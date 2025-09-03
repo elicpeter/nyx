@@ -28,12 +28,12 @@ tempfile = "3"
 directories = "6.0.0"
 clap = { version = "4.5.40", features = ["derive"] }
 serde = { version = "1.0.219", features = ["derive"] }
-toml = "0.8.23"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json", "ansi","time"] }
+toml = "0.9.5"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json", "ansi","time"] }
 tracing = "0.1.41"
 num_cpus = "1.17.0"
-rusqlite = { version = "0.36.0", features = ["bundled"] }
-r2d2_sqlite = { version = "0.30.0", features = ["bundled"] }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+r2d2_sqlite = { version = "0.31.0", features = ["bundled"] }
 ignore = "0.4.23"
 tree-sitter = "0.25.6"
 tree-sitter-rust = "0.24.0"
@@ -41,9 +41,9 @@ tree-sitter-c = "0.24.1"
 tree-sitter-cpp = "0.23.4"
 tree-sitter-java = "0.23.5"
 tree-sitter-typescript = "0.23.2"
-tree-sitter-javascript = "0.23.1"
-tree-sitter-go = "0.23.4"
-tree-sitter-php = "0.23.11"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-php = "0.24.2"
 tree-sitter-python = "0.23.6"
 tree-sitter-ruby = "0.23.1"
 crossbeam-channel = "0.5.15"
@@ -58,5 +58,4 @@ thiserror = "2.0.12"
 dashmap = "7.0.0-rc2"
 petgraph = "0.8.2"
 bitflags = "2.9.1"
-phf = { version = "0.12.1", features = ["macros"] }
-log = "0.4.27"
+phf = { version = "0.13.1", features = ["macros"] }
