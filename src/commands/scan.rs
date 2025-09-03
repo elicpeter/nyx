@@ -1,6 +1,6 @@
 pub(crate) use crate::ast::run_rules_on_file;
 use crate::database::index::{Indexer, IssueRow};
-use crate::errors::NyxResult;
+use crate::errors::{NyxError, NyxResult};
 use crate::patterns::Severity;
 use crate::utils::config::Config;
 use crate::utils::project::get_project_info;
@@ -13,8 +13,6 @@ use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-
-type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug)]
 pub struct Diag {
@@ -103,7 +101,7 @@ fn scan_filesystem(root: &Path, cfg: &Config) -> NyxResult<Vec<Diag>> {
     rx.into_iter().flatten().par_bridge().try_for_each(|path| {
         let mut local = run_rules_on_file(&path, cfg)?;
         acc.lock().unwrap().append(&mut local);
-        Ok::<(), DynError>(())
+        Ok::<(), NyxError>(())
     })?;
 
     let mut diags = acc.into_inner()?;
