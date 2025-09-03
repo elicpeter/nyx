@@ -15,6 +15,7 @@
 
 **Nyx** is a lightweight lightning-fast Rust‑native command‑line tool that detects potentially dangerous code patterns across several programming languages. It combines the accuracy of [`tree‑sitter`](https://tree-sitter.github.io/) parsing with a curated rule set and an optional SQLite‑backed index to deliver fast, repeatable scans on projects of any size.
 
+>[!IMPORTANT]
 > **Project status – Alpha**   
 > Nyx is under active development. The public interface, rule set, and output formats may change without notice while we stabilise the core. The new CFG + taint engine is experimental and Rust-only for now – please report any crashes or false-positives. Pin exact versions in production environments
 
@@ -133,10 +134,11 @@ $ nyx clean --all
 
 Nyx merges a default configuration file (`nyx.conf`) with user overrides (`nyx.local`). Both live in the platform‑specific configuration directory shown below.
 
-| Platform      | Directory                         |
-|---------------|-----------------------------------|
-| Linux / macOS | `~/.config/nyx/`                  |
-| Windows       | `%APPDATA%\ecpeter23\nyx\config\` |
+| Platform      | Directory                                          |
+|---------------|----------------------------------------------------|
+| Linux         | `~/.config/nyx/`                                   |
+| macOS         | `~/Library/Application Support/dev.ecpeter23.nyx/` |
+| Windows       | `%APPDATA%\ecpeter23\nyx\config\`                  |
 
 Minimal example (`nyx.local`):
 
