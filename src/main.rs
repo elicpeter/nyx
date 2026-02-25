@@ -7,6 +7,7 @@ mod database;
 mod errors;
 mod interop;
 mod labels;
+mod output;
 mod patterns;
 mod summary;
 mod symbol;
@@ -65,19 +66,28 @@ fn main() -> NyxResult<()> {
     let database_dir = proj_dirs.data_local_dir();
     fs::create_dir_all(database_dir)?;
 
-    let mut config = Config::load(config_dir)?;
+    let (mut config, config_note) = Config::load(config_dir)?;
 
     rayon::ThreadPoolBuilder::new()
         .stack_size(config.performance.rayon_thread_stack_size)
         .build_global()
         .expect("set rayon stack size");
 
-    commands::handle_command(cli.command, database_dir, &mut config)?;
+    let quiet = config.output.quiet || cli.command.is_structured_output();
 
-    println!(
-        "{} in {:.3}s.",
-        style("Finished").green().bold(),
-        now.elapsed().as_secs_f32()
-    );
+    // Print config note before scanning (human-readable mode only).
+    if let Some(note) = config_note.filter(|_| !quiet) {
+        eprint!("{note}");
+    }
+
+    commands::handle_command(cli.command, database_dir, config_dir, &mut config)?;
+
+    if !quiet {
+        println!(
+            "{} in {:.3}s.",
+            style("Finished").green().bold(),
+            now.elapsed().as_secs_f32()
+        );
+    }
     Ok(())
 }

@@ -1,6 +1,6 @@
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo, StmtKind};
 use crate::interop::InteropEdge;
-use crate::labels::{Cap, DataLabel};
+use crate::labels::{Cap, DataLabel, SourceKind};
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
 use petgraph::graph::NodeIndex;
@@ -18,18 +18,28 @@ pub struct Finding {
     /// The full path from source to sink through the CFG.
     #[allow(dead_code)] // used for future detailed diagnostics / path display
     pub path: Vec<NodeIndex>,
+    /// The kind of source that originated the taint.
+    pub source_kind: SourceKind,
 }
 
+/// Order-independent hash of a taint map.
+///
+/// Uses XOR of per-entry hashes so the result is the same regardless of
+/// iteration order — no allocation or sorting required.
 fn taint_hash(taint: &HashMap<String, Cap>) -> u64 {
-    let mut v: Vec<_> = taint.iter().collect();
-    v.sort_by_key(|(k, _)| k.as_str());
-    let mut hasher = blake3::Hasher::new();
-    for (k, bits) in v {
-        hasher.update(k.as_bytes());
-        hasher.update(&bits.bits().to_le_bytes());
+    let mut h: u64 = 0;
+    for (k, bits) in taint {
+        // Per-entry hash: FNV-1a-style mixing of key bytes + cap bits.
+        let mut entry_h: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
+        for b in k.as_bytes() {
+            entry_h ^= *b as u64;
+            entry_h = entry_h.wrapping_mul(0x0100_0000_01b3); // FNV prime
+        }
+        entry_h ^= bits.bits() as u64;
+        entry_h = entry_h.wrapping_mul(0x0100_0000_01b3);
+        h ^= entry_h;
     }
-    let digest = hasher.finalize();
-    u64::from_le_bytes(digest.as_bytes()[0..8].try_into().unwrap())
+    h
 }
 
 /// Resolved summary for a callee — a uniform view regardless of whether the
@@ -140,18 +150,21 @@ fn resolve_callee(
     None
 }
 
+/// Apply taint transfer for a single node, mutating `out` in place.
+///
+/// Callers should clone the taint map before calling if they need
+/// the original state preserved.
 fn apply_taint(
     node: &NodeInfo,
-    taint: &HashMap<String, Cap>,
+    out: &mut HashMap<String, Cap>,
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
     caller_lang: Lang,
     caller_namespace: &str,
     interop_edges: &[InteropEdge],
-) -> HashMap<String, Cap> {
+) {
     debug!(target: "taint", "Applying taint to node: {:?}", node);
-    debug!(target: "taint", "Taint: {:?}", taint);
-    let mut out = taint.clone();
+    debug!(target: "taint", "Taint: {:?}", out);
 
     let caller_func = node.enclosing_func.as_deref().unwrap_or("");
 
@@ -236,7 +249,7 @@ fn apply_taint(
                 // ── Sink behaviour: handled in the main analysis loop
                 //    (checked via node.label or resolved summary) ──
 
-                return out;
+                return;
             }
 
             // Unresolved call — fall through to default gen/kill below
@@ -264,8 +277,6 @@ fn apply_taint(
             out.insert(d.clone(), combined);
         }
     }
-
-    out
 }
 
 /// Run taint analysis on a single file's CFG.
@@ -309,9 +320,10 @@ pub fn analyse_file(
 
     while let Some(Item { node, taint }) = q.pop_front() {
         let caller_func = cfg[node].enclosing_func.as_deref().unwrap_or("");
-        let out = apply_taint(
+        let mut out = taint.clone();
+        apply_taint(
             &cfg[node],
-            &taint,
+            &mut out,
             local_summaries,
             global_summaries,
             caller_lang,
@@ -398,26 +410,44 @@ pub fn analyse_file(
                 }
 
                 path.reverse();
+
+                // Infer the source kind from the source node's label and callee
+                let source_kind = match cfg[source_node].label {
+                    Some(DataLabel::Source(caps)) => {
+                        let callee = cfg[source_node].callee.as_deref().unwrap_or("");
+                        crate::labels::infer_source_kind(caps, callee)
+                    }
+                    _ => SourceKind::Unknown,
+                };
+
                 findings.push(Finding {
                     sink: sink_node,
                     source: source_node,
                     path,
+                    source_kind,
                 });
             }
         }
 
-        // enqueue successors
-        for succ in cfg.neighbors(node) {
-            let h = taint_hash(&out);
-            let key = (succ, h);
+        // enqueue successors — cache hashes to avoid recomputation
+        let out_h = taint_hash(&out);
+        let in_h = taint_hash(&taint);
+        let succs: Vec<_> = cfg.neighbors(node).collect();
+        for (i, succ) in succs.iter().enumerate() {
+            let key = (*succ, out_h);
             if !seen.contains(&key) {
                 seen.insert(key);
-                pred.insert(key, (node, taint_hash(&taint)));
-                let item = Item {
-                    node: succ,
-                    taint: out.clone(),
+                pred.insert(key, (node, in_h));
+                // Move the map into the last successor to avoid a clone
+                let taint_for_succ = if i + 1 == succs.len() {
+                    std::mem::take(&mut out)
+                } else {
+                    out.clone()
                 };
-                q.push_back(item);
+                q.push_back(Item {
+                    node: *succ,
+                    taint: taint_for_succ,
+                });
             }
         }
     }

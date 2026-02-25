@@ -22,6 +22,19 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["sys.argv"],
         label: DataLabel::Source(Cap::all()),
     },
+    LabelRule {
+        matchers: &["open"],
+        label: DataLabel::Source(Cap::all()),
+    },
+    LabelRule {
+        matchers: &[
+            "argparse.parse_args",
+            "urllib.request.urlopen",
+            "requests.get",
+            "requests.post",
+        ],
+        label: DataLabel::Source(Cap::all()),
+    },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["html.escape"],

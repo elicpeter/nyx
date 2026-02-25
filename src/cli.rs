@@ -9,6 +9,14 @@ pub struct Cli {
     pub(crate) command: Commands,
 }
 
+impl Commands {
+    /// Whether this command produces structured (machine-readable) output on
+    /// stdout, meaning human status messages must be suppressed entirely.
+    pub fn is_structured_output(&self) -> bool {
+        matches!(self, Commands::Scan { format, .. } if format == "json" || format == "sarif")
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Scan project for vulnerabilities
@@ -25,8 +33,8 @@ pub enum Commands {
         #[arg(long)]
         rebuild_index: bool,
 
-        /// Output format
-        #[arg(short, long, value_enum, default_value = "")]
+        /// Output format (console, json, sarif)
+        #[arg(short, long, default_value = "")]
         format: String,
 
         /// Show only high severity issues
@@ -41,6 +49,11 @@ pub enum Commands {
 
         #[arg(long)]
         all_targets: bool,
+
+        /// Include findings from test/vendor/build paths at original severity
+        /// (by default these are downgraded)
+        #[arg(long)]
+        include_nonprod: bool,
     },
 
     /// Manage project indexes
@@ -64,6 +77,51 @@ pub enum Commands {
         /// Clean all projects
         #[arg(long)]
         all: bool,
+    },
+
+    /// Manage analysis configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Print effective merged configuration as TOML
+    Show,
+
+    /// Print configuration directory path
+    Path,
+
+    /// Add a label rule to nyx.local
+    AddRule {
+        /// Language slug (e.g. javascript, rust, python)
+        #[arg(long)]
+        lang: String,
+
+        /// Function or property name to match
+        #[arg(long)]
+        matcher: String,
+
+        /// Rule kind: source, sanitizer, or sink
+        #[arg(long)]
+        kind: String,
+
+        /// Capability: env_var, html_escape, shell_escape, url_encode, json_parse, file_io, or all
+        #[arg(long)]
+        cap: String,
+    },
+
+    /// Add a terminator function to nyx.local
+    AddTerminator {
+        /// Language slug (e.g. javascript, rust, python)
+        #[arg(long)]
+        lang: String,
+
+        /// Function name that terminates execution (e.g. process.exit)
+        #[arg(long)]
+        name: String,
     },
 }
 

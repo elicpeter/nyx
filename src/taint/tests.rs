@@ -20,7 +20,7 @@ fn env_to_arg_is_flagged() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
 
     assert_eq!(findings.len(), 1); // exactly one unsanitised Source→Sink
@@ -49,7 +49,7 @@ fn taint_through_if_else() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
 
     // exactly one path (via the True branch) should be flagged
@@ -76,7 +76,7 @@ fn taint_through_while_loop() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
     assert_eq!(findings.len(), 1);
 }
@@ -102,7 +102,7 @@ fn taint_killed_by_matching_sanitizer() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
     assert!(
         findings.is_empty(),
@@ -131,7 +131,7 @@ fn wrong_sanitizer_preserves_taint() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
     assert_eq!(
         findings.len(),
@@ -160,7 +160,7 @@ fn taint_breaks_out_of_loop() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
     assert_eq!(findings.len(), 1);
 }
@@ -189,7 +189,7 @@ fn test_two_sources_one_sanitised() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
     assert_eq!(
         findings.len(),
@@ -222,7 +222,7 @@ fn test_two_sources_wrong_sanitiser_both_flagged() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
     assert_eq!(
         findings.len(),
@@ -250,7 +250,7 @@ fn test_should_not_panic_on_empty_function() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
     assert!(findings.is_empty());
 }
@@ -374,7 +374,7 @@ fn parse_rust(src: &[u8]) -> (Cfg, NodeIndex, FuncSummaries) {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src, None).unwrap();
-    build_cfg(&tree, src, "rust", "test.rs")
+    build_cfg(&tree, src, "rust", "test.rs", None)
 }
 
 /// Parse Rust source bytes, build CFG, and export cross-file summaries.
@@ -1089,7 +1089,7 @@ fn parse_lang(
         "ruby" => "test.rb",
         _ => "test.txt",
     };
-    build_cfg(&tree, src, slug, ext)
+    build_cfg(&tree, src, slug, ext, None)
 }
 
 #[test]
@@ -2206,7 +2206,7 @@ fn return_call_recognized_as_source() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (_, _, summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (_, _, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let exported = export_summaries(&summaries, "test.rs", "rust");
 
     let foo = exported

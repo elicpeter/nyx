@@ -54,9 +54,10 @@ pub const PATTERNS: &[Pattern] = &[
         description: "Assignment to window.location / location.href",
         query: "(assignment_expression
                left: (member_expression
-                        object: (identifier)? @obj
+                        object: (identifier) @obj
+                        (#match? @obj \"^(window|location|document|self|top|parent|frames)$\")
                         property: (property_identifier) @prop
-                        (#match? @prop \"location|href\"))) @vuln",
+                        (#match? @prop \"^(location|href)$\"))) @vuln",
         severity: Severity::High,
     },
     Pattern {
@@ -77,7 +78,7 @@ pub const PATTERNS: &[Pattern] = &[
                left: (member_expression
                         property: (property_identifier) @prop
                         (#eq? @prop \"__proto__\"))) @vuln",
-        severity: Severity::High,
+        severity: Severity::Low,
     },
     Pattern {
         id: "weak_hash_md5",

@@ -31,7 +31,7 @@ bitflags! {
         const URL_ENCODE   = 0b0000_1000;
         const JSON_PARSE   = 0b0001_0000;
         const FILE_IO      = 0b0010_0000;
-        // todo: add more if needed
+        const FMT_STRING   = 0b0100_0000;
     }
 }
 
@@ -195,6 +195,147 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
         .unwrap_or(Kind::Other)
 }
 
+/// The kind of taint source, used to refine finding severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// Direct user input (request params, argv, stdin, form data)
+    UserInput,
+    /// Environment variables and configuration
+    EnvironmentConfig,
+    /// File system reads
+    FileSystem,
+    /// Database query results
+    Database,
+    /// Could not determine — treat conservatively
+    Unknown,
+}
+
+/// Infer the source kind from capabilities and callee name.
+pub fn infer_source_kind(caps: Cap, callee: &str) -> SourceKind {
+    let cl = callee.to_ascii_lowercase();
+
+    // User input patterns
+    if cl.contains("argv")
+        || cl.contains("stdin")
+        || cl.contains("request")
+        || cl.contains("form")
+        || cl.contains("query")
+        || cl.contains("params")
+        || cl.contains("input")
+        || cl.contains("body")
+        || cl.contains("header")
+        || cl.contains("cookie")
+    {
+        return SourceKind::UserInput;
+    }
+
+    // Environment / config patterns
+    if cl.contains("env")
+        || cl.contains("getenv")
+        || cl.contains("environ")
+        || cl.contains("config")
+    {
+        return SourceKind::EnvironmentConfig;
+    }
+
+    // File system patterns
+    if cl.contains("read") || cl.contains("fopen") || cl.contains("open") {
+        // Distinguish from db reads — file reads typically have FILE_IO cap
+        if caps.contains(Cap::FILE_IO) {
+            return SourceKind::FileSystem;
+        }
+    }
+
+    // Database patterns
+    if cl.contains("fetchone")
+        || cl.contains("fetchall")
+        || cl.contains("fetch_row")
+        || cl.contains("query")
+        || cl.contains("execute")
+    {
+        // Queries that read back from db
+        return SourceKind::Database;
+    }
+
+    SourceKind::Unknown
+}
+
+/// Map a source kind to its appropriate severity level.
+pub fn severity_for_source_kind(kind: SourceKind) -> crate::patterns::Severity {
+    match kind {
+        SourceKind::UserInput => crate::patterns::Severity::High,
+        SourceKind::EnvironmentConfig => crate::patterns::Severity::High,
+        SourceKind::FileSystem => crate::patterns::Severity::Medium,
+        SourceKind::Database => crate::patterns::Severity::Medium,
+        SourceKind::Unknown => crate::patterns::Severity::High,
+    }
+}
+
+/// A runtime (config-derived) label rule with owned matchers.
+#[derive(Debug, Clone)]
+pub struct RuntimeLabelRule {
+    pub matchers: Vec<String>,
+    pub label: DataLabel,
+}
+
+/// Parse a capability name string into a `Cap` bitflag.
+pub fn parse_cap(s: &str) -> Option<Cap> {
+    match s.to_ascii_lowercase().as_str() {
+        "env_var" => Some(Cap::ENV_VAR),
+        "html_escape" => Some(Cap::HTML_ESCAPE),
+        "shell_escape" => Some(Cap::SHELL_ESCAPE),
+        "url_encode" => Some(Cap::URL_ENCODE),
+        "json_parse" => Some(Cap::JSON_PARSE),
+        "file_io" => Some(Cap::FILE_IO),
+        "fmt_string" => Some(Cap::FMT_STRING),
+        "all" => Some(Cap::all()),
+        _ => None,
+    }
+}
+
+/// Pre-built analysis rules for a specific language, derived from config.
+/// Built once per file and threaded through the pipeline.
+#[derive(Debug, Clone, Default)]
+pub struct LangAnalysisRules {
+    pub extra_labels: Vec<RuntimeLabelRule>,
+    pub terminators: Vec<String>,
+    pub event_handlers: Vec<String>,
+}
+
+/// Build `LangAnalysisRules` from a `Config` for a given language slug.
+pub fn build_lang_rules(
+    config: &crate::utils::config::Config,
+    lang_slug: &str,
+) -> LangAnalysisRules {
+    let Some(lang_cfg) = config.analysis.languages.get(lang_slug) else {
+        return LangAnalysisRules::default();
+    };
+
+    let extra_labels = lang_cfg
+        .rules
+        .iter()
+        .filter_map(|r| {
+            let cap = parse_cap(&r.cap)?;
+            let label = match r.kind.as_str() {
+                "source" => DataLabel::Source(cap),
+                "sanitizer" => DataLabel::Sanitizer(cap),
+                "sink" => DataLabel::Sink(cap),
+                _ => return None,
+            };
+            Some(RuntimeLabelRule {
+                matchers: r.matchers.clone(),
+                label,
+            })
+        })
+        .collect();
+
+    LangAnalysisRules {
+        extra_labels,
+        terminators: lang_cfg.terminators.clone(),
+        event_handlers: lang_cfg.event_handlers.clone(),
+    }
+}
+
 /// Case-insensitive suffix check (ASCII).
 #[inline]
 fn ends_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
@@ -223,29 +364,58 @@ fn starts_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
 /// Try to classify a piece of syntax text.
 /// `lang` is the canonicalised language key ("rust", "javascript", ...).
 ///
+/// If `extra` runtime rules are provided, they are checked **first** (config
+/// takes priority over built-in rules).
+///
 /// **Two-pass matching** -- exact / suffix matches are checked across *all*
 /// rules before any prefix (`foo_`) match is attempted.  This prevents a
 /// greedy prefix like `sanitize_` from shadowing a more specific exact
 /// match like `sanitize_shell`.
-pub fn classify(lang: &str, text: &str) -> Option<DataLabel> {
-    // Lang slugs are already lowercase; try direct lookup first to avoid
-    // allocating a lowercased copy.
+pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> Option<DataLabel> {
+    let head = text.split(['(', '<']).next().unwrap_or("");
+    let trimmed = head.trim().as_bytes();
+
+    // ── Check runtime (config) rules first — they take priority ──────
+    if let Some(extras) = extra {
+        // Pass 1: exact / suffix
+        for rule in extras {
+            for raw in &rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_') {
+                    continue;
+                }
+                if ends_with_ignore_case(trimmed, m) {
+                    let start = trimmed.len() - m.len();
+                    let ok = start == 0 || matches!(trimmed[start - 1], b'.' | b':');
+                    if ok {
+                        return Some(rule.label);
+                    }
+                }
+            }
+        }
+        // Pass 2: prefix
+        for rule in extras {
+            for raw in &rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_') && starts_with_ignore_case(trimmed, m) {
+                    return Some(rule.label);
+                }
+            }
+        }
+    }
+
+    // ── Built-in static rules ────────────────────────────────────────
     let rules = REGISTRY.get(lang).or_else(|| {
         let key = lang.to_ascii_lowercase();
         REGISTRY.get(key.as_str())
     })?;
 
-    let head = text.split(['(', '<']).next().unwrap_or("");
-    let trimmed = head.trim().as_bytes();
-
     // Pass 1: exact / suffix matches (high confidence)
-    // Matchers are already lowercase &'static str, so we compare with
-    // case-insensitive byte helpers — zero heap allocations.
     for rule in *rules {
         for raw in rule.matchers {
             let m = raw.as_bytes();
             if m.last() == Some(&b'_') {
-                continue; // skip prefix matchers in pass 1
+                continue;
             }
             if ends_with_ignore_case(trimmed, m) {
                 let start = trimmed.len() - m.len();
@@ -268,4 +438,73 @@ pub fn classify(lang: &str, text: &str) -> Option<DataLabel> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_none_extra_unchanged() {
+        // Built-in rule: innerHTML → Sink(HTML_ESCAPE)
+        let result = classify("javascript", "innerHTML", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::HTML_ESCAPE)));
+
+        // Non-existent should still be None
+        let result = classify("javascript", "myCustomFunc", None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_extra_rules_take_priority() {
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["escapeHtml".into()],
+            label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        }];
+
+        let result = classify("javascript", "escapeHtml", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sanitizer(Cap::HTML_ESCAPE)));
+
+        // Built-in rules still work
+        let result = classify("javascript", "innerHTML", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sink(Cap::HTML_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_extra_overrides_builtin() {
+        // Override innerHTML to be a sanitizer (contrived but tests priority)
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["innerHTML".into()],
+            label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        }];
+
+        let result = classify("javascript", "innerHTML", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sanitizer(Cap::HTML_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_location_href_is_sink() {
+        let result = classify("javascript", "location.href", None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::URL_ENCODE)));
+    }
+
+    #[test]
+    fn classify_bare_href_is_none() {
+        // Bare "href" should NOT be a sink — only "location.href" and variants
+        let result = classify("javascript", "href", None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn parse_cap_works() {
+        assert_eq!(parse_cap("html_escape"), Some(Cap::HTML_ESCAPE));
+        assert_eq!(parse_cap("shell_escape"), Some(Cap::SHELL_ESCAPE));
+        assert_eq!(parse_cap("url_encode"), Some(Cap::URL_ENCODE));
+        assert_eq!(parse_cap("json_parse"), Some(Cap::JSON_PARSE));
+        assert_eq!(parse_cap("env_var"), Some(Cap::ENV_VAR));
+        assert_eq!(parse_cap("file_io"), Some(Cap::FILE_IO));
+        assert_eq!(parse_cap("all"), Some(Cap::all()));
+        assert_eq!(parse_cap("ALL"), Some(Cap::all()));
+        assert_eq!(parse_cap("invalid"), None);
+    }
 }

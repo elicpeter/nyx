@@ -1,20 +1,21 @@
 [package]
 name = "nyx-scanner"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "A CLI security scanner for automating vulnerability checks"
 license = "GPL-3.0"
 authors = ["Eli Peter <elicpeter@exmaple.com>"]
-homepage = "https://github.com/ecpeter23/nyx"
-repository = "https://github.com/ecpeter23/nyx"
-documentation = "https://github.com/ecpeter23/nyx#readme"
+homepage = "https://github.com/elicpeter/nyx"
+repository = "https://github.com/elicpeter/nyx"
+documentation = "https://github.com/elicpeter/nyx#readme"
 keywords = ["security", "vulnerability", "scanner", "static-analysis", "cli"]
-categories = ["command-line-utilities", "development-tools", "security"]
+categories = ["security", "command-line-utilities", "development-tools", "parser-implementations", "text-processing"]
 readme = "README.md"
 default-run = "nyx"
 exclude = [
     "assets/",
     ".github/",
+    "CLAUDE.md",
     ".claude/",
     ".idea/",
     "tests/",
@@ -79,3 +80,4 @@ dashmap = "7.0.0-rc2"
 petgraph = "0.8.3"
 bitflags = "2.11.0"
 phf = { version = "0.13.1", features = ["macros"] }
+indicatif = "0.18.4"

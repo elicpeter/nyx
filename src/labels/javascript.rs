@@ -40,6 +40,14 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &[
+            "location.href",
+            "window.location.href",
+            "document.location.href",
+        ],
+        label: DataLabel::Sink(Cap::URL_ENCODE),
+    },
+    LabelRule {
+        matchers: &[
             "child_process.exec",
             "child_process.execSync",
             "child_process.spawn",
@@ -56,6 +64,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "for_in_statement"      => Kind::For,
 
     "return_statement"      => Kind::Return,
+    "throw_statement"       => Kind::Return,
     "break_statement"       => Kind::Break,
     "continue_statement"    => Kind::Continue,
 

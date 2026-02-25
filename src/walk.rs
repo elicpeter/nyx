@@ -61,6 +61,11 @@ fn build_overrides(root: &Path, cfg: &Config) -> ignore::overrides::Override {
             tracing::warn!("invalid exclude‐dir pattern ‘{dir}’: {e}");
         }
     }
+    for file in &cfg.scanner.excluded_files {
+        if let Err(e) = ob.add(&format!("!{file}")) {
+            tracing::warn!("invalid exclude‐file pattern ‘{file}’: {e}");
+        }
+    }
 
     ob.build().unwrap_or_else(|e| {
         tracing::error!("failed to build ignore overrides: {e}");
@@ -83,6 +88,9 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
     let follow = cfg.scanner.follow_symlinks;
     let max_bytes = cfg.scanner.max_file_size_mb.unwrap_or(0) * 1_048_576;
     let batch_size = cfg.performance.batch_size;
+    let max_depth = cfg.performance.max_depth;
+    let same_file_system = cfg.scanner.one_file_system;
+    let require_git = cfg.scanner.require_git_to_read_vcsignore;
 
     // ----- 3  the background walker thread ---------------------------------
     let handle = thread::spawn(move || {
@@ -96,11 +104,18 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
             "starting directory walk"
         );
 
-        WalkBuilder::new(root)
+        let mut builder = WalkBuilder::new(root);
+        builder
             .hidden(!scan_hidden)
             .follow_links(follow)
             .threads(workers)
             .overrides(overrides)
+            .same_file_system(same_file_system)
+            .require_git(require_git);
+        if let Some(depth) = max_depth {
+            builder.max_depth(Some(depth));
+        }
+        builder
             .filter_entry(|e| {
                 e.file_type()
                     .map(|ft| ft.is_dir() || ft.is_file())
