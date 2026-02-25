@@ -1,62 +1,82 @@
+use crate::utils::Config;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use ignore::{WalkBuilder, WalkState, overrides::OverrideBuilder};
+use std::thread::JoinHandle;
 use std::{
     mem,
     path::{Path, PathBuf},
     thread,
 };
 
-use crate::utils::Config;
-
 // ---------------------------------------------------------------------------
 // Internal constants / helpers
 // ---------------------------------------------------------------------------
 
-type Batch = Vec<PathBuf>;
+type Paths = Vec<PathBuf>;
 
-struct Batcher {
-    tx: Sender<Batch>,
-    batch: Batch,
+struct BatchSender {
+    tx: Sender<Paths>,
+    batch: Paths,
+    batch_size: usize,
 }
-impl Batcher {
-    fn push(&mut self, p: PathBuf, batch_size: usize) {
-        self.batch.push(p);
-        if self.batch.len() == batch_size {
+impl BatchSender {
+    fn new(tx: Sender<Paths>, batch_size: usize) -> Self {
+        Self {
+            tx,
+            batch: Vec::with_capacity(batch_size),
+            batch_size,
+        }
+    }
+
+    fn push_path(&mut self, path: PathBuf) {
+        self.batch.push(path);
+        if self.batch.len() >= self.batch_size {
             self.flush();
         }
     }
+
     fn flush(&mut self) {
         if !self.batch.is_empty() {
+            tracing::debug!(n_paths = self.batch.len(), "flushing batch");
             let _ = self.tx.send(mem::take(&mut self.batch));
         }
     }
 }
-impl Drop for Batcher {
+impl Drop for BatchSender {
     fn drop(&mut self) {
         self.flush();
     }
 }
 
-// ---------------------------------------------------------------------------
-/// Walk `root` and send *batches* of paths through the returned channel.
-pub fn spawn_senders(root: &Path, cfg: &Config) -> Receiver<Batch> {
-    // ----- 1  build ignore/override rules ----------------------------------
+fn build_overrides(root: &Path, cfg: &Config) -> ignore::overrides::Override {
     let mut ob = OverrideBuilder::new(root);
+
     for ext in &cfg.scanner.excluded_extensions {
         if let Err(e) = ob.add(&format!("!*.{ext}")) {
-            tracing::warn!("cannot add ignore pattern ‘{ext}’: {e}");
+            tracing::warn!("invalid exclude‐extension pattern ‘{ext}’: {e}");
         }
     }
     for dir in &cfg.scanner.excluded_directories {
         if let Err(e) = ob.add(&format!("!**/{dir}/**")) {
-            tracing::warn!("cannot add ignore pattern ‘{dir}’: {e}");
+            tracing::warn!("invalid exclude‐dir pattern ‘{dir}’: {e}");
         }
     }
-    let overrides = ob.build().unwrap();
+
+    ob.build().unwrap_or_else(|e| {
+        tracing::error!("failed to build ignore overrides: {e}");
+        ignore::overrides::Override::empty()
+    })
+}
+
+// ---------------------------------------------------------------------------
+/// Walk `root` and send *batches* of paths through the returned channel.
+pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHandle<()>) {
+    let _span = tracing::info_span!("spawn_file_walker", root = %root.display()).entered();
+    let overrides = build_overrides(root, cfg);
 
     // ----- 2  channel & thread pool parameters -----------------------------
     let workers = cfg.performance.worker_threads.unwrap_or(num_cpus::get());
-    let (tx, rx) = bounded::<Batch>(workers * cfg.performance.channel_multiplier);
+    let (tx, rx) = bounded::<Paths>(workers * cfg.performance.channel_multiplier);
 
     let root = root.to_path_buf();
     let scan_hidden = cfg.scanner.scan_hidden_files;
@@ -65,45 +85,48 @@ pub fn spawn_senders(root: &Path, cfg: &Config) -> Receiver<Batch> {
     let batch_size = cfg.performance.batch_size;
 
     // ----- 3  the background walker thread ---------------------------------
-    thread::spawn(move || {
+    let handle = thread::spawn(move || {
+        tracing::info!(
+            root = ?root,
+            workers = workers,
+            scan_hidden = scan_hidden,
+            follow_links = follow,
+            max_bytes = max_bytes,
+            batch_size = batch_size,
+            "starting directory walk"
+        );
+
         WalkBuilder::new(root)
             .hidden(!scan_hidden)
             .follow_links(follow)
             .threads(workers)
             .overrides(overrides)
+            .filter_entry(|e| {
+                e.file_type()
+                    .map(|ft| ft.is_dir() || ft.is_file())
+                    .unwrap_or(true)
+            })
             .build_parallel()
             .run(move || {
-                let mut b = Batcher {
-                    tx: tx.clone(),
-                    batch: Vec::with_capacity(batch_size),
-                };
+                let mut bs = BatchSender::new(tx.clone(), batch_size);
 
                 Box::new(move |entry| {
-                    tracing::debug!("walking {:?}", entry);
-                    let entry = match entry {
-                        Ok(e) if e.file_type().map(|ft| ft.is_file()).unwrap_or(false) => e,
-                        _ => return WalkState::Continue,
-                    };
+                    if let Ok(e) = entry {
+                        let is_file = e.file_type().is_some_and(|ft| ft.is_file());
+                        let under_limit = max_bytes == 0
+                            || e.metadata().map(|m| m.len() <= max_bytes).unwrap_or(true);
 
-                    if max_bytes != 0 {
-                        match entry.metadata() {
-                            Ok(m) if m.len() > max_bytes => return WalkState::Continue,
-                            Err(e) => {
-                                tracing::debug!("metadata failed for {:?}: {e}", entry.path());
-                                return WalkState::Continue;
-                            }
-                            _ => {}
+                        if is_file && under_limit {
+                            bs.push_path(e.into_path());
                         }
                     }
-
-                    tracing::debug!("sending {:?}", entry);
-                    b.push(entry.into_path(), batch_size);
                     WalkState::Continue
                 })
             });
+        tracing::info!("directory walk complete");
     });
 
-    rx
+    (rx, handle)
 }
 
 #[test]
@@ -118,7 +141,10 @@ fn walker_respects_excluded_extensions() {
     cfg.performance.channel_multiplier = 1;
     cfg.performance.batch_size = 2;
 
-    let rx = spawn_senders(tmp.path(), &cfg);
+    let (rx, handle) = spawn_file_walker(tmp.path(), &cfg);
+    if let Err(err) = handle.join() {
+        tracing::error!("walker thread panicked: {:#?}", err);
+    }
 
     let all: Vec<_> = rx.into_iter().flatten().collect();
 

@@ -13,37 +13,38 @@
 
 ## What is Nyx?
 
-**Nyx** is a lightweight lightning-fast Rust‑native command‑line tool that detects potentially dangerous code patterns across several programming languages. It combines the accuracy of [`tree‑sitter`](https://tree-sitter.github.io/) parsing with a curated rule set and an optional SQLite‑backed index to deliver fast, repeatable scans on projects of any size.
-
->[!IMPORTANT]
-> **Project status – Alpha**   
-> Nyx is under active development. The public interface, rule set, and output formats may change without notice while we stabilise the core. The new CFG + taint engine is experimental and Rust-only for now – please report any crashes or false-positives. Pin exact versions in production environments
+**Nyx** is a lightweight, lightning-fast Rust-native command-line tool that detects security vulnerabilities across 10 programming languages. It combines [`tree-sitter`](https://tree-sitter.github.io/) parsing, intra-procedural control-flow graphs, and cross-file taint analysis with an optional SQLite-backed index to deliver deep, repeatable scans on projects of any size.
 
 ---
 
 ## Key Capabilities
 
-| Capability                   | Description                                                                               |
-|------------------------------|-------------------------------------------------------------------------------------------|
-| Multi‑language support       | Rust, C, C++, Java, Go, PHP, Python, Ruby, TypeScript, JavaScript                         |
-| AST‑level pattern matching   | Language‑specific queries written against precise parse trees                             |
-| Incremental indexing         | SQLite database stores file hashes and previous findings to skip unchanged files          |
-| Parallel execution           | File walking and rule execution run concurrently; defaults scale with available CPU cores |
-| Configurable scan parameters | Exclude directories, set maximum file size, tune worker threads, limit output, and more   |
-| Multiple output formats      | Human‑readable console view (default) and machine‑readable JSON / CSV / SARIF (roadmap)   |
+| Capability | Description |
+|---|---|
+| Multi-language support | Rust, C, C++, Java, Go, PHP, Python, Ruby, TypeScript, JavaScript |
+| AST-level pattern matching | Language-specific queries written against precise parse trees |
+| Control-flow graph analysis | Auth gaps, unguarded sinks, unreachable security code, resource leaks, error fallthrough |
+| Cross-file taint tracking | BFS taint propagation from sources through sanitizers to sinks with function summaries |
+| Cross-language interop | Taint flows across language boundaries via explicit interop edges |
+| Two-pass architecture | Pass 1 extracts function summaries; Pass 2 runs taint with full cross-file context |
+| Incremental indexing | SQLite database stores file hashes, summaries, and findings to skip unchanged files |
+| Parallel execution | File walking and analysis run concurrently via Rayon; scales with available CPU cores |
+| Configurable scan parameters | Exclude directories, set maximum file size, tune worker threads, limit output, and more |
+| Multiple output formats | Human-readable console view (default) and machine-readable JSON |
 
 ---
 
 ## Why choose Nyx?
 
-| Advantage                      | What it means for you                                                                                                                                                        |
-|--------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Pure-Rust, single binary**   | No JVM, Python, or server to install; drop the `nyx` executable into your `$PATH` and go.                                                                                    |
-| **Massively parallel**         | Uses Rayon and a thread-pool walker; scales to all CPU cores. Example: scanning the entire **rust-lang/rust** codebase (~53,000 files) on an M2 MacBook Pro takes **≈ 1 s**. |
-| **Index-aware**                | An optional SQLite index stores file hashes and findings, subsequent scans touch *only* changed files, slashing CI times.                                                    |
-| **Offline & privacy-friendly** | Requires no login, cloud account, or telemetry. Perfect for air-gapped environments and strict compliance policies.                                                          |
-| **Tree-sitter precision**      | Parses real language grammars, not regexes, giving far fewer false positives than line-based scanners.                                                                       |
-| **Extensible**                 | Add new patterns with concise `tree-sitter` queries; no SaaS lock-in.                                                                                                        |
+| Advantage | What it means for you |
+|---|---|
+| **Pure-Rust, single binary** | No JVM, Python, or server to install; drop the `nyx` executable into your `$PATH` and go. |
+| **Massively parallel** | Uses Rayon and a thread-pool walker; scales to all CPU cores. Scanning the entire **rust-lang/rust** codebase (~53,000 files) on an M2 MacBook Pro takes **~1 s**. |
+| **Deep analysis** | Real CFG construction and taint propagation, not just regex matching. Cross-file function summaries, capability-based sanitizer tracking, and scored findings. |
+| **Index-aware** | An optional SQLite index stores file hashes and findings; subsequent scans touch *only* changed files, slashing CI times. |
+| **Offline & privacy-friendly** | Requires no login, cloud account, or telemetry. Perfect for air-gapped environments and strict compliance policies. |
+| **Tree-sitter precision** | Parses real language grammars, not regexes, giving far fewer false positives than line-based scanners. |
+| **Extensible** | Add new patterns with concise `tree-sitter` queries; no SaaS lock-in. |
 
 ---
 
@@ -76,7 +77,7 @@ $ cargo install nyx-scanner
     Expand-Archive -Path nyx-x86_64-pc-windows-msvc.zip -DestinationPath .
     Move-Item -Path .\nyx.exe -Destination "C:\Program Files\Nyx\"  # Add to PATH manually if needed
     ```
-   
+
 4. Verify the installation:
      ```bash
     nyx --version
@@ -104,11 +105,17 @@ $ nyx scan
 # Scan a specific path and emit JSON
 $ nyx scan ./server --format json
 
-# Perform an ad‑hoc scan without touching the index
+# Perform an ad-hoc scan without touching the index
 $ nyx scan --no-index
 
-# Restrict results to high‑severity findings
+# Restrict results to high-severity findings
 $ nyx scan --high-only
+
+# AST pattern matching only (fastest, no CFG/taint)
+$ nyx scan --ast-only
+
+# CFG + taint analysis only (skip AST pattern rules)
+$ nyx scan --cfg-only
 ```
 
 ### Index Management
@@ -130,20 +137,65 @@ $ nyx clean --all
 
 ---
 
+## Analysis Modes
+
+Nyx supports three analysis modes, selectable via the `scanner.mode` config option or CLI flags:
+
+| Mode | CLI flag | What runs |
+|---|---|---|
+| **Full** (default) | — | AST pattern matching + CFG construction + taint analysis |
+| **AST-only** | `--ast-only` | AST pattern matching only; skips CFG and taint entirely |
+| **Taint-only** | `--cfg-only` | CFG + taint analysis only; filters out AST pattern findings |
+
+### What the CFG + taint engine detects
+
+| Finding | Rule ID | Description |
+|---|---|---|
+| Tainted data flow | `taint-*` | Untrusted data (env vars, user input, file reads) flowing to dangerous sinks (shell exec, SQL, file write) without matching sanitization |
+| Unguarded sink | `cfg-unguarded-sink` | Sink calls not dominated by a guard or sanitizer on the control-flow path |
+| Auth gap | `cfg-auth-gap` | Web handler functions that reach privileged sinks without an auth check |
+| Unreachable security code | `cfg-unreachable-*` | Sanitizers, guards, or sinks in dead code branches |
+| Error fallthrough | `cfg-error-fallthrough` | Error-handling branches that don't terminate, allowing execution to fall through to dangerous operations |
+| Resource leak | `cfg-resource-leak` | Resources acquired but not released on all exit paths (malloc/free, fopen/fclose, Lock/Unlock) |
+
+Findings are scored and ranked by severity, proximity to entry point, path complexity, and taint confirmation.
+
+---
+
+## Supported Languages
+
+All 10 languages have full AST pattern matching and CFG/taint analysis. Resource leak detection is available where language-specific acquire/release pairs are defined.
+
+| Language | AST Patterns | CFG + Taint | Resource Leaks |
+|---|---|---|---|
+| Rust | Yes | Yes | Yes |
+| C | Yes | Yes | Yes |
+| C++ | Yes | Yes | Yes |
+| Java | Yes | Yes | Yes |
+| Go | Yes | Yes | Yes |
+| PHP | Yes | Yes | — |
+| Python | Yes | Yes | — |
+| Ruby | Yes | Yes | — |
+| TypeScript | Yes | Yes | — |
+| JavaScript | Yes | Yes | — |
+
+---
+
 ## Configuration Overview
 
-Nyx merges a default configuration file (`nyx.conf`) with user overrides (`nyx.local`). Both live in the platform‑specific configuration directory shown below.
+Nyx merges a default configuration file (`nyx.conf`) with user overrides (`nyx.local`). Both live in the platform-specific configuration directory shown below.
 
-| Platform      | Directory                                          |
-|---------------|----------------------------------------------------|
-| Linux         | `~/.config/nyx/`                                   |
-| macOS         | `~/Library/Application Support/dev.ecpeter23.nyx/` |
-| Windows       | `%APPDATA%\ecpeter23\nyx\config\`                  |
+| Platform | Directory |
+|---|---|
+| Linux | `~/.config/nyx/` |
+| macOS | `~/Library/Application Support/dev.ecpeter23.nyx/` |
+| Windows | `%APPDATA%\ecpeter23\nyx\config\` |
 
 Minimal example (`nyx.local`):
 
 ```toml
 [scanner]
+mode                = "full"       # full | ast | taint
 min_severity        = "Medium"
 follow_symlinks     = true
 excluded_extensions = ["mp3", "mp4"]
@@ -153,7 +205,7 @@ default_format = "json"
 max_results    = 200
 
 [performance]
-worker_threads     = 8  # 0 = auto‑detect
+worker_threads     = 8  # 0 = auto-detect
 batch_size         = 200
 channel_multiplier = 2
 ```
@@ -164,36 +216,54 @@ A fully documented `nyx.conf` is generated automatically on first run.
 
 ## Architecture in Brief
 
-1. **File enumeration** – A highly parallel walker applies ignore rules, size limits, and user exclusions.
-2. **Parsing** – Supported files are parsed into ASTs via the appropriate `tree‑sitter` grammar.
-3. **Rule execution** – Each language ships with a dedicated rule set expressed as `tree‑sitter` queries. Matches are classified into three severity levels (`High`, `Medium`, `Low`).
-4. **Indexing (optional)** – File digests and findings are stored in SQLite. Later scans skip files whose content and modification time are unchanged.
-5. **Reporting** – Results are grouped by file and emitted to the console or serialized in the requested format.
+Nyx uses a **two-pass architecture** to enable cross-file analysis without sacrificing parallelism:
+
+1. **File enumeration** -- A parallel walker (Rayon + `ignore` crate) applies gitignore rules, size limits, and user exclusions.
+2. **Pass 1 -- Summary extraction** -- Each file is parsed via tree-sitter, an intra-procedural CFG is built (petgraph), and a `FuncSummary` is exported per function capturing source/sanitizer/sink capabilities (bitflags), taint propagation behavior, and callee lists. Summaries are persisted to SQLite.
+3. **Summary merge** -- All per-file summaries are merged into a `GlobalSummaries` map with conservative conflict resolution (union caps, OR booleans).
+4. **Pass 2 -- Analysis** -- Files are re-parsed and analyzed with the full cross-file context: BFS taint propagation resolves callees against local and global summaries, CFG analysis checks for auth gaps, unguarded sinks, resource leaks, and more.
+5. **Reporting** -- Findings are scored, ranked, deduplicated, and emitted to the console or serialized as JSON.
+
+With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged, and cached findings are served directly for AST-only results.
 
 ---
 
 ## Roadmap
 
-| Area                  | Planned Improvements                                                                                  |
-|-----------------------|-------------------------------------------------------------------------------------------------------|
-| More language support | Plans to create rule sets for over 100 languages for maximum coverage                                 |
-| Control‑flow analysis | Inter‑procedural function summaries. Cap label propagation & bit‑flag checks. Loop/branch sensitivity |
-| Taint tracking        | Intra‑ / inter‑procedural tracing of untrusted data from sources to sinks                             |
-| Output formats        | Full SARIF 2.1.0, JUnit XML, HTML report generator                                                    |
-| Rule updates          | Remote rule feed with signature verification                                                          |
-| Performance & UX      | Incremental CFG cache, progress‑bar UX, smart file‑watch re‑scan                                      |
+### Phase 1 -- Deep Static Engine
 
-Community feedback will help shape priorities; please open an issue to discuss proposed changes.
+| Feature | Description |
+|---|---|
+| Interprocedural call graph | Precise symbol resolution via `FuncKey`, language-scoped namespaces, cross-module linking. No name-collision merging -- full call graph with topological analysis. |
+| Path-sensitive analysis | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Dramatically reduces false positives. |
+| Dataflow & state modeling | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Semantic analysis beyond pattern matching. |
+| Attack surface ranking | Score entry points by distance-to-sink, guard strength, path complexity, and privilege escalation potential. Deterministic attack surface scoring. |
 
----
+### Phase 2 -- Dynamic Capability
 
-## Experimental Features & Feedback
+| Feature | Description |
+|---|---|
+| Controlled dynamic execution | Local sandbox: identify entry points, spin up test harnesses, inject payloads, detect runtime crashes and command execution. Deterministic automated exploit validation -- static finds `exec(user_input)`, dynamic confirms it with `; id`. |
+| Fuzzing integration | libFuzzer (C/C++), cargo-fuzz (Rust), go-fuzz, HTTP fuzzing harness. Static engine identifies interesting functions, fuzzer targets only those. |
 
-The new Rust intra‑procedural CFG + taint engine is not enabled.
+### Phase 3 -- Intelligent Reasoning Layer
 
-Expect rough edges: slightly slower scans, occasional false positives, limited language coverage.
+| Feature | Description |
+|---|---|
+| Semantic similarity | Embeddings for finding similar vulnerability patterns across codebases. |
+| LLM reasoning | AI-assisted detection of non-obvious logic bugs. |
+| Exploit refinement | Automated loops to refine and validate exploit chains. |
 
-Please open an issue for every crash, panic, or suspicious result – attach the minimal code snippet and mention the Nyx version.
+### Other planned improvements
+
+| Area | Details |
+|---|---|
+| Output formats | SARIF 2.1.0, JUnit XML, HTML report generator |
+| Language coverage | Expanded taint rules per language, resource leak pairs for Python/Ruby/PHP/JS/TS |
+| Rule updates | Remote rule feed with signature verification |
+| UX | Progress bar, smart file-watch re-scan |
+
+Community feedback shapes priorities -- please [open an issue](https://github.com/ecpeter23/nyx/issues) to discuss proposed changes.
 
 ---
 
@@ -204,7 +274,9 @@ Pull requests are welcome. To contribute:
 1. Fork the repository and create a feature branch.
 2. Adhere to `rustfmt` and ensure `cargo clippy --all -- -D warnings` passes.
 3. Add unit and/or integration tests where applicable (`cargo test` should remain green).
-4. Submit a concise, well‑documented pull request.
+4. Submit a concise, well-documented pull request.
+
+Please open an issue for any crash, panic, or suspicious result -- attach the minimal code snippet and mention the Nyx version.
 
 See `CONTRIBUTING.md` for full guidelines.
 
@@ -212,7 +284,7 @@ See `CONTRIBUTING.md` for full guidelines.
 
 ## License
 
-Nyx is licensed under the **GNU General Public License v3.0 (GPL‑3.0)**.
+Nyx is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
 
 This ensures that all modified versions of the scanner remain free and open-source, protecting the integrity and transparency of security tools.
 

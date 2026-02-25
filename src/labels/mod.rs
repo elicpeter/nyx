@@ -1,5 +1,13 @@
+mod c;
+mod cpp;
+mod go;
+mod java;
 mod javascript;
+mod php;
+mod python;
+mod ruby;
 mod rust;
+mod typescript;
 
 use bitflags::bitflags;
 use once_cell::sync::Lazy;
@@ -22,7 +30,8 @@ bitflags! {
         const SHELL_ESCAPE = 0b0000_0100;
         const URL_ENCODE   = 0b0000_1000;
         const JSON_PARSE   = 0b0001_0000;
-        // ADD MORE
+        const FILE_IO      = 0b0010_0000;
+        // todo: add more if needed
     }
 }
 
@@ -55,6 +64,26 @@ pub enum DataLabel {
     Sink(Cap),
 }
 
+/// Configuration for extracting parameter names from function AST nodes.
+pub struct ParamConfig {
+    /// Field name on the function node that holds the parameter list
+    /// (e.g. "parameters", "formal_parameters").
+    pub params_field: &'static str,
+    /// Tree-sitter node kinds that represent individual parameters.
+    pub param_node_kinds: &'static [&'static str],
+    /// Node kinds representing self/this parameters (e.g. "self_parameter" in Rust).
+    pub self_param_kinds: &'static [&'static str],
+    /// Field names tried in order to extract the identifier from a parameter node.
+    pub ident_fields: &'static [&'static str],
+}
+
+static DEFAULT_PARAM_CONFIG: ParamConfig = ParamConfig {
+    params_field: "parameters",
+    param_node_kinds: &["parameter", "identifier"],
+    self_param_kinds: &[],
+    ident_fields: &["name", "pattern"],
+};
+
 static REGISTRY: Lazy<HashMap<&'static str, &'static [LabelRule]>> = Lazy::new(|| {
     let mut m = HashMap::new();
     m.insert("rust", rust::RULES);
@@ -63,8 +92,25 @@ static REGISTRY: Lazy<HashMap<&'static str, &'static [LabelRule]>> = Lazy::new(|
     m.insert("javascript", javascript::RULES);
     m.insert("js", javascript::RULES);
 
-    // add more languages in one line:
-    // m.insert("go", go::RULES);
+    m.insert("typescript", typescript::RULES);
+    m.insert("ts", typescript::RULES);
+
+    m.insert("python", python::RULES);
+    m.insert("py", python::RULES);
+
+    m.insert("go", go::RULES);
+
+    m.insert("java", java::RULES);
+
+    m.insert("c", c::RULES);
+
+    m.insert("cpp", cpp::RULES);
+    m.insert("c++", cpp::RULES);
+
+    m.insert("php", php::RULES);
+
+    m.insert("ruby", ruby::RULES);
+    m.insert("rb", ruby::RULES);
 
     m
 });
@@ -76,12 +122,70 @@ pub(crate) static CLASSIFIERS: Lazy<HashMap<&'static str, FastMap>> = Lazy::new(
     m.insert("rust", &rust::KINDS);
     m.insert("rs", &rust::KINDS);
 
-    // m.insert("javascript",  &javascript::KINDS);
-    // m.insert("js",          &javascript::KINDS);
+    m.insert("javascript", &javascript::KINDS);
+    m.insert("js", &javascript::KINDS);
 
-    // todo: add more languages
+    m.insert("typescript", &typescript::KINDS);
+    m.insert("ts", &typescript::KINDS);
+
+    m.insert("python", &python::KINDS);
+    m.insert("py", &python::KINDS);
+
+    m.insert("go", &go::KINDS);
+
+    m.insert("java", &java::KINDS);
+
+    m.insert("c", &c::KINDS);
+
+    m.insert("cpp", &cpp::KINDS);
+    m.insert("c++", &cpp::KINDS);
+
+    m.insert("php", &php::KINDS);
+
+    m.insert("ruby", &ruby::KINDS);
+    m.insert("rb", &ruby::KINDS);
+
     m
 });
+
+static PARAM_CONFIGS: Lazy<HashMap<&'static str, &'static ParamConfig>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("rust", &rust::PARAM_CONFIG);
+    m.insert("rs", &rust::PARAM_CONFIG);
+
+    m.insert("javascript", &javascript::PARAM_CONFIG);
+    m.insert("js", &javascript::PARAM_CONFIG);
+
+    m.insert("typescript", &typescript::PARAM_CONFIG);
+    m.insert("ts", &typescript::PARAM_CONFIG);
+
+    m.insert("python", &python::PARAM_CONFIG);
+    m.insert("py", &python::PARAM_CONFIG);
+
+    m.insert("go", &go::PARAM_CONFIG);
+
+    m.insert("java", &java::PARAM_CONFIG);
+
+    m.insert("c", &c::PARAM_CONFIG);
+
+    m.insert("cpp", &cpp::PARAM_CONFIG);
+    m.insert("c++", &cpp::PARAM_CONFIG);
+
+    m.insert("php", &php::PARAM_CONFIG);
+
+    m.insert("ruby", &ruby::PARAM_CONFIG);
+    m.insert("rb", &ruby::PARAM_CONFIG);
+
+    m
+});
+
+/// Return the parameter extraction config for the given language, with a sensible default.
+pub fn param_config(lang: &str) -> &'static ParamConfig {
+    PARAM_CONFIGS
+        .get(lang)
+        .copied()
+        .unwrap_or(&DEFAULT_PARAM_CONFIG)
+}
 
 #[inline(always)]
 pub fn lookup(lang: &str, raw: &str) -> Kind {
@@ -91,31 +195,77 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
         .unwrap_or(Kind::Other)
 }
 
+/// Case-insensitive suffix check (ASCII).
+#[inline]
+fn ends_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    let start = haystack.len() - needle.len();
+    haystack[start..]
+        .iter()
+        .zip(needle)
+        .all(|(h, n)| h.eq_ignore_ascii_case(n))
+}
+
+/// Case-insensitive prefix check (ASCII).
+#[inline]
+fn starts_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    haystack[..needle.len()]
+        .iter()
+        .zip(needle)
+        .all(|(h, n)| h.eq_ignore_ascii_case(n))
+}
+
 /// Try to classify a piece of syntax text.
-/// `lang` is the canonicalised language key (“rust”, “javascript”, …).
+/// `lang` is the canonicalised language key ("rust", "javascript", ...).
+///
+/// **Two-pass matching** -- exact / suffix matches are checked across *all*
+/// rules before any prefix (`foo_`) match is attempted.  This prevents a
+/// greedy prefix like `sanitize_` from shadowing a more specific exact
+/// match like `sanitize_shell`.
 pub fn classify(lang: &str, text: &str) -> Option<DataLabel> {
-    let key = lang.to_ascii_lowercase();
-    let rules = REGISTRY.get(key.as_str())?;
+    // Lang slugs are already lowercase; try direct lookup first to avoid
+    // allocating a lowercased copy.
+    let rules = REGISTRY.get(lang).or_else(|| {
+        let key = lang.to_ascii_lowercase();
+        REGISTRY.get(key.as_str())
+    })?;
+
     let head = text.split(['(', '<']).next().unwrap_or("");
+    let trimmed = head.trim().as_bytes();
 
-    let text_lc = head.trim().to_ascii_lowercase();
-
+    // Pass 1: exact / suffix matches (high confidence)
+    // Matchers are already lowercase &'static str, so we compare with
+    // case-insensitive byte helpers — zero heap allocations.
     for rule in *rules {
         for raw in rule.matchers {
-            let m = raw.to_ascii_lowercase();
-
-            if m.ends_with('_') {
-                if text_lc.starts_with(&m) {
-                    return Some(rule.label);
-                }
-            } else if text_lc.ends_with(&m) {
-                let start = text_lc.len() - m.len();
-                let ok = start == 0 || matches!(text_lc.as_bytes()[start - 1], b'.' | b':');
+            let m = raw.as_bytes();
+            if m.last() == Some(&b'_') {
+                continue; // skip prefix matchers in pass 1
+            }
+            if ends_with_ignore_case(trimmed, m) {
+                let start = trimmed.len() - m.len();
+                let ok = start == 0 || matches!(trimmed[start - 1], b'.' | b':');
                 if ok {
                     return Some(rule.label);
                 }
             }
         }
     }
+
+    // Pass 2: prefix matches (catch-all, lower priority)
+    for rule in *rules {
+        for raw in rule.matchers {
+            let m = raw.as_bytes();
+            if m.last() == Some(&b'_') && starts_with_ignore_case(trimmed, m) {
+                return Some(rule.label);
+            }
+        }
+    }
+
     None
 }

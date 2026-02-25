@@ -1,0 +1,72 @@
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use phf::{Map, phf_map};
+
+pub static RULES: &[LabelRule] = &[
+    // ─────────── Sources ───────────
+    LabelRule {
+        matchers: &["os.Getenv"],
+        label: DataLabel::Source(Cap::all()),
+    },
+    LabelRule {
+        matchers: &["http.Request", "r.FormValue", "r.URL"],
+        label: DataLabel::Source(Cap::all()),
+    },
+    // ───────── Sanitizers ──────────
+    LabelRule {
+        matchers: &["html.EscapeString", "template.HTMLEscapeString"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["url.QueryEscape"],
+        label: DataLabel::Sanitizer(Cap::URL_ENCODE),
+    },
+    // ─────────── Sinks ─────────────
+    LabelRule {
+        matchers: &["exec.Command"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["db.Query", "db.Exec"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+];
+
+pub static KINDS: Map<&'static str, Kind> = phf_map! {
+    // control-flow
+    "if_statement"             => Kind::If,
+    "for_statement"            => Kind::For,
+
+    "return_statement"         => Kind::Return,
+    "break_statement"          => Kind::Break,
+    "continue_statement"       => Kind::Continue,
+
+    // structure
+    "source_file"              => Kind::SourceFile,
+    "block"                    => Kind::Block,
+    "statement_list"           => Kind::Block,
+    "function_declaration"     => Kind::Function,
+    "method_declaration"       => Kind::Function,
+
+    // data-flow
+    "call_expression"          => Kind::CallFn,
+    "assignment_statement"     => Kind::Assignment,
+    "short_var_declaration"    => Kind::CallWrapper,
+    "expression_statement"     => Kind::CallWrapper,
+    "var_declaration"          => Kind::CallWrapper,
+
+    // trivia
+    "comment"                  => Kind::Trivia,
+    ";"  => Kind::Trivia, ","  => Kind::Trivia,
+    "("  => Kind::Trivia, ")"  => Kind::Trivia,
+    "{"  => Kind::Trivia, "}"  => Kind::Trivia,
+    "\n" => Kind::Trivia,
+    "import_declaration"       => Kind::Trivia,
+    "package_clause"           => Kind::Trivia,
+};
+
+pub static PARAM_CONFIG: ParamConfig = ParamConfig {
+    params_field: "parameters",
+    param_node_kinds: &["parameter_declaration"],
+    self_param_kinds: &[],
+    ident_fields: &["name"],
+};

@@ -4,12 +4,14 @@ use crate::errors::NyxResult;
 use crate::patterns::Severity;
 use crate::utils::Config;
 use crate::utils::project::get_project_info;
-use crate::walk::spawn_senders;
+use crate::walk::spawn_file_walker;
+use blake3;
 use bytesize::ByteSize;
 use chrono::{DateTime, Local};
 use console::style;
 use rayon::prelude::*;
 use std::fs;
+use std::path::PathBuf;
 use std::process::exit;
 
 pub fn handle(
@@ -94,13 +96,29 @@ pub fn build_index(
 
     tracing::debug!("Cleaned index for: {}", project_name);
 
-    let rx = spawn_senders(project_path, config);
-    let paths: Vec<_> = rx.into_iter().flatten().collect();
+    let (rx, handle) = spawn_file_walker(project_path, config);
+    if let Err(err) = handle.join() {
+        tracing::error!("walker thread panicked: {:#?}", err);
+    }
+    let paths: Vec<PathBuf> = rx.into_iter().flatten().collect();
 
-    paths.into_par_iter().try_for_each(
-        |path| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-            let issues = crate::commands::scan::run_rules_on_file(&path, config)?;
+    paths
+        .into_par_iter()
+        .try_for_each(|path| -> NyxResult<()> {
             let mut idx = Indexer::from_pool(project_name, &pool)?;
+
+            // Read once, hash once — pass bytes to both rule execution and
+            // summary extraction.
+            let bytes = std::fs::read(&path)?;
+            let hash = {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(&bytes);
+                hasher.finalize().as_bytes().to_vec()
+            };
+
+            // Run AST-only rules (no taint yet — summaries come later in scan)
+            let issues =
+                crate::commands::scan::run_rules_on_bytes(&bytes, &path, config, None, None)?;
             let file_id = idx.upsert_file(&path)?;
 
             let rows: Vec<IssueRow> = issues
@@ -118,9 +136,16 @@ pub fn build_index(
                 .collect();
 
             idx.replace_issues(file_id, rows)?;
+
+            // Extract and persist function summaries for cross-file taint
+            let sums = crate::commands::scan::extract_summaries_from_bytes(&bytes, &path, config)
+                .unwrap_or_default();
+            if !sums.is_empty() {
+                idx.replace_summaries_for_file(&path, &hash, &sums)?;
+            }
+
             Ok(())
-        },
-    )?;
+        })?;
 
     {
         let idx = Indexer::from_pool(project_name, &pool)?;

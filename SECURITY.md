@@ -4,7 +4,7 @@
 
 | Version | Supported | Notes                |
 |---------|-----------|----------------------|
-| 0.2.x   | ✅        | Latest *alpha* line  |
+| 0.2.x   | ✅        | Latest stable line   |
 | 0.1.x   | ✅        | Critical fixes only  |
 | < 0.1   | ❌        | End-of-life          |
 

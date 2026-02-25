@@ -9,6 +9,7 @@ pub fn lowercase_ext(path: &std::path::Path) -> Option<&'static str> {
         "py" | "PY" => Some("py"),
         "ts" | "TSX" | "tsx" => Some("ts"),
         "js" => Some("js"),
+        "rb" | "RB" => Some("rb"),
         _ => None,
     })
 }

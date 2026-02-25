@@ -20,12 +20,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
     },
     Pattern {
-        id: "inner_html_assignment",
-        description: "Assignment to element.innerHTML",
-        query: "(assignment_expression left: (member_expression property: (property_identifier) @prop (#eq? @prop \"innerHTML\"))) @vuln",
-        severity: Severity::Medium,
-    },
-    Pattern {
         id: "settimeout_string",
         description: "setTimeout / setInterval with a string argument",
         query: "(call_expression function: (identifier) @id (#match? @id \"setTimeout|setInterval\") arguments: (arguments (string) @code . _)) @vuln",
