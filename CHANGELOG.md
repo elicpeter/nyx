@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **AST pattern overhaul** -- all 10 language pattern files (`src/patterns/*.rs`) rewritten with consistent conventions, structured metadata, and validated tree-sitter queries.
+  - **Pattern schema extensions** -- `PatternTier` (A = structural, B = heuristic-guarded), `PatternCategory` (13 vulnerability classes), and `Hash` on `Severity`. Module-level docs explain conventions and how to add new patterns.
+  - **Namespaced IDs** -- all pattern IDs follow `<lang>.<category>.<specific>` format (e.g. `java.deser.readobject`, `py.cmdi.os_system`, `js.xss.document_write`).
+  - **New vulnerability coverage** -- 30+ new patterns across languages: Python deserialization (`pickle.loads`, `yaml.load`, `shelve.open`), Python command injection (`os.system`, `os.popen`), Python weak crypto (`hashlib.md5/sha1`), Java reflection (`Method.invoke`), Java weak digest (`MessageDigest.getInstance("MD5")`), Java XSS (`getWriter().println`), Go TLS misconfiguration (`InsecureSkipVerify: true`), Go SQL concat, Go hardcoded secrets, Go gob deserialization, PHP `assert()` code exec, PHP `include $var` path traversal, PHP weak crypto (`md5`/`sha1`/`rand`), C/C++ `popen()`, C/C++ format-string with variable first arg, C++ `const_cast`, Ruby `Digest::MD5`.
+  - **Query fixes** -- fixed 11 broken tree-sitter queries: Java `object_creation_expression` used wrong type node (`identifier` → `type_identifier`), C++ `reinterpret_cast`/`const_cast` used non-existent node types (→ `template_function` match), Ruby backtick used `shell_command` (→ `subshell`), Python SQL used `binary_expression` (→ `binary_operator`), TypeScript `as any` used inaccessible field (→ positional child), PHP patterns missing `argument` wrapper nodes, Rust `unsafe fn` regex used unsupported `\b`.
+  - **No-duplicate rule** -- patterns that overlap with taint sinks use distinct ID namespaces and are documented; dedup in `ast.rs` prevents duplicate findings at the same location.
+  - **Severity recalibration** -- `unwrap`/`expect`/`panic!`/`todo!` moved to Low (filtered by default `min_severity`). Security patterns remain High/Medium.
+- **Pattern test suite** (`tests/pattern_tests.rs`, 26 tests) -- sanity checks (unique IDs, query compilation, non-empty descriptions, naming convention, severity distribution), positive fixture tests (10 languages), and negative fixture tests (10 languages verifying no false positives on safe code).
+- **Pattern test fixtures** -- positive and negative fixture files for all 10 languages under `tests/fixtures/patterns/<lang>/`.
+
+### Changed
+- **Path-sensitive taint analysis** -- the BFS taint engine now carries a `PathState` (bounded set of branch predicates) alongside the taint map. When the BFS traverses a True or False edge from an `If` node, it records a `Predicate` with the condition's variables, kind, and polarity. This enables two new capabilities:
+  - **Infeasible path pruning** -- paths with contradictory predicates (e.g. `if x.is_none() { return; } if x.is_none() { sink }`) are detected and pruned, eliminating false positives on code guarded by redundant null/empty/error checks. Contradiction detection is conservative: only whitelisted kinds (`NullCheck`, `EmptyCheck`, `ErrorCheck`) with single-variable predicates are pruned.
+  - **Validation guard annotation** -- when all tainted variables reaching a sink are guarded by a `ValidationCall` predicate (e.g. `if validate(&x) { sink }` or `if !validate(&x) { return; } sink`), the finding is annotated with `path_validated: true` and `guard_kind: ValidationCall`. This metadata is surfaced in JSON and console output without changing severity.
+- **Condition metadata on CFG nodes** -- `NodeInfo` now carries `condition_text`, `condition_vars`, and `condition_negated` for `If` nodes, extracted during CFG construction. Negation detection handles `!expr`, `not expr`, and Ruby `unless`. Classification of condition text into `PredicateKind` (NullCheck, EmptyCheck, ErrorCheck, ValidationCall, SanitizerCall, Comparison, Unknown) is conservative: call-based kinds require `(` in the text and a matching callee token.
+- **`path_validated` and `guard_kind` fields on `Diag`** -- taint findings carry path-sensitivity metadata in JSON output (fields omitted when not set) and console output (suffix line `Path guard: ValidationCall` when present). Finding IDs are unchanged for dedup stability.
+- **`smallvec` dependency** -- used for inline-allocated predicate storage in `PathState` (avoids heap allocation for the common case of ≤4 predicates per path).
+- **Interprocedural call graph** -- a whole-program `CallGraph` (`petgraph::DiGraph<FuncKey, CallEdge>`) is now built between Pass 1 and Pass 2 of every taint-enabled scan. Each function definition is a node; resolved callee relationships are edges. The graph is constructed from the merged `GlobalSummaries` and is available in both the filesystem and indexed scan paths.
+- **Three-valued callee resolution** -- `CalleeResolution` enum distinguishes `Resolved(FuncKey)`, `NotFound`, and `Ambiguous(Vec<FuncKey>)`. Ambiguous callees (same name in multiple namespaces, caller in a third namespace) are tracked separately from missing callees for diagnostics.
+- **Shared resolution helper** -- `GlobalSummaries::resolve_callee_key()` centralizes same-language callee resolution with arity-aware filtering and namespace disambiguation. Both the call graph builder and the taint engine now use the same resolution logic.
+- **Callee-name normalization** -- `normalize_callee_name()` extracts the last segment from qualified callee text (`"env::var"` → `"var"`, `"obj.method"` → `"method"`) before resolution. The raw call-site text is preserved on graph edges for diagnostics.
+- **SCC / topological analysis** -- `CallGraphAnalysis` computes strongly connected components via Tarjan's algorithm and exposes a callee-first (leaves-first) topological ordering of SCC indices, ready for future bottom-up taint propagation.
+- **Call graph tracing** -- `tracing::info!` log with node count, edge count, unresolved-not-found count, unresolved-ambiguous count, and SCC count is emitted after every call graph build.
+- 8 new path-sensitivity integration tests: early-return validation guard, failed-validation branch, contradictory null-check pruning, if/else validation annotation, sanitize-one-branch regression, path-state budget graceful degradation, unknown-predicate non-pruning, multi-var non-pruning.
+- 35 new unit tests in `taint::path_state`: classify_condition variants, PathState push/truncation, contradiction detection (whitelisted kinds, single-var only), has_validation_for semantics, state_hash determinism, priority ordering.
+- 11 new unit tests: callee normalization, same-name-different-namespaces resolution, cross-language isolation, arity separation, recursive SCC detection, not-found vs ambiguous diagnostics, diamond topo ordering, interop edge resolution, namespace normalization consistency, and raw call-site preservation.
+
+### Changed
+- **Edge-aware taint traversal** -- `analyse_file()` now uses `cfg.edges(node)` instead of `cfg.neighbors(node)`, inspecting `EdgeKind` on each edge. This is required for predicate recording but also makes the taint engine aware of the CFG's branch structure for the first time.
+- **Two-tier seen-state deduplication** -- the BFS seen-state map changed from `HashSet<(NodeIndex, u64)>` to a `HashMap` keyed by `(NodeIndex, taint_hash)` mapping to a bounded list of `(path_hash, priority)` pairs. At most `MAX_PATH_VARIANTS_PER_KEY` (4) path variants are tracked per taint state, with deterministic eviction preferring non-truncated states with fewer predicates.
+- **Finding deduplication** -- taint findings are now deduplicated by `(sink, source)` pair after analysis, preferring findings with `path_validated = true` (most informative metadata).
+- **`taint::Finding` struct** -- added `path_validated: bool` and `guard_kind: Option<PredicateKind>` fields. Code that constructs `Finding` directly must include these fields.
+- **`Diag` struct** -- added `path_validated: bool` and `guard_kind: Option<String>` fields. Both use `#[serde(skip_serializing_if)]` to omit from JSON when not set.
+- **`taint::resolve_callee()` refactored** -- the global resolution step now delegates to `GlobalSummaries::resolve_callee_key()` and applies `normalize_callee_name()` before lookup, unifying resolution logic with the call graph builder.
+
+### Fixed
+- **CFG: False edge to then-block exits in no-else if statements** -- previously, `if (cond) { body }` without an else block created a `False` edge from the condition node directly to the then-block's exit nodes. This made the false path appear to traverse the then-block, causing incorrect predicate polarity in path-sensitive analysis and duplicate taint findings with contradictory metadata. The CFG now creates a synthetic pass-through `Seq` node for the false path with an explicit `False` edge from the condition, correctly modeling "skip the then-block." This also fixes the frontier: previously, the no-else non-terminating case duplicated `then_exits` in the frontier (`then_exits ++ then_exits.clone()`); it now correctly produces `then_exits ∪ [pass_through]`.
+
 ## [0.3.0] - 2026-02-25
 
 ### Added

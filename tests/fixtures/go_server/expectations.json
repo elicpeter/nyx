@@ -1,7 +1,7 @@
 {
   "required_findings": [
     { "id_prefix": "taint-unsanitised-flow", "min_count": 4 },
-    { "id_prefix": "exec_command", "min_count": 3 },
+    { "id_prefix": "go.cmdi.exec_command", "min_count": 3 },
     { "id_prefix": "cfg-unguarded-sink", "min_count": 1 }
   ],
   "forbidden_findings": [],

@@ -249,6 +249,8 @@ pub fn run_rules_on_bytes(
                     source_point.row + 1,
                     source_point.column + 1
                 ),
+                path_validated: finding.path_validated,
+                guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
             });
         }
 
@@ -274,6 +276,8 @@ pub fn run_rules_on_bytes(
                 col: point.column + 1,
                 severity: cf.severity,
                 id: cf.rule_id,
+                path_validated: false,
+                guard_kind: None,
             });
         }
     }
@@ -298,6 +302,8 @@ pub fn run_rules_on_bytes(
                         col: point.column + 1,
                         severity: cq.meta.severity,
                         id: cq.meta.id.to_owned(),
+                        path_validated: false,
+                        guard_kind: None,
                     });
                 }
             }
@@ -437,6 +443,8 @@ pub fn analyse_file_fused(
                     source_point.row + 1,
                     source_point.column + 1
                 ),
+                path_validated: finding.path_validated,
+                guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
             });
         }
 
@@ -461,6 +469,8 @@ pub fn analyse_file_fused(
                 col: point.column + 1,
                 severity: cf.severity,
                 id: cf.rule_id,
+                path_validated: false,
+                guard_kind: None,
             });
         }
     }
@@ -485,6 +495,8 @@ pub fn analyse_file_fused(
                         col: point.column + 1,
                         severity: cq.meta.severity,
                         id: cq.meta.id.to_owned(),
+                        path_validated: false,
+                        guard_kind: None,
                     });
                 }
             }

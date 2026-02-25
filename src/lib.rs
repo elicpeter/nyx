@@ -3,6 +3,7 @@
 // exposes internals for criterion and other tooling.
 
 pub mod ast;
+pub mod callgraph;
 pub mod cfg;
 pub mod cfg_analysis;
 pub(crate) mod cli;

@@ -1,118 +1,156 @@
-use crate::patterns::{Pattern, Severity};
+use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
+/// Rust AST patterns.
+///
+/// Rust taint rules already cover `Command::new`/`arg`/`status`/`output` sinks
+/// and `env::var` / `fs::read_to_string` sources, so we do NOT duplicate those.
+/// Patterns here focus on **unsafe memory**, **panicking APIs**, and structural
+/// code-quality signals specific to Rust.
 pub const PATTERNS: &[Pattern] = &[
+    // ── Tier A: Memory Safety (unsafe) ─────────────────────────────────
     Pattern {
-        id: "unsafe_block",
-        description: "Use of an `unsafe` block",
+        id: "rs.memory.transmute",
+        description: "std::mem::transmute — unchecked type reinterpretation",
+        query: r#"(call_expression
+                     function: (scoped_identifier
+                       path: (identifier) @p (#eq? @p "mem")
+                       name: (identifier) @f (#eq? @f "transmute")))
+                   @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::MemorySafety,
+    },
+    Pattern {
+        id: "rs.memory.copy_nonoverlapping",
+        description: "ptr::copy_nonoverlapping — raw pointer memcpy",
+        query: r#"(call_expression
+                     function: (scoped_identifier
+                       path: (identifier) @p (#eq? @p "ptr")
+                       name: (identifier) @f (#eq? @f "copy_nonoverlapping")))
+                   @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::MemorySafety,
+    },
+    Pattern {
+        id: "rs.memory.get_unchecked",
+        description: "get_unchecked / get_unchecked_mut — unchecked indexing",
+        query: r#"(call_expression
+                     function: (field_expression
+                       field: (field_identifier) @m
+                       (#match? @m "^get_unchecked(_mut)?$")))
+                   @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::MemorySafety,
+    },
+    Pattern {
+        id: "rs.memory.mem_zeroed",
+        description: "std::mem::zeroed — zero-initialised memory may be UB for non-POD types",
+        query: r#"(call_expression
+                     function: (scoped_identifier
+                       path: (identifier) @p (#eq? @p "mem")
+                       name: (identifier) @n (#eq? @n "zeroed")))
+                   @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::MemorySafety,
+    },
+    Pattern {
+        id: "rs.memory.ptr_read",
+        description: "ptr::read / ptr::read_volatile — raw pointer dereference",
+        query: r#"(call_expression
+                     function: (scoped_identifier
+                       path: (identifier) @p (#eq? @p "ptr")
+                       name: (identifier) @n (#match? @n "^read(_volatile)?$")))
+                   @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::MemorySafety,
+    },
+    // ── Tier A: Code quality / robustness ──────────────────────────────
+    Pattern {
+        id: "rs.quality.unsafe_block",
+        description: "unsafe block — manual memory safety obligation",
         query: "(unsafe_block) @vuln",
-        severity: Severity::High,
-    },
-    Pattern {
-        id: "unsafe_fn",
-        description: "`unsafe fn` declaration",
-        query: "(function_item
-               (function_modifiers) @mods
-               (#match? @mods \"^unsafe\\b\")) @vuln",
-        severity: Severity::High,
-    },
-    Pattern {
-        id: "transmute_call",
-        description: "`std::mem::transmute` call",
-        query: "(call_expression
-                  function: (scoped_identifier
-                              path: (identifier) @p (#eq? @p \"mem\")
-                              name: (identifier) @f (#eq? @f \"transmute\")))
-                @vuln",
-        severity: Severity::High,
-    },
-    Pattern {
-        id: "copy_nonoverlapping",
-        description: "Raw pointer `copy_nonoverlapping`",
-        query: "(call_expression
-                  function: (scoped_identifier
-                              path: (identifier) @p (#eq? @p \"ptr\")
-                              name: (identifier) @f (#eq? @f \"copy_nonoverlapping\")))
-                @vuln",
-        severity: Severity::High,
-    },
-    Pattern {
-        id: "get_unchecked",
-        description: "`get_unchecked` / `get_unchecked_mut` slice access",
-        query: "(call_expression
-                  function: (field_expression
-                              field: (field_identifier) @m
-                              (#match? @m \"get_unchecked(_mut)?\"))) @vuln",
-        severity: Severity::High,
-    },
-    Pattern {
-        id: "unwrap_call",
-        description: "`.unwrap()` call (may panic)",
-        query: "(call_expression
-              function: (field_expression
-                          field: (field_identifier) @name
-                          (#eq? @name \"unwrap\")))   ; exact match
-            @vuln",
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::MemorySafety,
     },
     Pattern {
-        id: "expect_call",
-        description: "`.expect()` call (may panic)",
-        query: "(call_expression
-                  function: (field_expression
-                              field: (field_identifier) @name
-                              (#eq? @name \"expect\"))) @vuln",
+        id: "rs.quality.unsafe_fn",
+        description: "unsafe fn declaration",
+        query: r#"(function_item
+                     (function_modifiers) @mods
+                     (#match? @mods "^unsafe"))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::MemorySafety,
     },
     Pattern {
-        id: "panic_macro",
-        description: "`panic!` macro invocation",
-        query: "(macro_invocation (identifier) @id (#eq? @id \"panic\")) @vuln",
-        severity: Severity::Medium,
-    },
-    Pattern {
-        id: "todo_or_unimplemented",
-        description: "`todo!()` / `unimplemented!()` placeholder",
-        query: "(macro_invocation
-                  (identifier) @id
-                  (#match? @id \"todo|unimplemented\")) @vuln",
+        id: "rs.quality.unwrap",
+        description: ".unwrap() — panics on None/Err",
+        query: r#"(call_expression
+                     function: (field_expression
+                       field: (field_identifier) @name (#eq? @name "unwrap")))
+                   @vuln"#,
         severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeQuality,
     },
     Pattern {
-        id: "narrow_cast_with_as",
-        description: "`as` cast to an 8-/16-bit integer (possible truncation)",
-        query: "(type_cast_expression
-                  type: (primitive_type) @to
-                  (#match? @to \"^u?i(8|16)$\")) @vuln",
+        id: "rs.quality.expect",
+        description: ".expect() — panics on None/Err",
+        query: r#"(call_expression
+                     function: (field_expression
+                       field: (field_identifier) @name (#eq? @name "expect")))
+                   @vuln"#,
         severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeQuality,
     },
     Pattern {
-        id: "mem_zeroed",
-        description: "`std::mem::zeroed()`",
-        query: "(call_expression function:(scoped_identifier path:(identifier)@p (#eq? @p \"mem\") name:(identifier)@n (#eq? @n \"zeroed\")))@vuln",
-        severity: Severity::High,
-    },
-    Pattern {
-        id: "mem_forget",
-        description: "`std::mem::forget()`",
-        query: "(call_expression function:(scoped_identifier path:(identifier)@p (#eq? @p \"mem\") name:(identifier)@n (#eq? @n \"forget\")))@vuln",
-        severity: Severity::Medium,
-    },
-    Pattern {
-        id: "ptr_read",
-        description: "`ptr::read_*` raw-ptr read",
-        query: "(call_expression function:(scoped_identifier path:(identifier)@p (#eq? @p \"ptr\") name:(identifier)@n (#match? @n \"read(_volatile)?\")))@vuln",
-        severity: Severity::High,
-    },
-    Pattern {
-        id: "arc_unwrap",
-        description: "`Arc::unwrap_or_else_unchecked`",
-        query: "(call_expression function:(scoped_identifier name:(identifier)@n (#eq? @n \"unwrap_or_else_unchecked\")))@vuln",
-        severity: Severity::High,
-    },
-    Pattern {
-        id: "dbg_macro",
-        description: "`dbg!()` left in code",
-        query: "(macro_invocation (identifier)@id (#eq? @id \"dbg\"))@vuln",
+        id: "rs.quality.panic_macro",
+        description: "panic! macro invocation",
+        query: r#"(macro_invocation (identifier) @id (#eq? @id "panic")) @vuln"#,
         severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeQuality,
+    },
+    Pattern {
+        id: "rs.quality.todo",
+        description: "todo!() / unimplemented!() placeholder left in code",
+        query: r#"(macro_invocation
+                     (identifier) @id
+                     (#match? @id "^(todo|unimplemented)$"))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeQuality,
+    },
+    // ── Tier A: Narrowing cast ─────────────────────────────────────────
+    Pattern {
+        id: "rs.memory.narrow_cast",
+        description: "`as` cast to 8/16-bit integer — possible truncation",
+        query: r#"(type_cast_expression
+                     type: (primitive_type) @to
+                     (#match? @to "^(u8|i8|u16|i16)$"))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::MemorySafety,
+    },
+    Pattern {
+        id: "rs.memory.mem_forget",
+        description: "std::mem::forget — may leak resources",
+        query: r#"(call_expression
+                     function: (scoped_identifier
+                       path: (identifier) @p (#eq? @p "mem")
+                       name: (identifier) @n (#eq? @n "forget")))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::MemorySafety,
     },
 ];

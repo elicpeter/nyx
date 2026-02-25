@@ -681,6 +681,8 @@ fn taint_and_unguarded_sink_deduped() {
         source: entry,
         path: vec![entry, sink_node],
         source_kind: crate::labels::SourceKind::UserInput,
+        path_validated: false,
+        guard_kind: None,
     }];
 
     let findings = parse_and_run_all_with_taint(

@@ -1,100 +1,144 @@
-use crate::patterns::{Pattern, Severity};
+use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
+/// TypeScript AST patterns.
+///
+/// TypeScript shares most patterns with JavaScript. Taint rules cover `eval`,
+/// `innerHTML`, and `child_process.*` sinks. AST patterns here mirror JS
+/// patterns plus TS-specific `any` type-safety escapes.
 pub const PATTERNS: &[Pattern] = &[
+    // ── Tier A: Code execution ─────────────────────────────────────────
     Pattern {
-        id: "eval_call",
-        description: "Use of eval()",
-        query: "(call_expression function: (identifier) @id (#eq? @id \"eval\")) @vuln",
+        id: "ts.code_exec.eval",
+        description: "eval() — dynamic code execution",
+        query: r#"(call_expression
+                     function: (identifier) @id (#eq? @id "eval"))
+                   @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
     },
     Pattern {
-        id: "new_function",
-        description: "new Function() constructor",
-        query: "(new_expression constructor: (identifier) @id (#eq? @id \"Function\")) @vuln",
+        id: "ts.code_exec.new_function",
+        description: "new Function() constructor — eval equivalent",
+        query: r#"(new_expression
+                     constructor: (identifier) @id (#eq? @id "Function"))
+                   @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
     },
     Pattern {
-        id: "document_write",
-        description: "document.write() call",
-        query: "(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj \"document\") property: (property_identifier) @prop (#eq? @prop \"write\"))) @vuln",
+        id: "ts.code_exec.settimeout_string",
+        description: "setTimeout/setInterval with string argument — implicit eval",
+        query: r#"(call_expression
+                     function: (identifier) @id (#match? @id "^(setTimeout|setInterval)$")
+                     arguments: (arguments (string) @code))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
     },
+    // ── Tier A: XSS sinks ──────────────────────────────────────────────
     Pattern {
-        id: "settimeout_string",
-        description: "setTimeout / setInterval with a string argument",
-        query: "(call_expression function: (identifier) @id (#match? @id \"setTimeout|setInterval\") arguments: (arguments (string) @code . _)) @vuln",
+        id: "ts.xss.document_write",
+        description: "document.write() — XSS sink",
+        query: r#"(call_expression
+                     function: (member_expression
+                       object: (identifier) @obj (#eq? @obj "document")
+                       property: (property_identifier) @prop (#match? @prop "^(write|writeln)$")))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
     },
     Pattern {
-        id: "any_type",
-        description: "Type annotation of `any`",
-        query: "(type_annotation (predefined_type) @t (#eq? @t \"any\")) @vuln",
-        severity: Severity::Low,
-    },
-    Pattern {
-        id: "json_parse",
-        description: "JSON.parse on dynamic string",
-        query: "(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj \"JSON\") property: (property_identifier) @prop (#eq? @prop \"parse\"))) @vuln",
-        severity: Severity::Low,
-    },
-    Pattern {
-        id: "as_any_assertion",
-        description: "Type assertion to `any` using `as any`",
-        query: "(as_expression type: (predefined_type) @t (#eq? @t \"any\")) @vuln",
-        severity: Severity::Low,
-    },
-    Pattern {
-        id: "type_assertion_any",
-        description: "Type assertion to `any` using `<any>` syntax",
-        query: "(type_assertion type: (predefined_type) @t (#eq? @t \"any\")) @vuln",
-        severity: Severity::Low,
-    },
-    Pattern {
-        id: "outer_html_assignment",
-        description: "Assignment to element.outerHTML",
-        query: "(assignment_expression left: (member_expression property: (property_identifier) @prop (#eq? @prop \"outerHTML\"))) @vuln",
+        id: "ts.xss.outer_html",
+        description: "Assignment to .outerHTML — XSS sink",
+        query: r#"(assignment_expression
+                     left: (member_expression
+                       property: (property_identifier) @prop (#eq? @prop "outerHTML")))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
     },
     Pattern {
-        id: "insert_adjacent_html",
-        description: "insertAdjacentHTML() call",
-        query: "(call_expression function: (member_expression property: (property_identifier) @prop (#eq? @prop \"insertAdjacentHTML\"))) @vuln",
+        id: "ts.xss.insert_adjacent_html",
+        description: "insertAdjacentHTML() — XSS sink",
+        query: r#"(call_expression
+                     function: (member_expression
+                       property: (property_identifier) @prop (#eq? @prop "insertAdjacentHTML")))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
+    },
+    // ── Tier A: Weak crypto ────────────────────────────────────────────
+    Pattern {
+        id: "ts.crypto.math_random",
+        description: "Math.random() — not cryptographically secure",
+        query: r#"(call_expression
+                     function: (member_expression
+                       object: (identifier) @obj (#eq? @obj "Math")
+                       property: (property_identifier) @prop (#eq? @prop "random")))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::Crypto,
+    },
+    // ── Tier A: TypeScript-specific type-safety escapes ────────────────
+    Pattern {
+        id: "ts.quality.any_annotation",
+        description: "Type annotation of `any` — disables type checking",
+        query: r#"(type_annotation (predefined_type) @t (#eq? @t "any")) @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeQuality,
     },
     Pattern {
-        id: "document_cookie_write",
+        id: "ts.quality.as_any",
+        description: "Type assertion `as any` — type-safety escape hatch",
+        query: r#"(as_expression (predefined_type) @t (#eq? @t "any")) @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeQuality,
+    },
+    // ── Tier A: Prototype pollution ────────────────────────────────────
+    Pattern {
+        id: "ts.prototype.proto_assignment",
+        description: "Assignment to __proto__ — prototype pollution",
+        query: r#"(assignment_expression
+                     left: (member_expression
+                       property: (property_identifier) @prop (#eq? @prop "__proto__")))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Prototype,
+    },
+    // ── Tier A: Open redirect ──────────────────────────────────────────
+    Pattern {
+        id: "ts.xss.location_assign",
+        description: "Assignment to location/location.href — open redirect",
+        query: r#"(assignment_expression
+                     left: (member_expression
+                       object: (identifier) @obj (#match? @obj "^(window|location|document)$")
+                       property: (property_identifier) @prop (#match? @prop "^(location|href)$")))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
+    },
+    // ── Tier A: Cookie manipulation ────────────────────────────────────
+    Pattern {
+        id: "ts.xss.cookie_write",
         description: "Write to document.cookie",
-        query: "(assignment_expression left: (member_expression object: (identifier) @obj (#eq? @obj \"document\") property: (property_identifier) @prop (#eq? @prop \"cookie\"))) @vuln",
+        query: r#"(assignment_expression
+                     left: (member_expression
+                       object: (identifier) @obj (#eq? @obj "document")
+                       property: (property_identifier) @prop (#eq? @prop "cookie")))
+                   @vuln"#,
         severity: Severity::Low,
-    },
-    Pattern {
-        id: "onclick_setattribute",
-        description: "Element.setAttribute('onclick', …)",
-        query: "(call_expression function: (member_expression property: (property_identifier) @prop (#eq? @prop \"setAttribute\")) arguments: (arguments (string) @name (#eq? @name \"\\\"onclick\\\"\") . (string) @handler)) @vuln",
-        severity: Severity::Medium,
-    },
-    Pattern {
-        id: "math_random_call",
-        description: "Use of Math.random() for security-sensitive randomness",
-        query: "(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj \"Math\") property: (property_identifier) @prop (#eq? @prop \"random\"))) @vuln",
-        severity: Severity::Low,
-    },
-    Pattern {
-        id: "crypto_createhash_md5",
-        description: "Insecure hash algorithm: crypto.createHash('md5')",
-        query: "(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj \"crypto\") property: (property_identifier) @prop (#eq? @prop \"createHash\")) arguments: (arguments (string) @alg (#match? @alg \"(?i)\\\"md5\\\"\"))) @vuln",
-        severity: Severity::Medium,
-    },
-    Pattern {
-        id: "fetch_http_url",
-        description: "fetch() over plain HTTP",
-        query: "(call_expression function: (identifier) @id (#eq? @id \"fetch\") arguments: (arguments (string) @url (#match? @url \"^\\\"http://\"))) @vuln",
-        severity: Severity::Low,
-    },
-    Pattern {
-        id: "xhr_eval_response",
-        description: "eval() of XMLHttpRequest.responseText",
-        query: "(call_expression function: (identifier) @id (#eq? @id \"eval\") arguments: (arguments (member_expression property: (property_identifier) @prop (#eq? @prop \"responseText\")))) @vuln",
-        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
     },
 ];

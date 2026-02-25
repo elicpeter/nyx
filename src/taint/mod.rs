@@ -1,11 +1,32 @@
-use crate::cfg::{Cfg, FuncSummaries, NodeInfo, StmtKind};
+pub mod path_state;
+
+use crate::callgraph::normalize_callee_name;
+use crate::cfg::{Cfg, EdgeKind, FuncSummaries, NodeInfo, StmtKind};
 use crate::interop::InteropEdge;
 use crate::labels::{Cap, DataLabel, SourceKind};
-use crate::summary::GlobalSummaries;
+use crate::summary::{CalleeResolution, GlobalSummaries};
 use crate::symbol::Lang;
+use path_state::{PathState, Predicate, PredicateKind, classify_condition};
 use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use tracing::debug;
+
+// ─── Path-sensitivity bail-out thresholds ────────────────────────────────────
+
+/// CFG node count above which path sensitivity is disabled.
+const PATH_SENSITIVITY_NODE_LIMIT: usize = 500;
+
+/// BFS queue size above which new predicate recording stops (existing
+/// predicates on queued items are preserved).
+const PATH_SENSITIVITY_QUEUE_LIMIT: usize = 10_000;
+
+/// Maximum path-state variants per `(node, taint_hash)` key in the
+/// seen-state map.  When this limit is reached, new variants are only
+/// accepted if they have strictly better [`PathState::priority`] than
+/// the worst existing entry.
+const MAX_PATH_VARIANTS_PER_KEY: usize = 4;
 
 /// A detected taint finding with both source and sink locations.
 #[derive(Debug, Clone)]
@@ -20,6 +41,13 @@ pub struct Finding {
     pub path: Vec<NodeIndex>,
     /// The kind of source that originated the taint.
     pub source_kind: SourceKind,
+    /// Whether all tainted sink variables are guarded by a validation
+    /// predicate on this path (metadata only — does not change severity).
+    #[allow(dead_code)] // surfaced in Diag output (task 4)
+    pub path_validated: bool,
+    /// The kind of validation guard protecting this path, if any.
+    #[allow(dead_code)] // surfaced in Diag output (task 4)
+    pub guard_kind: Option<PredicateKind>,
 }
 
 /// Order-independent hash of a taint map.
@@ -69,11 +97,15 @@ fn resolve_callee(
     global: Option<&GlobalSummaries>,
     interop_edges: &[InteropEdge],
 ) -> Option<ResolvedSummary> {
+    // Normalize qualified callee names (e.g. "env::var" → "var") so that
+    // resolution matches the bare function `name` stored in summaries.
+    let normalized = normalize_callee_name(callee);
+
     // 1) Local (same-file): scan local summaries for matching name + lang + namespace
     let local_matches: Vec<_> = local
         .iter()
         .filter(|(k, _)| {
-            k.name == callee && k.lang == caller_lang && k.namespace == caller_namespace
+            k.name == normalized && k.lang == caller_lang && k.namespace == caller_namespace
         })
         .collect();
 
@@ -92,35 +124,22 @@ fn resolve_callee(
         return None;
     }
 
-    // 2) Global same-language
+    // 2) Global same-language — delegate to shared resolution helper
     if let Some(gs) = global {
-        let matches = gs.lookup_same_lang(caller_lang, callee);
-        if matches.len() == 1 {
-            let (_, fs) = matches[0];
-            return Some(ResolvedSummary {
-                source_caps: fs.source_caps(),
-                sanitizer_caps: fs.sanitizer_caps(),
-                sink_caps: fs.sink_caps(),
-                propagates_taint: fs.propagates_taint,
-            });
-        }
-        // Multiple matches — try namespace match first
-        if matches.len() > 1 {
-            let same_ns: Vec<_> = matches
-                .iter()
-                .filter(|(k, _)| k.namespace == caller_namespace)
-                .collect();
-            if same_ns.len() == 1 {
-                let (_, fs) = same_ns[0];
-                return Some(ResolvedSummary {
-                    source_caps: fs.source_caps(),
-                    sanitizer_caps: fs.sanitizer_caps(),
-                    sink_caps: fs.sink_caps(),
-                    propagates_taint: fs.propagates_taint,
-                });
+        match gs.resolve_callee_key(normalized, caller_lang, caller_namespace, None) {
+            CalleeResolution::Resolved(target_key) => {
+                if let Some(fs) = gs.get(&target_key) {
+                    return Some(ResolvedSummary {
+                        source_caps: fs.source_caps(),
+                        sanitizer_caps: fs.sanitizer_caps(),
+                        sink_caps: fs.sink_caps(),
+                        propagates_taint: fs.propagates_taint,
+                    });
+                }
             }
-            // Still ambiguous — return None (conservative)
-            return None;
+            CalleeResolution::NotFound | CalleeResolution::Ambiguous(_) => {
+                // Fall through to interop edges
+            }
         }
     }
 
@@ -283,6 +302,13 @@ fn apply_taint(
 ///
 /// `global_summaries` is `None` for pass‑1 / single‑file mode and
 /// `Some(&map)` for pass‑2 cross‑file analysis.
+///
+/// When path sensitivity is enabled (CFG node count ≤
+/// [`PATH_SENSITIVITY_NODE_LIMIT`]), the BFS carries a [`PathState`]
+/// alongside the taint map.  This records branch predicates along each
+/// path, prunes infeasible (contradictory) paths, and annotates findings
+/// with `path_validated` metadata when the sink is guarded by a
+/// validation check.
 pub fn analyse_file(
     cfg: &Cfg,
     entry: NodeIndex,
@@ -292,33 +318,52 @@ pub fn analyse_file(
     caller_namespace: &str,
     interop_edges: &[InteropEdge],
 ) -> Vec<Finding> {
-    use std::collections::{HashMap, HashSet, VecDeque};
+    use std::collections::{HashMap, VecDeque};
 
-    /// Queue item: current CFG node + taint map that holds here
+    /// Queue item: current CFG node + taint map + path predicates.
     #[derive(Clone)]
     struct Item {
         node: NodeIndex,
         taint: HashMap<String, Cap>,
+        path_state: PathState,
     }
 
-    // (node, taint_hash)  →  predecessor key   (for path rebuild)
-    type Key = (NodeIndex, u64);
+    // ── Predecessor map for path reconstruction ──────────────────────────
+    // Key: (node, taint_hash, path_hash)
+    // Value: predecessor key
+    type Key = (NodeIndex, u64, u64);
     let mut pred: HashMap<Key, Key> = HashMap::new();
 
-    // Seen states so we do not revisit them infinitely
-    let mut seen: HashSet<Key> = HashSet::new();
+    // ── Seen states ──────────────────────────────────────────────────────
+    // Two-tier scheme: primary key = (node, taint_hash) maps to a bounded
+    // list of (path_hash, priority) pairs.  This prevents state explosion
+    // while preserving path sensitivity.
+    type PathPriority = (bool, usize);
+    type SeenVariants = SmallVec<[(u64, PathPriority); 2]>;
+    let mut seen: HashMap<(NodeIndex, u64), SeenVariants> = HashMap::new();
 
-    // Resulting findings: (sink_node, source_node, full_path)
+    let path_sensitive = cfg.node_count() <= PATH_SENSITIVITY_NODE_LIMIT;
+
     let mut findings: Vec<Finding> = Vec::new();
 
     let mut q = VecDeque::new();
+    let init_path = PathState::new();
+    let init_path_h = init_path.state_hash();
     q.push_back(Item {
         node: entry,
         taint: HashMap::new(),
+        path_state: init_path,
     });
-    seen.insert((entry, 0));
+    seen.entry((entry, 0))
+        .or_default()
+        .push((init_path_h, (true, path_state::MAX_PATH_PREDICATES)));
 
-    while let Some(Item { node, taint }) = q.pop_front() {
+    while let Some(Item {
+        node,
+        taint,
+        path_state,
+    }) = q.pop_front()
+    {
         let caller_func = cfg[node].enclosing_func.as_deref().unwrap_or("");
         let mut out = taint.clone();
         apply_taint(
@@ -337,56 +382,65 @@ pub fn analyse_file(
         //   2. Its callee resolves to a function with sink_caps (cross-file)
         let sink_caps = match cfg[node].label {
             Some(DataLabel::Sink(caps)) => caps,
-            _ => {
-                // check if callee resolves to a sink
-                cfg[node]
-                    .callee
-                    .as_ref()
-                    .and_then(|c| {
-                        resolve_callee(
-                            c,
-                            caller_lang,
-                            caller_namespace,
-                            caller_func,
-                            cfg[node].call_ordinal,
-                            local_summaries,
-                            global_summaries,
-                            interop_edges,
-                        )
-                    })
-                    .filter(|r| !r.sink_caps.is_empty())
-                    .map(|r| r.sink_caps)
-                    .unwrap_or(Cap::empty())
-            }
+            _ => cfg[node]
+                .callee
+                .as_ref()
+                .and_then(|c| {
+                    resolve_callee(
+                        c,
+                        caller_lang,
+                        caller_namespace,
+                        caller_func,
+                        cfg[node].call_ordinal,
+                        local_summaries,
+                        global_summaries,
+                        interop_edges,
+                    )
+                })
+                .filter(|r| !r.sink_caps.is_empty())
+                .map(|r| r.sink_caps)
+                .unwrap_or(Cap::empty()),
         };
 
         if !sink_caps.is_empty() {
-            let bad = cfg[node]
+            let tainted_sink_vars: Vec<&str> = cfg[node]
                 .uses
                 .iter()
-                .any(|u| out.get(u).is_some_and(|b| (*b & sink_caps) != Cap::empty()));
-            if bad {
-                // Reconstruct path backwards from sink to source.
-                //
-                // A node is considered a "source" if:
-                //   1. It has an inline DataLabel::Source (same-file), OR
-                //   2. It is a Call whose callee resolves to a source via
-                //      local or global summaries (cross-file).
+                .filter(|u| {
+                    out.get(*u)
+                        .is_some_and(|b| (*b & sink_caps) != Cap::empty())
+                })
+                .map(|s| s.as_str())
+                .collect();
+
+            if !tainted_sink_vars.is_empty() {
+                // ── Path validation metadata ─────────────────────────────
+                let all_validated = tainted_sink_vars
+                    .iter()
+                    .all(|v| path_state.has_validation_for(v));
+
+                let guard_kind = if all_validated {
+                    tainted_sink_vars
+                        .iter()
+                        .find_map(|v| path_state.guard_kind_for(v))
+                } else {
+                    None
+                };
+
+                // ── Reconstruct path backwards to source ─────────────────
                 let sink_node = node;
                 let mut path = vec![node];
-                let mut source_node = node; // fallback: sink itself
-                let mut key = (node, taint_hash(&taint));
+                let mut source_node = node;
+                let mut key = (node, taint_hash(&taint), path_state.state_hash());
 
-                while let Some(&(prev, prev_hash)) = pred.get(&key) {
+                while let Some(&(prev, prev_th, prev_ph)) = pred.get(&key) {
                     path.push(prev);
 
-                    // Check inline source label
                     if matches!(cfg[prev].label, Some(DataLabel::Source(_))) {
                         source_node = prev;
                         break;
                     }
 
-                    // Check cross-file source via resolved callee summary
                     let prev_caller_func = cfg[prev].enclosing_func.as_deref().unwrap_or("");
                     if cfg[prev].kind == StmtKind::Call
                         && let Some(callee) = &cfg[prev].callee
@@ -406,12 +460,11 @@ pub fn analyse_file(
                         break;
                     }
 
-                    key = (prev, prev_hash);
+                    key = (prev, prev_th, prev_ph);
                 }
 
                 path.reverse();
 
-                // Infer the source kind from the source node's label and callee
                 let source_kind = match cfg[source_node].label {
                     Some(DataLabel::Source(caps)) => {
                         let callee = cfg[source_node].callee.as_deref().unwrap_or("");
@@ -425,32 +478,107 @@ pub fn analyse_file(
                     source: source_node,
                     path,
                     source_kind,
+                    path_validated: all_validated,
+                    guard_kind,
                 });
             }
         }
 
-        // enqueue successors — cache hashes to avoid recomputation
+        // ── Enqueue successors (edge-aware) ──────────────────────────────
         let out_h = taint_hash(&out);
         let in_h = taint_hash(&taint);
-        let succs: Vec<_> = cfg.neighbors(node).collect();
-        for (i, succ) in succs.iter().enumerate() {
-            let key = (*succ, out_h);
-            if !seen.contains(&key) {
-                seen.insert(key);
-                pred.insert(key, (node, in_h));
-                // Move the map into the last successor to avoid a clone
-                let taint_for_succ = if i + 1 == succs.len() {
-                    std::mem::take(&mut out)
-                } else {
-                    out.clone()
-                };
-                q.push_back(Item {
-                    node: *succ,
-                    taint: taint_for_succ,
+        let in_ph = path_state.state_hash();
+        let edges: Vec<_> = cfg.edges(node).collect();
+        let edge_count = edges.len();
+
+        for (i, edge_ref) in edges.into_iter().enumerate() {
+            let succ = edge_ref.target();
+            let edge_kind = *edge_ref.weight();
+
+            // Clone or move the path state (move the last to avoid clone).
+            let mut next_path = if i + 1 == edge_count {
+                // Safety: we won't use path_state after this iteration.
+                path_state.clone() // last edge — could use take but clone is fine for SmallVec
+            } else {
+                path_state.clone()
+            };
+
+            // ── Record predicate when leaving an If node via True/False ──
+            if path_sensitive
+                && q.len() < PATH_SENSITIVITY_QUEUE_LIMIT
+                && cfg[node].kind == StmtKind::If
+                && !cfg[node].condition_vars.is_empty()
+                && matches!(edge_kind, EdgeKind::True | EdgeKind::False)
+            {
+                let cond_text = cfg[node].condition_text.as_deref().unwrap_or("");
+                let kind = classify_condition(cond_text);
+                let polarity = matches!(edge_kind, EdgeKind::True) ^ cfg[node].condition_negated;
+                next_path.push(Predicate {
+                    vars: cfg[node].condition_vars.iter().cloned().collect(),
+                    kind,
+                    polarity,
+                    origin: node,
                 });
             }
+
+            // ── Prune infeasible (contradictory) paths ───────────────────
+            if next_path.is_contradictory() {
+                debug!(target: "taint", "Pruning infeasible path at node {}", succ.index());
+                continue;
+            }
+
+            // ── Two-tier seen-state check with deterministic eviction ────
+            let path_h = next_path.state_hash();
+            let taint_key = (succ, out_h);
+            let variants = seen.entry(taint_key).or_default();
+
+            if variants.iter().any(|(h, _)| *h == path_h) {
+                continue; // exact duplicate
+            }
+
+            let new_prio = next_path.priority();
+            if variants.len() >= MAX_PATH_VARIANTS_PER_KEY {
+                // Find the worst (lowest priority) existing entry.
+                let worst_idx = variants
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, (_, prio))| *prio)
+                    .map(|(idx, _)| idx);
+                if let Some(wi) = worst_idx {
+                    if new_prio > variants[wi].1 {
+                        variants.swap_remove(wi);
+                    } else {
+                        continue; // new state is not better — skip
+                    }
+                } else {
+                    continue;
+                }
+            }
+
+            variants.push((path_h, new_prio));
+            pred.insert((succ, out_h, path_h), (node, in_h, in_ph));
+
+            // Move the taint map into the last successor to avoid a clone.
+            let taint_for_succ = if i + 1 == edge_count {
+                std::mem::take(&mut out)
+            } else {
+                out.clone()
+            };
+            q.push_back(Item {
+                node: succ,
+                taint: taint_for_succ,
+                path_state: next_path,
+            });
         }
     }
+
+    // ── Deduplicate findings ────────────────────────────────────────────
+    // Path sensitivity may produce multiple findings at the same
+    // (sink, source) pair via different path states.  Keep at most one
+    // per (sink, source), preferring the one with `path_validated = true`
+    // (provides the most useful metadata).
+    findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
+    findings.dedup_by_key(|f| (f.sink, f.source));
 
     findings
 }

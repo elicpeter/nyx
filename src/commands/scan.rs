@@ -41,6 +41,13 @@ pub struct Diag {
     pub col: usize,
     pub severity: Severity,
     pub id: String,
+    /// Whether the finding is guarded by a path validation predicate.
+    /// Only set for taint findings; `false` for AST/CFG structural findings.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub path_validated: bool,
+    /// The kind of validation guard protecting this path, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard_kind: Option<String>,
 }
 
 /// Entry point called by the CLI.
@@ -122,6 +129,9 @@ pub fn handle(
                     d.severity.colored_tag(),
                     style(&d.id).bold()
                 );
+                if let Some(guard) = &d.guard_kind {
+                    println!("              Path guard: {}", style(guard).cyan());
+                }
             }
             println!();
         }
@@ -260,6 +270,22 @@ pub(crate) fn scan_filesystem(
         gs
     };
 
+    // ── Build call graph ────────────────────────────────────────────────
+    {
+        let _span = tracing::info_span!("build_call_graph").entered();
+        // TODO: wire interop_edges from config/index when InteropEdge sources are implemented
+        let call_graph = crate::callgraph::build_call_graph(&global_summaries, &[]);
+        let cg_analysis = crate::callgraph::analyse(&call_graph);
+        tracing::info!(
+            nodes = call_graph.graph.node_count(),
+            edges = call_graph.graph.edge_count(),
+            unresolved_not_found = call_graph.unresolved_not_found.len(),
+            unresolved_ambiguous = call_graph.unresolved_ambiguous.len(),
+            sccs = cg_analysis.sccs.len(),
+            "call graph built"
+        );
+    }
+
     // ── Pass 2: re-run with cross-file global summaries ──────────────────
     let mut diags: Vec<Diag> = {
         let _span = tracing::info_span!("pass2_analysis", files = all_paths.len()).entered();
@@ -371,6 +397,22 @@ pub fn scan_with_index_parallel(
     } else {
         None
     };
+
+    // ── Build call graph ────────────────────────────────────────────────
+    if let Some(ref gs) = global_summaries {
+        let _span = tracing::info_span!("build_call_graph").entered();
+        // TODO: wire interop_edges from config/index when InteropEdge sources are implemented
+        let call_graph = crate::callgraph::build_call_graph(gs, &[]);
+        let cg_analysis = crate::callgraph::analyse(&call_graph);
+        tracing::info!(
+            nodes = call_graph.graph.node_count(),
+            edges = call_graph.graph.edge_count(),
+            unresolved_not_found = call_graph.unresolved_not_found.len(),
+            unresolved_ambiguous = call_graph.unresolved_ambiguous.len(),
+            sccs = cg_analysis.sccs.len(),
+            "call graph built"
+        );
+    }
 
     // ── Pass 2: full analysis ────────────────────────────────────────────
     let _span = tracing::info_span!("pass2_indexed").entered();

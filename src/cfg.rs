@@ -32,6 +32,9 @@ pub enum EdgeKind {
     Back,  // back‑edge that closes a loop
 }
 
+/// Maximum number of identifiers to store from a condition expression.
+const MAX_COND_VARS: usize = 8;
+
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     pub kind: StmtKind,
@@ -44,6 +47,12 @@ pub struct NodeInfo {
     pub enclosing_func: Option<String>,
     /// Per-function call ordinal (0-based, only meaningful for Call nodes).
     pub call_ordinal: u32,
+    /// For If nodes: raw condition text (truncated to 128 chars). None for non-If nodes.
+    pub condition_text: Option<String>,
+    /// For If nodes: identifiers referenced in the condition (sorted, deduped, max 8).
+    pub condition_vars: Vec<String>,
+    /// For If nodes: whether the condition has a leading negation (`!` / `not`).
+    pub condition_negated: bool,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -370,6 +379,109 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
     }
 }
 
+/// Extract raw condition metadata from an If AST node.
+///
+/// Returns `(condition_text, condition_vars, condition_negated)`.
+/// The condition subtree is located via `child_by_field_name("condition")`
+/// for most languages, with a positional fallback for Rust `if_expression`.
+///
+/// Negation is detected by checking for a leading unary `!` operator or
+/// `not` keyword.  Variables are sorted, deduped, and capped at
+/// [`MAX_COND_VARS`].
+fn extract_condition_raw<'a>(
+    ast: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+) -> (Option<String>, Vec<String>, bool) {
+    // 1. Find the condition subtree.
+    let cond_node = ast.child_by_field_name("condition").or_else(|| {
+        // Rust `if_expression` uses positional children: the condition is
+        // the first child that is not a keyword, block, or `let` pattern.
+        let mut cursor = ast.walk();
+        ast.children(&mut cursor).find(|c| {
+            let k = c.kind();
+            !matches!(lookup(lang, k), Kind::Block | Kind::Trivia)
+                && k != "if"
+                && k != "else"
+                && k != "let"
+                && k != "{"
+                && k != "}"
+                && k != "("
+                && k != ")"
+        })
+    });
+
+    let Some(cond) = cond_node else {
+        return (None, Vec::new(), false);
+    };
+
+    // 2. Detect leading negation (`!expr`, `not expr`, Ruby `unless`).
+    let (inner, negated) = detect_negation(cond, ast, lang);
+
+    // 3. Collect identifiers from the (inner) condition subtree.
+    let mut vars = Vec::new();
+    collect_idents(inner, code, &mut vars);
+    vars.sort();
+    vars.dedup();
+    vars.truncate(MAX_COND_VARS);
+
+    // 4. Extract text, truncated.
+    let text = text_of(cond, code).map(|t| {
+        if t.len() > 128 {
+            t[..128].to_string()
+        } else {
+            t
+        }
+    });
+
+    (text, vars, negated)
+}
+
+/// Detect leading negation and return the inner expression.
+///
+/// Handles:
+/// - `!expr` (unary_expression / prefix_unary_expression with `!` operator)
+/// - `not expr` (Python `not_operator`, Ruby)
+/// - Ruby `unless` (the whole If node kind is `unless`)
+fn detect_negation<'a>(cond: Node<'a>, if_ast: Node<'a>, _lang: &str) -> (Node<'a>, bool) {
+    // Ruby `unless` is mapped to Kind::If but is semantically negated.
+    if if_ast.kind() == "unless" {
+        return (cond, true);
+    }
+
+    // `!expr` appears as unary_expression, not_operator, or prefix_unary_expression
+    // with a `!` or `not` operator child.
+    let is_negation_wrapper = matches!(
+        cond.kind(),
+        "unary_expression" | "not_operator" | "prefix_unary_expression" | "unary_not"
+    );
+
+    if is_negation_wrapper {
+        // Check if the first child is a `!` or `not` operator.
+        let has_not = cond
+            .child(0)
+            .is_some_and(|c| c.kind() == "!" || c.kind() == "not");
+
+        if has_not {
+            // Return the operand (inner expression after the `!` / `not`).
+            let inner = cond
+                .child_by_field_name("argument")
+                .or_else(|| cond.child_by_field_name("operand"))
+                .or_else(|| {
+                    // Last non-operator child.
+                    let mut cursor = cond.walk();
+                    cond.children(&mut cursor)
+                        .filter(|c| c.kind() != "!" && c.kind() != "not")
+                        .last()
+                })
+                .unwrap_or(cond);
+            return (inner, true);
+        }
+    }
+
+    (cond, false)
+}
+
 /// Create a node in one short borrow and optionally attach a taint label.
 #[allow(clippy::too_many_arguments)]
 fn push_node<'a>(
@@ -505,6 +617,13 @@ fn push_node<'a>(
         None
     };
 
+    // Extract condition metadata for If nodes.
+    let (condition_text, condition_vars, condition_negated) = if kind == StmtKind::If {
+        extract_condition_raw(ast, lang, code)
+    } else {
+        (None, Vec::new(), false)
+    };
+
     let idx = g.add_node(NodeInfo {
         kind,
         span,
@@ -514,6 +633,9 @@ fn push_node<'a>(
         callee,
         enclosing_func: enclosing_func.map(|s| s.to_string()),
         call_ordinal,
+        condition_text,
+        condition_vars,
+        condition_negated,
     });
 
     debug!(
@@ -717,19 +839,27 @@ fn build_sub<'a>(
                 }
                 exits
             } else {
-                // No explicit else → if the then-branch falls through
-                // (non-empty exits), the false branch merges with those exits.
-                // If the then-branch terminates (break/return/continue →
-                // empty exits), the false branch flows from the condition
-                // to whatever comes next.
-                if then_exits.is_empty() {
-                    vec![cond]
-                } else {
-                    if let Some(&first) = then_exits.first() {
-                        connect_all(g, &[cond], first, EdgeKind::False);
-                    }
-                    then_exits.clone()
-                }
+                // No explicit else → create a synthetic pass-through node
+                // for the false path.  This avoids routing the False edge
+                // to a then-block exit (which would make it appear that the
+                // false path goes *through* the then-block) and gives
+                // path-sensitive analysis an explicit False edge to record
+                // predicates on.
+                let pass = g.add_node(NodeInfo {
+                    kind: StmtKind::Seq,
+                    span: (ast.end_byte(), ast.end_byte()),
+                    label: None,
+                    defines: None,
+                    uses: Vec::new(),
+                    callee: None,
+                    enclosing_func: enclosing_func.map(|s| s.to_string()),
+                    call_ordinal: 0,
+                    condition_text: None,
+                    condition_vars: Vec::new(),
+                    condition_negated: false,
+                });
+                connect_all(g, &[cond], pass, EdgeKind::False);
+                vec![pass]
             };
 
             // Frontier = union of both branches
@@ -1191,6 +1321,9 @@ fn build_sub<'a>(
                 callee: None,
                 enclosing_func: Some(fn_name.clone()),
                 call_ordinal: 0,
+                condition_text: None,
+                condition_vars: Vec::new(),
+                condition_negated: false,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -1412,6 +1545,9 @@ pub(crate) fn build_cfg<'a>(
         callee: None,
         enclosing_func: None,
         call_ordinal: 0,
+        condition_text: None,
+        condition_vars: Vec::new(),
+        condition_negated: false,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -1422,6 +1558,9 @@ pub(crate) fn build_cfg<'a>(
         callee: None,
         enclosing_func: None,
         call_ordinal: 0,
+        condition_text: None,
+        condition_vars: Vec::new(),
+        condition_negated: false,
     });
 
     // Build the body below the synthetic ENTRY.

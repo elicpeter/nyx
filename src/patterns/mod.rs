@@ -1,3 +1,43 @@
+//! # AST Pattern Conventions
+//!
+//! Each language file exports a `PATTERNS` slice of [`Pattern`] structs.
+//!
+//! ## ID format
+//!
+//! `<lang>.<category>.<specific>` — e.g. `java.deser.readobject`, `py.cmdi.os_system`.
+//!
+//! Language prefixes: `rs`, `java`, `py`, `js`, `ts`, `c`, `cpp`, `go`, `php`, `rb`.
+//!
+//! ## Tiers
+//!
+//! * **Tier A** — structural presence is high-signal (e.g. `gets()`, `eval()`).
+//! * **Tier B** — requires a heuristic guard in the query (e.g. SQL with concatenated
+//!   arg, format-string with variable first arg).
+//!
+//! ## Severity
+//!
+//! * **High** — command exec, deserialization, banned C functions.
+//! * **Medium** — SQL concat, reflection, XSS sinks, casts.
+//! * **Low** — weak crypto, insecure randomness, code-quality (`unwrap`/`expect`/`panic`).
+//!
+//! Note: the default `min_severity` filter skips Low patterns; they only appear when
+//! the user explicitly lowers the threshold.
+//!
+//! ## No-duplicate rule
+//!
+//! If a vulnerability class is already detected by taint analysis (e.g. `eval` as a
+//! sink, `system` as a sink), the AST pattern is still kept for `--ast-only` mode but
+//! uses a distinct ID namespace (`js.code_exec.eval` vs `taint-unsanitised-flow`).
+//! The dedup pass in `ast.rs` prevents exact-duplicate findings at the same location.
+//!
+//! ## Adding a new pattern
+//!
+//! 1. Pick the language file under `src/patterns/<lang>.rs`.
+//! 2. Choose tier, category, severity per the rules above.
+//! 3. Write the tree-sitter query — test with `cargo test --test pattern_tests`.
+//! 4. Add a snippet to `tests/fixtures/patterns/<lang>/positive.<ext>`.
+//! 5. Add the ID to the positive test assertion in `tests/pattern_tests.rs`.
+
 pub mod c;
 pub mod cpp;
 mod go;
@@ -16,7 +56,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Severity {
     High,
     Medium,
@@ -77,10 +117,39 @@ impl FromStr for Severity {
     }
 }
 
+/// Pattern confidence tier.
+///
+/// * **A** – Structural presence alone is high-signal (e.g. `gets()`, `eval()`).
+/// * **B** – Requires a simple heuristic guard in the query (e.g. SQL with
+///   concatenated arg, file-open with non-literal path).
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum PatternTier {
+    A,
+    B,
+}
+
+/// Vulnerability class that a pattern detects.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub enum PatternCategory {
+    CommandExec,
+    CodeExec,
+    Deserialization,
+    SqlInjection,
+    PathTraversal,
+    Xss,
+    Crypto,
+    Secrets,
+    InsecureTransport,
+    Reflection,
+    MemorySafety,
+    Prototype,
+    CodeQuality,
+}
+
 /// One AST pattern with a tree-sitter query and meta-data.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Pattern {
-    /// Unique identifier (snake-case preferred).
+    /// Unique identifier — `<lang>.<category>.<specific>` preferred.
     pub id: &'static str,
     /// Human-readable explanation.
     pub description: &'static str,
@@ -88,6 +157,10 @@ pub struct Pattern {
     pub query: &'static str,
     /// Rough severity bucket.
     pub severity: Severity,
+    /// Confidence tier (A = structural, B = heuristic-guarded).
+    pub tier: PatternTier,
+    /// Vulnerability class.
+    pub category: PatternCategory,
 }
 
 /// Global, lazily-initialised registry: lang-name → pattern slice

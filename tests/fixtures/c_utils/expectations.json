@@ -1,12 +1,12 @@
 {
   "required_findings": [
     { "id_prefix": "taint-unsanitised-flow", "min_count": 4 },
-    { "id_prefix": "strcpy_call", "min_count": 1 },
-    { "id_prefix": "strcat_call", "min_count": 1 },
-    { "id_prefix": "sprintf_call", "min_count": 4 },
-    { "id_prefix": "gets_call", "min_count": 1 },
-    { "id_prefix": "scanf_with_percent_s", "min_count": 1 },
-    { "id_prefix": "system_call", "min_count": 3 },
+    { "id_prefix": "c.memory.strcpy", "min_count": 1 },
+    { "id_prefix": "c.memory.strcat", "min_count": 1 },
+    { "id_prefix": "c.memory.sprintf", "min_count": 4 },
+    { "id_prefix": "c.memory.gets", "min_count": 1 },
+    { "id_prefix": "c.memory.scanf_percent_s", "min_count": 1 },
+    { "id_prefix": "c.cmdi.system", "min_count": 3 },
     { "id_prefix": "cfg-unguarded-sink", "min_count": 5 }
   ],
   "forbidden_findings": [],

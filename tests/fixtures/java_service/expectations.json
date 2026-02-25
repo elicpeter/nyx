@@ -1,14 +1,14 @@
 {
   "required_findings": [
     { "id_prefix": "taint-unsanitised-flow", "min_count": 2 },
-    { "id_prefix": "runtime_exec", "min_count": 2 },
-    { "id_prefix": "class_for_name", "min_count": 1 },
+    { "id_prefix": "java.cmdi.runtime_exec", "min_count": 2 },
+    { "id_prefix": "java.reflection.class_forname", "min_count": 1 },
     { "id_prefix": "cfg-unguarded-sink", "min_count": 2 }
   ],
   "forbidden_findings": [],
   "noise_budget": {
-    "max_total_findings": 15,
-    "max_high_findings": 8
+    "max_total_findings": 20,
+    "max_high_findings": 12
   },
   "performance_expectations": {
     "max_ms_no_index": 1000,

@@ -80,8 +80,8 @@ fn taint_only_mode_excludes_ast() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Taint);
 
     // Taint mode should not produce AST-only pattern findings
-    assert_no_findings(&diags, "unwrap_call");
-    assert_no_findings(&diags, "expect_call");
+    assert_no_findings(&diags, "rs.quality.unwrap");
+    assert_no_findings(&diags, "rs.quality.expect");
 }
 
 #[test]

@@ -1,117 +1,168 @@
-use crate::patterns::{Pattern, Severity};
+use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
+/// JavaScript AST patterns.
+///
+/// Taint rules cover `eval` (code injection), `innerHTML` (XSS),
+/// `location.href` (open redirect), and `child_process.exec/spawn` (command
+/// injection).  AST patterns here add **new Function()**, **document.write**,
+/// **setTimeout with string**, **deserialization**, **prototype pollution**,
+/// **XSS sinks** not covered by taint, and **weak crypto**.
 pub const PATTERNS: &[Pattern] = &[
+    // ── Tier A: Code execution ─────────────────────────────────────────
     Pattern {
-        id: "eval_call",
-        description: "Use of eval()",
-        query: "(call_expression function: (identifier) @id (#eq? @id \"eval\")) @vuln",
+        id: "js.code_exec.eval",
+        description: "eval() — dynamic code execution",
+        query: r#"(call_expression
+                     function: (identifier) @id (#eq? @id "eval"))
+                   @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
     },
     Pattern {
-        id: "new_function",
-        description: "new Function() constructor",
-        query: "(new_expression constructor: (identifier) @id (#eq? @id \"Function\")) @vuln",
+        id: "js.code_exec.new_function",
+        description: "new Function() constructor — eval equivalent",
+        query: r#"(new_expression
+                     constructor: (identifier) @id (#eq? @id "Function"))
+                   @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
     },
     Pattern {
-        id: "document_write",
-        description: "document.write() call",
-        query: "(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj \"document\") property: (property_identifier) @prop (#eq? @prop \"write\"))) @vuln",
+        id: "js.code_exec.settimeout_string",
+        description: "setTimeout/setInterval with string argument — implicit eval",
+        query: r#"(call_expression
+                     function: (identifier) @id (#match? @id "^(setTimeout|setInterval)$")
+                     arguments: (arguments (string) @code))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
     },
+    // ── Tier A: XSS sinks ──────────────────────────────────────────────
     Pattern {
-        id: "settimeout_string",
-        description: "setTimeout / setInterval with a string argument",
-        query: "(call_expression function: (identifier) @id (#match? @id \"setTimeout|setInterval\") arguments: (arguments (string) @code . _)) @vuln",
+        id: "js.xss.document_write",
+        description: "document.write() — XSS sink",
+        query: r#"(call_expression
+                     function: (member_expression
+                       object: (identifier) @obj (#eq? @obj "document")
+                       property: (property_identifier) @prop (#match? @prop "^(write|writeln)$")))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
     },
     Pattern {
-        id: "json_parse",
-        description: "JSON.parse on dynamic string",
-        query: "(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj \"JSON\") property: (property_identifier) @prop (#eq? @prop \"parse\"))) @vuln",
+        id: "js.xss.outer_html",
+        description: "Assignment to .outerHTML — XSS sink",
+        query: r#"(assignment_expression
+                     left: (member_expression
+                       property: (property_identifier) @prop (#eq? @prop "outerHTML")))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
+    },
+    Pattern {
+        id: "js.xss.insert_adjacent_html",
+        description: "insertAdjacentHTML() — XSS sink",
+        query: r#"(call_expression
+                     function: (member_expression
+                       property: (property_identifier) @prop (#eq? @prop "insertAdjacentHTML")))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
+    },
+    // ── Tier A: Prototype pollution ────────────────────────────────────
+    Pattern {
+        id: "js.prototype.proto_assignment",
+        description: "Assignment to __proto__ — prototype pollution",
+        query: r#"(assignment_expression
+                     left: (member_expression
+                       property: (property_identifier) @prop (#eq? @prop "__proto__")))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Prototype,
+    },
+    Pattern {
+        id: "js.prototype.extend_object",
+        description: "Assignment to Object.prototype — prototype mutation",
+        query: r#"(assignment_expression
+                     left: (member_expression
+                       object: (member_expression
+                         object: (identifier) @obj (#eq? @obj "Object")
+                         property: (property_identifier) @mid (#eq? @mid "prototype"))))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Prototype,
+    },
+    // ── Tier A: Weak crypto ────────────────────────────────────────────
+    Pattern {
+        id: "js.crypto.weak_hash",
+        description: "crypto.createHash with weak algorithm (md5/sha1)",
+        query: r#"(call_expression
+                     function: (member_expression
+                       property: (property_identifier) @prop (#eq? @prop "createHash"))
+                     arguments: (arguments
+                       (string) @alg (#match? @alg "\"(md5|sha1)\"")))
+                   @vuln"#,
         severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::Crypto,
     },
     Pattern {
-        id: "outer_html_assignment",
-        description: "Assignment to element.outerHTML",
-        query: "(assignment_expression
-               left: (member_expression
-                        property: (property_identifier) @prop
-                        (#eq? @prop \"outerHTML\"))) @vuln",
+        id: "js.crypto.math_random",
+        description: "Math.random() — not cryptographically secure",
+        query: r#"(call_expression
+                     function: (member_expression
+                       object: (identifier) @obj (#eq? @obj "Math")
+                       property: (property_identifier) @prop (#eq? @prop "random")))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::Crypto,
+    },
+    // ── Tier A: Open redirect ──────────────────────────────────────────
+    Pattern {
+        id: "js.xss.location_assign",
+        description: "Assignment to location/location.href — open redirect",
+        query: r#"(assignment_expression
+                     left: (member_expression
+                       object: (identifier) @obj (#match? @obj "^(window|location|document)$")
+                       property: (property_identifier) @prop (#match? @prop "^(location|href)$")))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
     },
+    // ── Tier A: Insecure transport ─────────────────────────────────────
     Pattern {
-        id: "insert_adjacent_html",
-        description: "insertAdjacentHTML() call",
-        query: "(call_expression
-               function: (member_expression
-                           property: (property_identifier) @prop
-                           (#eq? @prop \"insertAdjacentHTML\"))) @vuln",
-        severity: Severity::Medium,
+        id: "js.transport.fetch_http",
+        description: "fetch() over plain HTTP",
+        query: r#"(call_expression
+                     function: (identifier) @id (#eq? @id "fetch")
+                     arguments: (arguments
+                       (string) @url (#match? @url "^\"http://")))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureTransport,
     },
+    // ── Tier A: Cookie manipulation ────────────────────────────────────
     Pattern {
-        id: "location_href_assignment",
-        description: "Assignment to window.location / location.href",
-        query: "(assignment_expression
-               left: (member_expression
-                        object: (identifier) @obj
-                        (#match? @obj \"^(window|location|document|self|top|parent|frames)$\")
-                        property: (property_identifier) @prop
-                        (#match? @prop \"^(location|href)$\"))) @vuln",
-        severity: Severity::High,
-    },
-    Pattern {
-        id: "cookie_assignment",
+        id: "js.xss.cookie_write",
         description: "Write to document.cookie",
-        query: "(assignment_expression
-               left: (member_expression
-                        object: (identifier) @obj
-                        (#eq? @obj \"document\")
-                        property: (property_identifier) @prop
-                        (#eq? @prop \"cookie\"))) @vuln",
+        query: r#"(assignment_expression
+                     left: (member_expression
+                       object: (identifier) @obj (#eq? @obj "document")
+                       property: (property_identifier) @prop (#eq? @prop "cookie")))
+                   @vuln"#,
         severity: Severity::Medium,
-    },
-    Pattern {
-        id: "proto_pollution",
-        description: "Assignment to __proto__ (prototype pollution)",
-        query: "(assignment_expression
-               left: (member_expression
-                        property: (property_identifier) @prop
-                        (#eq? @prop \"__proto__\"))) @vuln",
-        severity: Severity::Low,
-    },
-    Pattern {
-        id: "weak_hash_md5",
-        description: "crypto.createHash(\"md5\")",
-        query: "(call_expression
-               function: (member_expression
-                           object: (identifier) @obj
-                           (#eq? @obj \"crypto\")
-                           property: (property_identifier) @prop
-                           (#eq? @prop \"createHash\"))
-               arguments: (arguments
-                            (string) @alg
-                            (#eq? @alg \"md5\"))) @vuln",
-        severity: Severity::Low,
-    },
-    Pattern {
-        id: "regexp_constructor_string",
-        description: "new RegExp() with a dynamic string",
-        query: "(new_expression
-               constructor: (identifier) @id
-               (#eq? @id \"RegExp\")
-               arguments: (arguments (string) @pattern)) @vuln",
-        severity: Severity::Low,
-    },
-    Pattern {
-        id: "dangerous_extend_builtin",
-        description: "Extending Object.prototype (may lead to collisions/pollution)",
-        query: "(assignment_expression
-               left: (member_expression
-                        object: (identifier) @obj
-                        (#eq? @obj \"Object\")
-                        property: (property_identifier) @prop
-                        (#eq? @prop \"prototype\"))) @vuln",
-        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Xss,
     },
 ];

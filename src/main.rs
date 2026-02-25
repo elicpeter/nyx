@@ -1,4 +1,5 @@
 mod ast;
+mod callgraph;
 mod cfg;
 mod cfg_analysis;
 mod cli;

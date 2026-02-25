@@ -1,10 +1,7 @@
 {
   "required_findings": [
     { "id_prefix": "taint-unsanitised-flow", "min_count": 5 },
-    { "id_prefix": "unwrap_call", "min_count": 10 },
-    { "id_prefix": "expect_call", "min_count": 5 },
-    { "id_prefix": "unsafe_block", "min_count": 1 },
-    { "id_prefix": "panic_macro", "min_count": 1 },
+    { "id_prefix": "rs.quality.unsafe_block", "min_count": 1 },
     { "id_prefix": "cfg-auth-gap", "min_count": 3 }
   ],
   "forbidden_findings": [],

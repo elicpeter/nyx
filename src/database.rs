@@ -272,6 +272,8 @@ pub mod index {
                     line: row.get::<_, i64>(2)? as usize,
                     col: row.get::<_, i64>(3)? as usize,
                     severity: Severity::from_str(&sev_str).unwrap(),
+                    path_validated: false,
+                    guard_kind: None,
                 })
             })?;
 
