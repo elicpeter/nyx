@@ -15,6 +15,7 @@ default-run = "nyx"
 exclude = [
     "assets/",
     ".github/",
+    "CLAUDE.md",
     ".claude/",
     ".idea/",
     "tests/",
