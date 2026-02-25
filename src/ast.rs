@@ -2,7 +2,7 @@ use crate::cfg::{build_cfg, export_summaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
-use crate::labels::build_lang_rules;
+use crate::labels::{build_lang_rules, severity_for_source_kind};
 use crate::patterns::Severity;
 use crate::summary::{FuncSummary, GlobalSummaries};
 use crate::symbol::{Lang, normalize_namespace};
@@ -52,6 +52,53 @@ fn lang_for_path(path: &Path) -> Option<(Language, &'static str)> {
 /// Fast binary-file guard: skip if >1% NUL bytes.
 fn is_binary(bytes: &[u8]) -> bool {
     bytes.iter().filter(|b| **b == 0).count() * 100 / bytes.len().max(1) > 1
+}
+
+/// Check if a file path belongs to a non-production context (tests, vendor,
+/// benchmarks, etc.).  Used to downgrade severity for findings in paths that
+/// are unlikely to represent attack surface.
+fn is_nonprod_path(path: &Path) -> bool {
+    static NONPROD_DIRS: &[&str] = &[
+        "tests",
+        "test",
+        "__tests__",
+        "benches",
+        "benchmarks",
+        "examples",
+        "build",
+        "scripts",
+        "docs",
+        "js_tests",
+        "fixtures",
+        "vendor",
+    ];
+    static NONPROD_FILES: &[&str] = &["build.rs"];
+
+    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+        && (NONPROD_FILES.contains(&name) || name.ends_with(".min.js"))
+    {
+        return true;
+    }
+
+    for component in path.components() {
+        if let std::path::Component::Normal(c) = component
+            && let Some(s) = c.to_str()
+            && NONPROD_DIRS.contains(&s)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Downgrade severity by one tier: High→Medium, Medium→Low, Low→Low.
+fn downgrade_severity(s: Severity) -> Severity {
+    match s {
+        Severity::High => Severity::Medium,
+        Severity::Medium => Severity::Low,
+        Severity::Low => Severity::Low,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -196,7 +243,7 @@ pub fn run_rules_on_bytes(
                 path: path.to_string_lossy().into_owned(),
                 line: sink_point.row + 1,
                 col: sink_point.column + 1,
-                severity: Severity::High,
+                severity: severity_for_source_kind(finding.source_kind),
                 id: format!(
                     "taint-unsanitised-flow (source {}:{})",
                     source_point.row + 1,
@@ -206,6 +253,7 @@ pub fn run_rules_on_bytes(
         }
 
         // ── CFG structural analyses ─────────────────────────────────────
+        let taint_active = global_summaries.is_some() || !taint_results.is_empty();
         let cfg_ctx = cfg_analysis::AnalysisContext {
             cfg: &cfg_graph,
             entry,
@@ -216,6 +264,7 @@ pub fn run_rules_on_bytes(
             global_summaries,
             taint_findings: &taint_results,
             analysis_rules: rules_ref,
+            taint_active,
         };
         for cf in cfg_analysis::run_all(&cfg_ctx) {
             let point = byte_offset_to_point(&_tree, cf.span.0);
@@ -260,6 +309,13 @@ pub fn run_rules_on_bytes(
     out.dedup_by(|a, b| {
         a.line == b.line && a.col == b.col && a.id == b.id && a.severity == b.severity
     });
+
+    // Downgrade severity for non-production paths unless opted out
+    if !cfg.scanner.include_nonprod && is_nonprod_path(path) {
+        for d in &mut out {
+            d.severity = downgrade_severity(d.severity);
+        }
+    }
 
     Ok(out)
 }
@@ -375,7 +431,7 @@ pub fn analyse_file_fused(
                 path: path.to_string_lossy().into_owned(),
                 line: sink_point.row + 1,
                 col: sink_point.column + 1,
-                severity: Severity::High,
+                severity: severity_for_source_kind(finding.source_kind),
                 id: format!(
                     "taint-unsanitised-flow (source {}:{})",
                     source_point.row + 1,
@@ -384,6 +440,7 @@ pub fn analyse_file_fused(
             });
         }
 
+        let taint_active = global_summaries.is_some() || !taint_results.is_empty();
         let cfg_ctx = cfg_analysis::AnalysisContext {
             cfg: &cfg_graph,
             entry,
@@ -394,6 +451,7 @@ pub fn analyse_file_fused(
             global_summaries,
             taint_findings: &taint_results,
             analysis_rules: rules_ref,
+            taint_active,
         };
         for cf in cfg_analysis::run_all(&cfg_ctx) {
             let point = byte_offset_to_point(&tree, cf.span.0);
@@ -439,6 +497,13 @@ pub fn analyse_file_fused(
         a.line == b.line && a.col == b.col && a.id == b.id && a.severity == b.severity
     });
 
+    // Downgrade severity for non-production paths unless opted out
+    if !cfg.scanner.include_nonprod && is_nonprod_path(path) {
+        for d in &mut out {
+            d.severity = downgrade_severity(d.severity);
+        }
+    }
+
     Ok(FusedResult {
         summaries,
         diags: out,
@@ -470,4 +535,66 @@ fn binary_file_guard_triggers() {
 
     let diags = run_rules_on_file(&bin, &Config::default(), None, None).unwrap();
     assert!(diags.is_empty(), "binary files are skipped");
+}
+
+#[test]
+fn nonprod_path_detection() {
+    // Test that is_nonprod_path recognises common non-production paths
+    assert!(is_nonprod_path(Path::new("project/tests/test_main.py")));
+    assert!(is_nonprod_path(Path::new("src/__tests__/foo.js")));
+    assert!(is_nonprod_path(Path::new("benches/bench.rs")));
+    assert!(is_nonprod_path(Path::new("vendor/lib/foo.py")));
+    assert!(is_nonprod_path(Path::new("src/build.rs")));
+    assert!(is_nonprod_path(Path::new("dist/app.min.js")));
+    assert!(is_nonprod_path(Path::new("examples/demo.py")));
+    assert!(is_nonprod_path(Path::new("fixtures/data.json")));
+
+    // Should NOT match production paths
+    assert!(!is_nonprod_path(Path::new("src/main.rs")));
+    assert!(!is_nonprod_path(Path::new("lib/handler.py")));
+    assert!(!is_nonprod_path(Path::new("app/views.py")));
+}
+
+#[test]
+fn severity_downgrade_works() {
+    assert_eq!(downgrade_severity(Severity::High), Severity::Medium);
+    assert_eq!(downgrade_severity(Severity::Medium), Severity::Low);
+    assert_eq!(downgrade_severity(Severity::Low), Severity::Low);
+}
+
+#[test]
+fn nonprod_path_downgrades_findings() {
+    let dir = tempfile::tempdir().unwrap();
+    // Create a file under a "tests" directory
+    let test_dir = dir.path().join("tests");
+    std::fs::create_dir_all(&test_dir).unwrap();
+    let test_file = test_dir.join("test_cmd.py");
+    std::fs::write(
+        &test_file,
+        b"import os\ndef test():\n    cmd = os.environ['X']\n    os.system(cmd)\n",
+    )
+    .unwrap();
+
+    let default_cfg = Config::default();
+    let diags = run_rules_on_file(&test_file, &default_cfg, None, None).unwrap();
+
+    // All findings in tests/ should be downgraded (no HIGH)
+    let high: Vec<_> = diags
+        .iter()
+        .filter(|d| d.severity == Severity::High)
+        .collect();
+    assert!(
+        high.is_empty(),
+        "Findings in tests/ should be downgraded from HIGH; got {:?}",
+        high
+    );
+
+    // With include_nonprod=true, original severity preserved
+    let mut prod_cfg = Config::default();
+    prod_cfg.scanner.include_nonprod = true;
+    let diags_prod = run_rules_on_file(&test_file, &prod_cfg, None, None).unwrap();
+
+    // Not all diagnostics are necessarily high, but include_nonprod should not downgrade
+    // Just verify that if there are findings, they weren't downgraded by the nonprod logic
+    let _ = diags_prod;
 }

@@ -56,6 +56,11 @@ pub struct ScannerConfig {
 
     /// Whether to scan hidden files or not.
     pub scan_hidden_files: bool,
+
+    /// Whether to include findings from non-production paths (tests, vendor,
+    /// benchmarks, etc.) at their original severity.  When false (default),
+    /// findings in these paths are downgraded by one severity tier.
+    pub include_nonprod: bool,
 }
 impl Default for ScannerConfig {
     fn default() -> Self {
@@ -88,6 +93,7 @@ impl Default for ScannerConfig {
             one_file_system: false,
             follow_symlinks: false,
             scan_hidden_files: false,
+            include_nonprod: false,
         }
     }
 }
@@ -296,6 +302,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.scanner.one_file_system = user.scanner.one_file_system;
     default.scanner.follow_symlinks = user.scanner.follow_symlinks;
     default.scanner.scan_hidden_files = user.scanner.scan_hidden_files;
+    default.scanner.include_nonprod = user.scanner.include_nonprod;
 
     // Merge exclusion lists (default ⊔ user), then sort & dedupe
     default

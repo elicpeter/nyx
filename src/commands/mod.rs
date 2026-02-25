@@ -26,6 +26,7 @@ pub fn handle_command(
             ast_only,
             cfg_only,
             all_targets,
+            include_nonprod,
         } => {
             if high_only {
                 config.scanner.min_severity = Severity::High
@@ -41,6 +42,10 @@ pub fn handle_command(
 
             if all_targets {
                 config.scanner.mode = AnalysisMode::Full
+            };
+
+            if include_nonprod {
+                config.scanner.include_nonprod = true
             };
 
             scan::handle(&path, no_index, rebuild_index, format, database_dir, config)?;

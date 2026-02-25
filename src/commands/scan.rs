@@ -473,14 +473,8 @@ fn scan_with_index_parallel_uses_existing_index_without_rescanning() {
     std::fs::write(project_dir.join("foo.txt"), "abc").unwrap();
 
     let (project_name, db_path) = get_project_info(&project_dir, td.path()).unwrap();
-    crate::commands::index::build_index(
-        &project_name,
-        &project_dir,
-        &db_path,
-        &cfg,
-        false,
-    )
-    .unwrap();
+    crate::commands::index::build_index(&project_name, &project_dir, &db_path, &cfg, false)
+        .unwrap();
 
     let pool = Indexer::init(&db_path).unwrap();
 

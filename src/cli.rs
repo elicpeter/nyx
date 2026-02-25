@@ -49,6 +49,11 @@ pub enum Commands {
 
         #[arg(long)]
         all_targets: bool,
+
+        /// Include findings from test/vendor/build paths at original severity
+        /// (by default these are downgraded)
+        #[arg(long)]
+        include_nonprod: bool,
     },
 
     /// Manage project indexes

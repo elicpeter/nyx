@@ -180,8 +180,7 @@ fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
         if info.defines.as_ref().is_some_and(|d| d == &acquired_var) {
             let is_field_write = if start < end && end <= ctx.source_bytes.len() {
                 let span_text = &ctx.source_bytes[start..end];
-                span_text.windows(2).any(|w| w == b"->")
-                    || has_dot_field_assignment(span_text)
+                span_text.windows(2).any(|w| w == b"->") || has_dot_field_assignment(span_text)
             } else {
                 false
             };
@@ -231,6 +230,102 @@ fn has_dot_field_assignment(span_text: &[u8]) -> bool {
     false
 }
 
+/// Check whether the acquired variable is consumed by an ownership-taking
+/// function (e.g. `FileResponse(f)`, `send_file(f)`) downstream of the
+/// acquire node.  These functions take ownership of the file handle so there
+/// is no leak.
+fn is_consumed_by_owner(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
+    static CONSUMING_SINKS: &[&str] = &[
+        "fileresponse",
+        "streaminghttpresponse",
+        "send_file",
+        "make_response",
+    ];
+
+    let acquired_var = match &ctx.cfg[acquire].defines {
+        Some(v) => v.clone(),
+        None => return false,
+    };
+
+    use std::collections::VecDeque;
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+    for succ in ctx.cfg.neighbors(acquire) {
+        if visited.insert(succ) {
+            queue.push_back(succ);
+        }
+    }
+
+    while let Some(node) = queue.pop_front() {
+        let info = &ctx.cfg[node];
+
+        // Check Call nodes with callee that matches a consuming sink
+        if info.kind == StmtKind::Call
+            && let Some(callee) = &info.callee
+        {
+            let callee_lower = callee.to_ascii_lowercase();
+            let is_consuming = CONSUMING_SINKS.iter().any(|s| callee_lower.ends_with(s));
+            if is_consuming && info.uses.iter().any(|u| u == &acquired_var) {
+                return true;
+            }
+        }
+
+        // Also check the span text for consuming calls — handles cases where
+        // the call is embedded in a return statement (e.g. `return FileResponse(f)`)
+        if info.uses.iter().any(|u| u == &acquired_var) {
+            let (start, end) = info.span;
+            if start < end && end <= ctx.source_bytes.len() {
+                let span_lower: Vec<u8> = ctx.source_bytes[start..end]
+                    .iter()
+                    .map(|b| b.to_ascii_lowercase())
+                    .collect();
+                if CONSUMING_SINKS
+                    .iter()
+                    .any(|s| span_lower.windows(s.len()).any(|w| w == s.as_bytes()))
+                {
+                    return true;
+                }
+            }
+        }
+
+        for succ in ctx.cfg.neighbors(node) {
+            if visited.insert(succ) {
+                queue.push_back(succ);
+            }
+        }
+    }
+
+    false
+}
+
+/// For mutex pairs, check that an explicit `.acquire()` or `.lock()` call
+/// exists on the acquired variable in the CFG.  If only the constructor
+/// (e.g. `threading.Lock()`) is observed without acquire, skip the finding.
+fn has_explicit_lock_acquire(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
+    let acquired_var = match &ctx.cfg[acquire].defines {
+        Some(v) => v.clone(),
+        None => return false,
+    };
+
+    for idx in ctx.cfg.node_indices() {
+        let info = &ctx.cfg[idx];
+        if info.kind != StmtKind::Call {
+            continue;
+        }
+        if let Some(callee) = &info.callee {
+            let callee_lower = callee.to_ascii_lowercase();
+            let is_lock_call = callee_lower.ends_with(".acquire")
+                || callee_lower.ends_with(".lock")
+                || callee_lower == "pthread_mutex_lock";
+            if is_lock_call && info.uses.iter().any(|u| u == &acquired_var) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 impl CfgAnalysis for ResourceMisuse {
     fn name(&self) -> &'static str {
         "resource-misuse"
@@ -252,7 +347,12 @@ impl CfgAnalysis for ResourceMisuse {
             for &acquire in &acquire_nodes {
                 if !release_on_all_exit_paths(ctx, acquire, &release_nodes, exit)
                     && !is_ownership_transferred(ctx, acquire)
+                    && !is_consumed_by_owner(ctx, acquire)
                 {
+                    // For mutex pairs, require an explicit .acquire()/.lock() call
+                    if pair.resource_name == "mutex" && !has_explicit_lock_acquire(ctx, acquire) {
+                        continue;
+                    }
                     let info = &ctx.cfg[acquire];
                     let callee_desc = info.callee.as_deref().unwrap_or("(acquire)");
 

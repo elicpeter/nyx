@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] - 2026-02-25
+## [0.3.0] - 2026-02-25
 
 ### Added
 - **Configurable analysis rules** -- users can define custom sources, sanitizers, and sinks per language via TOML config (`nyx.local`) or the new `nyx config` CLI. Config rules take priority over built-in rules, so project-specific sanitizers like `escapeHtml()` are recognized without code changes.
@@ -14,8 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `path` -- print config directory path
   - `add-rule --lang <LANG> --matcher <NAME> --kind <KIND> --cap <CAP>` -- append a label rule to `nyx.local`
   - `add-terminator --lang <LANG> --name <NAME>` -- append a terminator function to `nyx.local`
+- **`--include-nonprod` CLI flag** -- by default, findings in non-production paths (tests, vendor, benchmarks, examples, fixtures, build scripts, `*.min.js`) are now downgraded by one severity tier (High→Medium, Medium→Low). Pass `--include-nonprod` to restore original severity. Controlled by `scanner.include_nonprod` config key.
+- **`SourceKind` enum** in the taint engine -- taint findings now carry a `source_kind` field (`UserInput`, `EnvironmentConfig`, `FileSystem`, `Database`, `Unknown`) inferred from the source callee name and capabilities. Severity is based on source kind rather than hardcoded to High: filesystem and database sources produce Medium, user input and environment sources produce High.
 - **Configurable terminators** -- functions like `process.exit()` can be declared as terminators per language; the CFG treats them as dead ends, preventing false positives on code after termination calls.
 - **Event handler callback suppression** -- functions passed as arguments to configured event handler calls (e.g. `addEventListener`) are no longer flagged as unreachable code.
+- **Exec-path guard rules** -- calls to `which`, `resolve_binary`, `find_program`, `lookup_path`, and `shutil.which` are recognized as guards for `SHELL_ESCAPE` sinks. If such a guard dominates a shell-exec sink, the `cfg-unguarded-sink` finding is suppressed.
+- **One-hop constant binding trace** -- the constant-arg sink suppression now traces one hop through the CFG. If a sink's variable was defined by a node with no uses and no Source label, it is treated as constant. Fixes false positives on patterns like `cmd = "git"; subprocess.run([cmd, "status"])`.
+- **Evidence-based severity in cfg-only mode** -- when taint analysis is not active (no global summaries and no taint findings), structural `cfg-unguarded-sink` findings without source-derived evidence are downgraded from Medium to Low.
+- **FileResponse ownership transfer** -- file handles passed to consuming sinks (`FileResponse`, `StreamingHttpResponse`, `send_file`, `make_response`) are no longer flagged as resource leaks.
+- **Lock-not-released refinement** -- mutex findings now require an explicit `.acquire()` or `.lock()` call on the acquired variable. Constructor-only patterns like `lock = threading.Lock()` without acquire no longer produce `cfg-lock-not-released`.
+- **Python `connect`/`cursor` exclusions** -- `signal.connect`, `event.connect`, and `.register` are excluded from the Python db-connection acquire pattern, preventing false `cfg-resource-leak` findings on Django signal handlers and event registrations.
 - **`location.href` sink rules** for JavaScript -- `location.href`, `window.location.href`, and `document.location.href` assignments are classified as `Sink(URL_ENCODE)`.
 - **`throw_statement` as terminator** in JavaScript -- `throw` now terminates the current block in the CFG (mapped to `Kind::Return`), preventing false `cfg-error-fallthrough` findings after throw statements.
 - **`Cap::FMT_STRING` capability bit** -- new bitflag (`0b0100_0000`) for format-string vulnerabilities, distinct from HTML injection. Sources using `Cap::all()` automatically match.
@@ -26,13 +34,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Resource leak detection for Python, Ruby, PHP, JavaScript, and TypeScript** -- new acquire/release pairs: Python (`open`/`.close`, `socket`/`.close`, `connect`/`.close`, `threading.Lock`/`.release`), Ruby (`File.open`/`.close`, `TCPSocket.new`/`.close`, `.lock`/`.unlock`), PHP (`fopen`/`fclose`, `mysqli_connect`/`mysqli_close`, `curl_init`/`curl_close`), JS/TS (`fs.open`/`fs.close`, `createReadStream`/`.close`).
 - **Walker config wired up** -- `performance.max_depth`, `scanner.one_file_system`, `scanner.require_git_to_read_vcsignore`, and `scanner.excluded_files` are now enforced during directory walking (previously parsed but ignored).
 - **`database.vacuum_on_startup`** -- when enabled, runs SQLite VACUUM before indexed scans to reclaim space.
-- 22 new unit tests covering config round-trip, rule merging, classify extension, href classification, throw termination, terminator detection, config sanitizer suppression, Python/C++ precision (constant-arg suppression, source-derived sinks), unreachable+unguarded dedup, and resource leak detection for Python/PHP/JS.
+- 31 new unit tests covering config round-trip, rule merging, classify extension, href classification, throw termination, terminator detection, config sanitizer suppression, Python/C++ precision, unreachable+unguarded dedup, resource leak detection, one-hop constant binding, exec-path guards, cfg-only severity downgrade, FileResponse ownership, lock constructor suppression, signal.connect exclusion, nonprod path detection, and severity downgrade.
 
 ### Changed
+- **`taint::Finding` struct** -- added `source_kind: SourceKind` field. Code that constructs `Finding` directly must include this field.
+- **`AnalysisContext` struct** -- added `taint_active: bool` and `analysis_rules` fields. Code that constructs `AnalysisContext` directly must include these fields.
+- **`ScannerConfig` struct** -- added `include_nonprod: bool` field (default `false`). Deserialization is unaffected due to `#[serde(default)]`.
+- **`proto_pollution` AST pattern severity** -- downgraded from High to Low. The AST-only pattern is a structural indicator; the taint engine separately produces High findings when attacker-controlled data flows to `__proto__`.
+- **`location_href_assignment` AST pattern** -- constrained to require a known browser global object (`window`, `location`, `document`, `self`, `top`, `parent`, `frames`). Prevents `el.href = val` from matching; only `window.location.href = val` and similar patterns trigger the finding.
+- **Taint finding severity** -- no longer hardcoded to High. Severity is now derived from `SourceKind`: UserInput/EnvironmentConfig/Unknown → High, FileSystem/Database → Medium.
 - **C/C++ sink reclassification** -- `printf`/`fprintf` moved from `Sink(HTML_ESCAPE)` to `Sink(FMT_STRING)`. `std::cout`, `std::cerr`, `std::clog` removed from sinks entirely (output/logging, not injection vectors). `sprintf`/`strcpy`/`strcat` remain `Sink(HTML_ESCAPE)`.
 - `classify()` now accepts an optional `extra: Option<&[RuntimeLabelRule]>` parameter; config-defined rules are checked first (higher priority) before built-in static rules.
 - `build_cfg()`, `build_sub()`, and `push_node()` accept optional `LangAnalysisRules` for config-driven label classification, terminator detection, and event handler awareness.
-- `AnalysisContext` carries `analysis_rules` so CFG analyses (guards, unreachable) can consult config rules.
 - `find_guard_nodes()` and `is_guard_call()` now recognize config-defined sanitizers as guards with matching capability bits.
 - `merge_configs()` union-merges analysis rules, terminators, and event handlers per language key with dedup.
 - Assignment LHS classification now tries the full member expression text (e.g. `location.href`) before falling back to property-only (e.g. `innerHTML`), fixing false positives on `a.href` assignments.
@@ -47,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **In-place taint transfer** -- `apply_taint()` now mutates the taint map in place instead of cloning and returning a new `HashMap` per node visit. The BFS loop caches hash values and uses `std::mem::take` for the last successor to avoid unnecessary clones.
 
 ### Fixed
+- **False positives on one-hop constant bindings** -- `cmd = "git"; Command::new(cmd)` no longer triggers `cfg-unguarded-sink` because the variable is traced back to a constant definition.
+- **False positives from exec-path guards** -- `resolve_binary(&bin); Command::new(bin)` is now recognized as guarded.
+- **False `cfg-resource-leak` on Django signal handlers** -- `signal.connect(handler)` no longer matches the Python db-connection acquire pattern.
+- **False `cfg-lock-not-released` on Lock constructors** -- `threading.Lock()` without `.acquire()` no longer produces a finding.
+- **False `cfg-resource-leak` on FileResponse** -- `f = open(...); return FileResponse(f)` is recognized as ownership transfer.
+- **Inflated severity in cfg-only mode** -- structural findings without taint evidence now correctly produce Low severity instead of Medium.
+- **`el.href = val` false positive in AST patterns** -- the `location_href_assignment` pattern now requires a known browser global, eliminating matches on DOM element `.href` assignments.
 - **Structured output modes (`-f json`, `-f sarif`) now produce zero stderr noise** -- config notes, "Checking …", and "Finished in …" messages are fully suppressed (not just redirected to stderr) so that `nyx scan -f json | jq` and CI SARIF upload work without extraneous output. Human-readable console format continues to show status messages.
 - **Console output column alignment** -- severity tags are now bracketed and padded to a fixed display width (`[HIGH]`, `[MEDIUM]`, `[LOW]`) so that rule IDs align consistently regardless of severity. ANSI color codes are applied after width calculation, not before.
 - **`.href` false positives** -- `el.href = "/about"` no longer triggers `location_href_assignment` or sink classification; only `location.href` (and `window.location.href`, `document.location.href`) match.

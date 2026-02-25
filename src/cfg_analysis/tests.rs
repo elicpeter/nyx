@@ -26,6 +26,7 @@ fn parse_and_analyse<A: CfgAnalysis>(
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: None,
+        taint_active: true,
     };
     analysis.run(&ctx)
 }
@@ -47,6 +48,7 @@ fn parse_and_run_all(src: &[u8], lang_str: &str, ts_lang: Language) -> Vec<CfgFi
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: None,
+        taint_active: true,
     };
     run_all(&ctx)
 }
@@ -73,6 +75,7 @@ fn parse_and_run_all_with_taint(
         global_summaries: None,
         taint_findings,
         analysis_rules: None,
+        taint_active: true,
     };
     run_all(&ctx)
 }
@@ -677,6 +680,7 @@ fn taint_and_unguarded_sink_deduped() {
         sink: sink_node,
         source: entry,
         path: vec![entry, sink_node],
+        source_kind: crate::labels::SourceKind::UserInput,
     }];
 
     let findings = parse_and_run_all_with_taint(
@@ -977,6 +981,7 @@ fn config_sanitizer_suppresses_unguarded_sink() {
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: Some(&rules),
+        taint_active: true,
     };
     let findings = run_all(&ctx);
 
@@ -1355,5 +1360,197 @@ void process() {
         unreachable_count == 0,
         "Expected all nodes reachable after break in loop, but {} nodes are unreachable",
         unreachable_count
+    );
+}
+
+// ─── PART 2A: One-hop constant binding trace ────────────────────────
+
+#[test]
+fn python_one_hop_constant_binding_no_finding() {
+    // cmd = "git"; subprocess.run([cmd, "status"]) → no finding
+    let src = br#"
+import subprocess
+
+def check():
+    cmd = "git"
+    subprocess.run([cmd, "status"])
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "One-hop constant binding should suppress cfg-unguarded-sink; got {:?}",
+        unguarded
+    );
+}
+
+// ─── PART 2B: Exec-path guard rules ─────────────────────────────────
+
+#[test]
+fn exec_path_guard_suppresses_unguarded_sink() {
+    // resolve_binary(&bin); Command::new(bin); → no finding
+    let src = br#"
+        use std::process::Command;
+        fn main() {
+            let bin = std::env::var("BIN").unwrap();
+            resolve_binary(&bin);
+            Command::new("sh").arg(&bin).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "resolve_binary guard should suppress cfg-unguarded-sink; got {:?}",
+        unguarded
+    );
+}
+
+// ─── PART 2C: Evidence-based severity in cfg-only mode ──────────────
+
+#[test]
+fn cfg_only_no_taint_produces_low_severity() {
+    // In cfg-only mode (taint_active=false) with no source-derived evidence,
+    // unguarded sink should produce LOW severity instead of MEDIUM.
+    let src = br#"
+        use std::process::Command;
+        fn process_data() {
+            let x = compute_something();
+            Command::new("sh").arg(&x).status().unwrap();
+        }"#;
+
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let lang = Lang::from_slug("rust").unwrap();
+    let ctx = AnalysisContext {
+        cfg: &cfg,
+        entry,
+        lang,
+        file_path: "test.rs",
+        source_bytes: src,
+        func_summaries: &summaries,
+        global_summaries: None,
+        taint_findings: &[],
+        analysis_rules: None,
+        taint_active: false, // cfg-only mode
+    };
+    let findings = guards::UnguardedSink.run(&ctx);
+
+    let medium_or_high: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink"
+                && (f.severity == crate::patterns::Severity::Medium
+                    || f.severity == crate::patterns::Severity::High)
+        })
+        .collect();
+    assert!(
+        medium_or_high.is_empty(),
+        "cfg-only mode without taint should produce LOW severity, not MEDIUM/HIGH; got {:?}",
+        medium_or_high
+    );
+}
+
+// ─── PART 4B: FileResponse ownership transfer ──────────────────────
+
+#[test]
+fn file_response_ownership_transfer_no_leak() {
+    let src = br#"
+def serve_file():
+    f = open("report.pdf", "rb")
+    return FileResponse(f)
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        leak_findings.is_empty(),
+        "FileResponse should suppress cfg-resource-leak; got {:?}",
+        leak_findings
+    );
+}
+
+// ─── PART 4C: Lock-not-released refinement ──────────────────────────
+
+#[test]
+fn python_lock_constructor_only_no_finding() {
+    // threading.Lock() without .acquire() → no finding
+    let src = br#"
+import threading
+
+def setup():
+    lock = threading.Lock()
+    do_work()
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let lock_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-lock-not-released")
+        .collect();
+    assert!(
+        lock_findings.is_empty(),
+        "Lock constructor without acquire should not produce cfg-lock-not-released; got {:?}",
+        lock_findings
+    );
+}
+
+// ─── PART 4A: signal.connect exclusion ──────────────────────────────
+
+#[test]
+fn python_signal_connect_not_treated_as_db_acquire() {
+    let src = br#"
+def setup():
+    signal.connect(handler)
+    do_work()
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        leak_findings.is_empty(),
+        "signal.connect should not be treated as db acquire; got {:?}",
+        leak_findings
     );
 }

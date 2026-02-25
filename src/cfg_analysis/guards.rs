@@ -8,6 +8,40 @@ use petgraph::graph::NodeIndex;
 
 pub struct UnguardedSink;
 
+/// Check whether **all** arguments to the sink are constants (no taint-capable
+/// variable flows).  Extends the inline callee-part check by tracing one hop
+/// through the CFG: if a used variable is defined by a node that itself has
+/// empty `uses` and no Source label, the definition is treated as a constant
+/// binding (e.g. `let cmd = "git"; Command::new(cmd)`).
+fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
+    let sink_info = &ctx.cfg[sink];
+    let callee_desc = sink_info.callee.as_deref().unwrap_or("");
+    let callee_parts: Vec<&str> = callee_desc.split(['.', ':']).collect();
+    let sink_func = sink_info.enclosing_func.as_deref();
+
+    sink_info.uses.iter().all(|u| {
+        // Part of the callee name itself → constant
+        if callee_parts.contains(&u.as_str()) {
+            return true;
+        }
+        // One-hop trace: find the defining node in the same function
+        for idx in ctx.cfg.node_indices() {
+            let info = &ctx.cfg[idx];
+            if info.enclosing_func.as_deref() != sink_func {
+                continue;
+            }
+            if info.defines.as_deref() == Some(u.as_str()) {
+                // If the defining node has no uses (pure constant) and is not
+                // a Source, the variable is constant.
+                if info.uses.is_empty() && !matches!(info.label, Some(DataLabel::Source(_))) {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+}
+
 /// Check if a callee matches any of the runtime label rules that are sanitizers.
 fn match_config_sanitizer(callee: &str, extra: &[RuntimeLabelRule]) -> Option<Cap> {
     let callee_lower = callee.to_ascii_lowercase();
@@ -208,14 +242,9 @@ impl CfgAnalysis for UnguardedSink {
             let has_taint = taint_confirms_sink(ctx, *sink);
             let source_derived = sink_arg_is_source_derived(ctx, *sink);
 
-            // If sink args are all constants (no variable uses beyond the callee name
-            // itself) and taint didn't confirm, this is a false positive — skip it.
-            let callee_parts: Vec<&str> = callee_desc.split(['.', ':']).collect();
-            let constant_args = sink_info
-                .uses
-                .iter()
-                .all(|u| callee_parts.contains(&u.as_str()));
-            if constant_args && !has_taint && !source_derived {
+            // If sink args are all constants (including one-hop constant bindings)
+            // and taint didn't confirm, this is a false positive — skip it.
+            if is_all_args_constant(ctx, *sink) && !has_taint && !source_derived {
                 continue;
             }
 
@@ -227,6 +256,9 @@ impl CfgAnalysis for UnguardedSink {
                 (Severity::High, Confidence::High)
             } else if param_only && !in_entrypoint {
                 // Wrapper function consuming only parameters → LOW
+                (Severity::Low, Confidence::Low)
+            } else if !ctx.taint_active && !source_derived {
+                // CFG-only mode without taint confirmation → LOW
                 (Severity::Low, Confidence::Low)
             } else if in_entrypoint && !param_only {
                 // Entrypoint with non-parameter args but no taint confirmation → MEDIUM

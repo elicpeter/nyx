@@ -1,6 +1,6 @@
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo, StmtKind};
 use crate::interop::InteropEdge;
-use crate::labels::{Cap, DataLabel};
+use crate::labels::{Cap, DataLabel, SourceKind};
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
 use petgraph::graph::NodeIndex;
@@ -18,6 +18,8 @@ pub struct Finding {
     /// The full path from source to sink through the CFG.
     #[allow(dead_code)] // used for future detailed diagnostics / path display
     pub path: Vec<NodeIndex>,
+    /// The kind of source that originated the taint.
+    pub source_kind: SourceKind,
 }
 
 /// Order-independent hash of a taint map.
@@ -408,10 +410,21 @@ pub fn analyse_file(
                 }
 
                 path.reverse();
+
+                // Infer the source kind from the source node's label and callee
+                let source_kind = match cfg[source_node].label {
+                    Some(DataLabel::Source(caps)) => {
+                        let callee = cfg[source_node].callee.as_deref().unwrap_or("");
+                        crate::labels::infer_source_kind(caps, callee)
+                    }
+                    _ => SourceKind::Unknown,
+                };
+
                 findings.push(Finding {
                     sink: sink_node,
                     source: source_node,
                     path,
+                    source_kind,
                 });
             }
         }

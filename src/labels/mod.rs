@@ -195,6 +195,82 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
         .unwrap_or(Kind::Other)
 }
 
+/// The kind of taint source, used to refine finding severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// Direct user input (request params, argv, stdin, form data)
+    UserInput,
+    /// Environment variables and configuration
+    EnvironmentConfig,
+    /// File system reads
+    FileSystem,
+    /// Database query results
+    Database,
+    /// Could not determine — treat conservatively
+    Unknown,
+}
+
+/// Infer the source kind from capabilities and callee name.
+pub fn infer_source_kind(caps: Cap, callee: &str) -> SourceKind {
+    let cl = callee.to_ascii_lowercase();
+
+    // User input patterns
+    if cl.contains("argv")
+        || cl.contains("stdin")
+        || cl.contains("request")
+        || cl.contains("form")
+        || cl.contains("query")
+        || cl.contains("params")
+        || cl.contains("input")
+        || cl.contains("body")
+        || cl.contains("header")
+        || cl.contains("cookie")
+    {
+        return SourceKind::UserInput;
+    }
+
+    // Environment / config patterns
+    if cl.contains("env")
+        || cl.contains("getenv")
+        || cl.contains("environ")
+        || cl.contains("config")
+    {
+        return SourceKind::EnvironmentConfig;
+    }
+
+    // File system patterns
+    if cl.contains("read") || cl.contains("fopen") || cl.contains("open") {
+        // Distinguish from db reads — file reads typically have FILE_IO cap
+        if caps.contains(Cap::FILE_IO) {
+            return SourceKind::FileSystem;
+        }
+    }
+
+    // Database patterns
+    if cl.contains("fetchone")
+        || cl.contains("fetchall")
+        || cl.contains("fetch_row")
+        || cl.contains("query")
+        || cl.contains("execute")
+    {
+        // Queries that read back from db
+        return SourceKind::Database;
+    }
+
+    SourceKind::Unknown
+}
+
+/// Map a source kind to its appropriate severity level.
+pub fn severity_for_source_kind(kind: SourceKind) -> crate::patterns::Severity {
+    match kind {
+        SourceKind::UserInput => crate::patterns::Severity::High,
+        SourceKind::EnvironmentConfig => crate::patterns::Severity::High,
+        SourceKind::FileSystem => crate::patterns::Severity::Medium,
+        SourceKind::Database => crate::patterns::Severity::Medium,
+        SourceKind::Unknown => crate::patterns::Severity::High,
+    }
+}
+
 /// A runtime (config-derived) label rule with owned matchers.
 #[derive(Debug, Clone)]
 pub struct RuntimeLabelRule {

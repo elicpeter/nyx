@@ -52,6 +52,10 @@ pub struct AnalysisContext<'a> {
     pub global_summaries: Option<&'a GlobalSummaries>,
     pub taint_findings: &'a [taint::Finding],
     pub analysis_rules: Option<&'a LangAnalysisRules>,
+    /// Whether full taint analysis was active for this file (global summaries
+    /// existed and taint engine ran).  When false, structural findings without
+    /// taint confirmation should be treated with lower confidence.
+    pub taint_active: bool,
 }
 
 pub trait CfgAnalysis {

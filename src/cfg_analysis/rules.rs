@@ -50,6 +50,16 @@ static COMMON_GUARDS: &[GuardRule] = &[
         matchers: &["url_encode", "encode_uri", "urlencode"],
         applies_to_sink_caps: Cap::URL_ENCODE,
     },
+    GuardRule {
+        matchers: &[
+            "which",
+            "resolve_binary",
+            "find_program",
+            "lookup_path",
+            "shutil.which",
+        ],
+        applies_to_sink_caps: Cap::SHELL_ESCAPE,
+    },
 ];
 
 pub fn guard_rules(_lang: Lang) -> &'static [GuardRule] {
@@ -247,7 +257,7 @@ static PYTHON_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
         acquire: &["connect", "cursor"],
         release: &[".close"],
-        exclude_acquire: &[],
+        exclude_acquire: &["signal.connect", "event.connect", ".register"],
         resource_name: "db connection",
     },
     ResourcePair {

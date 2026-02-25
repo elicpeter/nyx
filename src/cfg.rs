@@ -951,12 +951,11 @@ fn build_sub<'a>(
                 // of the `#endif`, tree-sitter parses a dangling else that
                 // empties the frontier.  The code after the preproc block should
                 // remain reachable.
-                let child_preds =
-                    if frontier.is_empty() && (child_is_fn || prev_was_preproc) {
-                        last_live_frontier.clone()
-                    } else {
-                        frontier.clone()
-                    };
+                let child_preds = if frontier.is_empty() && (child_is_fn || prev_was_preproc) {
+                    last_live_frontier.clone()
+                } else {
+                    frontier.clone()
+                };
 
                 let child_exits = build_sub(
                     child,

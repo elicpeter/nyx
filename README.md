@@ -121,6 +121,10 @@ $ nyx scan --ast-only
 
 # CFG + taint analysis only (skip AST pattern rules)
 $ nyx scan --cfg-only
+
+# Include test/vendor/benchmark paths at original severity
+# (by default these are downgraded one tier)
+$ nyx scan --include-nonprod
 ```
 
 ### Index Management
