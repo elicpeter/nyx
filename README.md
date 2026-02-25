@@ -29,8 +29,10 @@
 | Two-pass architecture | Pass 1 extracts function summaries; Pass 2 runs taint with full cross-file context |
 | Incremental indexing | SQLite database stores file hashes, summaries, and findings to skip unchanged files |
 | Parallel execution | File walking and analysis run concurrently via Rayon; scales with available CPU cores |
+| Configurable analysis rules | Define custom sources, sanitizers, sinks, terminators, and event handlers per language via TOML config or CLI |
 | Configurable scan parameters | Exclude directories, set maximum file size, tune worker threads, limit output, and more |
-| Multiple output formats | Human-readable console view (default) and machine-readable JSON |
+| Multiple output formats | Console (default), JSON, and SARIF 2.1.0 for CI integration |
+| Progress reporting | Real-time progress bars for file discovery and analysis passes |
 
 ---
 
@@ -105,6 +107,9 @@ $ nyx scan
 # Scan a specific path and emit JSON
 $ nyx scan ./server --format json
 
+# Emit SARIF 2.1.0 for CI integration (GitHub Code Scanning, etc.)
+$ nyx scan --format sarif > results.sarif
+
 # Perform an ad-hoc scan without touching the index
 $ nyx scan --no-index
 
@@ -116,6 +121,10 @@ $ nyx scan --ast-only
 
 # CFG + taint analysis only (skip AST pattern rules)
 $ nyx scan --cfg-only
+
+# Include test/vendor/benchmark paths at original severity
+# (by default these are downgraded one tier)
+$ nyx scan --include-nonprod
 ```
 
 ### Index Management
@@ -133,6 +142,22 @@ $ nyx list [-v]
 # Remove a single project or purge all indexes
 $ nyx clean <PROJECT_NAME>
 $ nyx clean --all
+```
+
+### Configuration Management
+
+```bash
+# Print the effective merged configuration
+$ nyx config show
+
+# Print the config directory path
+$ nyx config path
+
+# Add a custom sanitizer rule (written to nyx.local)
+$ nyx config add-rule --lang javascript --matcher escapeHtml --kind sanitizer --cap html_escape
+
+# Add a terminator function
+$ nyx config add-terminator --lang javascript --name process.exit
 ```
 
 ---
@@ -173,11 +198,11 @@ All 10 languages have full AST pattern matching and CFG/taint analysis. Resource
 | C++ | Yes | Yes | Yes |
 | Java | Yes | Yes | Yes |
 | Go | Yes | Yes | Yes |
-| PHP | Yes | Yes | — |
-| Python | Yes | Yes | — |
-| Ruby | Yes | Yes | — |
-| TypeScript | Yes | Yes | — |
-| JavaScript | Yes | Yes | — |
+| PHP | Yes | Yes | Yes |
+| Python | Yes | Yes | Yes |
+| Ruby | Yes | Yes | Yes |
+| TypeScript | Yes | Yes | Yes |
+| JavaScript | Yes | Yes | Yes |
 
 ---
 
@@ -203,12 +228,36 @@ excluded_extensions = ["mp3", "mp4"]
 [output]
 default_format = "json"
 max_results    = 200
+quiet          = true       # suppress status messages
 
 [performance]
 worker_threads     = 8  # 0 = auto-detect
 batch_size         = 200
 channel_multiplier = 2
 ```
+
+### Custom Analysis Rules
+
+You can define custom sources, sanitizers, sinks, terminators, and event handlers per language. These take priority over built-in rules, letting you teach Nyx about project-specific functions.
+
+```toml
+[analysis.languages.javascript]
+terminators = ["process.exit"]
+event_handlers = ["addEventListener"]
+
+[[analysis.languages.javascript.rules]]
+matchers = ["escapeHtml"]
+kind = "sanitizer"          # "source" | "sanitizer" | "sink"
+cap = "html_escape"         # "env_var" | "html_escape" | "shell_escape" |
+                            # "url_encode" | "json_parse" | "file_io" | "all"
+
+[[analysis.languages.javascript.rules]]
+matchers = ["dangerouslySetHTML"]
+kind = "sink"
+cap = "html_escape"
+```
+
+Rules can also be added interactively via `nyx config add-rule` and `nyx config add-terminator`.
 
 A fully documented `nyx.conf` is generated automatically on first run.
 
@@ -258,10 +307,10 @@ With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged
 
 | Area | Details |
 |---|---|
-| Output formats | SARIF 2.1.0, JUnit XML, HTML report generator |
-| Language coverage | Expanded taint rules per language, resource leak pairs for Python/Ruby/PHP/JS/TS |
+| Output formats | JUnit XML, HTML report generator |
+| Language coverage | Expanded taint rules per language |
 | Rule updates | Remote rule feed with signature verification |
-| UX | Progress bar, smart file-watch re-scan |
+| UX | Smart file-watch re-scan |
 
 Community feedback shapes priorities -- please [open an issue](https://github.com/ecpeter23/nyx/issues) to discuss proposed changes.
 

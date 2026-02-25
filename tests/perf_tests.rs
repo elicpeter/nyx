@@ -50,14 +50,14 @@ fn bench_indexed(fixture_dir: &Path, iterations: usize) -> (u64, u64) {
 
         // Cold: build index + scan
         let start = Instant::now();
-        build_index("bench", fixture_dir, &db_path, &cfg).expect("build_index");
+        build_index("bench", fixture_dir, &db_path, &cfg, false).expect("build_index");
         let pool = Indexer::init(&db_path).expect("db init");
-        let _ = scan_with_index_parallel("bench", Arc::clone(&pool), &cfg);
+        let _ = scan_with_index_parallel("bench", Arc::clone(&pool), &cfg, false);
         cold_durations.push(start.elapsed().as_millis() as u64);
 
         // Warm: second scan on same index — files unchanged
         let start = Instant::now();
-        let _ = scan_with_index_parallel("bench", Arc::clone(&pool), &cfg);
+        let _ = scan_with_index_parallel("bench", Arc::clone(&pool), &cfg, false);
         warm_durations.push(start.elapsed().as_millis() as u64);
     }
 

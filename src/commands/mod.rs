@@ -1,4 +1,5 @@
 pub mod clean;
+pub mod config;
 pub mod index;
 pub mod list;
 pub mod scan;
@@ -12,6 +13,7 @@ use std::path::Path;
 pub fn handle_command(
     command: Commands,
     database_dir: &Path,
+    config_dir: &Path,
     config: &mut Config,
 ) -> NyxResult<()> {
     match command {
@@ -24,6 +26,7 @@ pub fn handle_command(
             ast_only,
             cfg_only,
             all_targets,
+            include_nonprod,
         } => {
             if high_only {
                 config.scanner.min_severity = Severity::High
@@ -41,10 +44,37 @@ pub fn handle_command(
                 config.scanner.mode = AnalysisMode::Full
             };
 
-            scan::handle(&path, no_index, rebuild_index, format, database_dir, config)
+            if include_nonprod {
+                config.scanner.include_nonprod = true
+            };
+
+            scan::handle(&path, no_index, rebuild_index, format, database_dir, config)?;
         }
-        Commands::Index { action } => index::handle(action, database_dir, config),
-        Commands::List { verbose } => list::handle(verbose, database_dir),
-        Commands::Clean { project, all } => clean::handle(project, all, database_dir),
+        Commands::Index { action } => {
+            index::handle(action, database_dir, config)?;
+        }
+        Commands::List { verbose } => {
+            list::handle(verbose, database_dir)?;
+        }
+        Commands::Clean { project, all } => {
+            clean::handle(project, all, database_dir)?;
+        }
+        Commands::Config { action } => {
+            use crate::cli::ConfigAction;
+            match action {
+                ConfigAction::Show => self::config::show(config)?,
+                ConfigAction::Path => self::config::path(config_dir)?,
+                ConfigAction::AddRule {
+                    lang,
+                    matcher,
+                    kind,
+                    cap,
+                } => self::config::add_rule(config_dir, &lang, &matcher, &kind, &cap)?,
+                ConfigAction::AddTerminator { lang, name } => {
+                    self::config::add_terminator(config_dir, &lang, &name)?
+                }
+            }
+        }
     }
+    Ok(())
 }

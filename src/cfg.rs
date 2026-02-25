@@ -3,7 +3,7 @@ use petgraph::prelude::*;
 use tracing::debug;
 use tree_sitter::{Node, Tree};
 
-use crate::labels::{Cap, DataLabel, Kind, classify, lookup, param_config};
+use crate::labels::{Cap, DataLabel, Kind, LangAnalysisRules, classify, lookup, param_config};
 use crate::summary::FuncSummary;
 use crate::symbol::{FuncKey, Lang};
 use std::collections::{HashMap, HashSet};
@@ -186,7 +186,12 @@ fn member_expr_text(n: Node, code: &[u8]) -> Option<String> {
 }
 
 /// Recursively search `n` for a member expression whose text classifies as a label.
-fn first_member_label(n: Node, lang: &str, code: &[u8]) -> Option<DataLabel> {
+fn first_member_label(
+    n: Node,
+    lang: &str,
+    code: &[u8],
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
+) -> Option<DataLabel> {
     match n.kind() {
         "member_expression" | "attribute" | "selector_expression" => {
             if let Some(full) = member_expr_text(n, code) {
@@ -194,7 +199,7 @@ fn first_member_label(n: Node, lang: &str, code: &[u8]) -> Option<DataLabel> {
                 // to match rules like "process.env" from "process.env.CMD".
                 let mut candidate = full.as_str();
                 loop {
-                    if let Some(lbl) = classify(lang, candidate) {
+                    if let Some(lbl) = classify(lang, candidate, extra_labels) {
                         return Some(lbl);
                     }
                     match candidate.rsplit_once('.') {
@@ -208,7 +213,7 @@ fn first_member_label(n: Node, lang: &str, code: &[u8]) -> Option<DataLabel> {
     }
     let mut cursor = n.walk();
     for child in n.children(&mut cursor) {
-        if let Some(lbl) = first_member_label(child, lang, code) {
+        if let Some(lbl) = first_member_label(child, lang, code, extra_labels) {
             return Some(lbl);
         }
     }
@@ -366,6 +371,7 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
 }
 
 /// Create a node in one short borrow and optionally attach a taint label.
+#[allow(clippy::too_many_arguments)]
 fn push_node<'a>(
     g: &mut Cfg,
     kind: StmtKind,
@@ -374,6 +380,7 @@ fn push_node<'a>(
     code: &'a [u8],
     enclosing_func: Option<&str>,
     call_ordinal: u32,
+    analysis_rules: Option<&LangAnalysisRules>,
 ) -> NodeIndex {
     /* ── 1.  IDENTIFIER EXTRACTION ─────────────────────────────────────── */
 
@@ -427,7 +434,8 @@ fn push_node<'a>(
 
     /* ── 2.  LABEL LOOK-UP  ───────────────────────────────────────────── */
 
-    let mut label = classify(lang, &text);
+    let extra = analysis_rules.map(|r| r.extra_labels.as_slice());
+    let mut label = classify(lang, &text, extra);
 
     // For assignments like `element.innerHTML = value`, the inner-call heuristic
     // above may have overridden `text` with a call on the RHS (e.g. getElementById).
@@ -450,10 +458,20 @@ fn push_node<'a>(
 
         if let Some(assign) = assign_node
             && let Some(lhs) = assign.child_by_field_name("left")
-            && let Some(prop) = lhs.child_by_field_name("property")
-            && let Some(prop_text) = text_of(prop, code)
         {
-            label = classify(lang, &prop_text);
+            // Try full member expression first (e.g. "location.href") — more
+            // specific and avoids false positives on `a.href`.
+            if let Some(full) = member_expr_text(lhs, code) {
+                label = classify(lang, &full, extra);
+            }
+            // Fall back to property-only (e.g. "innerHTML") for sinks that
+            // don't need object context.
+            if label.is_none()
+                && let Some(prop) = lhs.child_by_field_name("property")
+                && let Some(prop_text) = text_of(prop, code)
+            {
+                label = classify(lang, &prop_text, extra);
+            }
         }
     }
 
@@ -466,7 +484,7 @@ fn push_node<'a>(
             lookup(lang, ast.kind()),
             Kind::CallWrapper | Kind::Assignment
         )
-        && let Some(found) = first_member_label(ast, lang, code)
+        && let Some(found) = first_member_label(ast, lang, code, extra)
     {
         label = Some(found);
         // Update text so the callee name reflects the source
@@ -564,6 +582,19 @@ fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> V
     names
 }
 
+/// Check if a callee name matches any configured terminator.
+fn is_configured_terminator(callee: &str, analysis_rules: Option<&LangAnalysisRules>) -> bool {
+    if let Some(rules) = analysis_rules {
+        let callee_lower = callee.to_ascii_lowercase();
+        rules
+            .terminators
+            .iter()
+            .any(|t| callee_lower == t.to_ascii_lowercase())
+    } else {
+        false
+    }
+}
+
 /// Add the same edge (of the same kind) from every node in `froms` to `to`.
 #[inline]
 fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind: EdgeKind) {
@@ -588,6 +619,9 @@ fn build_sub<'a>(
     file_path: &str,
     enclosing_func: Option<&str>,
     call_ordinal: &mut u32,
+    analysis_rules: Option<&LangAnalysisRules>,
+    break_targets: &mut Vec<NodeIndex>,
+    continue_targets: &mut Vec<NodeIndex>,
 ) -> Vec<NodeIndex> {
     match lookup(lang, ast.kind()) {
         // ─────────────────────────────────────────────────────────────────
@@ -595,7 +629,16 @@ fn build_sub<'a>(
         // ─────────────────────────────────────────────────────────────────
         Kind::If => {
             // Condition node
-            let cond = push_node(g, StmtKind::If, ast, lang, code, enclosing_func, 0);
+            let cond = push_node(
+                g,
+                StmtKind::If,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                0,
+                analysis_rules,
+            );
             connect_all(g, preds, cond, EdgeKind::Seq);
 
             // Locate then & else blocks using field-based lookup first,
@@ -620,6 +663,7 @@ fn build_sub<'a>(
             };
 
             // THEN branch
+            let then_first_node = NodeIndex::new(g.node_count());
             let then_exits = if let Some(b) = then_block {
                 let exits = build_sub(
                     b,
@@ -631,9 +675,17 @@ fn build_sub<'a>(
                     file_path,
                     enclosing_func,
                     call_ordinal,
+                    analysis_rules,
+                    break_targets,
+                    continue_targets,
                 );
-                // True edges leave the condition
-                if let Some(&first) = exits.first() {
+                // Add True edge from condition to first node of then-branch.
+                // We use the first node created (by index) rather than the
+                // exit, because the branch may terminate (return/break) and
+                // have no exits.
+                if then_first_node.index() < g.node_count() {
+                    connect_all(g, &[cond], then_first_node, EdgeKind::True);
+                } else if let Some(&first) = exits.first() {
                     connect_all(g, &[cond], first, EdgeKind::True);
                 }
                 exits
@@ -642,6 +694,7 @@ fn build_sub<'a>(
             };
 
             // ELSE branch
+            let else_first_node = NodeIndex::new(g.node_count());
             let else_exits = if let Some(b) = else_block {
                 let exits = build_sub(
                     b,
@@ -653,17 +706,30 @@ fn build_sub<'a>(
                     file_path,
                     enclosing_func,
                     call_ordinal,
+                    analysis_rules,
+                    break_targets,
+                    continue_targets,
                 );
-                if let Some(&first) = exits.first() {
+                if else_first_node.index() < g.node_count() {
+                    connect_all(g, &[cond], else_first_node, EdgeKind::False);
+                } else if let Some(&first) = exits.first() {
                     connect_all(g, &[cond], first, EdgeKind::False);
                 }
                 exits
             } else {
-                // No explicit else → non-taken branch flows to the *then* exits
-                if let Some(&first) = then_exits.first() {
-                    connect_all(g, &[cond], first, EdgeKind::False);
+                // No explicit else → if the then-branch falls through
+                // (non-empty exits), the false branch merges with those exits.
+                // If the then-branch terminates (break/return/continue →
+                // empty exits), the false branch flows from the condition
+                // to whatever comes next.
+                if then_exits.is_empty() {
+                    vec![cond]
+                } else {
+                    if let Some(&first) = then_exits.first() {
+                        connect_all(g, &[cond], first, EdgeKind::False);
+                    }
+                    then_exits.clone()
                 }
-                then_exits.clone()
             };
 
             // Frontier = union of both branches
@@ -672,8 +738,21 @@ fn build_sub<'a>(
 
         Kind::InfiniteLoop => {
             // Synthetic header node
-            let header = push_node(g, StmtKind::Loop, ast, lang, code, enclosing_func, 0);
+            let header = push_node(
+                g,
+                StmtKind::Loop,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                0,
+                analysis_rules,
+            );
             connect_all(g, preds, header, EdgeKind::Seq);
+
+            // Fresh break/continue targets scoped to this loop
+            let mut loop_breaks = Vec::new();
+            let mut loop_continues = Vec::new();
 
             // The body is the single `block` child
             let body = ast.child_by_field_name("body").expect("loop without body");
@@ -687,22 +766,48 @@ fn build_sub<'a>(
                 file_path,
                 enclosing_func,
                 call_ordinal,
+                analysis_rules,
+                &mut loop_breaks,
+                &mut loop_continues,
             );
 
             // Back-edge from every linear exit to header
             for &e in &body_exits {
                 connect_all(g, &[e], header, EdgeKind::Back);
             }
-            // `loop` may break → those exits are frontiers too
-            body_exits.into_iter().chain([header]).collect()
+            // Wire continue targets as back edges to header
+            for &c in &loop_continues {
+                connect_all(g, &[c], header, EdgeKind::Back);
+            }
+            // Break targets become exits of the loop
+            if loop_breaks.is_empty() {
+                // No break → infinite loop; header is the only exit for
+                // downstream code (fallthrough semantics)
+                vec![header]
+            } else {
+                loop_breaks
+            }
         }
 
         // ─────────────────────────────────────────────────────────────────
         //  WHILE / FOR: classic loop with a back edge.
         // ─────────────────────────────────────────────────────────────────
         Kind::While | Kind::For => {
-            let header = push_node(g, StmtKind::Loop, ast, lang, code, enclosing_func, 0);
+            let header = push_node(
+                g,
+                StmtKind::Loop,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                0,
+                analysis_rules,
+            );
             connect_all(g, preds, header, EdgeKind::Seq);
+
+            // Fresh break/continue targets scoped to this loop
+            let mut loop_breaks = Vec::new();
+            let mut loop_continues = Vec::new();
 
             // Body = first (and usually only) block child.
             let body = ast
@@ -724,14 +829,24 @@ fn build_sub<'a>(
                 file_path,
                 enclosing_func,
                 call_ordinal,
+                analysis_rules,
+                &mut loop_breaks,
+                &mut loop_continues,
             );
 
             // Back‑edge for every linear exit → header.
             for &e in &body_exits {
                 connect_all(g, &[e], header, EdgeKind::Back);
             }
-            // Falling out of the loop = header’s false branch.
-            vec![header]
+            // Wire continue targets as back edges to header
+            for &c in &loop_continues {
+                connect_all(g, &[c], header, EdgeKind::Back);
+            }
+            // Falling out of the loop = header’s false branch +
+            // any break targets that exit the loop.
+            let mut exits = vec![header];
+            exits.extend(loop_breaks);
+            exits
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -743,25 +858,72 @@ fn build_sub<'a>(
                 // that callee labels (source/sanitizer/sink) are applied.
                 let ord = *call_ordinal;
                 *call_ordinal += 1;
-                let call_idx = push_node(g, StmtKind::Call, ast, lang, code, enclosing_func, ord);
+                let call_idx = push_node(
+                    g,
+                    StmtKind::Call,
+                    ast,
+                    lang,
+                    code,
+                    enclosing_func,
+                    ord,
+                    analysis_rules,
+                );
                 connect_all(g, preds, call_idx, EdgeKind::Seq);
-                let ret = push_node(g, StmtKind::Return, ast, lang, code, enclosing_func, 0);
+                let ret = push_node(
+                    g,
+                    StmtKind::Return,
+                    ast,
+                    lang,
+                    code,
+                    enclosing_func,
+                    0,
+                    analysis_rules,
+                );
                 connect_all(g, &[call_idx], ret, EdgeKind::Seq);
                 Vec::new()
             } else {
-                let ret = push_node(g, StmtKind::Return, ast, lang, code, enclosing_func, 0);
+                let ret = push_node(
+                    g,
+                    StmtKind::Return,
+                    ast,
+                    lang,
+                    code,
+                    enclosing_func,
+                    0,
+                    analysis_rules,
+                );
                 connect_all(g, preds, ret, EdgeKind::Seq);
                 Vec::new() // terminates this path
             }
         }
         Kind::Break => {
-            let brk = push_node(g, StmtKind::Break, ast, lang, code, enclosing_func, 0);
+            let brk = push_node(
+                g,
+                StmtKind::Break,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                0,
+                analysis_rules,
+            );
             connect_all(g, preds, brk, EdgeKind::Seq);
+            break_targets.push(brk);
             Vec::new()
         }
         Kind::Continue => {
-            let cont = push_node(g, StmtKind::Continue, ast, lang, code, enclosing_func, 0);
+            let cont = push_node(
+                g,
+                StmtKind::Continue,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                0,
+                analysis_rules,
+            );
             connect_all(g, preds, cont, EdgeKind::Seq);
+            continue_targets.push(cont);
             Vec::new()
         }
 
@@ -774,6 +936,7 @@ fn build_sub<'a>(
             // Track the last frontier before a function emptied it — used to
             // keep subsequent functions reachable.
             let mut last_live_frontier = preds.to_vec();
+            let mut prev_was_preproc = false;
             for child in ast.children(&mut cursor) {
                 let child_is_fn = lookup(lang, child.kind()) == Kind::Function;
 
@@ -782,7 +945,13 @@ fn build_sub<'a>(
                 // file-level predecessors.  Without this, a preceding function
                 // that ends with `return` (frontier = []) would leave subsequent
                 // functions disconnected from the graph.
-                let child_preds = if child_is_fn && frontier.is_empty() {
+                //
+                // Similarly, when a preprocessor block (`#ifdef ... #endif`)
+                // contains an `if/else` whose else branch is on the other side
+                // of the `#endif`, tree-sitter parses a dangling else that
+                // empties the frontier.  The code after the preproc block should
+                // remain reachable.
+                let child_preds = if frontier.is_empty() && (child_is_fn || prev_was_preproc) {
                     last_live_frontier.clone()
                 } else {
                     frontier.clone()
@@ -798,12 +967,17 @@ fn build_sub<'a>(
                     file_path,
                     enclosing_func,
                     call_ordinal,
+                    analysis_rules,
+                    break_targets,
+                    continue_targets,
                 );
 
+                let is_preproc = child.kind().starts_with("preproc_");
                 if !child_exits.is_empty() {
                     last_live_frontier = child_exits.clone();
                 }
                 frontier = child_exits;
+                prev_was_preproc = is_preproc;
             }
             frontier
         }
@@ -822,7 +996,16 @@ fn build_sub<'a>(
                     tmp.into_iter().next()
                 })
                 .unwrap_or_else(|| "<anon>".to_string());
-            let entry_idx = push_node(g, StmtKind::Seq, ast, lang, code, Some(&fn_name), 0);
+            let entry_idx = push_node(
+                g,
+                StmtKind::Seq,
+                ast,
+                lang,
+                code,
+                Some(&fn_name),
+                0,
+                analysis_rules,
+            );
             connect_all(g, preds, entry_idx, EdgeKind::Seq);
 
             // 1b) extract parameter names
@@ -830,8 +1013,13 @@ fn build_sub<'a>(
             let param_count = param_names.len();
 
             // 2) build its body with a fresh call ordinal counter for this function scope
+            // Snapshot the current node count so we can iterate only over nodes
+            // created within this function (avoids O(N²) scan of the full graph).
+            let fn_first_node: NodeIndex = NodeIndex::new(g.node_count());
             let body = ast.child_by_field_name("body").expect("fn w/o body");
             let mut fn_call_ordinal: u32 = 0;
+            let mut fn_breaks = Vec::new();
+            let mut fn_continues = Vec::new();
             let body_exits = build_sub(
                 body,
                 &[entry_idx],
@@ -842,6 +1030,9 @@ fn build_sub<'a>(
                 file_path,
                 Some(&fn_name),
                 &mut fn_call_ordinal,
+                analysis_rules,
+                &mut fn_breaks,
+                &mut fn_continues,
             );
 
             // ───── 3) light-weight dataflow ──────────────────────────────────────
@@ -862,11 +1053,12 @@ fn build_sub<'a>(
 
             let param_set: HashSet<&str> = param_names.iter().map(|s| s.as_str()).collect();
 
-            for idx in g.node_indices() {
+            // Iterate only over nodes created within this function scope
+            // (entry_idx .. current end) instead of the entire graph.
+            let fn_node_range = entry_idx.index()..g.node_count();
+            for raw in fn_node_range {
+                let idx = NodeIndex::new(raw);
                 let info = &g[idx];
-                if info.span.0 < ast.start_byte() || info.span.1 > ast.end_byte() {
-                    continue;
-                }
 
                 // collect callee names
                 if let Some(callee) = &info.callee
@@ -1010,11 +1202,12 @@ fn build_sub<'a>(
             // this edge, the synthetic exit node is unreachable whenever
             // the function body ends with a `return` statement, which
             // disconnects all subsequent functions at the module level.
-            for idx in g.node_indices() {
+            //
+            // Only scan nodes created within this function scope.
+            for raw in fn_first_node.index()..g.node_count() {
+                let idx = NodeIndex::new(raw);
                 let info = &g[idx];
                 if info.kind == StmtKind::Return
-                    && info.span.0 >= ast.start_byte()
-                    && info.span.1 <= ast.end_byte()
                     && idx != exit_idx
                     && !g.contains_edge(idx, exit_idx)
                 {
@@ -1068,6 +1261,9 @@ fn build_sub<'a>(
                     file_path,
                     enclosing_func,
                     call_ordinal,
+                    analysis_rules,
+                    break_targets,
+                    continue_targets,
                 );
             }
 
@@ -1085,8 +1281,25 @@ fn build_sub<'a>(
             } else {
                 0
             };
-            let node = push_node(g, kind, ast, lang, code, enclosing_func, ord);
+            let node = push_node(
+                g,
+                kind,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                ord,
+                analysis_rules,
+            );
             connect_all(g, preds, node, EdgeKind::Seq);
+
+            // If the callee is a configured terminator, treat as a dead end
+            if kind == StmtKind::Call
+                && let Some(callee) = &g[node].callee
+                && is_configured_terminator(callee, analysis_rules)
+            {
+                return Vec::new();
+            }
             vec![node]
         }
 
@@ -1095,8 +1308,24 @@ fn build_sub<'a>(
         Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
             let ord = *call_ordinal;
             *call_ordinal += 1;
-            let n = push_node(g, StmtKind::Call, ast, lang, code, enclosing_func, ord);
+            let n = push_node(
+                g,
+                StmtKind::Call,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                ord,
+                analysis_rules,
+            );
             connect_all(g, preds, n, EdgeKind::Seq);
+
+            // If the callee is a configured terminator, treat as a dead end
+            if let Some(callee) = &g[n].callee
+                && is_configured_terminator(callee, analysis_rules)
+            {
+                return Vec::new();
+            }
             vec![n]
         }
 
@@ -1115,7 +1344,16 @@ fn build_sub<'a>(
             } else {
                 0
             };
-            let n = push_node(g, kind, ast, lang, code, enclosing_func, ord);
+            let n = push_node(
+                g,
+                kind,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                ord,
+                analysis_rules,
+            );
             connect_all(g, preds, n, EdgeKind::Seq);
             vec![n]
         }
@@ -1127,7 +1365,16 @@ fn build_sub<'a>(
         //  Every other node = simple sequential statement
         // ─────────────────────────────────────────────────────────────────
         _ => {
-            let n = push_node(g, StmtKind::Seq, ast, lang, code, enclosing_func, 0);
+            let n = push_node(
+                g,
+                StmtKind::Seq,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                0,
+                analysis_rules,
+            );
             connect_all(g, preds, n, EdgeKind::Seq);
             vec![n]
         }
@@ -1150,6 +1397,7 @@ pub(crate) fn build_cfg<'a>(
     code: &'a [u8],
     lang: &str,
     file_path: &str,
+    analysis_rules: Option<&LangAnalysisRules>,
 ) -> (Cfg, NodeIndex, FuncSummaries) {
     debug!(target: "cfg", "Building CFG for {:?}", tree.root_node());
 
@@ -1178,6 +1426,8 @@ pub(crate) fn build_cfg<'a>(
 
     // Build the body below the synthetic ENTRY.
     let mut top_ordinal: u32 = 0;
+    let mut top_breaks = Vec::new();
+    let mut top_continues = Vec::new();
     let exits = build_sub(
         tree.root_node(),
         &[entry],
@@ -1188,6 +1438,9 @@ pub(crate) fn build_cfg<'a>(
         file_path,
         None,
         &mut top_ordinal,
+        analysis_rules,
+        &mut top_breaks,
+        &mut top_continues,
     );
     debug!(target: "cfg", "exits: {:?}", exits);
     // Wire every real exit to our synthetic EXIT node.

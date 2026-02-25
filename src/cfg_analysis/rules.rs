@@ -21,6 +21,9 @@ pub struct EntryPointRule {
 pub struct ResourcePair {
     pub acquire: &'static [&'static str],
     pub release: &'static [&'static str],
+    /// Patterns that look like acquire calls (e.g. `freopen` ends with `fopen`)
+    /// but should NOT be treated as acquisitions.
+    pub exclude_acquire: &'static [&'static str],
     pub resource_name: &'static str,
 }
 
@@ -46,6 +49,16 @@ static COMMON_GUARDS: &[GuardRule] = &[
     GuardRule {
         matchers: &["url_encode", "encode_uri", "urlencode"],
         applies_to_sink_caps: Cap::URL_ENCODE,
+    },
+    GuardRule {
+        matchers: &[
+            "which",
+            "resolve_binary",
+            "find_program",
+            "lookup_path",
+            "shutil.which",
+        ],
+        applies_to_sink_caps: Cap::SHELL_ESCAPE,
     },
 ];
 
@@ -168,21 +181,25 @@ static C_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
         acquire: &["malloc", "calloc", "realloc"],
         release: &["free"],
+        exclude_acquire: &[],
         resource_name: "memory",
     },
     ResourcePair {
-        acquire: &["fopen"],
-        release: &["fclose"],
+        acquire: &["fopen", "fdopen", "curlx_fopen", "curlx_fdopen"],
+        release: &["fclose", "curlx_fclose"],
+        exclude_acquire: &["freopen", "curlx_freopen"],
         resource_name: "file handle",
     },
     ResourcePair {
         acquire: &["open"],
         release: &["close"],
+        exclude_acquire: &["freopen", "curlx_freopen"],
         resource_name: "file descriptor",
     },
     ResourcePair {
         acquire: &["pthread_mutex_lock"],
         release: &["pthread_mutex_unlock"],
+        exclude_acquire: &[],
         resource_name: "mutex",
     },
 ];
@@ -191,11 +208,13 @@ static GO_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
         acquire: &["os.Open", "os.Create", "os.OpenFile"],
         release: &[".Close"],
+        exclude_acquire: &[],
         resource_name: "file handle",
     },
     ResourcePair {
         acquire: &[".Lock"],
         release: &[".Unlock"],
+        exclude_acquire: &[],
         resource_name: "mutex",
     },
 ];
@@ -205,6 +224,7 @@ static RUST_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
         acquire: &["alloc"],
         release: &["dealloc"],
+        exclude_acquire: &[],
         resource_name: "raw memory",
     },
 ];
@@ -217,10 +237,93 @@ static JAVA_RESOURCES: &[ResourcePair] = &[ResourcePair {
         "openConnection",
     ],
     release: &[".close"],
+    exclude_acquire: &[],
     resource_name: "stream/connection",
 }];
 
-static EMPTY_RESOURCES: &[ResourcePair] = &[];
+static PYTHON_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &["open"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "file handle",
+    },
+    ResourcePair {
+        acquire: &["socket.socket", "socket"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "socket",
+    },
+    ResourcePair {
+        acquire: &["connect", "cursor"],
+        release: &[".close"],
+        exclude_acquire: &["signal.connect", "event.connect", ".register"],
+        resource_name: "db connection",
+    },
+    ResourcePair {
+        acquire: &["threading.Lock", "threading.RLock"],
+        release: &[".release"],
+        exclude_acquire: &[],
+        resource_name: "mutex",
+    },
+];
+
+static RUBY_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &["File.open", "open"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "file handle",
+    },
+    ResourcePair {
+        acquire: &["TCPSocket.new", "UDPSocket.new"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "socket",
+    },
+    ResourcePair {
+        acquire: &[".lock"],
+        release: &[".unlock"],
+        exclude_acquire: &[],
+        resource_name: "mutex",
+    },
+];
+
+static PHP_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &["fopen"],
+        release: &["fclose"],
+        exclude_acquire: &["freopen"],
+        resource_name: "file handle",
+    },
+    ResourcePair {
+        acquire: &["mysqli_connect"],
+        release: &["mysqli_close"],
+        exclude_acquire: &[],
+        resource_name: "db connection",
+    },
+    ResourcePair {
+        acquire: &["curl_init"],
+        release: &["curl_close"],
+        exclude_acquire: &[],
+        resource_name: "curl handle",
+    },
+];
+
+static JS_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &["fs.open", "fs.openSync"],
+        release: &["fs.close", "fs.closeSync"],
+        exclude_acquire: &[],
+        resource_name: "file descriptor",
+    },
+    ResourcePair {
+        acquire: &["createReadStream", "createWriteStream"],
+        release: &[".close", ".destroy"],
+        exclude_acquire: &[],
+        resource_name: "stream",
+    },
+];
 
 pub fn resource_pairs(lang: Lang) -> &'static [ResourcePair] {
     match lang {
@@ -229,6 +332,9 @@ pub fn resource_pairs(lang: Lang) -> &'static [ResourcePair] {
         Lang::Go => GO_RESOURCES,
         Lang::Rust => RUST_RESOURCES,
         Lang::Java => JAVA_RESOURCES,
-        _ => EMPTY_RESOURCES,
+        Lang::Python => PYTHON_RESOURCES,
+        Lang::Ruby => RUBY_RESOURCES,
+        Lang::Php => PHP_RESOURCES,
+        Lang::JavaScript | Lang::TypeScript => JS_RESOURCES,
     }
 }

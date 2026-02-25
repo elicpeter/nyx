@@ -2,15 +2,75 @@ use super::dominators::{self, dominates};
 use super::rules;
 use super::{AnalysisContext, CfgAnalysis, CfgFinding, Confidence, is_entry_point_func};
 use crate::cfg::StmtKind;
-use crate::labels::{Cap, DataLabel};
+use crate::labels::{Cap, DataLabel, RuntimeLabelRule};
 use crate::patterns::Severity;
 use petgraph::graph::NodeIndex;
 
 pub struct UnguardedSink;
 
+/// Check whether **all** arguments to the sink are constants (no taint-capable
+/// variable flows).  Extends the inline callee-part check by tracing one hop
+/// through the CFG: if a used variable is defined by a node that itself has
+/// empty `uses` and no Source label, the definition is treated as a constant
+/// binding (e.g. `let cmd = "git"; Command::new(cmd)`).
+fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
+    let sink_info = &ctx.cfg[sink];
+    let callee_desc = sink_info.callee.as_deref().unwrap_or("");
+    let callee_parts: Vec<&str> = callee_desc.split(['.', ':']).collect();
+    let sink_func = sink_info.enclosing_func.as_deref();
+
+    sink_info.uses.iter().all(|u| {
+        // Part of the callee name itself → constant
+        if callee_parts.contains(&u.as_str()) {
+            return true;
+        }
+        // One-hop trace: find the defining node in the same function
+        for idx in ctx.cfg.node_indices() {
+            let info = &ctx.cfg[idx];
+            if info.enclosing_func.as_deref() != sink_func {
+                continue;
+            }
+            if info.defines.as_deref() == Some(u.as_str()) {
+                // If the defining node has no uses (pure constant) and is not
+                // a Source, the variable is constant.
+                if info.uses.is_empty() && !matches!(info.label, Some(DataLabel::Source(_))) {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+}
+
+/// Check if a callee matches any of the runtime label rules that are sanitizers.
+fn match_config_sanitizer(callee: &str, extra: &[RuntimeLabelRule]) -> Option<Cap> {
+    let callee_lower = callee.to_ascii_lowercase();
+    for rule in extra {
+        let cap = match rule.label {
+            DataLabel::Sanitizer(c) => c,
+            _ => continue,
+        };
+        for m in &rule.matchers {
+            let ml = m.to_ascii_lowercase();
+            if ml.ends_with('_') {
+                if callee_lower.starts_with(&ml) {
+                    return Some(cap);
+                }
+            } else if callee_lower.ends_with(&ml) {
+                return Some(cap);
+            }
+        }
+    }
+    None
+}
+
 /// Find all nodes in the CFG that are calls to guard functions.
 fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
     let guard_rules = rules::guard_rules(ctx.lang);
+    let config_rules = ctx
+        .analysis_rules
+        .map(|r| r.extra_labels.as_slice())
+        .unwrap_or(&[]);
     let mut result = Vec::new();
 
     for idx in ctx.cfg.node_indices() {
@@ -19,6 +79,13 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
             continue;
         }
         if let Some(callee) = &info.callee {
+            // Check config sanitizer rules first
+            if let Some(cap) = match_config_sanitizer(callee, config_rules) {
+                result.push((idx, cap));
+                continue;
+            }
+
+            // Then check built-in guard rules
             let callee_lower = callee.to_ascii_lowercase();
             for rule in guard_rules {
                 let matched = rule.matchers.iter().any(|m| {
@@ -174,6 +241,13 @@ impl CfgAnalysis for UnguardedSink {
 
             let has_taint = taint_confirms_sink(ctx, *sink);
             let source_derived = sink_arg_is_source_derived(ctx, *sink);
+
+            // If sink args are all constants (including one-hop constant bindings)
+            // and taint didn't confirm, this is a false positive — skip it.
+            if is_all_args_constant(ctx, *sink) && !has_taint && !source_derived {
+                continue;
+            }
+
             let param_only = sink_arg_is_parameter_only(ctx, *sink);
             let in_entrypoint = sink_in_entrypoint(ctx, *sink);
 
@@ -182,6 +256,9 @@ impl CfgAnalysis for UnguardedSink {
                 (Severity::High, Confidence::High)
             } else if param_only && !in_entrypoint {
                 // Wrapper function consuming only parameters → LOW
+                (Severity::Low, Confidence::Low)
+            } else if !ctx.taint_active && !source_derived {
+                // CFG-only mode without taint confirmation → LOW
                 (Severity::Low, Confidence::Low)
             } else if in_entrypoint && !param_only {
                 // Entrypoint with non-parameter args but no taint confirmation → MEDIUM

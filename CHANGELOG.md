@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-02-25
+
+### Added
+- **Configurable analysis rules** -- users can define custom sources, sanitizers, and sinks per language via TOML config (`nyx.local`) or the new `nyx config` CLI. Config rules take priority over built-in rules, so project-specific sanitizers like `escapeHtml()` are recognized without code changes.
+- **`nyx config` CLI subcommand** with four actions:
+  - `show` -- print effective merged configuration as TOML
+  - `path` -- print config directory path
+  - `add-rule --lang <LANG> --matcher <NAME> --kind <KIND> --cap <CAP>` -- append a label rule to `nyx.local`
+  - `add-terminator --lang <LANG> --name <NAME>` -- append a terminator function to `nyx.local`
+- **`--include-nonprod` CLI flag** -- by default, findings in non-production paths (tests, vendor, benchmarks, examples, fixtures, build scripts, `*.min.js`) are now downgraded by one severity tier (High→Medium, Medium→Low). Pass `--include-nonprod` to restore original severity. Controlled by `scanner.include_nonprod` config key.
+- **`SourceKind` enum** in the taint engine -- taint findings now carry a `source_kind` field (`UserInput`, `EnvironmentConfig`, `FileSystem`, `Database`, `Unknown`) inferred from the source callee name and capabilities. Severity is based on source kind rather than hardcoded to High: filesystem and database sources produce Medium, user input and environment sources produce High.
+- **Configurable terminators** -- functions like `process.exit()` can be declared as terminators per language; the CFG treats them as dead ends, preventing false positives on code after termination calls.
+- **Event handler callback suppression** -- functions passed as arguments to configured event handler calls (e.g. `addEventListener`) are no longer flagged as unreachable code.
+- **Exec-path guard rules** -- calls to `which`, `resolve_binary`, `find_program`, `lookup_path`, and `shutil.which` are recognized as guards for `SHELL_ESCAPE` sinks. If such a guard dominates a shell-exec sink, the `cfg-unguarded-sink` finding is suppressed.
+- **One-hop constant binding trace** -- the constant-arg sink suppression now traces one hop through the CFG. If a sink's variable was defined by a node with no uses and no Source label, it is treated as constant. Fixes false positives on patterns like `cmd = "git"; subprocess.run([cmd, "status"])`.
+- **Evidence-based severity in cfg-only mode** -- when taint analysis is not active (no global summaries and no taint findings), structural `cfg-unguarded-sink` findings without source-derived evidence are downgraded from Medium to Low.
+- **FileResponse ownership transfer** -- file handles passed to consuming sinks (`FileResponse`, `StreamingHttpResponse`, `send_file`, `make_response`) are no longer flagged as resource leaks.
+- **Lock-not-released refinement** -- mutex findings now require an explicit `.acquire()` or `.lock()` call on the acquired variable. Constructor-only patterns like `lock = threading.Lock()` without acquire no longer produce `cfg-lock-not-released`.
+- **Python `connect`/`cursor` exclusions** -- `signal.connect`, `event.connect`, and `.register` are excluded from the Python db-connection acquire pattern, preventing false `cfg-resource-leak` findings on Django signal handlers and event registrations.
+- **`location.href` sink rules** for JavaScript -- `location.href`, `window.location.href`, and `document.location.href` assignments are classified as `Sink(URL_ENCODE)`.
+- **`throw_statement` as terminator** in JavaScript -- `throw` now terminates the current block in the CFG (mapped to `Kind::Return`), preventing false `cfg-error-fallthrough` findings after throw statements.
+- **`Cap::FMT_STRING` capability bit** -- new bitflag (`0b0100_0000`) for format-string vulnerabilities, distinct from HTML injection. Sources using `Cap::all()` automatically match.
+- **Python taint sources** -- `open`, `argparse.parse_args`, `urllib.request.urlopen`, `requests.get`, `requests.post` added as `Cap::all()` sources for broader attack-surface coverage.
+- **SARIF 2.1.0 output format** (`-f sarif`) -- produces spec-compliant Static Analysis Results Interchange Format JSON on stdout. Includes tool metadata, deduplicated rule definitions with descriptions, severity-to-level mapping (`High→error`, `Medium→warning`, `Low→note`), and physical locations with relative paths. Suitable for GitHub Code Scanning, Azure DevOps, and other SARIF-consuming CI tools.
+- **Progress bars** via `indicatif` -- file discovery, Pass 1, and Pass 2 each display a progress bar on stderr with file counts and ETA. Bars are automatically hidden when output format is `json`/`sarif` or quiet mode is enabled. Index building also shows progress.
+- **Quiet mode** (`output.quiet = true`) -- suppresses all status messages (config notes, "Checking...", "Finished in...") on stderr. Useful for CI pipelines and scripted invocations.
+- **Resource leak detection for Python, Ruby, PHP, JavaScript, and TypeScript** -- new acquire/release pairs: Python (`open`/`.close`, `socket`/`.close`, `connect`/`.close`, `threading.Lock`/`.release`), Ruby (`File.open`/`.close`, `TCPSocket.new`/`.close`, `.lock`/`.unlock`), PHP (`fopen`/`fclose`, `mysqli_connect`/`mysqli_close`, `curl_init`/`curl_close`), JS/TS (`fs.open`/`fs.close`, `createReadStream`/`.close`).
+- **Walker config wired up** -- `performance.max_depth`, `scanner.one_file_system`, `scanner.require_git_to_read_vcsignore`, and `scanner.excluded_files` are now enforced during directory walking (previously parsed but ignored).
+- **`database.vacuum_on_startup`** -- when enabled, runs SQLite VACUUM before indexed scans to reclaim space.
+- 31 new unit tests covering config round-trip, rule merging, classify extension, href classification, throw termination, terminator detection, config sanitizer suppression, Python/C++ precision, unreachable+unguarded dedup, resource leak detection, one-hop constant binding, exec-path guards, cfg-only severity downgrade, FileResponse ownership, lock constructor suppression, signal.connect exclusion, nonprod path detection, and severity downgrade.
+
+### Changed
+- **`taint::Finding` struct** -- added `source_kind: SourceKind` field. Code that constructs `Finding` directly must include this field.
+- **`AnalysisContext` struct** -- added `taint_active: bool` and `analysis_rules` fields. Code that constructs `AnalysisContext` directly must include these fields.
+- **`ScannerConfig` struct** -- added `include_nonprod: bool` field (default `false`). Deserialization is unaffected due to `#[serde(default)]`.
+- **`proto_pollution` AST pattern severity** -- downgraded from High to Low. The AST-only pattern is a structural indicator; the taint engine separately produces High findings when attacker-controlled data flows to `__proto__`.
+- **`location_href_assignment` AST pattern** -- constrained to require a known browser global object (`window`, `location`, `document`, `self`, `top`, `parent`, `frames`). Prevents `el.href = val` from matching; only `window.location.href = val` and similar patterns trigger the finding.
+- **Taint finding severity** -- no longer hardcoded to High. Severity is now derived from `SourceKind`: UserInput/EnvironmentConfig/Unknown → High, FileSystem/Database → Medium.
+- **C/C++ sink reclassification** -- `printf`/`fprintf` moved from `Sink(HTML_ESCAPE)` to `Sink(FMT_STRING)`. `std::cout`, `std::cerr`, `std::clog` removed from sinks entirely (output/logging, not injection vectors). `sprintf`/`strcpy`/`strcat` remain `Sink(HTML_ESCAPE)`.
+- `classify()` now accepts an optional `extra: Option<&[RuntimeLabelRule]>` parameter; config-defined rules are checked first (higher priority) before built-in static rules.
+- `build_cfg()`, `build_sub()`, and `push_node()` accept optional `LangAnalysisRules` for config-driven label classification, terminator detection, and event handler awareness.
+- `find_guard_nodes()` and `is_guard_call()` now recognize config-defined sanitizers as guards with matching capability bits.
+- `merge_configs()` union-merges analysis rules, terminators, and event handlers per language key with dedup.
+- Assignment LHS classification now tries the full member expression text (e.g. `location.href`) before falling back to property-only (e.g. `innerHTML`), fixing false positives on `a.href` assignments.
+- `handle_command()` now receives `config_dir` to support the `config` subcommand.
+- **Fused single-pass analysis** -- AST-only mode now runs a single fused pass (`analyse_file_fused`) that parses each file and builds the CFG once, producing both function summaries and diagnostics. Previously every file was parsed twice (once for summary extraction, once for analysis). Taint mode uses the fused pass for Pass 1, eliminating redundant CFG construction during summary extraction.
+- **O(N²) → O(N) function-level dataflow sweep in CFG builder** -- the light-weight dataflow sweep and return-node wiring in `build_sub` for `Kind::Function` now iterate only over nodes created within the current function scope (tracked via a snapshot of the node count) instead of scanning the entire graph. Eliminates quadratic scaling in files with many functions.
+- **Parallel summary merging** -- `scan_filesystem` now uses rayon `fold`/`reduce` to build per-thread `GlobalSummaries` maps in parallel, then merges them in a binary reduce tree. Eliminates the serial `merge_summaries` bottleneck. Added `GlobalSummaries::merge()`.
+- **Redundant file I/O eliminated in indexed path** -- files are now read once and hashed once per scan. Added `Indexer::should_scan_with_hash()` and `Indexer::upsert_file_with_hash()` to accept pre-computed hashes. Pass 2 uses `run_rules_on_bytes` with already-read bytes instead of re-reading from disk. Previously files could be read up to 4 times and hashed up to 3 times per indexed scan.
+- **SQLite mutex mode relaxed** -- switched from `SQLITE_OPEN_FULL_MUTEX` (global serialization) to `SQLITE_OPEN_NO_MUTEX`. The r2d2 connection pool guarantees one-connection-per-thread safety; combined with WAL mode this allows concurrent readers without a global lock.
+- **Parallel JSON deserialization in `load_all_summaries`** -- for large result sets (>256 summaries), JSON deserialization is now parallelized with rayon.
+- **Zero-allocation taint hashing** -- `taint_hash()` replaced sorted-`Vec` + blake3 with an order-independent XOR-of-FNV scheme. Eliminates a heap allocation and sort per BFS edge in the taint engine.
+- **In-place taint transfer** -- `apply_taint()` now mutates the taint map in place instead of cloning and returning a new `HashMap` per node visit. The BFS loop caches hash values and uses `std::mem::take` for the last successor to avoid unnecessary clones.
+
+### Fixed
+- **False positives on one-hop constant bindings** -- `cmd = "git"; Command::new(cmd)` no longer triggers `cfg-unguarded-sink` because the variable is traced back to a constant definition.
+- **False positives from exec-path guards** -- `resolve_binary(&bin); Command::new(bin)` is now recognized as guarded.
+- **False `cfg-resource-leak` on Django signal handlers** -- `signal.connect(handler)` no longer matches the Python db-connection acquire pattern.
+- **False `cfg-lock-not-released` on Lock constructors** -- `threading.Lock()` without `.acquire()` no longer produces a finding.
+- **False `cfg-resource-leak` on FileResponse** -- `f = open(...); return FileResponse(f)` is recognized as ownership transfer.
+- **Inflated severity in cfg-only mode** -- structural findings without taint evidence now correctly produce Low severity instead of Medium.
+- **`el.href = val` false positive in AST patterns** -- the `location_href_assignment` pattern now requires a known browser global, eliminating matches on DOM element `.href` assignments.
+- **Structured output modes (`-f json`, `-f sarif`) now produce zero stderr noise** -- config notes, "Checking …", and "Finished in …" messages are fully suppressed (not just redirected to stderr) so that `nyx scan -f json | jq` and CI SARIF upload work without extraneous output. Human-readable console format continues to show status messages.
+- **Console output column alignment** -- severity tags are now bracketed and padded to a fixed display width (`[HIGH]`, `[MEDIUM]`, `[LOW]`) so that rule IDs align consistently regardless of severity. ANSI color codes are applied after width calculation, not before.
+- **`.href` false positives** -- `el.href = "/about"` no longer triggers `location_href_assignment` or sink classification; only `location.href` (and `window.location.href`, `document.location.href`) match.
+- **Constant-arg sink false positives** -- sinks whose arguments are all constants (no variable uses beyond the callee name) with no taint confirmation are now suppressed. Fixes false positives on patterns like `subprocess.run(["make","clean"])` and `printf("hello\n")`.
+- **Unreachable + unguarded dedup** -- when both `cfg-unreachable-sink` and `cfg-unguarded-sink` fire on the same span, the unguarded finding is suppressed (unreachable is more specific).
+- **`std::cout` false positives** -- `std::cout` no longer classified as a sink, eliminating spurious findings on every C++ iostream print.
+- **Break/continue scope correctness** -- `break` and `continue` inside loops now correctly wire to their enclosing loop header/exit. Previously, `break` in a `while`/`for` body created a dead-end node that left post-loop code unreachable, producing false `cfg-unreachable-*` findings. The If handler's no-else case also now correctly flows the false branch to subsequent code when the then-branch terminates (return/break/continue). True/False edge labels are applied to branch entry nodes rather than exit nodes, fixing `cfg-error-fallthrough` false positives on `if (err) { return; }` patterns.
+- **Preprocessor dangling-else CFG recovery** -- `#ifdef`/`#endif` blocks that split an `if/else` across preprocessor boundaries no longer orphan subsequent code. The CFG block handler now recovers the frontier after preprocessor nodes, preventing false unreachable-code findings on code following `#ifdef ... #endif` blocks.
+- **Wrapper resource function recognition** -- `curlx_fopen`, `curlx_fdopen`, `fdopen`, and `curlx_fclose` are now recognized as acquire/release functions for C file handles, eliminating false `cfg-resource-leak` findings on codebases (e.g. curl) that use wrapper functions around standard I/O.
+- **`freopen` false positive** -- `freopen()` (and `curlx_freopen`) no longer triggers `cfg-resource-leak` findings. Previously `freopen` matched the `fopen` acquire pattern via `ends_with`; a new `exclude_acquire` field on `ResourcePair` filters out these false matches for both the file handle and file descriptor resource pairs.
+- **Struct field ownership transfer** -- resource leak detection now recognizes ownership transfer via struct field assignment (`s->stream = fp`, `obj.field = ptr`). When an acquired resource is stored into a struct field downstream, the finding is suppressed since the receiving struct assumes lifetime responsibility.
+- **Linked-list/global insertion** -- resource leak detection now recognizes linked-list insertion patterns (`p->next = list; list = p`) and global variable assignment as ownership transfers, eliminating false `cfg-resource-leak` findings on common C allocation-and-insert idioms.
+- Removed incorrect `value_enum` attribute from CLI `--format` argument.
+- Benchmark compilation error: `classify()` calls in `benches/scan_bench.rs` were missing the third `extra` parameter.
+
 ## [0.2.0] - 2026-02-24
 
 ### Added

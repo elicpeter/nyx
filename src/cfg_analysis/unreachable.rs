@@ -3,8 +3,39 @@ use super::{AnalysisContext, CfgAnalysis, CfgFinding, Confidence};
 use crate::cfg::StmtKind;
 use crate::labels::DataLabel;
 use crate::patterns::Severity;
+use std::collections::HashSet;
 
 pub struct UnreachableCode;
+
+/// Collect function names that appear as arguments to configured event handler calls.
+fn event_handler_callbacks(ctx: &AnalysisContext) -> HashSet<String> {
+    let mut callbacks = HashSet::new();
+    let handlers = match ctx.analysis_rules {
+        Some(rules) if !rules.event_handlers.is_empty() => &rules.event_handlers,
+        _ => return callbacks,
+    };
+
+    for idx in ctx.cfg.node_indices() {
+        let info = &ctx.cfg[idx];
+        if info.kind != StmtKind::Call {
+            continue;
+        }
+        if let Some(callee) = &info.callee {
+            let callee_lower = callee.to_ascii_lowercase();
+            let is_handler = handlers
+                .iter()
+                .any(|h| callee_lower.ends_with(&h.to_ascii_lowercase()));
+            if is_handler {
+                // The callback function is typically used within the call — any function
+                // that appears as `uses` of this call node is a potential callback.
+                for u in &info.uses {
+                    callbacks.insert(u.clone());
+                }
+            }
+        }
+    }
+    callbacks
+}
 
 impl CfgAnalysis for UnreachableCode {
     fn name(&self) -> &'static str {
@@ -13,6 +44,7 @@ impl CfgAnalysis for UnreachableCode {
 
     fn run(&self, ctx: &AnalysisContext) -> Vec<CfgFinding> {
         let reachable = dominators::reachable_set(ctx.cfg, ctx.entry);
+        let handler_callbacks = event_handler_callbacks(ctx);
         let mut findings = Vec::new();
 
         for idx in ctx.cfg.node_indices() {
@@ -24,6 +56,13 @@ impl CfgAnalysis for UnreachableCode {
 
             // Skip synthetic Entry/Exit nodes
             if matches!(info.kind, StmtKind::Entry | StmtKind::Exit) {
+                continue;
+            }
+
+            // Suppress findings for nodes inside event handler callbacks
+            if let Some(func_name) = &info.enclosing_func
+                && handler_callbacks.contains(func_name)
+            {
                 continue;
             }
 
@@ -43,7 +82,9 @@ impl CfgAnalysis for UnreachableCode {
                 ),
                 _ => {
                     // Check if it's a guard/auth call
-                    if super::is_guard_call(info, ctx.lang) || super::is_auth_call(info, ctx.lang) {
+                    if super::is_guard_call(info, ctx.lang, ctx.analysis_rules)
+                        || super::is_auth_call(info, ctx.lang)
+                    {
                         (
                             "cfg-unreachable-guard",
                             "Unreachable guard/auth check",

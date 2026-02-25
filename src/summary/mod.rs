@@ -209,6 +209,13 @@ impl GlobalSummaries {
             .unwrap_or_default()
     }
 
+    /// Merge another `GlobalSummaries` into this one (for parallel fold/reduce).
+    pub fn merge(&mut self, other: GlobalSummaries) {
+        for (key, summary) in other.by_key {
+            self.insert(key, summary);
+        }
+    }
+
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.by_key.is_empty()
