@@ -2,6 +2,7 @@ use crate::errors::NyxResult;
 use crate::patterns::Severity;
 use console::style;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use toml;
@@ -103,7 +104,7 @@ pub struct DatabaseConfig {
     /// The maximum size of the database, in megabytes. TODO: IMPLEMENT
     pub max_db_size_mb: u64,
 
-    /// Whether to run a VACUUM on startup or not. TODO: IMPLEMENT
+    /// Whether to run a VACUUM on startup or not.
     pub vacuum_on_startup: bool,
 }
 impl Default for DatabaseConfig {
@@ -120,10 +121,10 @@ impl Default for DatabaseConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct OutputConfig {
-    /// The default output format. TODO: IMPLEMENT others
+    /// The default output format.
     pub default_format: String,
 
-    /// Whether to print anything to the console or not. TODO: IMPLEMENT
+    /// Whether to print anything to the console or not.
     pub quiet: bool,
 
     /// The maximum number of results to show.
@@ -147,10 +148,10 @@ pub struct PerformanceConfig {
     ///
     /// A depth of `1` includes all files under the current directory, a depth of `2` also includes
     /// all files under subdirectories of the current directory, etc.
-    pub max_depth: Option<usize>, // TODO: IMPLEMENT
+    pub max_depth: Option<usize>,
 
     /// The minimum depth for reported entries, or `None`.
-    pub min_depth: Option<usize>, // TODO: IMPLEMENT
+    pub min_depth: Option<usize>,
 
     /// Whether to stop traversing into matching directories.
     pub prune: bool,
@@ -190,6 +191,33 @@ impl Default for PerformanceConfig {
     }
 }
 
+/// A single user-defined label rule from config.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ConfigLabelRule {
+    pub matchers: Vec<String>,
+    /// "source", "sanitizer", or "sink"
+    pub kind: String,
+    /// Capability name: "html_escape", "shell_escape", "url_encode", "json_parse",
+    /// "env_var", "file_io", or "all"
+    pub cap: String,
+}
+
+/// Per-language analysis configuration from config file.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct LanguageAnalysisConfig {
+    pub rules: Vec<ConfigLabelRule>,
+    pub terminators: Vec<String>,
+    pub event_handlers: Vec<String>,
+}
+
+/// Top-level analysis rules config, keyed by language slug.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct AnalysisRulesConfig {
+    pub languages: HashMap<String, LanguageAnalysisConfig>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
 #[derive(Default)]
@@ -198,10 +226,16 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub output: OutputConfig,
     pub performance: PerformanceConfig,
+    pub analysis: AnalysisRulesConfig,
 }
 
 impl Config {
-    pub fn load(config_dir: &Path) -> NyxResult<Self> {
+    /// Load config and return `(config, optional_note)`.
+    ///
+    /// The note is a formatted status message about which config file was
+    /// loaded (or that defaults are in use).  The caller decides whether to
+    /// print it based on output format / quiet mode.
+    pub fn load(config_dir: &Path) -> NyxResult<(Self, Option<String>)> {
         let mut config = Config::default();
 
         let default_config_path = config_dir.join("nyx.conf");
@@ -210,33 +244,33 @@ impl Config {
         }
 
         let user_config_path = config_dir.join("nyx.local");
-        if user_config_path.exists() {
+        let note = if user_config_path.exists() {
             let user_config_content = fs::read_to_string(&user_config_path)?;
             let user_config: Config = toml::from_str(&user_config_content)?;
 
             config = merge_configs(config, user_config);
 
-            println!(
+            Some(format!(
                 "{}: Loaded user config from: {}\n",
                 style("note").green().bold(),
                 style(user_config_path.display())
                     .underlined()
                     .white()
                     .bold()
-            );
+            ))
         } else {
-            println!(
-                "{}: Using {} configuration.\n      Create file in '{}'to customize.\n",
+            Some(format!(
+                "{}: Using {} configuration.\n      Create file in '{}' to customize.\n",
                 style("note").green().bold(),
                 style("default").bold(),
                 style(user_config_path.display())
                     .underlined()
                     .white()
                     .bold()
-            );
-        }
+            ))
+        };
 
-        Ok(config)
+        Ok((config, note))
     }
 }
 
@@ -299,6 +333,32 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.performance.scan_timeout_secs = user.performance.scan_timeout_secs;
     default.performance.memory_limit_mb = user.performance.memory_limit_mb;
 
+    // --- AnalysisRulesConfig ---
+    for (lang, user_lang_cfg) in user.analysis.languages {
+        let entry = default.analysis.languages.entry(lang).or_default();
+
+        // Union-merge rules with dedup
+        for rule in user_lang_cfg.rules {
+            if !entry.rules.contains(&rule) {
+                entry.rules.push(rule);
+            }
+        }
+
+        // Union-merge terminators with dedup
+        for t in user_lang_cfg.terminators {
+            if !entry.terminators.contains(&t) {
+                entry.terminators.push(t);
+            }
+        }
+
+        // Union-merge event_handlers with dedup
+        for eh in user_lang_cfg.event_handlers {
+            if !entry.event_handlers.contains(&eh) {
+                entry.event_handlers.push(eh);
+            }
+        }
+    }
+
     default
 }
 
@@ -319,6 +379,72 @@ fn merge_configs_dedupes_and_keeps_order() {
 }
 
 #[test]
+fn merge_analysis_rules_unions_and_dedupes() {
+    let mut default_cfg = Config::default();
+    default_cfg.analysis.languages.insert(
+        "javascript".into(),
+        LanguageAnalysisConfig {
+            rules: vec![ConfigLabelRule {
+                matchers: vec!["escapeHtml".into()],
+                kind: "sanitizer".into(),
+                cap: "html_escape".into(),
+            }],
+            terminators: vec!["process.exit".into()],
+            event_handlers: vec![],
+        },
+    );
+
+    let mut user_cfg = Config::default();
+    user_cfg.analysis.languages.insert(
+        "javascript".into(),
+        LanguageAnalysisConfig {
+            rules: vec![
+                ConfigLabelRule {
+                    matchers: vec!["escapeHtml".into()],
+                    kind: "sanitizer".into(),
+                    cap: "html_escape".into(),
+                },
+                ConfigLabelRule {
+                    matchers: vec!["sanitizeUrl".into()],
+                    kind: "sanitizer".into(),
+                    cap: "url_encode".into(),
+                },
+            ],
+            terminators: vec!["process.exit".into(), "abort".into()],
+            event_handlers: vec!["addEventListener".into()],
+        },
+    );
+
+    let merged = merge_configs(default_cfg, user_cfg);
+    let js = merged.analysis.languages.get("javascript").unwrap();
+    assert_eq!(js.rules.len(), 2); // deduped
+    assert_eq!(js.terminators, vec!["process.exit", "abort"]);
+    assert_eq!(js.event_handlers, vec!["addEventListener"]);
+}
+
+#[test]
+fn analysis_config_toml_roundtrip() {
+    let toml_str = r#"
+[analysis.languages.javascript]
+terminators = ["process.exit"]
+event_handlers = ["addEventListener"]
+
+[[analysis.languages.javascript.rules]]
+matchers = ["escapeHtml"]
+kind = "sanitizer"
+cap = "html_escape"
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    let js = cfg.analysis.languages.get("javascript").unwrap();
+    assert_eq!(js.rules.len(), 1);
+    assert_eq!(js.rules[0].matchers, vec!["escapeHtml"]);
+    assert_eq!(js.rules[0].kind, "sanitizer");
+    assert_eq!(js.rules[0].cap, "html_escape");
+    assert_eq!(js.terminators, vec!["process.exit"]);
+    assert_eq!(js.event_handlers, vec!["addEventListener"]);
+}
+
+#[test]
 fn load_creates_example_and_reads_user_overrides() {
     let cfg_dir = tempfile::tempdir().unwrap();
     let cfg_path = cfg_dir.path();
@@ -333,7 +459,7 @@ fn load_creates_example_and_reads_user_overrides() {
     "#;
     fs::write(cfg_path.join("nyx.local"), user_toml).unwrap();
 
-    let cfg = Config::load(cfg_path).expect("Config::load should succeed");
+    let (cfg, _note) = Config::load(cfg_path).expect("Config::load should succeed");
 
     assert!(cfg_path.join("nyx.conf").is_file());
 

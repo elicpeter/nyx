@@ -10,7 +10,7 @@ mod tests;
 pub mod unreachable;
 
 use crate::cfg::{FuncSummaries, NodeInfo, StmtKind};
-use crate::labels::DataLabel;
+use crate::labels::{DataLabel, LangAnalysisRules};
 use crate::patterns::Severity;
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
@@ -51,6 +51,7 @@ pub struct AnalysisContext<'a> {
     #[allow(dead_code)]
     pub global_summaries: Option<&'a GlobalSummaries>,
     pub taint_findings: &'a [taint::Finding],
+    pub analysis_rules: Option<&'a LangAnalysisRules>,
 }
 
 pub trait CfgAnalysis {
@@ -87,6 +88,20 @@ pub fn run_all(ctx: &AnalysisContext) -> Vec<CfgFinding> {
         true
     });
 
+    // ── Dedup: suppress cfg-unguarded-sink when cfg-unreachable-sink covers the span ──
+    let unreachable_spans: HashSet<(usize, usize)> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unreachable-sink")
+        .map(|f| f.span)
+        .collect();
+
+    findings.retain(|f| {
+        if f.rule_id == "cfg-unguarded-sink" && unreachable_spans.contains(&f.span) {
+            return false;
+        }
+        true
+    });
+
     scoring::score_findings(&mut findings, ctx);
     findings.sort_by(|a, b| {
         b.score
@@ -97,11 +112,36 @@ pub fn run_all(ctx: &AnalysisContext) -> Vec<CfgFinding> {
 }
 
 /// Helper: check whether a node is a guard call (validate, sanitize, check, etc.).
-pub(crate) fn is_guard_call(info: &NodeInfo, lang: Lang) -> bool {
+pub(crate) fn is_guard_call(
+    info: &NodeInfo,
+    lang: Lang,
+    analysis_rules: Option<&LangAnalysisRules>,
+) -> bool {
     if info.kind != StmtKind::Call {
         return false;
     }
     if let Some(callee) = &info.callee {
+        // Check config sanitizer rules
+        if let Some(extras) = analysis_rules {
+            let callee_lower = callee.to_ascii_lowercase();
+            for rule in &extras.extra_labels {
+                if !matches!(rule.label, DataLabel::Sanitizer(_)) {
+                    continue;
+                }
+                for m in &rule.matchers {
+                    let ml = m.to_ascii_lowercase();
+                    if ml.ends_with('_') {
+                        if callee_lower.starts_with(&ml) {
+                            return true;
+                        }
+                    } else if callee_lower.ends_with(&ml) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Check built-in guard rules
         let guard_rules = rules::guard_rules(lang);
         let callee_lower = callee.to_ascii_lowercase();
         for rule in guard_rules {

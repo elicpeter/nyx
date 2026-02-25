@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-02-25
+
+### Added
+- **Configurable analysis rules** -- users can define custom sources, sanitizers, and sinks per language via TOML config (`nyx.local`) or the new `nyx config` CLI. Config rules take priority over built-in rules, so project-specific sanitizers like `escapeHtml()` are recognized without code changes.
+- **`nyx config` CLI subcommand** with four actions:
+  - `show` -- print effective merged configuration as TOML
+  - `path` -- print config directory path
+  - `add-rule --lang <LANG> --matcher <NAME> --kind <KIND> --cap <CAP>` -- append a label rule to `nyx.local`
+  - `add-terminator --lang <LANG> --name <NAME>` -- append a terminator function to `nyx.local`
+- **Configurable terminators** -- functions like `process.exit()` can be declared as terminators per language; the CFG treats them as dead ends, preventing false positives on code after termination calls.
+- **Event handler callback suppression** -- functions passed as arguments to configured event handler calls (e.g. `addEventListener`) are no longer flagged as unreachable code.
+- **`location.href` sink rules** for JavaScript -- `location.href`, `window.location.href`, and `document.location.href` assignments are classified as `Sink(URL_ENCODE)`.
+- **`throw_statement` as terminator** in JavaScript -- `throw` now terminates the current block in the CFG (mapped to `Kind::Return`), preventing false `cfg-error-fallthrough` findings after throw statements.
+- **`Cap::FMT_STRING` capability bit** -- new bitflag (`0b0100_0000`) for format-string vulnerabilities, distinct from HTML injection. Sources using `Cap::all()` automatically match.
+- **Python taint sources** -- `open`, `argparse.parse_args`, `urllib.request.urlopen`, `requests.get`, `requests.post` added as `Cap::all()` sources for broader attack-surface coverage.
+- **SARIF 2.1.0 output format** (`-f sarif`) -- produces spec-compliant Static Analysis Results Interchange Format JSON on stdout. Includes tool metadata, deduplicated rule definitions with descriptions, severity-to-level mapping (`High→error`, `Medium→warning`, `Low→note`), and physical locations with relative paths. Suitable for GitHub Code Scanning, Azure DevOps, and other SARIF-consuming CI tools.
+- **Progress bars** via `indicatif` -- file discovery, Pass 1, and Pass 2 each display a progress bar on stderr with file counts and ETA. Bars are automatically hidden when output format is `json`/`sarif` or quiet mode is enabled. Index building also shows progress.
+- **Quiet mode** (`output.quiet = true`) -- suppresses all status messages (config notes, "Checking...", "Finished in...") on stderr. Useful for CI pipelines and scripted invocations.
+- **Resource leak detection for Python, Ruby, PHP, JavaScript, and TypeScript** -- new acquire/release pairs: Python (`open`/`.close`, `socket`/`.close`, `connect`/`.close`, `threading.Lock`/`.release`), Ruby (`File.open`/`.close`, `TCPSocket.new`/`.close`, `.lock`/`.unlock`), PHP (`fopen`/`fclose`, `mysqli_connect`/`mysqli_close`, `curl_init`/`curl_close`), JS/TS (`fs.open`/`fs.close`, `createReadStream`/`.close`).
+- **Walker config wired up** -- `performance.max_depth`, `scanner.one_file_system`, `scanner.require_git_to_read_vcsignore`, and `scanner.excluded_files` are now enforced during directory walking (previously parsed but ignored).
+- **`database.vacuum_on_startup`** -- when enabled, runs SQLite VACUUM before indexed scans to reclaim space.
+- 22 new unit tests covering config round-trip, rule merging, classify extension, href classification, throw termination, terminator detection, config sanitizer suppression, Python/C++ precision (constant-arg suppression, source-derived sinks), unreachable+unguarded dedup, and resource leak detection for Python/PHP/JS.
+
+### Changed
+- **C/C++ sink reclassification** -- `printf`/`fprintf` moved from `Sink(HTML_ESCAPE)` to `Sink(FMT_STRING)`. `std::cout`, `std::cerr`, `std::clog` removed from sinks entirely (output/logging, not injection vectors). `sprintf`/`strcpy`/`strcat` remain `Sink(HTML_ESCAPE)`.
+- `classify()` now accepts an optional `extra: Option<&[RuntimeLabelRule]>` parameter; config-defined rules are checked first (higher priority) before built-in static rules.
+- `build_cfg()`, `build_sub()`, and `push_node()` accept optional `LangAnalysisRules` for config-driven label classification, terminator detection, and event handler awareness.
+- `AnalysisContext` carries `analysis_rules` so CFG analyses (guards, unreachable) can consult config rules.
+- `find_guard_nodes()` and `is_guard_call()` now recognize config-defined sanitizers as guards with matching capability bits.
+- `merge_configs()` union-merges analysis rules, terminators, and event handlers per language key with dedup.
+- Assignment LHS classification now tries the full member expression text (e.g. `location.href`) before falling back to property-only (e.g. `innerHTML`), fixing false positives on `a.href` assignments.
+- `handle_command()` now receives `config_dir` to support the `config` subcommand.
+
+### Fixed
+- **Structured output modes (`-f json`, `-f sarif`) now produce zero stderr noise** -- config notes, "Checking …", and "Finished in …" messages are fully suppressed (not just redirected to stderr) so that `nyx scan -f json | jq` and CI SARIF upload work without extraneous output. Human-readable console format continues to show status messages.
+- **Console output column alignment** -- severity tags are now bracketed and padded to a fixed display width (`[HIGH]`, `[MEDIUM]`, `[LOW]`) so that rule IDs align consistently regardless of severity. ANSI color codes are applied after width calculation, not before.
+- **`.href` false positives** -- `el.href = "/about"` no longer triggers `location_href_assignment` or sink classification; only `location.href` (and `window.location.href`, `document.location.href`) match.
+- **Constant-arg sink false positives** -- sinks whose arguments are all constants (no variable uses beyond the callee name) with no taint confirmation are now suppressed. Fixes false positives on patterns like `subprocess.run(["make","clean"])` and `printf("hello\n")`.
+- **Unreachable + unguarded dedup** -- when both `cfg-unreachable-sink` and `cfg-unguarded-sink` fire on the same span, the unguarded finding is suppressed (unreachable is more specific).
+- **`std::cout` false positives** -- `std::cout` no longer classified as a sink, eliminating spurious findings on every C++ iostream print.
+- Removed incorrect `value_enum` attribute from CLI `--format` argument.
+
 ## [0.2.0] - 2026-02-24
 
 ### Added

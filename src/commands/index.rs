@@ -9,6 +9,7 @@ use blake3;
 use bytesize::ByteSize;
 use chrono::{DateTime, Local};
 use console::style;
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::fs;
 use std::path::PathBuf;
@@ -25,7 +26,7 @@ pub fn handle(
             let (project_name, db_path) = get_project_info(&build_path, database_dir)?;
 
             if force || !db_path.exists() {
-                build_index(&project_name, &build_path, &db_path, config)?;
+                build_index(&project_name, &build_path, &db_path, config, !config.output.quiet)?;
                 println!(
                     "✔ {} {}",
                     style("Index built:").green(),
@@ -84,6 +85,7 @@ pub fn build_index(
     project_path: &std::path::Path,
     db_path: &std::path::Path,
     config: &Config,
+    show_progress: bool,
 ) -> NyxResult<()> {
     tracing::debug!("Building index for: {}", project_name);
     fs::File::create(db_path)?;
@@ -101,6 +103,21 @@ pub fn build_index(
         tracing::error!("walker thread panicked: {:#?}", err);
     }
     let paths: Vec<PathBuf> = rx.into_iter().flatten().collect();
+
+    let pb = if show_progress {
+        let pb = ProgressBar::new(paths.len() as u64);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} {msg} [{bar:30.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .unwrap()
+            .progress_chars("##-"),
+        );
+        pb.set_message("Indexing files");
+        pb
+    } else {
+        ProgressBar::hidden()
+    };
 
     paths
         .into_par_iter()
@@ -144,8 +161,10 @@ pub fn build_index(
                 idx.replace_summaries_for_file(&path, &hash, &sums)?;
             }
 
+            pb.inc(1);
             Ok(())
         })?;
+    pb.finish_and_clear();
 
     {
         let idx = Indexer::from_pool(project_name, &pool)?;
@@ -170,7 +189,7 @@ fn build_index_creates_db_and_registers_files() {
 
     let db_path = td.path().join("proj.sqlite");
 
-    build_index("proj", &project_dir, &db_path, &cfg).expect("index build should succeed");
+    build_index("proj", &project_dir, &db_path, &cfg, false).expect("index build should succeed");
 
     // ── Assert ────────────────────────────────────────────────────────────────
     assert!(db_path.is_file(), "SQLite file must exist");

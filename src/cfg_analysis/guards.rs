@@ -2,15 +2,41 @@ use super::dominators::{self, dominates};
 use super::rules;
 use super::{AnalysisContext, CfgAnalysis, CfgFinding, Confidence, is_entry_point_func};
 use crate::cfg::StmtKind;
-use crate::labels::{Cap, DataLabel};
+use crate::labels::{Cap, DataLabel, RuntimeLabelRule};
 use crate::patterns::Severity;
 use petgraph::graph::NodeIndex;
 
 pub struct UnguardedSink;
 
+/// Check if a callee matches any of the runtime label rules that are sanitizers.
+fn match_config_sanitizer(callee: &str, extra: &[RuntimeLabelRule]) -> Option<Cap> {
+    let callee_lower = callee.to_ascii_lowercase();
+    for rule in extra {
+        let cap = match rule.label {
+            DataLabel::Sanitizer(c) => c,
+            _ => continue,
+        };
+        for m in &rule.matchers {
+            let ml = m.to_ascii_lowercase();
+            if ml.ends_with('_') {
+                if callee_lower.starts_with(&ml) {
+                    return Some(cap);
+                }
+            } else if callee_lower.ends_with(&ml) {
+                return Some(cap);
+            }
+        }
+    }
+    None
+}
+
 /// Find all nodes in the CFG that are calls to guard functions.
 fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
     let guard_rules = rules::guard_rules(ctx.lang);
+    let config_rules = ctx
+        .analysis_rules
+        .map(|r| r.extra_labels.as_slice())
+        .unwrap_or(&[]);
     let mut result = Vec::new();
 
     for idx in ctx.cfg.node_indices() {
@@ -19,6 +45,13 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
             continue;
         }
         if let Some(callee) = &info.callee {
+            // Check config sanitizer rules first
+            if let Some(cap) = match_config_sanitizer(callee, config_rules) {
+                result.push((idx, cap));
+                continue;
+            }
+
+            // Then check built-in guard rules
             let callee_lower = callee.to_ascii_lowercase();
             for rule in guard_rules {
                 let matched = rule.matchers.iter().any(|m| {
@@ -174,6 +207,20 @@ impl CfgAnalysis for UnguardedSink {
 
             let has_taint = taint_confirms_sink(ctx, *sink);
             let source_derived = sink_arg_is_source_derived(ctx, *sink);
+
+            // If sink args are all constants (no variable uses beyond the callee name
+            // itself) and taint didn't confirm, this is a false positive — skip it.
+            let callee_parts: Vec<&str> = callee_desc
+                .split(['.', ':'])
+                .collect();
+            let constant_args = sink_info
+                .uses
+                .iter()
+                .all(|u| callee_parts.contains(&u.as_str()));
+            if constant_args && !has_taint && !source_derived {
+                continue;
+            }
+
             let param_only = sink_arg_is_parameter_only(ctx, *sink);
             let in_entrypoint = sink_in_entrypoint(ctx, *sink);
 

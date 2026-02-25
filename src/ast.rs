@@ -2,6 +2,7 @@ use crate::cfg::{build_cfg, export_summaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
+use crate::labels::build_lang_rules;
 use crate::patterns::Severity;
 use crate::summary::{FuncSummary, GlobalSummaries};
 use crate::symbol::{Lang, normalize_namespace};
@@ -84,7 +85,17 @@ pub fn extract_summaries_from_bytes(
     })?;
 
     let file_path_str = path.to_string_lossy();
-    let (_cfg_graph, _entry, local_summaries) = build_cfg(&tree, bytes, lang_slug, &file_path_str);
+    let lang_rules = build_lang_rules(_cfg, lang_slug);
+    let rules_ref = if lang_rules.extra_labels.is_empty()
+        && lang_rules.terminators.is_empty()
+        && lang_rules.event_handlers.is_empty()
+    {
+        None
+    } else {
+        Some(&lang_rules)
+    };
+    let (_cfg_graph, _entry, local_summaries) =
+        build_cfg(&tree, bytes, lang_slug, &file_path_str, rules_ref);
 
     Ok(export_summaries(
         &local_summaries,
@@ -142,7 +153,17 @@ pub fn run_rules_on_bytes(
 
     if needs_cfg {
         // Build CFG — needed for both taint analysis and CFG structural analyses.
-        let (cfg_graph, entry, summaries) = build_cfg(&_tree, bytes, lang_slug, &file_path_str);
+        let lang_rules = build_lang_rules(cfg, lang_slug);
+        let rules_ref = if lang_rules.extra_labels.is_empty()
+            && lang_rules.terminators.is_empty()
+            && lang_rules.event_handlers.is_empty()
+        {
+            None
+        } else {
+            Some(&lang_rules)
+        };
+        let (cfg_graph, entry, summaries) =
+            build_cfg(&_tree, bytes, lang_slug, &file_path_str, rules_ref);
         let caller_lang = Lang::from_slug(lang_slug).unwrap_or(Lang::Rust);
 
         // ── Taint analysis ──────────────────────────────────────────────
@@ -193,6 +214,7 @@ pub fn run_rules_on_bytes(
             func_summaries: &summaries,
             global_summaries,
             taint_findings: &taint_results,
+            analysis_rules: rules_ref,
         };
         for cf in cfg_analysis::run_all(&cfg_ctx) {
             let point = byte_offset_to_point(&_tree, cf.span.0);

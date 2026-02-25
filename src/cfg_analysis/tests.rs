@@ -14,7 +14,7 @@ fn parse_and_analyse<A: CfgAnalysis>(
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", None);
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
         cfg: &cfg,
@@ -25,6 +25,7 @@ fn parse_and_analyse<A: CfgAnalysis>(
         func_summaries: &summaries,
         global_summaries: None,
         taint_findings: &[],
+        analysis_rules: None,
     };
     analysis.run(&ctx)
 }
@@ -34,7 +35,7 @@ fn parse_and_run_all(src: &[u8], lang_str: &str, ts_lang: Language) -> Vec<CfgFi
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", None);
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
         cfg: &cfg,
@@ -45,6 +46,7 @@ fn parse_and_run_all(src: &[u8], lang_str: &str, ts_lang: Language) -> Vec<CfgFi
         func_summaries: &summaries,
         global_summaries: None,
         taint_findings: &[],
+        analysis_rules: None,
     };
     run_all(&ctx)
 }
@@ -59,7 +61,7 @@ fn parse_and_run_all_with_taint(
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs");
+    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", None);
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
         cfg: &cfg,
@@ -70,6 +72,7 @@ fn parse_and_run_all_with_taint(
         func_summaries: &summaries,
         global_summaries: None,
         taint_findings,
+        analysis_rules: None,
     };
     run_all(&ctx)
 }
@@ -144,7 +147,7 @@ fn unreachable_detects_orphaned_nodes() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs", None);
 
     // All nodes in linear code should be reachable
     let reachable = dominators::reachable_set(&cfg, entry);
@@ -469,7 +472,7 @@ fn reachable_set_contains_all_connected_nodes() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs", None);
 
     let reachable = dominators::reachable_set(&cfg, entry);
 
@@ -493,7 +496,7 @@ fn find_exit_node_exists() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, _, _) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, _, _) = build_cfg(&tree, src, "rust", "test.rs", None);
 
     let exit = dominators::find_exit_node(&cfg);
     assert!(exit.is_some(), "Should find an exit node");
@@ -512,7 +515,7 @@ fn shortest_distance_basic() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs", None);
 
     let exit = dominators::find_exit_node(&cfg).unwrap();
     let dist = dominators::shortest_distance(&cfg, entry, exit);
@@ -656,7 +659,7 @@ fn taint_and_unguarded_sink_deduped() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg_graph, entry, _summaries) = build_cfg(&tree, src, "rust", "test.rs");
+    let (cfg_graph, entry, _summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let _lang = Lang::from_slug("rust").unwrap();
 
     // Find a sink node to create a synthetic taint finding
@@ -717,5 +720,481 @@ fn process_star_without_web_params_no_auth_gap() {
         auth_findings.is_empty(),
         "process_* without web params should NOT trigger auth-gap; got {:?}",
         auth_findings
+    );
+}
+
+// ─── Resource leak tests (additional languages) ────────────────────
+
+#[test]
+fn resource_leak_python_open_without_close() {
+    let src = br#"
+def process():
+    f = open("data.txt")
+    data = f.read()
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        !leak_findings.is_empty(),
+        "Should detect open() without close() in Python"
+    );
+}
+
+#[test]
+fn resource_leak_php_fopen_without_fclose() {
+    let src = br#"<?php
+function read_file() {
+    $fp = fopen("data.txt", "r");
+    $data = fread($fp, 1024);
+}
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "php",
+        Language::from(tree_sitter_php::LANGUAGE_PHP),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        !leak_findings.is_empty(),
+        "Should detect fopen() without fclose() in PHP"
+    );
+}
+
+#[test]
+fn resource_leak_js_open_without_close() {
+    let src = br#"
+function readFile() {
+    var fd = fs.openSync("data.txt", "r");
+    var data = fs.readSync(fd, buf, 0, 100, 0);
+}
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        !leak_findings.is_empty(),
+        "Should detect fs.openSync() without fs.closeSync() in JS"
+    );
+}
+
+// ─── JS CFG precision tests ────────────────────────────────────────
+
+#[test]
+fn js_throw_terminates_block() {
+    // throw should act as a terminator — code directly after throw in the same
+    // block should be unreachable.
+    let src = br#"
+        function fail() {
+            throw new Error("fatal");
+            eval("dead code");
+        }
+    "#;
+
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+    let (cfg, entry, _) = build_cfg(&tree, src, "javascript", "test.js", None);
+
+    // Verify throw creates a Return-kind node
+    let throw_nodes: Vec<_> = cfg
+        .node_indices()
+        .filter(|&idx| {
+            cfg[idx].kind == crate::cfg::StmtKind::Return
+                && cfg[idx].span.0 > 0
+                && src[cfg[idx].span.0..].starts_with(b"throw")
+        })
+        .collect();
+
+    assert!(
+        !throw_nodes.is_empty(),
+        "throw statement should create a Return-kind node"
+    );
+
+    // eval after throw should be unreachable
+    let reachable = crate::cfg_analysis::dominators::reachable_set(&cfg, entry);
+    let eval_nodes: Vec<_> = cfg
+        .node_indices()
+        .filter(|&idx| cfg[idx].callee.as_deref().is_some_and(|c| c == "eval"))
+        .collect();
+
+    // eval might not even be in the CFG, or if it is, it should be unreachable
+    if !eval_nodes.is_empty() {
+        assert!(
+            eval_nodes.iter().all(|n| !reachable.contains(n)),
+            "eval after throw should be unreachable"
+        );
+    }
+}
+
+#[test]
+fn configured_terminator_stops_flow() {
+    let src = br#"
+        function handler() {
+            process.exit(1);
+            eval("dangerous");
+        }
+    "#;
+
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let rules = crate::labels::LangAnalysisRules {
+        extra_labels: vec![],
+        terminators: vec!["process.exit".into()],
+        event_handlers: vec![],
+    };
+
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+    let (cfg, entry, _) = build_cfg(&tree, src, "javascript", "test.js", Some(&rules));
+
+    let reachable = crate::cfg_analysis::dominators::reachable_set(&cfg, entry);
+
+    // eval should be unreachable since process.exit is a terminator
+    let eval_nodes: Vec<_> = cfg
+        .node_indices()
+        .filter(|&idx| cfg[idx].callee.as_deref().is_some_and(|c| c == "eval"))
+        .collect();
+
+    if !eval_nodes.is_empty() {
+        assert!(
+            eval_nodes.iter().all(|n| !reachable.contains(n)),
+            "eval should be unreachable after process.exit terminator"
+        );
+    }
+    // If eval_nodes is empty it means the node wasn't created (also acceptable —
+    // it's after a terminator so the CFG may not even emit it)
+}
+
+// ─── Href classification tests ─────────────────────────────────────
+
+#[test]
+fn location_href_assignment_is_sink() {
+    let src = br#"
+        function redirect(url) {
+            location.href = url;
+        }
+    "#;
+
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+    let (cfg, _entry, _summaries) = build_cfg(&tree, src, "javascript", "test.js", None);
+
+    let has_sink = cfg
+        .node_indices()
+        .any(|idx| matches!(cfg[idx].label, Some(crate::labels::DataLabel::Sink(_))));
+    assert!(has_sink, "location.href = url should produce a Sink node");
+}
+
+#[test]
+fn a_href_assignment_is_not_sink() {
+    let src = br#"
+        function setLink(el) {
+            el.href = "/about";
+        }
+    "#;
+
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+    let (cfg, _entry, _summaries) = build_cfg(&tree, src, "javascript", "test.js", None);
+
+    let has_sink = cfg
+        .node_indices()
+        .any(|idx| matches!(cfg[idx].label, Some(crate::labels::DataLabel::Sink(_))));
+    assert!(
+        !has_sink,
+        "el.href = '/about' should NOT produce a Sink node"
+    );
+}
+
+// ─── Config sanitizer tests ────────────────────────────────────────
+
+#[test]
+fn config_sanitizer_suppresses_unguarded_sink() {
+    // JS snippet: escapeHtml(x) before innerHTML = ... should not trigger
+    // cfg-unguarded-sink when escapeHtml is configured as a sanitizer.
+    let src = br#"
+        function render(input) {
+            var safe = escapeHtml(input);
+            document.body.innerHTML = safe;
+        }
+    "#;
+
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let lang_str = "javascript";
+
+    // Build with config sanitizer rules
+    let rules = crate::labels::LangAnalysisRules {
+        extra_labels: vec![crate::labels::RuntimeLabelRule {
+            matchers: vec!["escapeHtml".into()],
+            label: crate::labels::DataLabel::Sanitizer(crate::labels::Cap::HTML_ESCAPE),
+        }],
+        terminators: vec![],
+        event_handlers: vec![],
+    };
+
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", Some(&rules));
+    let lang = Lang::from_slug(lang_str).unwrap();
+    let ctx = AnalysisContext {
+        cfg: &cfg,
+        entry,
+        lang,
+        file_path: "test.rs",
+        source_bytes: src,
+        func_summaries: &summaries,
+        global_summaries: None,
+        taint_findings: &[],
+        analysis_rules: Some(&rules),
+    };
+    let findings = run_all(&ctx);
+
+    let unguarded = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect::<Vec<_>>();
+
+    assert!(
+        unguarded.is_empty(),
+        "escapeHtml config sanitizer should suppress cfg-unguarded-sink; got {:?}",
+        unguarded
+    );
+}
+
+// ─── Python precision tests ────────────────────────────────────────
+
+#[test]
+fn python_constant_subprocess_no_finding() {
+    // subprocess.run(["make","clean"]) with constant args should produce no finding
+    let src = br#"
+import subprocess
+
+def build():
+    subprocess.run(["make", "clean"])
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "subprocess.run with constant list args should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn python_constant_git_status_no_finding() {
+    let src = br#"
+import subprocess
+
+def check():
+    subprocess.run(["git", "status"])
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "subprocess.run with constant git args should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn python_tainted_os_system_produces_finding() {
+    // Source (sys.argv) flowing to os.system → should produce a finding
+    let src = br#"
+import sys
+import os
+
+def run():
+    cmd = sys.argv[1]
+    os.system(cmd)
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "python",
+        Language::from(tree_sitter_python::LANGUAGE),
+    );
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink"
+                && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "Source-derived os.system should produce a HIGH finding"
+    );
+}
+
+// ─── C++ precision tests ───────────────────────────────────────────
+
+#[test]
+fn cpp_cout_not_a_sink() {
+    let src = br#"
+#include <iostream>
+int main() {
+    std::cout << "hello" << std::endl;
+    return 0;
+}
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "cpp",
+        Language::from(tree_sitter_cpp::LANGUAGE),
+    );
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        sink_findings.is_empty(),
+        "std::cout should not produce an unguarded-sink finding; got {:?}",
+        sink_findings
+    );
+}
+
+#[test]
+fn cpp_printf_constant_no_finding() {
+    // printf with constant args → FMT_STRING sink but constant-arg suppression
+    let src = br#"
+#include <stdio.h>
+int main() {
+    printf("hello\n");
+    return 0;
+}
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "c",
+        Language::from(tree_sitter_c::LANGUAGE),
+    );
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "printf with constant args should be suppressed; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn cpp_system_with_getenv_produces_finding() {
+    let src = br#"
+#include <stdlib.h>
+int main() {
+    char* input = getenv("USER_CMD");
+    system(input);
+    return 0;
+}
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "c",
+        Language::from(tree_sitter_c::LANGUAGE),
+    );
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "system(getenv(...)) should produce an unguarded-sink finding"
+    );
+}
+
+// ─── Unreachable + unguarded dedup test ─────────────────────────────
+
+#[test]
+fn unreachable_sink_suppresses_unguarded() {
+    // If a sink is in unreachable code, only cfg-unreachable-sink should fire,
+    // NOT also cfg-unguarded-sink.
+    let src = br#"
+fn main() {
+    return;
+    std::process::Command::new("sh").arg("x").status().unwrap();
+}
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let unreachable: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unreachable-sink")
+        .collect();
+    let unguarded_at_same_span: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink"
+                && unreachable.iter().any(|u| u.span == f.span)
+        })
+        .collect();
+    assert!(
+        unguarded_at_same_span.is_empty(),
+        "cfg-unguarded-sink should be suppressed when cfg-unreachable-sink fires on same span; got {:?}",
+        unguarded_at_same_span
     );
 }

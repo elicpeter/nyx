@@ -220,7 +220,77 @@ static JAVA_RESOURCES: &[ResourcePair] = &[ResourcePair {
     resource_name: "stream/connection",
 }];
 
-static EMPTY_RESOURCES: &[ResourcePair] = &[];
+static PYTHON_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &["open"],
+        release: &[".close"],
+        resource_name: "file handle",
+    },
+    ResourcePair {
+        acquire: &["socket.socket", "socket"],
+        release: &[".close"],
+        resource_name: "socket",
+    },
+    ResourcePair {
+        acquire: &["connect", "cursor"],
+        release: &[".close"],
+        resource_name: "db connection",
+    },
+    ResourcePair {
+        acquire: &["threading.Lock", "threading.RLock"],
+        release: &[".release"],
+        resource_name: "mutex",
+    },
+];
+
+static RUBY_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &["File.open", "open"],
+        release: &[".close"],
+        resource_name: "file handle",
+    },
+    ResourcePair {
+        acquire: &["TCPSocket.new", "UDPSocket.new"],
+        release: &[".close"],
+        resource_name: "socket",
+    },
+    ResourcePair {
+        acquire: &[".lock"],
+        release: &[".unlock"],
+        resource_name: "mutex",
+    },
+];
+
+static PHP_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &["fopen"],
+        release: &["fclose"],
+        resource_name: "file handle",
+    },
+    ResourcePair {
+        acquire: &["mysqli_connect"],
+        release: &["mysqli_close"],
+        resource_name: "db connection",
+    },
+    ResourcePair {
+        acquire: &["curl_init"],
+        release: &["curl_close"],
+        resource_name: "curl handle",
+    },
+];
+
+static JS_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &["fs.open", "fs.openSync"],
+        release: &["fs.close", "fs.closeSync"],
+        resource_name: "file descriptor",
+    },
+    ResourcePair {
+        acquire: &["createReadStream", "createWriteStream"],
+        release: &[".close", ".destroy"],
+        resource_name: "stream",
+    },
+];
 
 pub fn resource_pairs(lang: Lang) -> &'static [ResourcePair] {
     match lang {
@@ -229,6 +299,9 @@ pub fn resource_pairs(lang: Lang) -> &'static [ResourcePair] {
         Lang::Go => GO_RESOURCES,
         Lang::Rust => RUST_RESOURCES,
         Lang::Java => JAVA_RESOURCES,
-        _ => EMPTY_RESOURCES,
+        Lang::Python => PYTHON_RESOURCES,
+        Lang::Ruby => RUBY_RESOURCES,
+        Lang::Php => PHP_RESOURCES,
+        Lang::JavaScript | Lang::TypeScript => JS_RESOURCES,
     }
 }

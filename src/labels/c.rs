@@ -24,8 +24,12 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
     LabelRule {
-        matchers: &["printf", "fprintf", "sprintf", "strcpy", "strcat"],
+        matchers: &["sprintf", "strcpy", "strcat"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["printf", "fprintf"],
+        label: DataLabel::Sink(Cap::FMT_STRING),
     },
 ];
 
