@@ -1,9 +1,10 @@
 pub(crate) use crate::ast::{
     analyse_file_fused, extract_summaries_from_bytes, run_rules_on_bytes, run_rules_on_file,
 };
+use crate::cli::{IndexMode, OutputFormat};
 use crate::database::index::{Indexer, IssueRow};
 use crate::errors::NyxResult;
-use crate::patterns::Severity;
+use crate::patterns::{Severity, SeverityFilter};
 use crate::summary::{self, GlobalSummaries};
 use crate::utils::config::Config;
 use crate::utils::project::get_project_info;
@@ -53,30 +54,33 @@ pub struct Diag {
 /// Entry point called by the CLI.
 pub fn handle(
     path: &str,
-    no_index: bool,
-    rebuild_index: bool,
-    format: String,
+    index_mode: IndexMode,
+    format: OutputFormat,
+    severity_filter: Option<SeverityFilter>,
+    fail_on: Option<Severity>,
     database_dir: &Path,
     config: &Config,
 ) -> NyxResult<()> {
     let scan_path = Path::new(path).canonicalize()?;
     let (project_name, db_path) = get_project_info(&scan_path, database_dir)?;
 
-    let suppress_status = config.output.quiet || format == "json" || format == "sarif";
+    let is_machine = format == OutputFormat::Json || format == OutputFormat::Sarif;
+    let suppress_status = config.output.quiet || is_machine;
     if !suppress_status {
-        println!(
+        // Status messages go to stderr so stdout stays clean
+        eprintln!(
             "{} {}...\n",
             style("Checking").green().bold(),
             &project_name
         );
     }
 
-    let show_progress = format != "json" && format != "sarif" && !config.output.quiet;
+    let show_progress = !is_machine && !config.output.quiet;
 
-    let diags: Vec<Diag> = if no_index {
+    let mut diags: Vec<Diag> = if index_mode == IndexMode::Off {
         scan_filesystem(&scan_path, config, show_progress)?
     } else {
-        if rebuild_index || !db_path.exists() {
+        if index_mode == IndexMode::Rebuild || !db_path.exists() {
             tracing::debug!("Scanning filesystem index filesystem");
             crate::commands::index::build_index(
                 &project_name,
@@ -95,55 +99,70 @@ pub fn handle(
         scan_with_index_parallel(&project_name, pool, config, show_progress)?
     };
 
-    tracing::debug!("Found {:?} issues.", diags.len());
+    tracing::debug!("Found {:?} issues (pre-filter).", diags.len());
 
-    if format == "json" {
-        let json = serde_json::to_string(&diags)
-            .map_err(|e| crate::errors::NyxError::Msg(e.to_string()))?;
-        println!("{json}");
-        return Ok(());
+    // ── Apply severity filter AFTER all downgrades/dedup ────────────────
+    if let Some(ref filter) = severity_filter {
+        diags.retain(|d| filter.matches(d.severity));
     }
 
-    if format == "sarif" {
-        let sarif = crate::output::build_sarif(&diags, &scan_path);
-        let json = serde_json::to_string_pretty(&sarif)
-            .map_err(|e| crate::errors::NyxError::Msg(e.to_string()))?;
-        println!("{json}");
-        return Ok(());
-    }
+    tracing::debug!("Emitting {:?} issues (post-filter).", diags.len());
 
-    if format == "console" || (format.is_empty() && config.output.default_format == "console") {
-        tracing::debug!("Printing to console");
-        let mut grouped: BTreeMap<&str, Vec<&Diag>> = BTreeMap::new();
-        for d in &diags {
-            grouped.entry(&d.path).or_default().push(d);
+    // ── Output ──────────────────────────────────────────────────────────
+    match format {
+        OutputFormat::Json => {
+            let json = serde_json::to_string(&diags)
+                .map_err(|e| crate::errors::NyxError::Msg(e.to_string()))?;
+            println!("{json}");
         }
-
-        for (path, issues) in &grouped {
-            println!("{}", style(path).blue().underlined());
-            for d in issues {
-                println!(
-                    "  {:>4}:{:<4}  {}  {}",
-                    d.line,
-                    d.col,
-                    d.severity.colored_tag(),
-                    style(&d.id).bold()
-                );
-                if let Some(guard) = &d.guard_kind {
-                    println!("              Path guard: {}", style(guard).cyan());
-                }
+        OutputFormat::Sarif => {
+            let sarif = crate::output::build_sarif(&diags, &scan_path);
+            let json = serde_json::to_string_pretty(&sarif)
+                .map_err(|e| crate::errors::NyxError::Msg(e.to_string()))?;
+            println!("{json}");
+        }
+        OutputFormat::Console => {
+            tracing::debug!("Printing to console");
+            let mut grouped: BTreeMap<&str, Vec<&Diag>> = BTreeMap::new();
+            for d in &diags {
+                grouped.entry(&d.path).or_default().push(d);
             }
-            println!();
-        }
 
-        println!(
-            "{} '{}' generated {} issues.",
-            style("warning").yellow().bold(),
-            style(project_name).white().bold(),
-            style(diags.len()).bold()
-        );
-        println!("\t");
+            for (path, issues) in &grouped {
+                println!("{}", style(path).blue().underlined());
+                for d in issues {
+                    println!(
+                        "  {:>4}:{:<4}  {}  {}",
+                        d.line,
+                        d.col,
+                        d.severity.colored_tag(),
+                        style(&d.id).bold()
+                    );
+                    if let Some(guard) = &d.guard_kind {
+                        println!("              Path guard: {}", style(guard).cyan());
+                    }
+                }
+                println!();
+            }
+
+            println!(
+                "{} '{}' generated {} issues.",
+                style("warning").yellow().bold(),
+                style(project_name).white().bold(),
+                style(diags.len()).bold()
+            );
+            println!("\t");
+        }
     }
+
+    // ── --fail-on: exit non-zero if threshold breached ──────────────────
+    if let Some(threshold) = fail_on {
+        let breached = diags.iter().any(|d| d.severity <= threshold);
+        if breached {
+            std::process::exit(1);
+        }
+    }
+
     Ok(())
 }
 
@@ -533,4 +552,37 @@ fn scan_with_index_parallel_uses_existing_index_without_rescanning() {
         .expect("scan should succeed");
 
     assert!(diags.is_empty());
+}
+
+#[test]
+fn severity_filter_applied_at_output_stage() {
+    // Simulate: findings start as High, get downgraded to Medium by nonprod logic,
+    // then --severity HIGH should filter them out.
+    let diags = vec![
+        Diag {
+            path: "tests/test.py".into(),
+            line: 1,
+            col: 1,
+            severity: Severity::Medium, // was High, downgraded
+            id: "taint-unsanitised-flow".into(),
+            path_validated: false,
+            guard_kind: None,
+        },
+        Diag {
+            path: "src/main.rs".into(),
+            line: 10,
+            col: 5,
+            severity: Severity::High,
+            id: "taint-unsanitised-flow".into(),
+            path_validated: false,
+            guard_kind: None,
+        },
+    ];
+
+    let filter = SeverityFilter::parse("HIGH").unwrap();
+    let filtered: Vec<_> = diags.into_iter().filter(|d| filter.matches(d.severity)).collect();
+
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].severity, Severity::High);
+    assert_eq!(filtered[0].path, "src/main.rs");
 }

@@ -84,7 +84,7 @@ fn main() -> NyxResult<()> {
     commands::handle_command(cli.command, database_dir, config_dir, &mut config)?;
 
     if !quiet {
-        println!(
+        eprintln!(
             "{} in {:.3}s.",
             style("Finished").green().bold(),
             now.elapsed().as_secs_f32()

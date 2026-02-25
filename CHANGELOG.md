@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`--severity <EXPR>` filter** — replaces `--high-only` with a flexible severity expression supporting single levels (`HIGH`), comma lists (`HIGH,MEDIUM`), and thresholds (`>=MEDIUM`). Parsing is case-insensitive with whitespace tolerance. `SeverityFilter` type with `parse()` and `matches()` in `patterns/mod.rs`.
+- **`--mode <full|ast|cfg|taint>`** — replaces `--ast-only` and `--cfg-only` with a single canonical analysis mode flag. Enforces mutual exclusivity via clap `ValueEnum`.
+- **`--index <auto|off|rebuild>`** — replaces `--no-index` and `--rebuild-index` with a single flag (default `auto`).
+- **`--fail-on <SEVERITY>`** — CI ergonomics: exit code 1 if any emitted finding meets or exceeds the threshold severity. Example: `--fail-on HIGH`.
+- **`--quiet`** — CLI flag to suppress all human-readable status output (equivalent to `output.quiet = true` in config).
+- **`--keep-nonprod-severity`** — renamed from `--include-nonprod` for clarity; old name kept as hidden alias.
+- **`OutputFormat` enum** — `--format` now uses clap `ValueEnum` with typed `Console`, `Json`, `Sarif` variants (default `Console`). No more empty-string default.
+- 10 new unit tests: `SeverityFilter` parsing (single, comma list, threshold, case-insensitive, whitespace, empty rejection, invalid level rejection), `Severity::from_str` rejection of unknown values, and `severity_filter_applied_at_output_stage` integration test verifying that downgraded findings are correctly filtered.
+
+### Changed
+- **Severity filtering applied at output stage** — `--severity` (and legacy `--high-only`) filtering is now applied ONCE in `scan::handle()` after all severity normalization (nonprod downgrades, dedup, truncation). Previously `--high-only` only filtered AST patterns during analysis; taint and CFG findings bypassed the filter entirely.
+- **`--format` default is `console`** — previously defaulted to empty string, requiring fallback logic.
+- **All status/progress output goes to stderr** — "Checking...", "Finished in...", config notes, and progress bars now use `eprintln!`/stderr exclusively. JSON and SARIF output is stdout-only.
+- **`Severity::from_str` returns `Err` for unknown values** — previously returned `Ok(Severity::Low)` for any unrecognized input.
+- **Deprecated CLI flags preserved as hidden aliases** — `--high-only`, `--no-index`, `--rebuild-index`, `--ast-only`, `--cfg-only`, and `--include-nonprod` are hidden from help but still functional, mapping to their canonical replacements.
+
+### Fixed
+- **`--high-only` emitting Low/Medium taint and CFG findings** — severity filter was only applied to AST pattern queries during analysis. Taint findings (whose severity derives from `SourceKind`) and CFG structural findings passed through unfiltered. The filter is now applied at the final output stage after all severity normalization, ensuring `--severity HIGH` never emits downgraded Medium/Low findings.
+- **JSON/SARIF output contaminated with status messages on stdout** — status messages ("Checking...", "Finished in...") used `println!` and appeared in stdout alongside machine output. Now all status goes to stderr.
+
+### Added
 - **AST pattern overhaul** -- all 10 language pattern files (`src/patterns/*.rs`) rewritten with consistent conventions, structured metadata, and validated tree-sitter queries.
   - **Pattern schema extensions** -- `PatternTier` (A = structural, B = heuristic-guarded), `PatternCategory` (13 vulnerability classes), and `Hash` on `Severity`. Module-level docs explain conventions and how to add new patterns.
   - **Namespaced IDs** -- all pattern IDs follow `<lang>.<category>.<specific>` format (e.g. `java.deser.readobject`, `py.cmdi.os_system`, `js.xss.document_write`).

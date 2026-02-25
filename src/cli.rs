@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "nyx")]
@@ -13,8 +13,54 @@ impl Commands {
     /// Whether this command produces structured (machine-readable) output on
     /// stdout, meaning human status messages must be suppressed entirely.
     pub fn is_structured_output(&self) -> bool {
-        matches!(self, Commands::Scan { format, .. } if format == "json" || format == "sarif")
+        matches!(self, Commands::Scan { format, .. } if *format == OutputFormat::Json || *format == OutputFormat::Sarif)
     }
+}
+
+/// Output format for scan results.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default)]
+pub enum OutputFormat {
+    #[default]
+    Console,
+    Json,
+    Sarif,
+}
+
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OutputFormat::Console => write!(f, "console"),
+            OutputFormat::Json => write!(f, "json"),
+            OutputFormat::Sarif => write!(f, "sarif"),
+        }
+    }
+}
+
+/// Index mode for scan operations.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default)]
+pub enum IndexMode {
+    /// Use index if available, build if missing (default)
+    #[default]
+    Auto,
+    /// Skip indexing entirely, scan filesystem directly
+    Off,
+    /// Force rebuild index before scanning
+    Rebuild,
+}
+
+/// Analysis mode for scan operations.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default)]
+pub enum ScanMode {
+    /// Run all analyses: AST patterns + CFG + taint (default)
+    #[default]
+    Full,
+    /// Run AST pattern queries only (no CFG/taint)
+    Ast,
+    /// Run CFG structural analyses + taint only (no AST patterns)
+    Cfg,
+    /// Alias for cfg (CFG + taint analysis)
+    Taint,
 }
 
 #[derive(Subcommand)]
@@ -25,35 +71,67 @@ pub enum Commands {
         #[arg(default_value = ".")]
         path: String,
 
-        /// Skip using/building index, scan directly
-        #[arg(long)]
-        no_index: bool,
+        /// Index mode: auto (default), off (no index), rebuild (force rebuild)
+        #[arg(long, value_enum, default_value_t = IndexMode::Auto)]
+        index: IndexMode,
 
-        /// Force rebuild index before scanning
-        #[arg(long)]
-        rebuild_index: bool,
+        /// Output format
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Console)]
+        format: OutputFormat,
 
-        /// Output format (console, json, sarif)
-        #[arg(short, long, default_value = "")]
-        format: String,
-
-        /// Show only high severity issues
+        /// Severity filter expression: HIGH, HIGH,MEDIUM, or >=MEDIUM
+        ///
+        /// Filters findings AFTER all severity normalization (e.g. nonprod
+        /// downgrades). Only findings matching the expression are emitted.
+        /// Case-insensitive. Shell-quote expressions containing ">".
         #[arg(long)]
-        high_only: bool,
+        severity: Option<String>,
 
-        #[arg(long)]
-        ast_only: bool,
+        /// Analysis mode: full (default), ast, cfg, taint
+        #[arg(long, value_enum, default_value_t = ScanMode::Full)]
+        mode: ScanMode,
 
-        #[arg(long)]
-        cfg_only: bool,
-
-        #[arg(long)]
+        /// Scan all targets (alias for --mode full)
+        #[arg(long, hide = true)]
         all_targets: bool,
 
-        /// Include findings from test/vendor/build paths at original severity
-        /// (by default these are downgraded)
+        /// Preserve original severity for test/vendor/build paths
+        ///
+        /// By default, findings in non-production paths are downgraded by one
+        /// severity tier. This flag preserves original severity.
+        #[arg(long, alias = "include-nonprod")]
+        keep_nonprod_severity: bool,
+
+        /// Suppress all human-readable status output
         #[arg(long)]
-        include_nonprod: bool,
+        quiet: bool,
+
+        /// Exit with code 1 if any finding meets or exceeds this severity
+        ///
+        /// Useful for CI gating. Example: --fail-on HIGH
+        #[arg(long)]
+        fail_on: Option<String>,
+
+        // ── Deprecated aliases (hidden) ─────────────────────────────────
+        /// Deprecated: use --index off
+        #[arg(long, hide = true)]
+        no_index: bool,
+
+        /// Deprecated: use --index rebuild
+        #[arg(long, hide = true)]
+        rebuild_index: bool,
+
+        /// Deprecated: use --severity HIGH
+        #[arg(long, hide = true)]
+        high_only: bool,
+
+        /// Deprecated: use --mode ast
+        #[arg(long, hide = true)]
+        ast_only: bool,
+
+        /// Deprecated: use --mode cfg
+        #[arg(long, hide = true)]
+        cfg_only: bool,
     },
 
     /// Manage project indexes

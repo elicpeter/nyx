@@ -105,14 +105,75 @@ impl Severity {
 }
 
 impl FromStr for Severity {
-    // TODO: FIX
-    type Err = ();
+    type Err = String;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        match input.to_lowercase().as_str() {
-            "medium" => Ok(Severity::Medium),
-            "high" => Ok(Severity::High),
-            _ => Ok(Severity::Low),
+        match input.trim().to_ascii_uppercase().as_str() {
+            "HIGH" => Ok(Severity::High),
+            "MEDIUM" | "MED" => Ok(Severity::Medium),
+            "LOW" => Ok(Severity::Low),
+            other => Err(format!("unknown severity: '{other}'")),
+        }
+    }
+}
+
+/// A parsed severity filter expression.
+///
+/// Supports three forms:
+///   - Single level: `"HIGH"` — matches only that level
+///   - Comma list: `"HIGH,MEDIUM"` — matches any listed level
+///   - Threshold: `">=MEDIUM"` — matches that level and above
+///
+/// Parsing is case-insensitive and tolerates whitespace around tokens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeverityFilter {
+    /// Match findings at or above this level (High >= Medium >= Low).
+    AtLeast(Severity),
+    /// Match findings whose severity is in this exact set.
+    AnyOf(Vec<Severity>),
+}
+
+impl SeverityFilter {
+    /// Parse a severity filter expression.
+    ///
+    /// Examples: `"HIGH"`, `"high,medium"`, `">=MEDIUM"`, `">= low"`.
+    pub fn parse(expr: &str) -> Result<Self, String> {
+        let trimmed = expr.trim();
+        if trimmed.is_empty() {
+            return Err("empty severity expression".into());
+        }
+
+        // Threshold form: >=LEVEL
+        if let Some(rest) = trimmed.strip_prefix(">=") {
+            let level: Severity = rest.parse()?;
+            return Ok(SeverityFilter::AtLeast(level));
+        }
+
+        // Comma-separated list (also handles single value)
+        let levels: Result<Vec<Severity>, String> = trimmed
+            .split(',')
+            .map(|tok| tok.trim().parse::<Severity>())
+            .collect();
+        let levels = levels?;
+        if levels.is_empty() {
+            return Err("empty severity expression".into());
+        }
+        // Optimise single-value list
+        if levels.len() == 1 {
+            return Ok(SeverityFilter::AnyOf(levels));
+        }
+        Ok(SeverityFilter::AnyOf(levels))
+    }
+
+    /// Returns `true` if the given severity passes this filter.
+    pub fn matches(&self, sev: Severity) -> bool {
+        match self {
+            SeverityFilter::AtLeast(threshold) => {
+                // Severity ordering: High < Medium < Low (derived Ord).
+                // "at least Medium" means sev <= Medium in Ord terms.
+                sev <= *threshold
+            }
+            SeverityFilter::AnyOf(set) => set.contains(&sev),
         }
     }
 }
@@ -236,4 +297,67 @@ fn load_returns_correct_pattern_slices() {
     assert_eq!(load("RUST"), rust);
 
     assert!(load("brainfuck").is_empty());
+}
+
+#[test]
+fn severity_from_str_rejects_unknown() {
+    assert!("garbage".parse::<Severity>().is_err());
+}
+
+#[test]
+fn severity_filter_single() {
+    let f = SeverityFilter::parse("HIGH").unwrap();
+    assert!(f.matches(Severity::High));
+    assert!(!f.matches(Severity::Medium));
+    assert!(!f.matches(Severity::Low));
+}
+
+#[test]
+fn severity_filter_comma_list() {
+    let f = SeverityFilter::parse("HIGH,MEDIUM").unwrap();
+    assert!(f.matches(Severity::High));
+    assert!(f.matches(Severity::Medium));
+    assert!(!f.matches(Severity::Low));
+}
+
+#[test]
+fn severity_filter_threshold() {
+    let f = SeverityFilter::parse(">=MEDIUM").unwrap();
+    assert!(f.matches(Severity::High));
+    assert!(f.matches(Severity::Medium));
+    assert!(!f.matches(Severity::Low));
+
+    let f2 = SeverityFilter::parse(">=LOW").unwrap();
+    assert!(f2.matches(Severity::High));
+    assert!(f2.matches(Severity::Medium));
+    assert!(f2.matches(Severity::Low));
+
+    let f3 = SeverityFilter::parse(">=HIGH").unwrap();
+    assert!(f3.matches(Severity::High));
+    assert!(!f3.matches(Severity::Medium));
+}
+
+#[test]
+fn severity_filter_case_insensitive_and_whitespace() {
+    let f = SeverityFilter::parse("  high , medium  ").unwrap();
+    assert!(f.matches(Severity::High));
+    assert!(f.matches(Severity::Medium));
+    assert!(!f.matches(Severity::Low));
+
+    let f2 = SeverityFilter::parse(">= medium").unwrap();
+    assert!(f2.matches(Severity::High));
+    assert!(f2.matches(Severity::Medium));
+}
+
+#[test]
+fn severity_filter_rejects_empty() {
+    assert!(SeverityFilter::parse("").is_err());
+    assert!(SeverityFilter::parse("  ").is_err());
+}
+
+#[test]
+fn severity_filter_rejects_invalid_level() {
+    assert!(SeverityFilter::parse("CRITICAL").is_err());
+    assert!(SeverityFilter::parse("HIGH,CRITICAL").is_err());
+    assert!(SeverityFilter::parse(">=BOGUS").is_err());
 }
