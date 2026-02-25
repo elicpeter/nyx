@@ -80,4 +80,4 @@ dashmap = "7.0.0-rc2"
 petgraph = "0.8.3"
 bitflags = "2.11.0"
 phf = { version = "0.13.1", features = ["macros"] }
-indicatif = "0.17"
+indicatif = "0.18.4"
