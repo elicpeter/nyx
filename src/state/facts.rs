@@ -8,6 +8,11 @@ use crate::patterns::Severity;
 use crate::symbol::Lang;
 use petgraph::visit::IntoNodeReferences;
 
+/// Normalize a callee description for display.
+fn sanitize_desc(s: &str) -> String {
+    crate::fmt::normalize_snippet(s)
+}
+
 /// A finding produced by state analysis.
 #[derive(Debug, Clone)]
 pub struct StateFinding {
@@ -118,7 +123,9 @@ pub fn extract_findings(
                 continue;
             };
             if state.auth.auth_level == AuthLevel::Unauthed {
-                let callee_desc = info.callee.as_deref().unwrap_or("(sensitive op)");
+                let callee_desc = sanitize_desc(
+                    info.callee.as_deref().unwrap_or("(sensitive op)"),
+                );
                 findings.push(StateFinding {
                     rule_id: "state-unauthed-access".into(),
                     severity: Severity::High,

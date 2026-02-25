@@ -275,6 +275,7 @@ pub mod index {
                     path_validated: false,
                     guard_kind: None,
                     message: None,
+                    evidence: vec![],
                 })
             })?;
 

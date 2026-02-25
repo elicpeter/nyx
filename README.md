@@ -282,12 +282,12 @@ With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged
 ### Phase 1 -- Deep Static Engine
 
 | Feature | Status | Description |
-|---|---|---|
-| Interprocedural call graph | Done | Precise symbol resolution via `FuncKey`, language-scoped namespaces, cross-module linking. Full call graph with SCC and topological analysis. |
-| Path-sensitive analysis | Done | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Monotone predicate summaries with contradiction pruning. |
-| Dataflow & state modeling | Done | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Generic `Transfer` trait over bounded lattices with guaranteed convergence. |
-| Monotone taint analysis | Done | Replaced BFS taint engine with a forward worklist dataflow analysis over a finite `TaintState` lattice. Multi-origin tracking, dual validated-must/may sets, JS/TS two-level solve. Guaranteed termination via lattice finiteness. |
-| Attack surface ranking | Done | Score entry points by distance-to-sink, guard strength, path complexity, and privilege escalation potential. Deterministic attack surface scoring. |
+|---|--------|---|
+| Interprocedural call graph | Done   | Precise symbol resolution via `FuncKey`, language-scoped namespaces, cross-module linking. Full call graph with SCC and topological analysis. |
+| Path-sensitive analysis | Done   | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Monotone predicate summaries with contradiction pruning. |
+| Dataflow & state modeling | Done   | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Generic `Transfer` trait over bounded lattices with guaranteed convergence. |
+| Monotone taint analysis | Done   | Replaced BFS taint engine with a forward worklist dataflow analysis over a finite `TaintState` lattice. Multi-origin tracking, dual validated-must/may sets, JS/TS two-level solve. Guaranteed termination via lattice finiteness. |
+| Attack surface ranking | TODO   | Score entry points by distance-to-sink, guard strength, path complexity, and privilege escalation potential. Deterministic attack surface scoring. |
 
 ### Phase 2 -- Dynamic Capability
 

@@ -68,13 +68,14 @@ impl Severity {
     ///
     /// Returns e.g. `"[HIGH]  "` or `"[MEDIUM]"` — always 8 visible characters
     /// so the column after the tag lines up regardless of severity.
+    #[allow(dead_code)] // public API for lib consumers
     pub fn colored_tag(self) -> String {
         // Visible widths: "[HIGH]" = 6, "[MEDIUM]" = 8, "[LOW]" = 5.
         // Pad the *whole* tag to 8 visible chars (the longest, "[MEDIUM]").
         let (label, styled_fn): (&str, fn(&str) -> String) = match self {
             Severity::High => ("HIGH", |s| style(s).red().bold().to_string()),
-            Severity::Medium => ("MEDIUM", |s| style(s).yellow().bold().to_string()),
-            Severity::Low => ("LOW", |s| style(s).cyan().bold().to_string()),
+            Severity::Medium => ("MEDIUM", |s| style(s).color256(208).bold().to_string()),
+            Severity::Low => ("LOW", |s| style(s).color256(67).to_string()),
         };
         let bracket_len = label.len() + 2; // "[" + label + "]"
         let pad = 8usize.saturating_sub(bracket_len);
@@ -86,8 +87,8 @@ impl fmt::Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let styled = match *self {
             Severity::High => style("HIGH").red().bold().to_string(),
-            Severity::Medium => style("MEDIUM").yellow().bold().to_string(),
-            Severity::Low => style("LOW").cyan().bold().to_string(),
+            Severity::Medium => style("MEDIUM").color256(208).bold().to_string(),
+            Severity::Low => style("LOW").color256(67).to_string(),
         };
         f.write_str(&styled)
     }

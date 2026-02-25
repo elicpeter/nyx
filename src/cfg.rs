@@ -611,7 +611,7 @@ fn push_node<'a>(
 
     let (defines, uses) = def_use(ast, lang, code);
 
-    let callee = if kind == StmtKind::Call {
+    let callee = if kind == StmtKind::Call || label.is_some() {
         Some(text.clone())
     } else {
         None

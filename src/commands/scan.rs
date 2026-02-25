@@ -15,7 +15,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -52,6 +51,9 @@ pub struct Diag {
     /// Optional human-readable message with additional context (e.g. state analysis details).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Structured evidence labels (e.g. Source, Sink) for console display.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<(String, String)>,
 }
 
 /// Entry point called by the CLI.
@@ -126,38 +128,7 @@ pub fn handle(
         }
         OutputFormat::Console => {
             tracing::debug!("Printing to console");
-            let mut grouped: BTreeMap<&str, Vec<&Diag>> = BTreeMap::new();
-            for d in &diags {
-                grouped.entry(&d.path).or_default().push(d);
-            }
-
-            for (path, issues) in &grouped {
-                println!("{}", style(path).blue().underlined());
-                for d in issues {
-                    println!(
-                        "  {:>4}:{:<4}  {}  {}",
-                        d.line,
-                        d.col,
-                        d.severity.colored_tag(),
-                        style(&d.id).bold()
-                    );
-                    if let Some(msg) = &d.message {
-                        println!("              {}", style(msg).dim());
-                    }
-                    if let Some(guard) = &d.guard_kind {
-                        println!("              Path guard: {}", style(guard).cyan());
-                    }
-                }
-                println!();
-            }
-
-            println!(
-                "{} '{}' generated {} issues.",
-                style("warning").yellow().bold(),
-                style(project_name).white().bold(),
-                style(diags.len()).bold()
-            );
-            println!("\t");
+            print!("{}", crate::fmt::render_console(&diags, &project_name));
         }
     }
 
@@ -574,6 +545,7 @@ fn severity_filter_applied_at_output_stage() {
             path_validated: false,
             guard_kind: None,
             message: None,
+            evidence: vec![],
         },
         Diag {
             path: "src/main.rs".into(),
@@ -584,6 +556,7 @@ fn severity_filter_applied_at_output_stage() {
             path_validated: false,
             guard_kind: None,
             message: None,
+            evidence: vec![],
         },
     ];
 

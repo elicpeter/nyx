@@ -6,6 +6,7 @@ mod cli;
 mod commands;
 mod database;
 mod errors;
+mod fmt;
 mod interop;
 mod labels;
 mod output;
@@ -27,7 +28,7 @@ use std::fs;
 use std::time::Instant;
 use tracing_subscriber::fmt::time;
 use tracing_subscriber::prelude::*;
-use tracing_subscriber::{EnvFilter, Registry, fmt};
+use tracing_subscriber::{EnvFilter, Registry, fmt as tracing_fmt};
 // use tracing_appender::rolling::{RollingFileAppender, Rotation};
 // use tracing_appender::non_blocking;
 
@@ -35,7 +36,7 @@ fn init_tracing() {
     // let file_appender = RollingFileAppender::new(Rotation::HOURLY, "logs", "nyx-scanner.log");
     // let (file_writer, guard) = non_blocking(file_appender);
 
-    let fmt_layer = fmt::layer()
+    let fmt_layer = tracing_fmt::layer()
         .pretty()
         .with_thread_ids(true)
         .with_timer(time::UtcTime::rfc_3339());

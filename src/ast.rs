@@ -93,6 +93,23 @@ fn is_nonprod_path(path: &Path) -> bool {
     false
 }
 
+/// Normalize a callee description for display.
+fn sanitize_desc(s: &str) -> String {
+    crate::fmt::normalize_snippet(s)
+}
+
+/// Human-readable label for a `SourceKind`.
+fn source_kind_label(sk: crate::labels::SourceKind) -> &'static str {
+    use crate::labels::SourceKind;
+    match sk {
+        SourceKind::UserInput => "user input",
+        SourceKind::EnvironmentConfig => "environment config",
+        SourceKind::FileSystem => "file system data",
+        SourceKind::Database => "database result",
+        SourceKind::Unknown => "tainted data",
+    }
+}
+
 /// Downgrade severity by one tier: High→Medium, Medium→Low, Low→Low.
 fn downgrade_severity(s: Severity) -> Severity {
     match s {
@@ -240,6 +257,29 @@ pub fn run_rules_on_bytes(
             let source_byte = cfg_graph[finding.source].span.0;
             let source_point = byte_offset_to_point(&_tree, source_byte);
 
+            let source_callee = cfg_graph[finding.source]
+                .callee
+                .as_deref()
+                .map(sanitize_desc)
+                .unwrap_or_else(|| "(unknown)".into());
+            let sink_callee = cfg_graph[finding.sink]
+                .callee
+                .as_deref()
+                .map(sanitize_desc)
+                .unwrap_or_else(|| "(unknown)".into());
+            let kind_label = source_kind_label(finding.source_kind);
+
+            let short_source = crate::fmt::shorten_callee(&source_callee);
+            let short_sink = crate::fmt::shorten_callee(&sink_callee);
+
+            let mut evidence = vec![
+                ("Source".into(), format!("{source_callee} ({}:{})", source_point.row + 1, source_point.column + 1)),
+                ("Sink".into(), sink_callee.to_string()),
+            ];
+            if let Some(guard) = finding.guard_kind {
+                evidence.push(("Path guard".into(), format!("{guard:?}")));
+            }
+
             out.push(Diag {
                 path: path.to_string_lossy().into_owned(),
                 line: sink_point.row + 1,
@@ -252,7 +292,10 @@ pub fn run_rules_on_bytes(
                 ),
                 path_validated: finding.path_validated,
                 guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
-                message: None,
+                message: Some(format!(
+                    "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
+                )),
+                evidence,
             });
         }
 
@@ -280,7 +323,8 @@ pub fn run_rules_on_bytes(
                 id: cf.rule_id,
                 path_validated: false,
                 guard_kind: None,
-                message: None,
+                message: Some(cf.message),
+                evidence: vec![],
             });
         }
 
@@ -311,6 +355,7 @@ pub fn run_rules_on_bytes(
                     path_validated: false,
                     guard_kind: None,
                     message: Some(sf.message.clone()),
+                    evidence: vec![],
                 });
             }
 
@@ -347,7 +392,8 @@ pub fn run_rules_on_bytes(
                         id: cq.meta.id.to_owned(),
                         path_validated: false,
                         guard_kind: None,
-                        message: None,
+                        message: Some(cq.meta.description.to_owned()),
+                        evidence: vec![],
                     });
                 }
             }
@@ -477,6 +523,29 @@ pub fn analyse_file_fused(
             let source_byte = cfg_graph[finding.source].span.0;
             let source_point = byte_offset_to_point(&tree, source_byte);
 
+            let source_callee = cfg_graph[finding.source]
+                .callee
+                .as_deref()
+                .map(sanitize_desc)
+                .unwrap_or_else(|| "(unknown)".into());
+            let sink_callee = cfg_graph[finding.sink]
+                .callee
+                .as_deref()
+                .map(sanitize_desc)
+                .unwrap_or_else(|| "(unknown)".into());
+            let kind_label = source_kind_label(finding.source_kind);
+
+            let short_source = crate::fmt::shorten_callee(&source_callee);
+            let short_sink = crate::fmt::shorten_callee(&sink_callee);
+
+            let mut evidence = vec![
+                ("Source".into(), format!("{source_callee} ({}:{})", source_point.row + 1, source_point.column + 1)),
+                ("Sink".into(), sink_callee.to_string()),
+            ];
+            if let Some(guard) = finding.guard_kind {
+                evidence.push(("Path guard".into(), format!("{guard:?}")));
+            }
+
             out.push(Diag {
                 path: path.to_string_lossy().into_owned(),
                 line: sink_point.row + 1,
@@ -489,7 +558,10 @@ pub fn analyse_file_fused(
                 ),
                 path_validated: finding.path_validated,
                 guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
-                message: None,
+                message: Some(format!(
+                    "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
+                )),
+                evidence,
             });
         }
 
@@ -516,7 +588,8 @@ pub fn analyse_file_fused(
                 id: cf.rule_id,
                 path_validated: false,
                 guard_kind: None,
-                message: None,
+                message: Some(cf.message),
+                evidence: vec![],
             });
         }
 
@@ -546,6 +619,7 @@ pub fn analyse_file_fused(
                     path_validated: false,
                     guard_kind: None,
                     message: Some(sf.message.clone()),
+                    evidence: vec![],
                 });
             }
 
@@ -580,7 +654,8 @@ pub fn analyse_file_fused(
                         id: cq.meta.id.to_owned(),
                         path_validated: false,
                         guard_kind: None,
-                        message: None,
+                        message: Some(cq.meta.description.to_owned()),
+                        evidence: vec![],
                     });
                 }
             }
