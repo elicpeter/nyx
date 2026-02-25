@@ -107,7 +107,7 @@ pub fn build_index(
             let mut idx = Indexer::from_pool(project_name, &pool)?;
 
             // Run AST-only rules (no taint yet — summaries come later in scan)
-            let issues = crate::commands::scan::run_rules_on_file(&path, config, None)?;
+            let issues = crate::commands::scan::run_rules_on_file(&path, config, None, None)?;
             let file_id = idx.upsert_file(&path)?;
 
             let rows: Vec<IssueRow> = issues

@@ -1,4 +1,5 @@
 use crate::labels::{Cap, DataLabel};
+use crate::symbol::{FuncKey, Lang, normalize_namespace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -127,124 +128,129 @@ impl FuncSummary {
             || self.sink_caps != 0
             || self.propagates_taint
     }
+
+    /// Build a [`FuncKey`] from this summary, normalizing the namespace
+    /// relative to `scan_root`.
+    pub fn func_key(&self, scan_root: Option<&str>) -> FuncKey {
+        FuncKey {
+            lang: Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
+            namespace: normalize_namespace(&self.file_path, scan_root),
+            name: self.name.clone(),
+            arity: Some(self.param_count),
+        }
+    }
 }
 
 // ── Lookup map used by the taint engine ─────────────────────────────────
 
-/// A merged view of all function summaries keyed by function name.
+/// A merged view of all function summaries keyed by qualified [`FuncKey`].
 ///
-/// When multiple files define a function with the same unqualified name the
-/// summaries are merged conservatively (union of all cap bits, any‑true for
-/// booleans).  This is sound — we may over‑approximate but never miss a
-/// real flow.  Future module‑path resolution will make this more precise.
-pub type GlobalSummaries = HashMap<String, FuncSummary>;
-
-/// Merge a set of per‑file summaries into a single `GlobalSummaries` map.
+/// Functions are partitioned by language + namespace + name + arity.  Two
+/// functions with the same bare name but different languages or namespaces
+/// are stored separately — no implicit cross-language merging occurs.
 ///
-/// For name collisions the rule is *conservative union*: every cap bit that
-/// any definition sets is kept, `propagates_taint` is OR‑ed, and
-/// `tainted_sink_params` are unioned.
-pub fn merge_summaries(per_file: impl IntoIterator<Item = FuncSummary>) -> GlobalSummaries {
-    let mut map = GlobalSummaries::new();
+/// A secondary index `(Lang, name)` supports fast lookup by language + name
+/// for same-language resolution in the taint engine.
+pub struct GlobalSummaries {
+    by_key: HashMap<FuncKey, FuncSummary>,
+    by_lang_name: HashMap<(Lang, String), Vec<FuncKey>>,
+}
 
-    for fs in per_file {
-        map.entry(fs.name.clone())
+impl GlobalSummaries {
+    pub fn new() -> Self {
+        Self {
+            by_key: HashMap::new(),
+            by_lang_name: HashMap::new(),
+        }
+    }
+
+    /// Insert or merge a summary.  If an exact `FuncKey` match exists,
+    /// merge conservatively (OR caps/booleans, union params/callees).
+    pub fn insert(&mut self, key: FuncKey, summary: FuncSummary) {
+        let lang = key.lang;
+        let name = key.name.clone();
+
+        self.by_key
+            .entry(key.clone())
             .and_modify(|existing| {
-                existing.source_caps |= fs.source_caps;
-                existing.sanitizer_caps |= fs.sanitizer_caps;
-                existing.sink_caps |= fs.sink_caps;
-                existing.propagates_taint |= fs.propagates_taint;
-
-                // union tainted_sink_params (deduplicated)
-                for &idx in &fs.tainted_sink_params {
+                existing.source_caps |= summary.source_caps;
+                existing.sanitizer_caps |= summary.sanitizer_caps;
+                existing.sink_caps |= summary.sink_caps;
+                existing.propagates_taint |= summary.propagates_taint;
+                for &idx in &summary.tainted_sink_params {
                     if !existing.tainted_sink_params.contains(&idx) {
                         existing.tainted_sink_params.push(idx);
                     }
                 }
-
-                // union callees
-                for c in &fs.callees {
+                for c in &summary.callees {
                     if !existing.callees.contains(c) {
                         existing.callees.push(c.clone());
                     }
                 }
             })
-            .or_insert(fs);
+            .or_insert(summary);
+
+        let keys = self.by_lang_name.entry((lang, name)).or_default();
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+
+    /// Exact lookup by fully-qualified key.
+    pub fn get(&self, key: &FuncKey) -> Option<&FuncSummary> {
+        self.by_key.get(key)
+    }
+
+    /// All same-language matches for a bare function name.
+    pub fn lookup_same_lang(&self, lang: Lang, name: &str) -> Vec<(&FuncKey, &FuncSummary)> {
+        self.by_lang_name
+            .get(&(lang, name.to_string()))
+            .map(|keys| {
+                keys.iter()
+                    .filter_map(|k| self.by_key.get(k).map(|v| (k, v)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.by_key.is_empty()
+    }
+
+    /// Iterate over all (key, summary) pairs.
+    #[allow(dead_code)]
+    pub fn iter(&self) -> impl Iterator<Item = (&FuncKey, &FuncSummary)> {
+        self.by_key.iter()
+    }
+}
+
+impl std::fmt::Debug for GlobalSummaries {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GlobalSummaries")
+            .field("len", &self.by_key.len())
+            .finish()
+    }
+}
+
+/// Merge a set of per‑file summaries into a single `GlobalSummaries` map.
+///
+/// Merging only happens for exact `FuncKey` matches (same lang + namespace +
+/// name + arity).  Functions with the same bare name but different languages
+/// or namespaces are stored separately.
+pub fn merge_summaries(
+    per_file: impl IntoIterator<Item = FuncSummary>,
+    scan_root: Option<&str>,
+) -> GlobalSummaries {
+    let mut map = GlobalSummaries::new();
+
+    for fs in per_file {
+        let key = fs.func_key(scan_root);
+        map.insert(key, fs);
     }
 
     map
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make(name: &str, src: u8, san: u8, sink: u8) -> FuncSummary {
-        FuncSummary {
-            name: name.into(),
-            file_path: "test.rs".into(),
-            lang: "rust".into(),
-            param_count: 0,
-            param_names: vec![],
-            source_caps: src,
-            sanitizer_caps: san,
-            sink_caps: sink,
-            propagates_taint: false,
-            tainted_sink_params: vec![],
-            callees: vec![],
-        }
-    }
-
-    #[test]
-    fn primary_label_priority() {
-        // sink beats everything
-        let s = make("f", 0xFF, 0xFF, 0x01);
-        assert!(matches!(s.primary_label(), Some(DataLabel::Sink(_))));
-
-        // source beats sanitizer
-        let s = make("f", 0x01, 0x02, 0x00);
-        assert!(matches!(s.primary_label(), Some(DataLabel::Source(_))));
-
-        // sanitizer alone
-        let s = make("f", 0x00, 0x04, 0x00);
-        assert!(matches!(s.primary_label(), Some(DataLabel::Sanitizer(_))));
-
-        // nothing
-        let s = make("f", 0, 0, 0);
-        assert!(s.primary_label().is_none());
-    }
-
-    #[test]
-    fn merge_unions_conservatively() {
-        let a = make("foo", 0x01, 0x00, 0x00);
-        let b = FuncSummary {
-            sink_caps: 0x04,
-            propagates_taint: true,
-            tainted_sink_params: vec![0],
-            callees: vec!["bar".into()],
-            ..make("foo", 0x00, 0x02, 0x00)
-        };
-
-        let merged = merge_summaries(vec![a, b]);
-        let foo = merged.get("foo").unwrap();
-
-        assert_eq!(foo.source_caps, 0x01);
-        assert_eq!(foo.sanitizer_caps, 0x02);
-        assert_eq!(foo.sink_caps, 0x04);
-        assert!(foo.propagates_taint);
-        assert_eq!(foo.tainted_sink_params, vec![0]);
-        assert_eq!(foo.callees, vec!["bar".to_string()]);
-    }
-
-    #[test]
-    fn is_interesting_detects_all_cases() {
-        assert!(!make("f", 0, 0, 0).is_interesting());
-        assert!(make("f", 1, 0, 0).is_interesting());
-        assert!(make("f", 0, 1, 0).is_interesting());
-        assert!(make("f", 0, 0, 1).is_interesting());
-
-        let mut p = make("f", 0, 0, 0);
-        p.propagates_taint = true;
-        assert!(p.is_interesting());
-    }
-}
+mod tests;

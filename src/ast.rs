@@ -3,6 +3,7 @@ use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
 use crate::patterns::Severity;
 use crate::summary::{FuncSummary, GlobalSummaries};
+use crate::symbol::{Lang, normalize_namespace};
 use crate::taint::analyse_file;
 use crate::utils::config::AnalysisMode;
 use crate::utils::ext::lowercase_ext;
@@ -80,9 +81,9 @@ pub(crate) fn extract_summaries_from_file(
             .ok_or_else(|| NyxError::Other("tree-sitter failed".into()))
     })?;
 
-    let (_cfg_graph, _entry, local_summaries) = build_cfg(&tree, &bytes, lang_slug);
-
     let file_path_str = path.to_string_lossy();
+    let (_cfg_graph, _entry, local_summaries) = build_cfg(&tree, &bytes, lang_slug, &file_path_str);
+
     Ok(export_summaries(
         &local_summaries,
         &file_path_str,
@@ -102,6 +103,7 @@ pub(crate) fn run_rules_on_file(
     path: &Path,
     cfg: &Config,
     global_summaries: Option<&GlobalSummaries>,
+    scan_root: Option<&Path>,
 ) -> NyxResult<Vec<Diag>> {
     tracing::debug!("Running rules on: {}", path.display());
     let bytes = std::fs::read(path)?;
@@ -126,9 +128,16 @@ pub(crate) fn run_rules_on_file(
 
     if cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Taint {
         tracing::debug!("Running taint analysis on: {}", path.display());
-        let (cfg_graph, entry, summaries) = build_cfg(&_tree, &bytes, lang_slug);
+        let file_path_str = path.to_string_lossy();
+        let (cfg_graph, entry, summaries) = build_cfg(&_tree, &bytes, lang_slug, &file_path_str);
         tracing::debug!("Func summaries: {:?}", summaries);
-        for finding in analyse_file(&cfg_graph, entry, &summaries, global_summaries) {
+        let caller_lang = Lang::from_slug(lang_slug).unwrap_or(Lang::Rust);
+        let scan_root_str = scan_root.map(|p| p.to_string_lossy());
+        let namespace = normalize_namespace(
+            &file_path_str,
+            scan_root_str.as_deref(),
+        );
+        for finding in analyse_file(&cfg_graph, entry, &summaries, global_summaries, caller_lang, &namespace, &[]) {
             // Report the SINK location — where the vulnerability manifests.
             let sink_byte = cfg_graph[finding.sink].span.0;
             let sink_point = byte_offset_to_point(&_tree, sink_byte);
@@ -196,7 +205,7 @@ fn unknown_extension_returns_empty() {
     let txt = dir.path().join("notes.txt");
     std::fs::write(&txt, "just some text").unwrap();
 
-    let diags = run_rules_on_file(&txt, &Config::default(), None)
+    let diags = run_rules_on_file(&txt, &Config::default(), None, None)
         .expect("function should never error on plain text");
 
     assert!(diags.is_empty());
@@ -213,6 +222,6 @@ fn binary_file_guard_triggers() {
     }
     std::fs::write(&bin, &data).unwrap();
 
-    let diags = run_rules_on_file(&bin, &Config::default(), None).unwrap();
+    let diags = run_rules_on_file(&bin, &Config::default(), None, None).unwrap();
     assert!(diags.is_empty(), "binary files are skipped");
 }

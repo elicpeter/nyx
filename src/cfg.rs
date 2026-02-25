@@ -5,6 +5,7 @@ use tree_sitter::{Node, Tree};
 
 use crate::labels::{Cap, DataLabel, Kind, classify, lookup, param_config};
 use crate::summary::FuncSummary;
+use crate::symbol::{FuncKey, Lang};
 use std::collections::{HashMap, HashSet};
 
 /// -------------------------------------------------------------------------
@@ -39,6 +40,10 @@ pub struct NodeInfo {
     pub defines: Option<String>,  // variable written by this stmt
     pub uses: Vec<String>,        // variables read
     pub callee: Option<String>,
+    /// Name of the enclosing function (set during CFG construction).
+    pub enclosing_func: Option<String>,
+    /// Per-function call ordinal (0-based, only meaningful for Call nodes).
+    pub call_ordinal: u32,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -67,7 +72,7 @@ pub struct LocalFuncSummary {
 }
 
 pub type Cfg = Graph<NodeInfo, EdgeKind>;
-pub type FuncSummaries = HashMap<String, LocalFuncSummary>;
+pub type FuncSummaries = HashMap<FuncKey, LocalFuncSummary>;
 
 // -------------------------------------------------------------------------
 //                      Utility helpers
@@ -267,6 +272,8 @@ fn push_node<'a>(
     ast: Node<'a>,
     lang: &str,
     code: &'a [u8],
+    enclosing_func: Option<&str>,
+    call_ordinal: u32,
 ) -> NodeIndex {
     /* ── 1.  IDENTIFIER EXTRACTION ─────────────────────────────────────── */
 
@@ -340,6 +347,8 @@ fn push_node<'a>(
         defines,
         uses,
         callee,
+        enclosing_func: enclosing_func.map(|s| s.to_string()),
+        call_ordinal,
     });
 
     debug!(
@@ -421,6 +430,7 @@ fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind: EdgeKind) 
 //    The recursive *work‑horse* that converts an AST node into a CFG slice.
 //    Returns the set of *exit* nodes that need to be wired further.
 // -------------------------------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 fn build_sub<'a>(
     ast: Node<'a>,
     preds: &[NodeIndex], // predecessor frontier
@@ -428,6 +438,9 @@ fn build_sub<'a>(
     lang: &str,
     code: &'a [u8],
     summaries: &mut FuncSummaries,
+    file_path: &str,
+    enclosing_func: Option<&str>,
+    call_ordinal: &mut u32,
 ) -> Vec<NodeIndex> {
     match lookup(lang, ast.kind()) {
         // ─────────────────────────────────────────────────────────────────
@@ -435,7 +448,7 @@ fn build_sub<'a>(
         // ─────────────────────────────────────────────────────────────────
         Kind::If => {
             // Condition node
-            let cond = push_node(g, StmtKind::If, ast, lang, code);
+            let cond = push_node(g, StmtKind::If, ast, lang, code, enclosing_func, 0);
             connect_all(g, preds, cond, EdgeKind::Seq);
 
             // Locate then & else blocks using field-based lookup first,
@@ -461,7 +474,7 @@ fn build_sub<'a>(
 
             // THEN branch
             let then_exits = if let Some(b) = then_block {
-                let exits = build_sub(b, &[cond], g, lang, code, summaries);
+                let exits = build_sub(b, &[cond], g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
                 // True edges leave the condition
                 if let Some(&first) = exits.first() {
                     connect_all(g, &[cond], first, EdgeKind::True);
@@ -473,7 +486,7 @@ fn build_sub<'a>(
 
             // ELSE branch
             let else_exits = if let Some(b) = else_block {
-                let exits = build_sub(b, &[cond], g, lang, code, summaries);
+                let exits = build_sub(b, &[cond], g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
                 if let Some(&first) = exits.first() {
                     connect_all(g, &[cond], first, EdgeKind::False);
                 }
@@ -492,12 +505,12 @@ fn build_sub<'a>(
 
         Kind::InfiniteLoop => {
             // Synthetic header node
-            let header = push_node(g, StmtKind::Loop, ast, lang, code);
+            let header = push_node(g, StmtKind::Loop, ast, lang, code, enclosing_func, 0);
             connect_all(g, preds, header, EdgeKind::Seq);
 
             // The body is the single `block` child
             let body = ast.child_by_field_name("body").expect("loop without body");
-            let body_exits = build_sub(body, &[header], g, lang, code, summaries);
+            let body_exits = build_sub(body, &[header], g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
 
             // Back-edge from every linear exit to header
             for &e in &body_exits {
@@ -511,7 +524,7 @@ fn build_sub<'a>(
         //  WHILE / FOR: classic loop with a back edge.
         // ─────────────────────────────────────────────────────────────────
         Kind::While | Kind::For => {
-            let header = push_node(g, StmtKind::Loop, ast, lang, code);
+            let header = push_node(g, StmtKind::Loop, ast, lang, code, enclosing_func, 0);
             connect_all(g, preds, header, EdgeKind::Seq);
 
             // Body = first (and usually only) block child.
@@ -524,7 +537,7 @@ fn build_sub<'a>(
                 })
                 .expect("loop without body");
 
-            let body_exits = build_sub(body, &[header], g, lang, code, summaries);
+            let body_exits = build_sub(body, &[header], g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
 
             // Back‑edge for every linear exit → header.
             for &e in &body_exits {
@@ -538,17 +551,29 @@ fn build_sub<'a>(
         //  Control-flow sinks (return / break / continue).
         // ─────────────────────────────────────────────────────────────────
         Kind::Return => {
-            let ret = push_node(g, StmtKind::Return, ast, lang, code);
-            connect_all(g, preds, ret, EdgeKind::Seq);
-            Vec::new() // terminates this path
+            if has_call_descendant(ast, lang) {
+                // Return-call bug fix: emit a Call node BEFORE the Return so
+                // that callee labels (source/sanitizer/sink) are applied.
+                let ord = *call_ordinal;
+                *call_ordinal += 1;
+                let call_idx = push_node(g, StmtKind::Call, ast, lang, code, enclosing_func, ord);
+                connect_all(g, preds, call_idx, EdgeKind::Seq);
+                let ret = push_node(g, StmtKind::Return, ast, lang, code, enclosing_func, 0);
+                connect_all(g, &[call_idx], ret, EdgeKind::Seq);
+                Vec::new()
+            } else {
+                let ret = push_node(g, StmtKind::Return, ast, lang, code, enclosing_func, 0);
+                connect_all(g, preds, ret, EdgeKind::Seq);
+                Vec::new() // terminates this path
+            }
         }
         Kind::Break => {
-            let brk = push_node(g, StmtKind::Break, ast, lang, code);
+            let brk = push_node(g, StmtKind::Break, ast, lang, code, enclosing_func, 0);
             connect_all(g, preds, brk, EdgeKind::Seq);
             Vec::new()
         }
         Kind::Continue => {
-            let cont = push_node(g, StmtKind::Continue, ast, lang, code);
+            let cont = push_node(g, StmtKind::Continue, ast, lang, code, enclosing_func, 0);
             connect_all(g, preds, cont, EdgeKind::Seq);
             Vec::new()
         }
@@ -560,7 +585,7 @@ fn build_sub<'a>(
             let mut cursor = ast.walk();
             let mut frontier = preds.to_vec();
             for child in ast.children(&mut cursor) {
-                frontier = build_sub(child, &frontier, g, lang, code, summaries);
+                frontier = build_sub(child, &frontier, g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
             }
             frontier
         }
@@ -579,16 +604,17 @@ fn build_sub<'a>(
                     tmp.into_iter().next()
                 })
                 .unwrap_or_else(|| "<anon>".to_string());
-            let entry_idx = push_node(g, StmtKind::Seq, ast, lang, code);
+            let entry_idx = push_node(g, StmtKind::Seq, ast, lang, code, Some(&fn_name), 0);
             connect_all(g, preds, entry_idx, EdgeKind::Seq);
 
             // 1b) extract parameter names
             let param_names = extract_param_names(ast, lang, code);
             let param_count = param_names.len();
 
-            // 2) build its body
+            // 2) build its body with a fresh call ordinal counter for this function scope
             let body = ast.child_by_field_name("body").expect("fn w/o body");
-            let body_exits = build_sub(body, &[entry_idx], g, lang, code, summaries);
+            let mut fn_call_ordinal: u32 = 0;
+            let body_exits = build_sub(body, &[entry_idx], g, lang, code, summaries, file_path, Some(&fn_name), &mut fn_call_ordinal);
 
             // ───── 3) light-weight dataflow ──────────────────────────────────────
             //
@@ -744,13 +770,21 @@ fn build_sub<'a>(
                 defines: None,
                 uses: Vec::new(),
                 callee: None,
+                enclosing_func: Some(fn_name.clone()),
+                call_ordinal: 0,
             });
             for &b in &body_exits {
                 connect_all(g, &[b], exit_idx, EdgeKind::Seq);
             }
 
             /* ───── 5) store the rich summary ──────────────────────────────────── */
-            summaries.insert(fn_name.clone(), LocalFuncSummary {
+            let key = FuncKey {
+                lang: Lang::from_slug(lang).unwrap_or(Lang::Rust),
+                namespace: file_path.to_owned(),
+                name: fn_name.clone(),
+                arity: Some(param_count),
+            };
+            summaries.insert(key, LocalFuncSummary {
                 entry: entry_idx,
                 exit: exit_idx,
                 source_caps: fn_src_bits,
@@ -776,7 +810,7 @@ fn build_sub<'a>(
                     Kind::InfiniteLoop | Kind::While | Kind::For | Kind::If
                 )
             }) {
-                return build_sub(inner, preds, g, lang, code, summaries);
+                return build_sub(inner, preds, g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
             }
 
             let has_call = has_call_descendant(ast, lang);
@@ -786,7 +820,14 @@ fn build_sub<'a>(
             } else {
                 StmtKind::Seq
             };
-            let node = push_node(g, kind, ast, lang, code);
+            let ord = if kind == StmtKind::Call {
+                let o = *call_ordinal;
+                *call_ordinal += 1;
+                o
+            } else {
+                0
+            };
+            let node = push_node(g, kind, ast, lang, code, enclosing_func, ord);
             connect_all(g, preds, node, EdgeKind::Seq);
             vec![node]
         }
@@ -794,7 +835,9 @@ fn build_sub<'a>(
         // Direct call nodes (Ruby `call`, Python `call`, etc. when they appear
         // as direct children of a block rather than wrapped in expression_statement)
         Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
-            let n = push_node(g, StmtKind::Call, ast, lang, code);
+            let ord = *call_ordinal;
+            *call_ordinal += 1;
+            let n = push_node(g, StmtKind::Call, ast, lang, code, enclosing_func, ord);
             connect_all(g, preds, n, EdgeKind::Seq);
             vec![n]
         }
@@ -807,7 +850,14 @@ fn build_sub<'a>(
             } else {
                 StmtKind::Seq
             };
-            let n = push_node(g, kind, ast, lang, code);
+            let ord = if kind == StmtKind::Call {
+                let o = *call_ordinal;
+                *call_ordinal += 1;
+                o
+            } else {
+                0
+            };
+            let n = push_node(g, kind, ast, lang, code, enclosing_func, ord);
             connect_all(g, preds, n, EdgeKind::Seq);
             vec![n]
         }
@@ -819,7 +869,7 @@ fn build_sub<'a>(
         //  Every other node = simple sequential statement
         // ─────────────────────────────────────────────────────────────────
         _ => {
-            let n = push_node(g, StmtKind::Seq, ast, lang, code);
+            let n = push_node(g, StmtKind::Seq, ast, lang, code, enclosing_func, 0);
             connect_all(g, preds, n, EdgeKind::Seq);
             vec![n]
         }
@@ -841,6 +891,7 @@ pub(crate) fn build_cfg<'a>(
     tree: &'a Tree,
     code: &'a [u8],
     lang: &str,
+    file_path: &str,
 ) -> (Cfg, NodeIndex, FuncSummaries) {
     debug!(target: "cfg", "Building CFG for {:?}", tree.root_node());
 
@@ -853,6 +904,8 @@ pub(crate) fn build_cfg<'a>(
         defines: None,
         uses: Vec::new(),
         callee: None,
+        enclosing_func: None,
+        call_ordinal: 0,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -861,9 +914,12 @@ pub(crate) fn build_cfg<'a>(
         defines: None,
         uses: Vec::new(),
         callee: None,
+        enclosing_func: None,
+        call_ordinal: 0,
     });
 
     // Build the body below the synthetic ENTRY.
+    let mut top_ordinal: u32 = 0;
     let exits = build_sub(
         tree.root_node(),
         &[entry],
@@ -871,6 +927,9 @@ pub(crate) fn build_cfg<'a>(
         lang,
         code,
         &mut summaries,
+        file_path,
+        None,
+        &mut top_ordinal,
     );
     debug!(target: "cfg", "exits: {:?}", exits);
     // Wire every real exit to our synthetic EXIT node.
@@ -933,8 +992,8 @@ pub(crate) fn export_summaries(
 ) -> Vec<FuncSummary> {
     summaries
         .iter()
-        .map(|(name, local)| FuncSummary {
-            name: name.clone(),
+        .map(|(key, local)| FuncSummary {
+            name: key.name.clone(),
             file_path: file_path.to_owned(),
             lang: lang.to_owned(),
             param_count: local.param_count,

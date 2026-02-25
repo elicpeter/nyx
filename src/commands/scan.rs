@@ -130,7 +130,8 @@ fn scan_filesystem(root: &Path, cfg: &Config) -> NyxResult<Vec<Diag>> {
 
         let collected = per_file.into_inner().unwrap();
         tracing::debug!("Pass 1 complete: {} summaries collected", collected.len());
-        Some(summary::merge_summaries(collected))
+        let root_str = root.to_string_lossy();
+        Some(summary::merge_summaries(collected, Some(&root_str)))
     } else {
         None
     };
@@ -142,7 +143,7 @@ fn scan_filesystem(root: &Path, cfg: &Config) -> NyxResult<Vec<Diag>> {
     all_paths
         .par_iter()
         .try_for_each(|path| {
-            let mut local = run_rules_on_file(path, cfg, global_summaries.as_ref())?;
+            let mut local = run_rules_on_file(path, cfg, global_summaries.as_ref(), Some(root))?;
             acc.lock().unwrap().append(&mut local);
             Ok::<(), NyxError>(())
         })?;
@@ -221,7 +222,7 @@ pub fn scan_with_index_parallel(
         let idx = Indexer::from_pool(project, &pool)?;
         let all = idx.load_all_summaries()?;
         tracing::debug!("Loaded {} cross-file summaries from DB", all.len());
-        Some(summary::merge_summaries(all))
+        Some(summary::merge_summaries(all, None))
     } else {
         None
     };
@@ -242,7 +243,7 @@ pub fn scan_with_index_parallel(
             };
 
             let mut diags = if needs_scan {
-                let d = run_rules_on_file(&path, cfg, global_summaries.as_ref())
+                let d = run_rules_on_file(&path, cfg, global_summaries.as_ref(), None)
                     .unwrap_or_default();
 
                 // Persist issues + update file record
