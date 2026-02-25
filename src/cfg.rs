@@ -86,6 +86,30 @@ pub(crate) fn text_of<'a>(n: Node<'a>, code: &'a [u8]) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Walk through chained calls / member accesses to find the root receiver.
+///
+/// For `Runtime.getRuntime().exec(cmd)`, the receiver of `exec` is the call
+/// `Runtime.getRuntime()`.  This function drills through that to return
+/// `"Runtime"` — the outermost non-call object.  This lets labels like
+/// `"Runtime.exec"` match correctly.
+fn root_receiver_text(n: Node, lang: &str, code: &[u8]) -> Option<String> {
+    match lookup(lang, n.kind()) {
+        // The receiver is itself a call — drill into ITS receiver.
+        // e.g. for `Runtime.getRuntime()`, the object is `Runtime`.
+        Kind::CallFn | Kind::CallMethod => {
+            let inner = n
+                .child_by_field_name("object")
+                .or_else(|| n.child_by_field_name("receiver"))
+                .or_else(|| n.child_by_field_name("function"));
+            match inner {
+                Some(child) => root_receiver_text(child, lang, code),
+                None => text_of(n, code),
+            }
+        }
+        _ => text_of(n, code),
+    }
+}
+
 /// Return the callee identifier for the first call / method / macro inside `n`.
 /// Searches recursively through all descendants.
 fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
@@ -107,7 +131,7 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                         let recv = c
                             .child_by_field_name("object")
                             .or_else(|| c.child_by_field_name("receiver"))
-                            .and_then(|f| text_of(f, code));
+                            .and_then(|f| root_receiver_text(f, lang, code));
                         match (recv, func) {
                             (Some(r), Some(f)) => Some(format!("{r}.{f}")),
                             (_, Some(f)) => Some(f.to_string()),
@@ -129,6 +153,82 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
         }
     }
     None
+}
+
+/// Build the dot-joined text of a member_expression / attribute / selector_expression.
+/// E.g. for `process.env.CMD` this returns `"process.env.CMD"`.
+fn member_expr_text(n: Node, code: &[u8]) -> Option<String> {
+    match n.kind() {
+        "member_expression" | "attribute" | "selector_expression" => {
+            let obj = n
+                .child_by_field_name("object")
+                .or_else(|| n.child_by_field_name("value"))
+                .and_then(|o| member_expr_text(o, code))
+                .or_else(|| {
+                    n.child_by_field_name("object")
+                        .or_else(|| n.child_by_field_name("value"))
+                        .and_then(|o| text_of(o, code))
+                });
+            let prop = n
+                .child_by_field_name("property")
+                .or_else(|| n.child_by_field_name("attribute"))
+                .or_else(|| n.child_by_field_name("field"))
+                .and_then(|p| text_of(p, code));
+            match (obj, prop) {
+                (Some(o), Some(p)) => Some(format!("{o}.{p}")),
+                (_, Some(p)) => Some(p),
+                (Some(o), _) => Some(o),
+                _ => text_of(n, code),
+            }
+        }
+        _ => text_of(n, code),
+    }
+}
+
+/// Recursively search `n` for a member expression whose text classifies as a label.
+fn first_member_label(n: Node, lang: &str, code: &[u8]) -> Option<DataLabel> {
+    match n.kind() {
+        "member_expression" | "attribute" | "selector_expression" => {
+            if let Some(full) = member_expr_text(n, code) {
+                // Try the full text first, then progressively strip the last segment
+                // to match rules like "process.env" from "process.env.CMD".
+                let mut candidate = full.as_str();
+                loop {
+                    if let Some(lbl) = classify(lang, candidate) {
+                        return Some(lbl);
+                    }
+                    match candidate.rsplit_once('.') {
+                        Some((prefix, _)) => candidate = prefix,
+                        None => break,
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = n.walk();
+    for child in n.children(&mut cursor) {
+        if let Some(lbl) = first_member_label(child, lang, code) {
+            return Some(lbl);
+        }
+    }
+    None
+}
+
+/// Return the text of the first member expression found in `n`.
+fn first_member_text(n: Node, code: &[u8]) -> Option<String> {
+    match n.kind() {
+        "member_expression" | "attribute" | "selector_expression" => member_expr_text(n, code),
+        _ => {
+            let mut cursor = n.walk();
+            for child in n.children(&mut cursor) {
+                if let Some(t) = first_member_text(child, code) {
+                    return Some(t);
+                }
+            }
+            None
+        }
+    }
 }
 
 /// Check whether any descendant of `n` is a call expression.
@@ -296,7 +396,7 @@ fn push_node<'a>(
             let recv = ast
                 .child_by_field_name("object")
                 .or_else(|| ast.child_by_field_name("receiver"))
-                .and_then(|n| text_of(n, code));
+                .and_then(|n| root_receiver_text(n, lang, code));
             match (recv, func) {
                 (Some(r), Some(f)) => format!("{r}.{f}"),
                 (_, Some(f)) => f,
@@ -327,7 +427,54 @@ fn push_node<'a>(
 
     /* ── 2.  LABEL LOOK-UP  ───────────────────────────────────────────── */
 
-    let label = classify(lang, &text);
+    let mut label = classify(lang, &text);
+
+    // For assignments like `element.innerHTML = value`, the inner-call heuristic
+    // above may have overridden `text` with a call on the RHS (e.g. getElementById).
+    // If that didn't produce a label, check the LHS property name — it may be a
+    // sink like `innerHTML`.
+    //
+    // This covers both direct `Kind::Assignment` nodes and `Kind::CallWrapper`
+    // nodes (expression_statement) that wrap an assignment.
+    if label.is_none() {
+        let assign_node = if matches!(lookup(lang, ast.kind()), Kind::Assignment) {
+            Some(ast)
+        } else if matches!(lookup(lang, ast.kind()), Kind::CallWrapper) {
+            // Walk children to find a nested assignment_expression
+            let mut cursor = ast.walk();
+            ast.children(&mut cursor)
+                .find(|c| matches!(lookup(lang, c.kind()), Kind::Assignment))
+        } else {
+            None
+        };
+
+        if let Some(assign) = assign_node
+            && let Some(lhs) = assign.child_by_field_name("left")
+            && let Some(prop) = lhs.child_by_field_name("property")
+            && let Some(prop_text) = text_of(prop, code)
+        {
+            label = classify(lang, &prop_text);
+        }
+    }
+
+    // For declarations/assignments whose RHS is a member expression (not a call),
+    // try to classify the member expression text as a source.
+    // This handles `var x = process.env.CMD` (JS), `os.environ["KEY"]` (Python),
+    // and similar property-access-based source patterns.
+    if label.is_none()
+        && matches!(
+            lookup(lang, ast.kind()),
+            Kind::CallWrapper | Kind::Assignment
+        )
+        && let Some(found) = first_member_label(ast, lang, code)
+    {
+        label = Some(found);
+        // Update text so the callee name reflects the source
+        if let Some(member_text) = first_member_text(ast, code) {
+            text = member_text;
+        }
+    }
+
     let span = (ast.start_byte(), ast.end_byte());
 
     /* ── 3.  GRAPH INSERTION + DEBUG ──────────────────────────────────── */
@@ -474,7 +621,17 @@ fn build_sub<'a>(
 
             // THEN branch
             let then_exits = if let Some(b) = then_block {
-                let exits = build_sub(b, &[cond], g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
+                let exits = build_sub(
+                    b,
+                    &[cond],
+                    g,
+                    lang,
+                    code,
+                    summaries,
+                    file_path,
+                    enclosing_func,
+                    call_ordinal,
+                );
                 // True edges leave the condition
                 if let Some(&first) = exits.first() {
                     connect_all(g, &[cond], first, EdgeKind::True);
@@ -486,7 +643,17 @@ fn build_sub<'a>(
 
             // ELSE branch
             let else_exits = if let Some(b) = else_block {
-                let exits = build_sub(b, &[cond], g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
+                let exits = build_sub(
+                    b,
+                    &[cond],
+                    g,
+                    lang,
+                    code,
+                    summaries,
+                    file_path,
+                    enclosing_func,
+                    call_ordinal,
+                );
                 if let Some(&first) = exits.first() {
                     connect_all(g, &[cond], first, EdgeKind::False);
                 }
@@ -510,7 +677,17 @@ fn build_sub<'a>(
 
             // The body is the single `block` child
             let body = ast.child_by_field_name("body").expect("loop without body");
-            let body_exits = build_sub(body, &[header], g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
+            let body_exits = build_sub(
+                body,
+                &[header],
+                g,
+                lang,
+                code,
+                summaries,
+                file_path,
+                enclosing_func,
+                call_ordinal,
+            );
 
             // Back-edge from every linear exit to header
             for &e in &body_exits {
@@ -537,7 +714,17 @@ fn build_sub<'a>(
                 })
                 .expect("loop without body");
 
-            let body_exits = build_sub(body, &[header], g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
+            let body_exits = build_sub(
+                body,
+                &[header],
+                g,
+                lang,
+                code,
+                summaries,
+                file_path,
+                enclosing_func,
+                call_ordinal,
+            );
 
             // Back‑edge for every linear exit → header.
             for &e in &body_exits {
@@ -584,8 +771,39 @@ fn build_sub<'a>(
         Kind::SourceFile | Kind::Block => {
             let mut cursor = ast.walk();
             let mut frontier = preds.to_vec();
+            // Track the last frontier before a function emptied it — used to
+            // keep subsequent functions reachable.
+            let mut last_live_frontier = preds.to_vec();
             for child in ast.children(&mut cursor) {
-                frontier = build_sub(child, &frontier, g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
+                let child_is_fn = lookup(lang, child.kind()) == Kind::Function;
+
+                // At module / source-file level, each function definition is an
+                // independent entry point — it must always be reachable from the
+                // file-level predecessors.  Without this, a preceding function
+                // that ends with `return` (frontier = []) would leave subsequent
+                // functions disconnected from the graph.
+                let child_preds = if child_is_fn && frontier.is_empty() {
+                    last_live_frontier.clone()
+                } else {
+                    frontier.clone()
+                };
+
+                let child_exits = build_sub(
+                    child,
+                    &child_preds,
+                    g,
+                    lang,
+                    code,
+                    summaries,
+                    file_path,
+                    enclosing_func,
+                    call_ordinal,
+                );
+
+                if !child_exits.is_empty() {
+                    last_live_frontier = child_exits.clone();
+                }
+                frontier = child_exits;
             }
             frontier
         }
@@ -614,7 +832,17 @@ fn build_sub<'a>(
             // 2) build its body with a fresh call ordinal counter for this function scope
             let body = ast.child_by_field_name("body").expect("fn w/o body");
             let mut fn_call_ordinal: u32 = 0;
-            let body_exits = build_sub(body, &[entry_idx], g, lang, code, summaries, file_path, Some(&fn_name), &mut fn_call_ordinal);
+            let body_exits = build_sub(
+                body,
+                &[entry_idx],
+                g,
+                lang,
+                code,
+                summaries,
+                file_path,
+                Some(&fn_name),
+                &mut fn_call_ordinal,
+            );
 
             // ───── 3) light-weight dataflow ──────────────────────────────────────
             //
@@ -632,8 +860,7 @@ fn build_sub<'a>(
             let mut callees = Vec::<String>::new();
             let mut tainted_sink_params: Vec<usize> = Vec::new();
 
-            let param_set: HashSet<&str> =
-                param_names.iter().map(|s| s.as_str()).collect();
+            let param_set: HashSet<&str> = param_names.iter().map(|s| s.as_str()).collect();
 
             for idx in g.node_indices() {
                 let info = &g[idx];
@@ -773,8 +1000,26 @@ fn build_sub<'a>(
                 enclosing_func: Some(fn_name.clone()),
                 call_ordinal: 0,
             });
+            // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
                 connect_all(g, &[b], exit_idx, EdgeKind::Seq);
+            }
+            // Also wire any Return nodes inside the function to the exit
+            // node.  `build_sub` for Kind::Return returns Vec::new() (no
+            // exits), so those nodes are dead-ends in the graph.  Without
+            // this edge, the synthetic exit node is unreachable whenever
+            // the function body ends with a `return` statement, which
+            // disconnects all subsequent functions at the module level.
+            for idx in g.node_indices() {
+                let info = &g[idx];
+                if info.kind == StmtKind::Return
+                    && info.span.0 >= ast.start_byte()
+                    && info.span.1 <= ast.end_byte()
+                    && idx != exit_idx
+                    && !g.contains_edge(idx, exit_idx)
+                {
+                    connect_all(g, &[idx], exit_idx, EdgeKind::Seq);
+                }
             }
 
             /* ───── 5) store the rich summary ──────────────────────────────────── */
@@ -784,18 +1029,21 @@ fn build_sub<'a>(
                 name: fn_name.clone(),
                 arity: Some(param_count),
             };
-            summaries.insert(key, LocalFuncSummary {
-                entry: entry_idx,
-                exit: exit_idx,
-                source_caps: fn_src_bits,
-                sanitizer_caps: fn_sani_bits,
-                sink_caps: fn_sink_bits,
-                param_count,
-                param_names,
-                propagates_taint: propagates,
-                tainted_sink_params,
-                callees,
-            });
+            summaries.insert(
+                key,
+                LocalFuncSummary {
+                    entry: entry_idx,
+                    exit: exit_idx,
+                    source_caps: fn_src_bits,
+                    sanitizer_caps: fn_sani_bits,
+                    sink_caps: fn_sink_bits,
+                    param_count,
+                    param_names,
+                    propagates_taint: propagates,
+                    tainted_sink_params,
+                    callees,
+                },
+            );
 
             vec![exit_idx]
         }
@@ -810,7 +1058,17 @@ fn build_sub<'a>(
                     Kind::InfiniteLoop | Kind::While | Kind::For | Kind::If
                 )
             }) {
-                return build_sub(inner, preds, g, lang, code, summaries, file_path, enclosing_func, call_ordinal);
+                return build_sub(
+                    inner,
+                    preds,
+                    g,
+                    lang,
+                    code,
+                    summaries,
+                    file_path,
+                    enclosing_func,
+                    call_ordinal,
+                );
             }
 
             let has_call = has_call_descendant(ast, lang);

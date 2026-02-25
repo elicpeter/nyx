@@ -8,7 +8,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
-        matchers: &["http.Request"],
+        matchers: &["http.Request", "r.FormValue", "r.URL"],
         label: DataLabel::Source(Cap::all()),
     },
     // ───────── Sanitizers ──────────

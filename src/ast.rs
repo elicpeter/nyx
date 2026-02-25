@@ -1,4 +1,5 @@
 use crate::cfg::{build_cfg, export_summaries};
+use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
 use crate::patterns::Severity;
@@ -56,16 +57,17 @@ fn is_binary(bytes: &[u8]) -> bool {
 //  Pass 1: Extract function summaries (no taint analysis)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Parse a single file and return the [`FuncSummary`] for every function it
-/// defines.  This is the **pass 1** entry point used during two‑pass scanning.
+/// Extract function summaries from pre-read bytes.
 ///
-/// Returns an empty `Vec` for unsupported languages or binary files.
-pub(crate) fn extract_summaries_from_file(
+/// This is the core **pass 1** implementation. Callers that already hold the
+/// file contents should use this variant to avoid a redundant `fs::read`.
+pub fn extract_summaries_from_bytes(
+    bytes: &[u8],
     path: &Path,
     _cfg: &Config,
 ) -> NyxResult<Vec<FuncSummary>> {
-    let bytes = std::fs::read(path)?;
-    if is_binary(&bytes) {
+    let _span = tracing::debug_span!("extract_summaries", file = %path.display()).entered();
+    if is_binary(bytes) {
         return Ok(vec![]);
     }
 
@@ -77,12 +79,12 @@ pub(crate) fn extract_summaries_from_file(
         let mut parser = cell.borrow_mut();
         parser.set_language(&ts_lang)?;
         parser
-            .parse(&*bytes, None)
+            .parse(bytes, None)
             .ok_or_else(|| NyxError::Other("tree-sitter failed".into()))
     })?;
 
     let file_path_str = path.to_string_lossy();
-    let (_cfg_graph, _entry, local_summaries) = build_cfg(&tree, &bytes, lang_slug, &file_path_str);
+    let (_cfg_graph, _entry, local_summaries) = build_cfg(&tree, bytes, lang_slug, &file_path_str);
 
     Ok(export_summaries(
         &local_summaries,
@@ -91,24 +93,31 @@ pub(crate) fn extract_summaries_from_file(
     ))
 }
 
+/// Convenience wrapper that reads the file then delegates to
+/// [`extract_summaries_from_bytes`].
+pub fn extract_summaries_from_file(path: &Path, cfg: &Config) -> NyxResult<Vec<FuncSummary>> {
+    let bytes = std::fs::read(path)?;
+    extract_summaries_from_bytes(&bytes, path, cfg)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Pass 2 / single‑file: Full rule execution (AST queries + taint)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Run all enabled analyses on a single file and return diagnostics.
+/// Run all enabled analyses on pre-read bytes and return diagnostics.
 ///
-/// * `global_summaries` — pass `None` for single‑file / pass‑1 mode, or
-///   `Some(&map)` for cross‑file pass‑2 analysis.
-pub(crate) fn run_rules_on_file(
+/// This is the core **pass 2** implementation. Callers that already hold the
+/// file contents should use this variant to avoid a redundant `fs::read`.
+pub fn run_rules_on_bytes(
+    bytes: &[u8],
     path: &Path,
     cfg: &Config,
     global_summaries: Option<&GlobalSummaries>,
     scan_root: Option<&Path>,
 ) -> NyxResult<Vec<Diag>> {
-    tracing::debug!("Running rules on: {}", path.display());
-    let bytes = std::fs::read(path)?;
+    let _span = tracing::debug_span!("run_rules", file = %path.display()).entered();
 
-    if is_binary(&bytes) {
+    if is_binary(bytes) {
         return Ok(vec![]);
     }
 
@@ -120,24 +129,37 @@ pub(crate) fn run_rules_on_file(
         let mut parser = cell.borrow_mut();
         parser.set_language(&ts_lang)?;
         parser
-            .parse(&*bytes, None)
+            .parse(bytes, None)
             .ok_or_else(|| NyxError::Other("tree-sitter failed".into()))
     })?;
 
     let mut out = Vec::new();
+    let file_path_str = path.to_string_lossy();
 
-    if cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Taint {
-        tracing::debug!("Running taint analysis on: {}", path.display());
-        let file_path_str = path.to_string_lossy();
-        let (cfg_graph, entry, summaries) = build_cfg(&_tree, &bytes, lang_slug, &file_path_str);
-        tracing::debug!("Func summaries: {:?}", summaries);
+    // CFG construction + taint + cfg_analysis only needed for Full/Taint modes.
+    let needs_cfg =
+        cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Taint;
+
+    if needs_cfg {
+        // Build CFG — needed for both taint analysis and CFG structural analyses.
+        let (cfg_graph, entry, summaries) = build_cfg(&_tree, bytes, lang_slug, &file_path_str);
         let caller_lang = Lang::from_slug(lang_slug).unwrap_or(Lang::Rust);
+
+        // ── Taint analysis ──────────────────────────────────────────────
+        tracing::debug!("Running taint analysis on: {}", path.display());
+        tracing::debug!("Func summaries: {:?}", summaries);
         let scan_root_str = scan_root.map(|p| p.to_string_lossy());
-        let namespace = normalize_namespace(
-            &file_path_str,
-            scan_root_str.as_deref(),
+        let namespace = normalize_namespace(&file_path_str, scan_root_str.as_deref());
+        let taint_results = analyse_file(
+            &cfg_graph,
+            entry,
+            &summaries,
+            global_summaries,
+            caller_lang,
+            &namespace,
+            &[],
         );
-        for finding in analyse_file(&cfg_graph, entry, &summaries, global_summaries, caller_lang, &namespace, &[]) {
+        for finding in &taint_results {
             // Report the SINK location — where the vulnerability manifests.
             let sink_byte = cfg_graph[finding.sink].span.0;
             let sink_point = byte_offset_to_point(&_tree, sink_byte);
@@ -160,6 +182,28 @@ pub(crate) fn run_rules_on_file(
                 ),
             });
         }
+
+        // ── CFG structural analyses ─────────────────────────────────────
+        let cfg_ctx = cfg_analysis::AnalysisContext {
+            cfg: &cfg_graph,
+            entry,
+            lang: caller_lang,
+            file_path: &file_path_str,
+            source_bytes: bytes,
+            func_summaries: &summaries,
+            global_summaries,
+            taint_findings: &taint_results,
+        };
+        for cf in cfg_analysis::run_all(&cfg_ctx) {
+            let point = byte_offset_to_point(&_tree, cf.span.0);
+            out.push(Diag {
+                path: path.to_string_lossy().into_owned(),
+                line: point.row + 1,
+                col: point.column + 1,
+                severity: cf.severity,
+                id: cf.rule_id,
+            });
+        }
     }
 
     if cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Ast {
@@ -172,7 +216,7 @@ pub(crate) fn run_rules_on_file(
             if cfg.scanner.min_severity <= cq.meta.severity {
                 continue;
             }
-            let mut matches = cursor.matches(&cq.query, root, &*bytes);
+            let mut matches = cursor.matches(&cq.query, root, bytes);
             while let Some(m) = matches.next() {
                 if let Some(cap) = m.captures.iter().find(|c| c.index == 0) {
                     let point = cap.node.start_position();
@@ -189,14 +233,24 @@ pub(crate) fn run_rules_on_file(
     }
 
     // Check to ensure no duplicates
-    out.sort_by(|a, b| {
-        (a.line, a.col, &a.id, a.severity).cmp(&(b.line, b.col, &b.id, b.severity))
-    });
+    out.sort_by(|a, b| (a.line, a.col, &a.id, a.severity).cmp(&(b.line, b.col, &b.id, b.severity)));
     out.dedup_by(|a, b| {
         a.line == b.line && a.col == b.col && a.id == b.id && a.severity == b.severity
     });
 
     Ok(out)
+}
+
+/// Convenience wrapper that reads the file then delegates to
+/// [`run_rules_on_bytes`].
+pub fn run_rules_on_file(
+    path: &Path,
+    cfg: &Config,
+    global_summaries: Option<&GlobalSummaries>,
+    scan_root: Option<&Path>,
+) -> NyxResult<Vec<Diag>> {
+    let bytes = std::fs::read(path)?;
+    run_rules_on_bytes(&bytes, path, cfg, global_summaries, scan_root)
 }
 
 #[test]

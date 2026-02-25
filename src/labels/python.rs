@@ -8,7 +8,18 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
-        matchers: &["request.args", "request.form", "request.json", "input"],
+        matchers: &[
+            "request.args",
+            "request.form",
+            "request.json",
+            "request.headers",
+            "request.cookies",
+            "input",
+        ],
+        label: DataLabel::Source(Cap::all()),
+    },
+    LabelRule {
+        matchers: &["sys.argv"],
         label: DataLabel::Source(Cap::all()),
     },
     // ───────── Sanitizers ──────────
@@ -26,7 +37,19 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
     LabelRule {
-        matchers: &["os.system", "subprocess.call", "subprocess.run", "subprocess.Popen"],
+        matchers: &[
+            "os.system",
+            "os.popen",
+            "subprocess.call",
+            "subprocess.run",
+            "subprocess.Popen",
+            "subprocess.check_output",
+            "subprocess.check_call",
+        ],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["cursor.execute", "cursor.executemany"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
 ];

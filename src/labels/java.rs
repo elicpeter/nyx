@@ -8,7 +8,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
-        matchers: &["getParameter", "getInputStream"],
+        matchers: &["getParameter", "getInputStream", "getHeader", "getCookies"],
         label: DataLabel::Source(Cap::all()),
     },
     // ───────── Sanitizers ──────────

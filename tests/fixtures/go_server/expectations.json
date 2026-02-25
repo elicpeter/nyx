@@ -1,0 +1,18 @@
+{
+  "required_findings": [
+    { "id_prefix": "taint-unsanitised-flow", "min_count": 4 },
+    { "id_prefix": "exec_command", "min_count": 3 },
+    { "id_prefix": "cfg-unguarded-sink", "min_count": 1 }
+  ],
+  "forbidden_findings": [],
+  "noise_budget": {
+    "max_total_findings": 25,
+    "max_high_findings": 10
+  },
+  "performance_expectations": {
+    "max_ms_no_index": 1000,
+    "max_ms_index_cold": 1500,
+    "max_ms_index_warm": 500,
+    "ci_mode": "lenient"
+  }
+}

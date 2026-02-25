@@ -33,7 +33,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
     LabelRule {
-        matchers: &["println", "sink_html"],
+        matchers: &["sink_html"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
     },
 ];

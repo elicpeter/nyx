@@ -66,6 +66,7 @@ pub mod index {
 
     impl Indexer {
         pub fn init(database_path: &Path) -> NyxResult<Arc<Pool<SqliteConnectionManager>>> {
+            let _span = tracing::info_span!("db_init", path = %database_path.display()).entered();
             let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_FULL_MUTEX;
@@ -75,6 +76,10 @@ pub mod index {
             {
                 let conn = pool.get()?;
                 conn.pragma_update(None, "journal_mode", "WAL")?;
+                conn.pragma_update(None, "synchronous", "NORMAL")?;
+                conn.pragma_update(None, "cache_size", "-8000")?; // 8 MB
+                conn.pragma_update(None, "temp_store", "MEMORY")?;
+                conn.pragma_update(None, "mmap_size", "268435456")?; // 256 MB
                 conn.execute_batch(SCHEMA)?;
             }
             Ok(pool)
@@ -214,9 +219,7 @@ pub mod index {
         ) -> NyxResult<()> {
             let tx = self.conn.transaction()?;
             let path_str = file_path.to_string_lossy();
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)?
-                .as_secs() as i64;
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
             tx.execute(
                 "DELETE FROM function_summaries WHERE project = ?1 AND file_path = ?2",
@@ -251,9 +254,9 @@ pub mod index {
 
         /// Load every function summary for this project.
         pub fn load_all_summaries(&self) -> NyxResult<Vec<crate::summary::FuncSummary>> {
-            let mut stmt = self.c().prepare(
-                "SELECT summary FROM function_summaries WHERE project = ?1",
-            )?;
+            let mut stmt = self
+                .c()
+                .prepare("SELECT summary FROM function_summaries WHERE project = ?1")?;
 
             let iter = stmt.query_map([&self.project], |row| {
                 let json: String = row.get(0)?;

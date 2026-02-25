@@ -104,7 +104,10 @@ fn taint_killed_by_matching_sanitizer() {
 
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
-    assert!(findings.is_empty(), "matching sanitizer should kill the taint");
+    assert!(
+        findings.is_empty(),
+        "matching sanitizer should kill the taint"
+    );
 }
 
 #[test]
@@ -188,7 +191,11 @@ fn test_two_sources_one_sanitised() {
 
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
-    assert_eq!(findings.len(), 1, "only the unsanitised source should be flagged");
+    assert_eq!(
+        findings.len(),
+        1,
+        "only the unsanitised source should be flagged"
+    );
 }
 
 #[test]
@@ -217,7 +224,11 @@ fn test_two_sources_wrong_sanitiser_both_flagged() {
 
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs");
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
-    assert_eq!(findings.len(), 2, "both should be flagged — wrong sanitiser");
+    assert_eq!(
+        findings.len(),
+        2,
+        "both should be flagged — wrong sanitiser"
+    );
 }
 
 #[test]
@@ -284,7 +295,15 @@ fn cross_file_source_resolved_via_global_summaries() {
         },
     );
 
-    let findings = analyse_file(&cfg, entry, &local_summaries, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local_summaries,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
     assert_eq!(findings.len(), 1, "cross-file source should be detected");
 }
 
@@ -327,7 +346,15 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
         },
     );
 
-    let findings = analyse_file(&cfg, entry, &local_summaries, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local_summaries,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
     assert!(
         findings.is_empty(),
         "cross-file sanitizer should neutralise taint"
@@ -395,7 +422,15 @@ fn cross_file_sink_resolved_via_global_summaries() {
         },
     );
 
-    let findings = analyse_file(&cfg, entry, &local_summaries, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local_summaries,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
     assert_eq!(findings.len(), 1, "cross-file sink should be detected");
 }
 
@@ -428,7 +463,15 @@ fn multi_file_source_to_sink_detected() {
     let global = merge_summaries(summaries, None);
 
     let (cfg, entry, local) = parse_rust(caller_src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert_eq!(
         findings.len(),
@@ -468,7 +511,15 @@ fn multi_file_sanitizer_neutralises_cross_file_source() {
     let global = merge_summaries(summaries, None);
 
     let (cfg, entry, local) = parse_rust(caller_src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert!(
         findings.is_empty(),
@@ -506,7 +557,15 @@ fn multi_file_wrong_sanitizer_preserves_taint() {
     let global = merge_summaries(summaries, None);
 
     let (cfg, entry, local) = parse_rust(caller_src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert_eq!(
         findings.len(),
@@ -540,13 +599,17 @@ fn multi_file_sink_in_another_file() {
     let global = merge_summaries(summaries, None);
 
     let (cfg, entry, local) = parse_rust(caller_src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
-
-    assert_eq!(
-        findings.len(),
-        1,
-        "cross-file sink should be detected"
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
     );
+
+    assert_eq!(findings.len(), 1, "cross-file sink should be detected");
 }
 
 #[test]
@@ -589,7 +652,15 @@ fn multi_file_passthrough_preserves_taint() {
     "#;
 
     let (cfg, entry, local) = parse_rust(caller_src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert_eq!(
         findings.len(),
@@ -630,7 +701,15 @@ fn multi_file_chain_source_sanitize_sink_across_files() {
     let global = merge_summaries(summaries, None);
 
     let (cfg, entry, local) = parse_rust(caller_src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert!(
         findings.is_empty(),
@@ -645,15 +724,16 @@ fn multi_file_chain_source_sanitize_sink_across_files() {
 
 #[test]
 fn sanitizer_strips_only_matching_bits() {
-    // Source(ALL) → shell_escape → println (HTML sink).
+    // Source(ALL) → shell_escape → sink_html (HTML sink).
     // shell_escape strips SHELL_ESCAPE but not HTML_ESCAPE.
-    // println is an HTML sink — HTML_ESCAPE bit is still set → 1 finding.
+    // sink_html is an HTML sink — HTML_ESCAPE bit is still set → 1 finding.
     let src = br#"
         use std::env;
+        fn sink_html(s: &str) {}
         fn main() {
             let x = env::var("DANGEROUS").unwrap();
             let clean = shell_escape::unix::escape(&x);
-            println!("{}", clean);
+            sink_html(&clean);
         }
     "#;
 
@@ -775,7 +855,15 @@ fn local_summary_takes_precedence_over_global() {
     );
 
     let (cfg, entry, local) = parse_rust(caller_src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert_eq!(
         findings.len(),
@@ -798,7 +886,15 @@ fn empty_global_summaries_same_as_none() {
 
     let findings_none = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
     let empty = GlobalSummaries::new();
-    let findings_empty = analyse_file(&cfg, entry, &summaries, Some(&empty), Lang::Rust, "test.rs", &[]);
+    let findings_empty = analyse_file(
+        &cfg,
+        entry,
+        &summaries,
+        Some(&empty),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert_eq!(
         findings_none.len(),
@@ -868,7 +964,15 @@ fn source_and_sink_on_same_function() {
     "#;
 
     let (cfg, entry, local) = parse_rust(src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert_eq!(
         findings.len(),
@@ -941,7 +1045,15 @@ fn multiple_cross_file_sources_one_sanitised() {
     "#;
 
     let (cfg, entry, local) = parse_rust(src);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert_eq!(
         findings.len(),
@@ -955,7 +1067,11 @@ fn multiple_cross_file_sources_one_sanitised() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Parse source bytes for any supported language → (cfg, entry, local_summaries)
-fn parse_lang(src: &[u8], slug: &str, ts_lang: tree_sitter::Language) -> (Cfg, NodeIndex, FuncSummaries) {
+fn parse_lang(
+    src: &[u8],
+    slug: &str,
+    ts_lang: tree_sitter::Language,
+) -> (Cfg, NodeIndex, FuncSummaries) {
     use crate::cfg::build_cfg;
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
@@ -981,8 +1097,20 @@ fn js_source_to_sink() {
     let src = b"function main() {\n  let x = document.location();\n  eval(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
-    assert_eq!(findings.len(), 1, "JS: source->sink should produce 1 finding");
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "JS: source->sink should produce 1 finding"
+    );
 }
 
 #[test]
@@ -990,8 +1118,20 @@ fn ts_source_to_sink() {
     let src = b"function main() {\n  let x = document.location();\n  eval(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
     let (cfg, entry, summaries) = parse_lang(src, "typescript", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::TypeScript, "test.ts", &[]);
-    assert_eq!(findings.len(), 1, "TS: source->sink should produce 1 finding");
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &summaries,
+        None,
+        Lang::TypeScript,
+        "test.ts",
+        &[],
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "TS: source->sink should produce 1 finding"
+    );
 }
 
 #[test]
@@ -1000,16 +1140,25 @@ fn python_source_to_sink() {
     let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "python", lang);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Python, "test.py", &[]);
-    assert_eq!(findings.len(), 1, "Python: source->sink should produce 1 finding");
+    assert_eq!(
+        findings.len(),
+        1,
+        "Python: source->sink should produce 1 finding"
+    );
 }
 
 #[test]
 fn go_source_to_sink() {
-    let src = b"package main\n\nfunc main() {\n\tx := os.Getenv(\"SECRET\")\n\texec.Command(x)\n}\n";
+    let src =
+        b"package main\n\nfunc main() {\n\tx := os.Getenv(\"SECRET\")\n\texec.Command(x)\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "go", lang);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Go, "test.go", &[]);
-    assert_eq!(findings.len(), 1, "Go: source->sink should produce 1 finding");
+    assert_eq!(
+        findings.len(),
+        1,
+        "Go: source->sink should produce 1 finding"
+    );
 }
 
 #[test]
@@ -1018,7 +1167,11 @@ fn java_source_to_sink() {
     let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "java", lang);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Java, "test.java", &[]);
-    assert_eq!(findings.len(), 1, "Java: source->sink should produce 1 finding");
+    assert_eq!(
+        findings.len(),
+        1,
+        "Java: source->sink should produce 1 finding"
+    );
 }
 
 #[test]
@@ -1027,7 +1180,11 @@ fn c_source_to_sink() {
     let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "c", lang);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[]);
-    assert_eq!(findings.len(), 1, "C: source->sink should produce 1 finding");
+    assert_eq!(
+        findings.len(),
+        1,
+        "C: source->sink should produce 1 finding"
+    );
 }
 
 #[test]
@@ -1036,16 +1193,25 @@ fn cpp_source_to_sink() {
     let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "cpp", lang);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Cpp, "test.cpp", &[]);
-    assert_eq!(findings.len(), 1, "C++: source->sink should produce 1 finding");
+    assert_eq!(
+        findings.len(),
+        1,
+        "C++: source->sink should produce 1 finding"
+    );
 }
 
 #[test]
 fn php_source_to_sink() {
-    let src = b"<?php\nfunction main() {\n  $x = file_get_contents(\"secret\");\n  system($x);\n}\n?>";
+    let src =
+        b"<?php\nfunction main() {\n  $x = file_get_contents(\"secret\");\n  system($x);\n}\n?>";
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
     let (cfg, entry, summaries) = parse_lang(src, "php", lang);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Php, "test.php", &[]);
-    assert_eq!(findings.len(), 1, "PHP: source->sink should produce 1 finding");
+    assert_eq!(
+        findings.len(),
+        1,
+        "PHP: source->sink should produce 1 finding"
+    );
 }
 
 #[test]
@@ -1054,7 +1220,11 @@ fn ruby_source_to_sink() {
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "ruby", lang);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Ruby, "test.rb", &[]);
-    assert_eq!(findings.len(), 1, "Ruby: source->sink should produce 1 finding");
+    assert_eq!(
+        findings.len(),
+        1,
+        "Ruby: source->sink should produce 1 finding"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1094,7 +1264,15 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
     let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
 
     // Without interop: no cross-lang resolution
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::JavaScript, "main.js", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::JavaScript,
+        "main.js",
+        &[],
+    );
     assert!(findings.is_empty(), "No cross-lang without interop edge");
 
     // With interop edge
@@ -1115,8 +1293,20 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
         arg_map: vec![],
         ret_taints: true,
     }];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::JavaScript, "main.js", &edges);
-    assert_eq!(findings.len(), 1, "Python source → JS sink via interop edge");
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::JavaScript,
+        "main.js",
+        &edges,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "Python source → JS sink via interop edge"
+    );
 }
 
 // ── Scenario 2: Go source function → Python sink via interop ─────────────
@@ -1125,7 +1315,8 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
     use crate::interop::CallSiteKey;
     use crate::summary::merge_summaries;
 
-    let go_src = b"package main\n\nfunc fetch_env() string {\n\tx := os.Getenv(\"SECRET\")\n\treturn x\n}\n";
+    let go_src =
+        b"package main\n\nfunc fetch_env() string {\n\tx := os.Getenv(\"SECRET\")\n\treturn x\n}\n";
     let go_lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
     let go_summaries = extract_lang_summaries(go_src, "go", go_lang, "lib.go");
     let global = merge_summaries(go_summaries, None);
@@ -1135,7 +1326,15 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
     let (cfg, entry, local) = parse_lang(py_src, "python", py_lang);
 
     // Without interop: no findings
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Python, "main.py", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Python,
+        "main.py",
+        &[],
+    );
     assert!(findings.is_empty(), "No cross-lang without interop");
 
     // With interop
@@ -1156,7 +1355,15 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
         arg_map: vec![],
         ret_taints: true,
     }];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Python, "main.py", &edges);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Python,
+        "main.py",
+        &edges,
+    );
     assert_eq!(findings.len(), 1, "Go source → Python sink via interop");
 }
 
@@ -1197,7 +1404,15 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
         arg_map: vec![],
         ret_taints: true,
     }];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::JavaScript, "main.js", &edges);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::JavaScript,
+        "main.js",
+        &edges,
+    );
     assert!(
         findings.is_empty(),
         "Rust SHELL_ESCAPE sanitizer should neutralise taint via interop"
@@ -1236,7 +1451,15 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
         arg_map: vec![],
         ret_taints: false,
     }];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Java, "Main.java", &edges);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Java,
+        "Main.java",
+        &edges,
+    );
     assert_eq!(findings.len(), 1, "Java source → C sink via interop");
 }
 
@@ -1326,7 +1549,15 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
             ret_taints: false,
         },
     ];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Go, "main.go", &edges);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Go,
+        "main.go",
+        &edges,
+    );
     assert!(
         findings.is_empty(),
         "source(Py) → sanitizer(Rs) → sink(C) via interop should be safe; got {} findings",
@@ -1392,8 +1623,20 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
             ret_taints: false,
         },
     ];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Go, "main.go", &edges);
-    assert_eq!(findings.len(), 1, "source(Py) → sink(C) without sanitizer via interop");
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Go,
+        "main.go",
+        &edges,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "source(Py) → sink(C) without sanitizer via interop"
+    );
 }
 
 // ── Scenario 7: Name collision across languages stays separate ───────────
@@ -1421,7 +1664,10 @@ fn cross_lang_name_collision_stays_separate() {
         callees: vec![],
     };
 
-    let all_sums: Vec<_> = py_sums.into_iter().chain(std::iter::once(c_summary)).collect();
+    let all_sums: Vec<_> = py_sums
+        .into_iter()
+        .chain(std::iter::once(c_summary))
+        .collect();
     let global = merge_summaries(all_sums, None);
 
     // Verify they are stored under different FuncKeys
@@ -1432,7 +1678,10 @@ fn cross_lang_name_collision_stays_separate() {
 
     // Python's source_caps should NOT bleed into C
     assert!(py_matches[0].1.source_caps != 0, "Python has source caps");
-    assert_eq!(c_matches[0].1.source_caps, 0, "C should NOT get Python's source caps");
+    assert_eq!(
+        c_matches[0].1.source_caps, 0,
+        "C should NOT get Python's source caps"
+    );
 }
 
 // ── Scenario 8: Ruby passthrough in JS via interop ───────────────────────
@@ -1481,8 +1730,20 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
         arg_map: vec![],
         ret_taints: true,
     }];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::JavaScript, "main.js", &edges);
-    assert_eq!(findings.len(), 1, "taint should propagate through cross-lang passthrough via interop");
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::JavaScript,
+        "main.js",
+        &edges,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "taint should propagate through cross-lang passthrough via interop"
+    );
 }
 
 // ── Scenario 9: PHP source → Go sink via interop ─────────────────────────
@@ -1528,7 +1789,15 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
         arg_map: vec![],
         ret_taints: true,
     }];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Go, "main.go", &edges);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Go,
+        "main.go",
+        &edges,
+    );
     assert_eq!(findings.len(), 1, "PHP source → Go sink via interop");
 }
 
@@ -1579,8 +1848,20 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
         arg_map: vec![],
         ret_taints: true,
     }];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::JavaScript, "main.js", &edges);
-    assert_eq!(findings.len(), 1, "wrong cross-language sanitizer should NOT neutralise");
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::JavaScript,
+        "main.js",
+        &edges,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "wrong cross-language sanitizer should NOT neutralise"
+    );
 }
 
 // ── Scenario 11: Summary lang field preserved (different FuncKeys) ───────
@@ -1624,9 +1905,15 @@ fn cross_lang_summary_preserves_lang_metadata() {
 
     assert_eq!(py_matches.len(), 1, "Python helper stored separately");
     assert_eq!(js_matches.len(), 1, "JS helper stored separately");
-    assert!(py_matches[0].1.source_caps != 0, "Python source caps preserved");
+    assert!(
+        py_matches[0].1.source_caps != 0,
+        "Python source caps preserved"
+    );
     assert!(js_matches[0].1.sink_caps != 0, "JS sink caps preserved");
-    assert!(js_matches[0].1.propagates_taint, "JS propagates_taint preserved");
+    assert!(
+        js_matches[0].1.propagates_taint,
+        "JS propagates_taint preserved"
+    );
 }
 
 // ── Scenario 12: Full pipeline Python lib + JS caller via interop ────────
@@ -1689,8 +1976,20 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
             ret_taints: false,
         },
     ];
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Go, "main.go", &edges);
-    assert_eq!(findings.len(), 1, "Python source → JS sink via Go caller via interop");
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Go,
+        "main.go",
+        &edges,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "Python source → JS sink via Go caller via interop"
+    );
 }
 
 // ── New tests: ambiguous resolution, interop edge specificity ────────────
@@ -1808,7 +2107,15 @@ fn exact_namespace_match_wins() {
 
     let (cfg, entry, local) = parse_rust(src);
     // caller_namespace = "test.rs" matches the source version
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+    );
 
     assert_eq!(
         findings.len(),
@@ -1849,7 +2156,7 @@ fn interop_edge_wrong_caller_lang_no_match() {
     // Edge specifies Python caller, but we're calling from JavaScript
     let edges = vec![InteropEdge {
         from: CallSiteKey {
-            caller_lang: Lang::Python,  // wrong!
+            caller_lang: Lang::Python, // wrong!
             caller_namespace: "main.js".into(),
             caller_func: "main".into(),
             callee_symbol: "get_data".into(),
@@ -1863,9 +2170,20 @@ fn interop_edge_wrong_caller_lang_no_match() {
     let js_src = b"function main() {\n  let x = get_data();\n  eval(x);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
     let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
-    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::JavaScript, "main.js", &edges);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &local,
+        Some(&global),
+        Lang::JavaScript,
+        "main.js",
+        &edges,
+    );
 
-    assert!(findings.is_empty(), "Edge for wrong caller_lang should not match");
+    assert!(
+        findings.is_empty(),
+        "Edge for wrong caller_lang should not match"
+    );
 }
 
 #[test]
@@ -1891,7 +2209,10 @@ fn return_call_recognized_as_source() {
     let (_, _, summaries) = build_cfg(&tree, src, "rust", "test.rs");
     let exported = export_summaries(&summaries, "test.rs", "rust");
 
-    let foo = exported.iter().find(|s| s.name == "foo").expect("foo should exist");
+    let foo = exported
+        .iter()
+        .find(|s| s.name == "foo")
+        .expect("foo should exist");
     assert!(
         foo.source_caps != 0,
         "foo() should have source_caps set because env::var is called inside return"

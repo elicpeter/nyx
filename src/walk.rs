@@ -1,12 +1,12 @@
+use crate::utils::Config;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use ignore::{WalkBuilder, WalkState, overrides::OverrideBuilder};
+use std::thread::JoinHandle;
 use std::{
     mem,
     path::{Path, PathBuf},
     thread,
 };
-use std::thread::JoinHandle;
-use crate::utils::Config;
 
 // ---------------------------------------------------------------------------
 // Internal constants / helpers
@@ -71,6 +71,7 @@ fn build_overrides(root: &Path, cfg: &Config) -> ignore::overrides::Override {
 // ---------------------------------------------------------------------------
 /// Walk `root` and send *batches* of paths through the returned channel.
 pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHandle<()>) {
+    let _span = tracing::info_span!("spawn_file_walker", root = %root.display()).entered();
     let overrides = build_overrides(root, cfg);
 
     // ----- 2  channel & thread pool parameters -----------------------------
@@ -113,7 +114,7 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
                     if let Ok(e) = entry {
                         let is_file = e.file_type().is_some_and(|ft| ft.is_file());
                         let under_limit = max_bytes == 0
-                          || e.metadata().map(|m| m.len() <= max_bytes).unwrap_or(true);
+                            || e.metadata().map(|m| m.len() <= max_bytes).unwrap_or(true);
 
                         if is_file && under_limit {
                             bs.push_path(e.into_path());
@@ -124,7 +125,7 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
             });
         tracing::info!("directory walk complete");
     });
-    
+
     (rx, handle)
 }
 

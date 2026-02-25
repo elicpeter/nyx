@@ -62,7 +62,9 @@ fn resolve_callee(
     // 1) Local (same-file): scan local summaries for matching name + lang + namespace
     let local_matches: Vec<_> = local
         .iter()
-        .filter(|(k, _)| k.name == callee && k.lang == caller_lang && k.namespace == caller_namespace)
+        .filter(|(k, _)| {
+            k.name == callee && k.lang == caller_lang && k.namespace == caller_namespace
+        })
         .collect();
 
     if local_matches.len() == 1 {
@@ -245,8 +247,10 @@ fn apply_taint(
     }
 
     // Default gen/kill: propagate taint through variable assignments
-    if !matches!(node.label, Some(DataLabel::Source(_)) | Some(DataLabel::Sanitizer(_)))
-        && let Some(d) = &node.defines
+    if !matches!(
+        node.label,
+        Some(DataLabel::Source(_)) | Some(DataLabel::Sanitizer(_))
+    ) && let Some(d) = &node.defines
     {
         let mut combined = Cap::empty();
         for u in &node.uses {
@@ -326,16 +330,18 @@ pub fn analyse_file(
                 cfg[node]
                     .callee
                     .as_ref()
-                    .and_then(|c| resolve_callee(
-                        c,
-                        caller_lang,
-                        caller_namespace,
-                        caller_func,
-                        cfg[node].call_ordinal,
-                        local_summaries,
-                        global_summaries,
-                        interop_edges,
-                    ))
+                    .and_then(|c| {
+                        resolve_callee(
+                            c,
+                            caller_lang,
+                            caller_namespace,
+                            caller_func,
+                            cfg[node].call_ordinal,
+                            local_summaries,
+                            global_summaries,
+                            interop_edges,
+                        )
+                    })
                     .filter(|r| !r.sink_caps.is_empty())
                     .map(|r| r.sink_caps)
                     .unwrap_or(Cap::empty())
@@ -343,10 +349,10 @@ pub fn analyse_file(
         };
 
         if !sink_caps.is_empty() {
-            let bad = cfg[node].uses.iter().any(|u| {
-                out.get(u)
-                    .is_some_and(|b| (*b & sink_caps) != Cap::empty())
-            });
+            let bad = cfg[node]
+                .uses
+                .iter()
+                .any(|u| out.get(u).is_some_and(|b| (*b & sink_caps) != Cap::empty()));
             if bad {
                 // Reconstruct path backwards from sink to source.
                 //
@@ -372,17 +378,16 @@ pub fn analyse_file(
                     let prev_caller_func = cfg[prev].enclosing_func.as_deref().unwrap_or("");
                     if cfg[prev].kind == StmtKind::Call
                         && let Some(callee) = &cfg[prev].callee
-                        && let Some(resolved) =
-                            resolve_callee(
-                                callee,
-                                caller_lang,
-                                caller_namespace,
-                                prev_caller_func,
-                                cfg[prev].call_ordinal,
-                                local_summaries,
-                                global_summaries,
-                                interop_edges,
-                            )
+                        && let Some(resolved) = resolve_callee(
+                            callee,
+                            caller_lang,
+                            caller_namespace,
+                            prev_caller_func,
+                            cfg[prev].call_ordinal,
+                            local_summaries,
+                            global_summaries,
+                            interop_edges,
+                        )
                         && !resolved.source_caps.is_empty()
                     {
                         source_node = prev;

@@ -50,10 +50,7 @@ fn normalize_strips_root() {
 
 #[test]
 fn normalize_fallback_on_no_root() {
-    assert_eq!(
-        normalize_namespace("test.rs", None),
-        "test.rs"
-    );
+    assert_eq!(normalize_namespace("test.rs", None), "test.rs");
 }
 
 #[test]

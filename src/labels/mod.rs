@@ -195,6 +195,31 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
         .unwrap_or(Kind::Other)
 }
 
+/// Case-insensitive suffix check (ASCII).
+#[inline]
+fn ends_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    let start = haystack.len() - needle.len();
+    haystack[start..]
+        .iter()
+        .zip(needle)
+        .all(|(h, n)| h.eq_ignore_ascii_case(n))
+}
+
+/// Case-insensitive prefix check (ASCII).
+#[inline]
+fn starts_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    haystack[..needle.len()]
+        .iter()
+        .zip(needle)
+        .all(|(h, n)| h.eq_ignore_ascii_case(n))
+}
+
 /// Try to classify a piece of syntax text.
 /// `lang` is the canonicalised language key ("rust", "javascript", ...).
 ///
@@ -203,22 +228,28 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
 /// greedy prefix like `sanitize_` from shadowing a more specific exact
 /// match like `sanitize_shell`.
 pub fn classify(lang: &str, text: &str) -> Option<DataLabel> {
-    let key = lang.to_ascii_lowercase();
-    let rules = REGISTRY.get(key.as_str())?;
-    let head = text.split(['(', '<']).next().unwrap_or("");
+    // Lang slugs are already lowercase; try direct lookup first to avoid
+    // allocating a lowercased copy.
+    let rules = REGISTRY.get(lang).or_else(|| {
+        let key = lang.to_ascii_lowercase();
+        REGISTRY.get(key.as_str())
+    })?;
 
-    let text_lc = head.trim().to_ascii_lowercase();
+    let head = text.split(['(', '<']).next().unwrap_or("");
+    let trimmed = head.trim().as_bytes();
 
     // Pass 1: exact / suffix matches (high confidence)
+    // Matchers are already lowercase &'static str, so we compare with
+    // case-insensitive byte helpers — zero heap allocations.
     for rule in *rules {
         for raw in rule.matchers {
-            let m = raw.to_ascii_lowercase();
-            if m.ends_with('_') {
+            let m = raw.as_bytes();
+            if m.last() == Some(&b'_') {
                 continue; // skip prefix matchers in pass 1
             }
-            if text_lc.ends_with(&m) {
-                let start = text_lc.len() - m.len();
-                let ok = start == 0 || matches!(text_lc.as_bytes()[start - 1], b'.' | b':');
+            if ends_with_ignore_case(trimmed, m) {
+                let start = trimmed.len() - m.len();
+                let ok = start == 0 || matches!(trimmed[start - 1], b'.' | b':');
                 if ok {
                     return Some(rule.label);
                 }
@@ -229,8 +260,8 @@ pub fn classify(lang: &str, text: &str) -> Option<DataLabel> {
     // Pass 2: prefix matches (catch-all, lower priority)
     for rule in *rules {
         for raw in rule.matchers {
-            let m = raw.to_ascii_lowercase();
-            if m.ends_with('_') && text_lc.starts_with(&m) {
+            let m = raw.as_bytes();
+            if m.last() == Some(&b'_') && starts_with_ignore_case(trimmed, m) {
                 return Some(rule.label);
             }
         }

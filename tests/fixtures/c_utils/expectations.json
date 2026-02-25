@@ -1,0 +1,23 @@
+{
+  "required_findings": [
+    { "id_prefix": "taint-unsanitised-flow", "min_count": 4 },
+    { "id_prefix": "strcpy_call", "min_count": 1 },
+    { "id_prefix": "strcat_call", "min_count": 1 },
+    { "id_prefix": "sprintf_call", "min_count": 4 },
+    { "id_prefix": "gets_call", "min_count": 1 },
+    { "id_prefix": "scanf_with_percent_s", "min_count": 1 },
+    { "id_prefix": "system_call", "min_count": 3 },
+    { "id_prefix": "cfg-unguarded-sink", "min_count": 5 }
+  ],
+  "forbidden_findings": [],
+  "noise_budget": {
+    "max_total_findings": 50,
+    "max_high_findings": 20
+  },
+  "performance_expectations": {
+    "max_ms_no_index": 1000,
+    "max_ms_index_cold": 1500,
+    "max_ms_index_warm": 500,
+    "ci_mode": "lenient"
+  }
+}

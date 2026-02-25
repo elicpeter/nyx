@@ -41,7 +41,6 @@ pub struct FuncSummary {
     pub lang: String,
 
     // ── Signature information ────────────────────────────────────────────
-
     /// Total number of parameters (including `self`/`&self` for methods).
     pub param_count: usize,
 
@@ -50,7 +49,6 @@ pub struct FuncSummary {
 
     // ── Taint behaviour ──────────────────────────────────────────────────
     // Stored as raw `u8` so serde doesn't need to know about `bitflags`.
-
     /// Caps this function **introduces** — i.e. the return value carries
     /// freshly‑tainted data even if no argument was tainted.
     pub source_caps: u8,
@@ -151,6 +149,7 @@ impl FuncSummary {
 ///
 /// A secondary index `(Lang, name)` supports fast lookup by language + name
 /// for same-language resolution in the taint engine.
+#[derive(Default)]
 pub struct GlobalSummaries {
     by_key: HashMap<FuncKey, FuncSummary>,
     by_lang_name: HashMap<(Lang, String), Vec<FuncKey>>,
@@ -158,10 +157,7 @@ pub struct GlobalSummaries {
 
 impl GlobalSummaries {
     pub fn new() -> Self {
-        Self {
-            by_key: HashMap::new(),
-            by_lang_name: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Insert or merge a summary.  If an exact `FuncKey` match exists,

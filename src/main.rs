@@ -1,5 +1,6 @@
 mod ast;
 mod cfg;
+mod cfg_analysis;
 mod cli;
 mod commands;
 mod database;

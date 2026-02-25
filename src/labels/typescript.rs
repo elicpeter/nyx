@@ -4,7 +4,16 @@ use phf::{Map, phf_map};
 pub static RULES: &[LabelRule] = &[
     // ─────────── Sources ───────────
     LabelRule {
-        matchers: &["document.location", "window.location", "req.body", "req.query", "req.params", "process.env"],
+        matchers: &[
+            "document.location",
+            "window.location",
+            "req.body",
+            "req.query",
+            "req.params",
+            "req.headers",
+            "req.cookies",
+            "process.env",
+        ],
         label: DataLabel::Source(Cap::all()),
     },
     // ───────── Sanitizers ──────────
@@ -26,7 +35,11 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
     },
     LabelRule {
-        matchers: &["child_process.exec", "child_process.execSync", "child_process.spawn"],
+        matchers: &[
+            "child_process.exec",
+            "child_process.execSync",
+            "child_process.spawn",
+        ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
 ];
