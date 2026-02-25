@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pattern test fixtures** -- positive and negative fixture files for all 10 languages under `tests/fixtures/patterns/<lang>/`.
 
 ### Changed
+- **Breaking**: Config and data directory changed from `dev.ecpeter23.nyx` to `nyx` (e.g. `~/Library/Application Support/nyx/` on macOS). Existing config files (`nyx.conf`, `nyx.local`) and SQLite indexes at the old path will not be picked up automatically — copy them to the new location or re-run `nyx scan` to regenerate.
 - **Improved diagnostic output formatting** — overhauled console renderer for a professional, security-tool-grade look:
   - Severity is now the strongest visual anchor: HIGH (bold red with ✖), MEDIUM (bold orange ⚠), LOW (muted blue-gray ●). Fewer colors, clearer hierarchy.
   - File paths rendered dim blue (never brighter than severity).

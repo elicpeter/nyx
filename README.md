@@ -6,7 +6,7 @@
 [![crates.io](https://img.shields.io/crates/v/nyx-scanner.svg)](https://crates.io/crates/nyx-scanner)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange)](https://www.rust-lang.org)
-[![CI](https://img.shields.io/github/actions/workflow/status/ecpeter23/nyx/ci.yml?branch=master)](https://github.com/ecpeter23/nyx/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/elicpeter/nyx/ci.yml?branch=master)](https://github.com/elicpeter/nyx/actions)
 </div>
 
 ---
@@ -58,7 +58,7 @@ $ cargo install nyx-scanner
 ```
 
 ### Install Github release
-1. Navigate to the [Releases](https://github.com/ecpeter23/nyx/releases) page of the repository.
+1. Navigate to the [Releases](https://github.com/elicpeter/nyx/releases) page of the repository.
 2. Download the appropriate binary for your system:
 
     ```nyx-x86_64-unknown-linux-gnu.zip``` for Linux
@@ -87,7 +87,7 @@ $ cargo install nyx-scanner
 ### Build from source
 
 ```bash
-$ git clone https://github.com/ecpeter23/nyx.git
+$ git clone https://github.com/elicpeter/nyx.git
 $ cd nyx
 $ cargo build --release
 # optional – copy the binary into PATH
@@ -240,8 +240,8 @@ Nyx merges a default configuration file (`nyx.conf`) with user overrides (`nyx.l
 | Platform | Directory |
 |---|---|
 | Linux | `~/.config/nyx/` |
-| macOS | `~/Library/Application Support/dev.ecpeter23.nyx/` |
-| Windows | `%APPDATA%\ecpeter23\nyx\config\` |
+| macOS | `~/Library/Application Support/nyx/` |
+| Windows | `%APPDATA%\elicpeter\nyx\config\` |
 
 Minimal example (`nyx.local`):
 
@@ -340,7 +340,25 @@ With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged
 | Rule updates | Remote rule feed with signature verification |
 | UX | Smart file-watch re-scan |
 
-Community feedback shapes priorities -- please [open an issue](https://github.com/ecpeter23/nyx/issues) to discuss proposed changes.
+Community feedback shapes priorities -- please [open an issue](https://github.com/elicpeter/nyx/issues) to discuss proposed changes.
+
+---
+
+## Documentation
+
+Full documentation is available in the [`docs/`](docs/index.md) directory:
+
+- [Installation](docs/installation.md) — cargo, binaries, CI tips
+- [Quick Start](docs/quickstart.md) — Your first scan in 60 seconds
+- [CLI Reference](docs/cli.md) — Every flag and subcommand
+- [Configuration](docs/configuration.md) — Config file schema, custom rules
+- [Output Formats](docs/output.md) — Console, JSON, SARIF; exit codes
+- [Detector Overview](docs/detectors.md) — How the four detector families work
+  - [Taint Analysis](docs/detectors/taint.md) — Cross-file source-to-sink dataflow
+  - [CFG Structural](docs/detectors/cfg.md) — Auth gaps, unguarded sinks, resource leaks
+  - [State Model](docs/detectors/state.md) — Resource lifecycle, authentication state
+  - [AST Patterns](docs/detectors/patterns.md) — Tree-sitter structural matching
+- [Rule Reference](docs/rules/index.md) — Per-language rule listings with examples
 
 ---
 
@@ -355,7 +373,7 @@ Pull requests are welcome. To contribute:
 
 Please open an issue for any crash, panic, or suspicious result -- attach the minimal code snippet and mention the Nyx version.
 
-See `CONTRIBUTING.md` for full guidelines.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full guidelines, including how to add new rules and support new languages.
 
 ---
 
