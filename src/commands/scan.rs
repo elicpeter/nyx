@@ -1,11 +1,10 @@
 pub(crate) use crate::ast::{
-    extract_summaries_from_bytes, extract_summaries_from_file, run_rules_on_bytes,
-    run_rules_on_file,
+    analyse_file_fused, extract_summaries_from_bytes, run_rules_on_bytes, run_rules_on_file,
 };
 use crate::database::index::{Indexer, IssueRow};
 use crate::errors::NyxResult;
 use crate::patterns::Severity;
-use crate::summary::{self, FuncSummary, GlobalSummaries};
+use crate::summary::{self, GlobalSummaries};
 use crate::utils::config::Config;
 use crate::utils::project::get_project_info;
 use crate::walk::spawn_file_walker;
@@ -65,8 +64,7 @@ pub fn handle(
         );
     }
 
-    let show_progress =
-        format != "json" && format != "sarif" && !config.output.quiet;
+    let show_progress = format != "json" && format != "sarif" && !config.output.quiet;
 
     let diags: Vec<Diag> = if no_index {
         scan_filesystem(&scan_path, config, show_progress)?
@@ -74,7 +72,11 @@ pub fn handle(
         if rebuild_index || !db_path.exists() {
             tracing::debug!("Scanning filesystem index filesystem");
             crate::commands::index::build_index(
-                &project_name, &scan_path, &db_path, config, show_progress,
+                &project_name,
+                &scan_path,
+                &db_path,
+                config,
+                show_progress,
             )?;
         }
 
@@ -155,32 +157,38 @@ pub(crate) fn scan_filesystem(
     let all_paths: Vec<PathBuf> = {
         let _span = tracing::info_span!("walk_files").entered();
         let (rx, handle) = spawn_file_walker(root, cfg);
+        // Drain the channel BEFORE joining the walker thread.
+        // The channel is bounded, so joining first would deadlock once
+        // the walker fills it and blocks on send.
+        let paths: Vec<PathBuf> = rx.into_iter().flatten().collect();
         if let Err(err) = handle.join() {
             tracing::error!("walker thread panicked: {:#?}", err);
         }
-        rx.into_iter().flatten().collect()
+        paths
     };
     tracing::info!(file_count = all_paths.len(), "file walk complete");
 
-    // ── Pass 1: extract summaries ────────────────────────────────────────
     let needs_taint = cfg.scanner.mode == crate::utils::config::AnalysisMode::Full
         || cfg.scanner.mode == crate::utils::config::AnalysisMode::Taint;
 
-    let global_summaries: Option<GlobalSummaries> = if needs_taint {
-        let _span = tracing::info_span!("pass1_summaries", files = all_paths.len()).entered();
-        let pb = make_progress_bar(
-            all_paths.len() as u64,
-            "Pass 1: Extracting summaries",
-            show_progress,
-        );
+    if !needs_taint {
+        // ── AST-only: single fused pass (no cross-file context needed) ──
+        let _span = tracing::info_span!("ast_only_analysis", files = all_paths.len()).entered();
+        let pb = make_progress_bar(all_paths.len() as u64, "Running analysis", show_progress);
 
-        let collected: Vec<FuncSummary> = all_paths
+        let mut diags: Vec<Diag> = all_paths
             .par_iter()
             .flat_map_iter(|path| {
-                let result = match extract_summaries_from_file(path, cfg) {
-                    Ok(sums) => sums,
+                let result = match analyse_file_fused(
+                    &std::fs::read(path).unwrap_or_default(),
+                    path,
+                    cfg,
+                    None,
+                    Some(root),
+                ) {
+                    Ok(r) => r.diags,
                     Err(e) => {
-                        tracing::warn!("pass 1: failed to summarise {}: {e}", path.display());
+                        tracing::warn!("analysis: {}: {e}", path.display());
                         vec![]
                     }
                 };
@@ -188,17 +196,71 @@ pub(crate) fn scan_filesystem(
                 result
             })
             .collect();
+        pb.finish_and_clear();
+
+        if let Some(max) = cfg.output.max_results {
+            diags.truncate(max as usize);
+        }
+        return Ok(diags);
+    }
+
+    // ── Taint mode: two-pass with fused pass 1 ──────────────────────────
+    //
+    // Pass 1 (fused): parse + CFG (once!) → extract summaries + run
+    //   AST queries + local taint + CFG structural analyses.
+    //   Summaries are collected for the cross-file merge.
+    //
+    // Pass 2: re-run full analysis with global summaries injected.
+    //   This requires a second parse+CFG, but ONLY for taint-mode files
+    //   that need cross-file context.  For repos where most functions
+    //   don't have unresolved callees, pass 1 results are already correct.
+
+    // ── Pass 1: fused summary extraction + parallel merge ──────────────
+    //
+    // Each rayon thread builds a local `GlobalSummaries` from its chunk,
+    // then the per-thread maps are merged in a binary reduce tree.
+    // This eliminates the serial merge_summaries bottleneck.
+    let global_summaries: GlobalSummaries = {
+        let _span = tracing::info_span!("pass1_fused", files = all_paths.len()).entered();
+        let pb = make_progress_bar(
+            all_paths.len() as u64,
+            "Pass 1: Extracting summaries",
+            show_progress,
+        );
+        let root_str = root.to_string_lossy();
+
+        let gs = all_paths
+            .par_iter()
+            .fold(GlobalSummaries::new, |mut local_gs, path| {
+                if let Ok(bytes) = std::fs::read(path) {
+                    match analyse_file_fused(&bytes, path, cfg, None, Some(root)) {
+                        Ok(r) => {
+                            for s in r.summaries {
+                                let key = s.func_key(Some(&root_str));
+                                local_gs.insert(key, s);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("pass 1: {}: {e}", path.display());
+                        }
+                    }
+                } else {
+                    tracing::warn!("pass 1: cannot read {}", path.display());
+                }
+                pb.inc(1);
+                local_gs
+            })
+            .reduce(GlobalSummaries::new, |mut a, b| {
+                a.merge(b);
+                a
+            });
 
         pb.finish_and_clear();
-        tracing::info!(summaries = collected.len(), "pass 1 complete");
-        let _merge_span = tracing::info_span!("merge_summaries").entered();
-        let root_str = root.to_string_lossy();
-        Some(summary::merge_summaries(collected, Some(&root_str)))
-    } else {
-        None
+        tracing::info!("pass 1 complete");
+        gs
     };
 
-    // ── Pass 2: full analysis with cross‑file context ────────────────────
+    // ── Pass 2: re-run with cross-file global summaries ──────────────────
     let mut diags: Vec<Diag> = {
         let _span = tracing::info_span!("pass2_analysis", files = all_paths.len()).entered();
         let pb = make_progress_bar(
@@ -207,17 +269,21 @@ pub(crate) fn scan_filesystem(
             show_progress,
         );
 
-        let result = all_paths
+        let result: Vec<Diag> = all_paths
             .par_iter()
-            .map(|path| {
-                let r = run_rules_on_file(path, cfg, global_summaries.as_ref(), Some(root));
+            .flat_map_iter(|path| {
+                let result = match run_rules_on_file(path, cfg, Some(&global_summaries), Some(root))
+                {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!("pass 2: {}: {e}", path.display());
+                        vec![]
+                    }
+                };
                 pb.inc(1);
-                r
+                result
             })
-            .try_reduce(Vec::new, |mut a, mut b| {
-                a.append(&mut b);
-                Ok(a)
-            })?;
+            .collect();
         pb.finish_and_clear();
         result
     };
@@ -271,16 +337,12 @@ pub fn scan_with_index_parallel(
         files.par_iter().for_each_init(
             || Indexer::from_pool(project, &pool).expect("db pool"),
             |idx, path| {
-                let needs_scan = idx.should_scan(path).unwrap_or(true);
-                if needs_scan {
-                    // Read once, hash once, extract summaries from bytes.
-                    if let Ok(bytes) = std::fs::read(path) {
-                        let hash = {
-                            let mut h = blake3::Hasher::new();
-                            h.update(&bytes);
-                            h.finalize().as_bytes().to_vec()
-                        };
-
+                // Read once, hash once — use the hash for the change check
+                // to avoid a second file read inside should_scan.
+                if let Ok(bytes) = std::fs::read(path) {
+                    let hash = Indexer::digest_bytes(&bytes);
+                    let needs_scan = idx.should_scan_with_hash(path, &hash).unwrap_or(true);
+                    if needs_scan {
                         match extract_summaries_from_bytes(&bytes, path, cfg) {
                             Ok(sums) => {
                                 idx.replace_summaries_for_file(path, &hash, &sums).ok();
@@ -289,9 +351,9 @@ pub fn scan_with_index_parallel(
                                 tracing::warn!("pass 1: {}: {e}", path.display());
                             }
                         }
-                    } else {
-                        tracing::warn!("pass 1: cannot read {}", path.display());
                     }
+                } else {
+                    tracing::warn!("pass 1: cannot read {}", path.display());
                 }
                 pb.inc(1);
             },
@@ -322,21 +384,37 @@ pub fn scan_with_index_parallel(
     files.into_par_iter().for_each_init(
         || Indexer::from_pool(project, &pool).expect("db pool"),
         |idx, path| {
+            // Read file once for both change-detection and analysis.
+            let bytes_opt = std::fs::read(&path).ok();
+            let hash = bytes_opt.as_ref().map(|b| Indexer::digest_bytes(b));
+
             // In pass 2 we always re-analyse when taint is enabled because
             // global summaries may have changed even if this file didn't.
             // For AST-only mode, we can still use the cached issues.
             let needs_scan = if needs_taint {
                 true // conservative: always re-analyse in taint mode
             } else {
-                idx.should_scan(&path).unwrap_or(true)
+                match (&hash, &bytes_opt) {
+                    (Some(h), _) => idx.should_scan_with_hash(&path, h).unwrap_or(true),
+                    _ => true,
+                }
             };
 
             let mut diags = if needs_scan {
-                let d = run_rules_on_file(&path, cfg, global_summaries.as_ref(), None)
-                    .unwrap_or_default();
+                let d = match &bytes_opt {
+                    Some(bytes) => {
+                        run_rules_on_bytes(bytes, &path, cfg, global_summaries.as_ref(), None)
+                            .unwrap_or_default()
+                    }
+                    None => run_rules_on_file(&path, cfg, global_summaries.as_ref(), None)
+                        .unwrap_or_default(),
+                };
 
-                // Persist issues + update file record
-                let file_id = idx.upsert_file(&path).unwrap_or_default();
+                // Persist issues + update file record (use pre-computed hash)
+                let file_id = match &hash {
+                    Some(h) => idx.upsert_file_with_hash(&path, h).unwrap_or_default(),
+                    None => idx.upsert_file(&path).unwrap_or_default(),
+                };
                 idx.replace_issues(
                     file_id,
                     d.iter().map(|d| IssueRow {
@@ -395,8 +473,14 @@ fn scan_with_index_parallel_uses_existing_index_without_rescanning() {
     std::fs::write(project_dir.join("foo.txt"), "abc").unwrap();
 
     let (project_name, db_path) = get_project_info(&project_dir, td.path()).unwrap();
-    crate::commands::index::build_index(&project_name, &project_dir, &db_path, &cfg, false)
-        .unwrap();
+    crate::commands::index::build_index(
+        &project_name,
+        &project_dir,
+        &db_path,
+        &cfg,
+        false,
+    )
+    .unwrap();
 
     let pool = Indexer::init(&db_path).unwrap();
 

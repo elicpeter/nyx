@@ -210,9 +210,7 @@ impl CfgAnalysis for UnguardedSink {
 
             // If sink args are all constants (no variable uses beyond the callee name
             // itself) and taint didn't confirm, this is a false positive — skip it.
-            let callee_parts: Vec<&str> = callee_desc
-                .split(['.', ':'])
-                .collect();
+            let callee_parts: Vec<&str> = callee_desc.split(['.', ':']).collect();
             let constant_args = sink_info
                 .uses
                 .iter()

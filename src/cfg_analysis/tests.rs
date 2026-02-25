@@ -1004,11 +1004,7 @@ def build():
     subprocess.run(["make", "clean"])
 "#;
 
-    let findings = parse_and_run_all(
-        src,
-        "python",
-        Language::from(tree_sitter_python::LANGUAGE),
-    );
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
 
     let unguarded: Vec<_> = findings
         .iter()
@@ -1030,11 +1026,7 @@ def check():
     subprocess.run(["git", "status"])
 "#;
 
-    let findings = parse_and_run_all(
-        src,
-        "python",
-        Language::from(tree_sitter_python::LANGUAGE),
-    );
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
 
     let unguarded: Vec<_> = findings
         .iter()
@@ -1059,17 +1051,12 @@ def run():
     os.system(cmd)
 "#;
 
-    let findings = parse_and_run_all(
-        src,
-        "python",
-        Language::from(tree_sitter_python::LANGUAGE),
-    );
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
 
     let sink_findings: Vec<_> = findings
         .iter()
         .filter(|f| {
-            f.rule_id == "cfg-unguarded-sink"
-                && f.severity == crate::patterns::Severity::High
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
         })
         .collect();
     assert!(
@@ -1090,11 +1077,7 @@ int main() {
 }
 "#;
 
-    let findings = parse_and_run_all(
-        src,
-        "cpp",
-        Language::from(tree_sitter_cpp::LANGUAGE),
-    );
+    let findings = parse_and_run_all(src, "cpp", Language::from(tree_sitter_cpp::LANGUAGE));
 
     let sink_findings: Vec<_> = findings
         .iter()
@@ -1118,11 +1101,7 @@ int main() {
 }
 "#;
 
-    let findings = parse_and_run_all(
-        src,
-        "c",
-        Language::from(tree_sitter_c::LANGUAGE),
-    );
+    let findings = parse_and_run_all(src, "c", Language::from(tree_sitter_c::LANGUAGE));
 
     let unguarded: Vec<_> = findings
         .iter()
@@ -1146,11 +1125,7 @@ int main() {
 }
 "#;
 
-    let findings = parse_and_run_all(
-        src,
-        "c",
-        Language::from(tree_sitter_c::LANGUAGE),
-    );
+    let findings = parse_and_run_all(src, "c", Language::from(tree_sitter_c::LANGUAGE));
 
     let sink_findings: Vec<_> = findings
         .iter()
@@ -1175,11 +1150,7 @@ fn main() {
 }
 "#;
 
-    let findings = parse_and_run_all(
-        src,
-        "rust",
-        Language::from(tree_sitter_rust::LANGUAGE),
-    );
+    let findings = parse_and_run_all(src, "rust", Language::from(tree_sitter_rust::LANGUAGE));
 
     let unreachable: Vec<_> = findings
         .iter()
@@ -1188,13 +1159,201 @@ fn main() {
     let unguarded_at_same_span: Vec<_> = findings
         .iter()
         .filter(|f| {
-            f.rule_id == "cfg-unguarded-sink"
-                && unreachable.iter().any(|u| u.span == f.span)
+            f.rule_id == "cfg-unguarded-sink" && unreachable.iter().any(|u| u.span == f.span)
         })
         .collect();
     assert!(
         unguarded_at_same_span.is_empty(),
         "cfg-unguarded-sink should be suppressed when cfg-unreachable-sink fires on same span; got {:?}",
         unguarded_at_same_span
+    );
+}
+
+// ─── Fix 3: Wrapper resource names (curlx_fopen/curlx_fclose) ──────
+
+#[test]
+fn curlx_fopen_with_curlx_fclose_no_leak() {
+    let src = br#"
+void process() {
+    FILE *fp = curlx_fopen("file.txt", "r");
+    curlx_fclose(fp);
+}
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "c",
+        Language::from(tree_sitter_c::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        leak_findings.is_empty(),
+        "curlx_fopen + curlx_fclose should not produce a resource leak; got {:?}",
+        leak_findings
+    );
+}
+
+// ─── Fix 4: freopen exclusion ───────────────────────────────────────
+
+#[test]
+fn freopen_not_treated_as_acquire() {
+    let src = br#"
+void redirect_stderr() {
+    freopen("/dev/null", "w", stderr);
+}
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "c",
+        Language::from(tree_sitter_c::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        leak_findings.is_empty(),
+        "freopen should not produce a resource leak finding; got {:?}",
+        leak_findings
+    );
+}
+
+// ─── Fix 5: Struct field ownership transfer ─────────────────────────
+
+#[test]
+fn struct_field_ownership_transfer_no_leak() {
+    let src = br#"
+void open_stream(struct session *s) {
+    FILE *fp = fopen("data.txt", "r");
+    s->stream = fp;
+    s->fopened = 1;
+}
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "c",
+        Language::from(tree_sitter_c::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        leak_findings.is_empty(),
+        "Struct field ownership transfer should suppress resource leak; got {:?}",
+        leak_findings
+    );
+}
+
+// ─── Fix 6: Linked-list / global insertion ──────────────────────────
+
+#[test]
+fn linked_list_insertion_no_leak() {
+    let src = br#"
+void add_var(struct config *cfg, const char *name) {
+    struct var *p = malloc(sizeof(struct var));
+    p->next = cfg->variables;
+    cfg->variables = p;
+}
+"#;
+
+    let findings = parse_and_analyse(
+        &resources::ResourceMisuse,
+        src,
+        "c",
+        Language::from(tree_sitter_c::LANGUAGE),
+    );
+
+    let leak_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-resource-leak")
+        .collect();
+    assert!(
+        leak_findings.is_empty(),
+        "Linked-list insertion should suppress resource leak; got {:?}",
+        leak_findings
+    );
+}
+
+// ─── Fix 2: Preproc dangling-else CFG recovery ─────────────────────
+
+#[test]
+fn preproc_ifdef_does_not_orphan_subsequent_code() {
+    // After a #ifdef block containing an if/else, subsequent code should
+    // still be reachable (no unreachable findings).
+    let src = br#"
+void process() {
+    int x = 1;
+#ifdef _WIN32
+    if (x) {
+        x = 2;
+    } else
+#endif
+    {
+        x = 3;
+    }
+    free(x);
+}
+"#;
+
+    let ts_lang = Language::from(tree_sitter_c::LANGUAGE);
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+    let (cfg, entry, _) = build_cfg(&tree, src, "c", "test.c", None);
+
+    let reachable = dominators::reachable_set(&cfg, entry);
+
+    // All nodes should be reachable — the preproc recovery should prevent
+    // the dangling-else from orphaning downstream code.
+    let unreachable_count = cfg.node_count() - reachable.len();
+    assert!(
+        unreachable_count == 0,
+        "Expected all nodes reachable after preproc block, but {} nodes are unreachable",
+        unreachable_count
+    );
+}
+
+// ─── Fix 1: Break in loop keeps post-loop code reachable ────────────
+
+#[test]
+fn break_in_loop_post_loop_reachable() {
+    let src = br#"
+void process() {
+    int x = 0;
+    while(1) {
+        if(x) break;
+        x = x + 1;
+    }
+    free(x);
+}
+"#;
+
+    let ts_lang = Language::from(tree_sitter_c::LANGUAGE);
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+    let (cfg, entry, _) = build_cfg(&tree, src, "c", "test.c", None);
+
+    let reachable = dominators::reachable_set(&cfg, entry);
+
+    // All nodes should be reachable — break exits the loop and post-loop
+    // code (free(x)) should be connected.
+    let unreachable_count = cfg.node_count() - reachable.len();
+    assert!(
+        unreachable_count == 0,
+        "Expected all nodes reachable after break in loop, but {} nodes are unreachable",
+        unreachable_count
     );
 }

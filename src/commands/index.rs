@@ -5,7 +5,6 @@ use crate::patterns::Severity;
 use crate::utils::Config;
 use crate::utils::project::get_project_info;
 use crate::walk::spawn_file_walker;
-use blake3;
 use bytesize::ByteSize;
 use chrono::{DateTime, Local};
 use console::style;
@@ -26,7 +25,13 @@ pub fn handle(
             let (project_name, db_path) = get_project_info(&build_path, database_dir)?;
 
             if force || !db_path.exists() {
-                build_index(&project_name, &build_path, &db_path, config, !config.output.quiet)?;
+                build_index(
+                    &project_name,
+                    &build_path,
+                    &db_path,
+                    config,
+                    !config.output.quiet,
+                )?;
                 println!(
                     "✔ {} {}",
                     style("Index built:").green(),
@@ -99,10 +104,12 @@ pub fn build_index(
     tracing::debug!("Cleaned index for: {}", project_name);
 
     let (rx, handle) = spawn_file_walker(project_path, config);
+    // Drain the channel BEFORE joining — the bounded channel will deadlock
+    // if we join first and the walker blocks on send.
+    let paths: Vec<PathBuf> = rx.into_iter().flatten().collect();
     if let Err(err) = handle.join() {
         tracing::error!("walker thread panicked: {:#?}", err);
     }
-    let paths: Vec<PathBuf> = rx.into_iter().flatten().collect();
 
     let pb = if show_progress {
         let pb = ProgressBar::new(paths.len() as u64);
@@ -125,18 +132,15 @@ pub fn build_index(
             let mut idx = Indexer::from_pool(project_name, &pool)?;
 
             // Read once, hash once — pass bytes to both rule execution and
-            // summary extraction.
+            // summary extraction.  Use pre-computed hash for upsert to avoid
+            // a redundant file read inside upsert_file.
             let bytes = std::fs::read(&path)?;
-            let hash = {
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(&bytes);
-                hasher.finalize().as_bytes().to_vec()
-            };
+            let hash = Indexer::digest_bytes(&bytes);
 
             // Run AST-only rules (no taint yet — summaries come later in scan)
             let issues =
                 crate::commands::scan::run_rules_on_bytes(&bytes, &path, config, None, None)?;
-            let file_id = idx.upsert_file(&path)?;
+            let file_id = idx.upsert_file_with_hash(&path, &hash)?;
 
             let rows: Vec<IssueRow> = issues
                 .iter()

@@ -1,7 +1,7 @@
 use crate::commands::scan::Diag;
 use crate::patterns::{self, Severity};
 use once_cell::sync::Lazy;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -36,12 +36,8 @@ fn cfg_rule_description(id: &str) -> Option<&'static str> {
         "cfg-error-fallthrough" => {
             Some("Error check does not terminate; dangerous call follows on error path")
         }
-        "cfg-resource-leak" => {
-            Some("Resource acquired but not released on all exit paths")
-        }
-        "cfg-lock-not-released" => {
-            Some("Lock acquired but not released on all exit paths")
-        }
+        "cfg-resource-leak" => Some("Resource acquired but not released on all exit paths"),
+        "cfg-lock-not-released" => Some("Lock acquired but not released on all exit paths"),
         _ => None,
     }
 }

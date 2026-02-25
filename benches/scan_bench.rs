@@ -88,11 +88,11 @@ fn bench_single_file_parse_and_cfg(c: &mut Criterion) {
 
 fn bench_classify(c: &mut Criterion) {
     c.bench_function("classify_hit", |b| {
-        b.iter(|| nyx_scanner::labels::classify("rust", "std::env::var"));
+        b.iter(|| nyx_scanner::labels::classify("rust", "std::env::var", None));
     });
 
     c.bench_function("classify_miss", |b| {
-        b.iter(|| nyx_scanner::labels::classify("rust", "some_random_function"));
+        b.iter(|| nyx_scanner::labels::classify("rust", "some_random_function", None));
     });
 }
 

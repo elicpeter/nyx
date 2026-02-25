@@ -68,9 +68,13 @@ pub mod index {
     impl Indexer {
         pub fn init(database_path: &Path) -> NyxResult<Arc<Pool<SqliteConnectionManager>>> {
             let _span = tracing::info_span!("db_init", path = %database_path.display()).entered();
+            // NO_MUTEX is safe because r2d2 ensures each pooled connection
+            // is only ever used by one thread at a time.  Combined with WAL
+            // mode this allows concurrent readers + a single writer without
+            // the global serialization that FULL_MUTEX causes.
             let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_FULL_MUTEX;
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX;
             let manager = SqliteConnectionManager::file(database_path).with_flags(flags);
             let pool = Arc::new(Pool::new(manager)?);
 
@@ -132,10 +136,13 @@ pub mod index {
         }
 
         /// Return true when the file *content* or *mtime* changed since the last scan.
+        ///
+        /// Short-circuits on mtime: if the stored mtime matches the
+        /// filesystem mtime, the file is assumed unchanged (skip hash).
+        #[allow(dead_code)] // used in tests and by should_scan_with_hash callers may fall back
         pub fn should_scan(&self, path: &Path) -> NyxResult<bool> {
             let meta = fs::metadata(path)?;
             let mtime = meta.modified()?.duration_since(UNIX_EPOCH)?.as_secs() as i64;
-            let digest = Self::digest_file(path)?;
 
             let row: Option<(Vec<u8>, i64)> = self
                 .conn
@@ -147,18 +154,56 @@ pub mod index {
                 .optional()?;
 
             Ok(match row {
-                Some((stored_hash, stored_mtime)) => stored_hash != digest || stored_mtime != mtime,
+                Some((stored_hash, stored_mtime)) => {
+                    if stored_mtime != mtime {
+                        // mtime changed — must re-scan
+                        true
+                    } else {
+                        // mtime matches — compare hash only if cheap
+                        // (the caller already read the file and can use
+                        // should_scan_with_hash instead for full accuracy)
+                        let digest = Self::digest_file(path)?;
+                        stored_hash != digest
+                    }
+                }
+                None => true,
+            })
+        }
+
+        /// Like [`should_scan`] but accepts a pre-computed hash to avoid
+        /// redundant file reads.
+        pub fn should_scan_with_hash(&self, path: &Path, hash: &[u8]) -> NyxResult<bool> {
+            let row: Option<Vec<u8>> = self
+                .conn
+                .query_row(
+                    "SELECT hash FROM files WHERE project = ?1 AND path = ?2",
+                    params![self.project, path.to_string_lossy()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+
+            Ok(match row {
+                Some(stored_hash) => stored_hash != hash,
                 None => true,
             })
         }
 
         /// Insert or update the `files` row and return its id.
         pub fn upsert_file(&self, path: &Path) -> NyxResult<i64> {
+            let bytes = fs::read(path)?;
+            let hash = Self::digest_bytes(&bytes);
+            self.upsert_file_with_hash(path, &hash)
+        }
+
+        /// Insert or update the `files` row using a pre-computed hash.
+        /// Avoids redundant file reads when the caller already has the hash.
+        pub fn upsert_file_with_hash(&self, path: &Path, hash: &[u8]) -> NyxResult<i64> {
             let meta = fs::metadata(path)?;
             let mtime = meta.modified()?.duration_since(UNIX_EPOCH)?.as_secs() as i64;
             let scanned_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-            let digest = Self::digest_file(path)?;
+            let path_str = path.to_string_lossy();
 
+            // Use a single statement: upsert then query the id.
             self.c().execute(
                 "INSERT INTO files (project, path, hash, mtime, scanned_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)
@@ -166,18 +211,12 @@ pub mod index {
                  SET hash = excluded.hash,
                      mtime = excluded.mtime,
                      scanned_at = excluded.scanned_at",
-                params![
-                    self.project,
-                    path.to_string_lossy(),
-                    digest,
-                    mtime,
-                    scanned_at
-                ],
+                params![self.project, path_str, hash, mtime, scanned_at],
             )?;
 
             let id: i64 = self.c().query_row(
                 "SELECT id FROM files WHERE project = ?1 AND path = ?2",
-                params![self.project, path.to_string_lossy()],
+                params![self.project, path_str],
                 |r| r.get(0),
             )?;
             Ok(id)
@@ -287,24 +326,38 @@ pub mod index {
         }
 
         /// Load every function summary for this project.
+        ///
+        /// Reads all JSON strings from SQLite in one pass, then
+        /// deserializes them in parallel with rayon for large result sets.
         pub fn load_all_summaries(&self) -> NyxResult<Vec<crate::summary::FuncSummary>> {
             let mut stmt = self
                 .c()
                 .prepare("SELECT summary FROM function_summaries WHERE project = ?1")?;
 
-            let iter = stmt.query_map([&self.project], |row| {
-                let json: String = row.get(0)?;
-                Ok(json)
-            })?;
+            let jsons: Vec<String> = stmt
+                .query_map([&self.project], |row| row.get::<_, String>(0))?
+                .filter_map(Result::ok)
+                .collect();
 
-            let mut out = Vec::new();
-            for row in iter {
-                let json = row?;
-                let s: crate::summary::FuncSummary = serde_json::from_str(&json)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                out.push(s);
+            // Parallel JSON deserialization for large sets
+            if jsons.len() > 256 {
+                use rayon::prelude::*;
+                let results: Vec<_> = jsons
+                    .par_iter()
+                    .filter_map(|json| {
+                        serde_json::from_str::<crate::summary::FuncSummary>(json).ok()
+                    })
+                    .collect();
+                Ok(results)
+            } else {
+                let mut out = Vec::with_capacity(jsons.len());
+                for json in &jsons {
+                    if let Ok(s) = serde_json::from_str::<crate::summary::FuncSummary>(json) {
+                        out.push(s);
+                    }
+                }
+                Ok(out)
             }
-            Ok(out)
         }
 
         /// gets files from the database
@@ -351,11 +404,19 @@ pub mod index {
         // -------------------------------------------------------------------------
         // Helpers
         // -------------------------------------------------------------------------
+        #[allow(dead_code)] // used by should_scan() and tests
         fn digest_file(path: &Path) -> NyxResult<Vec<u8>> {
             let mut hasher = blake3::Hasher::new();
             let mut file = fs::File::open(path)?;
             std::io::copy(&mut file, &mut hasher)?;
             Ok(hasher.finalize().as_bytes().to_vec())
+        }
+
+        /// Hash already-read bytes without re-reading from disk.
+        pub fn digest_bytes(bytes: &[u8]) -> Vec<u8> {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(bytes);
+            hasher.finalize().as_bytes().to_vec()
         }
     }
 }
