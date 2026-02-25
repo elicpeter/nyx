@@ -4,6 +4,7 @@ use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
 use crate::labels::{build_lang_rules, severity_for_source_kind};
 use crate::patterns::Severity;
+use crate::state;
 use crate::summary::{FuncSummary, GlobalSummaries};
 use crate::symbol::{Lang, normalize_namespace};
 use crate::taint::analyse_file;
@@ -251,6 +252,7 @@ pub fn run_rules_on_bytes(
                 ),
                 path_validated: finding.path_validated,
                 guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
+                message: None,
             });
         }
 
@@ -278,7 +280,48 @@ pub fn run_rules_on_bytes(
                 id: cf.rule_id,
                 path_validated: false,
                 guard_kind: None,
+                message: None,
             });
+        }
+
+        // ── State-model dataflow analysis ────────────────────────────────
+        if cfg.scanner.enable_state_analysis {
+            let state_findings = state::run_state_analysis(
+                &cfg_graph,
+                entry,
+                caller_lang,
+                bytes,
+                &summaries,
+                global_summaries,
+            );
+            // Collect state finding lines to dedup overlapping CFG findings.
+            let state_lines: std::collections::HashSet<usize> = state_findings
+                .iter()
+                .map(|sf| byte_offset_to_point(&_tree, sf.span.0).row + 1)
+                .collect();
+
+            for sf in &state_findings {
+                let point = byte_offset_to_point(&_tree, sf.span.0);
+                out.push(Diag {
+                    path: path.to_string_lossy().into_owned(),
+                    line: point.row + 1,
+                    col: point.column + 1,
+                    severity: sf.severity,
+                    id: sf.rule_id.clone(),
+                    path_validated: false,
+                    guard_kind: None,
+                    message: Some(sf.message.clone()),
+                });
+            }
+
+            // Suppress cfg-resource-leak / cfg-auth-gap when state analysis
+            // already covers the same line (state analysis is more precise).
+            if !state_findings.is_empty() {
+                out.retain(|d| {
+                    !((d.id == "cfg-resource-leak" || d.id == "cfg-auth-gap")
+                        && state_lines.contains(&d.line))
+                });
+            }
         }
     }
 
@@ -304,6 +347,7 @@ pub fn run_rules_on_bytes(
                         id: cq.meta.id.to_owned(),
                         path_validated: false,
                         guard_kind: None,
+                        message: None,
                     });
                 }
             }
@@ -445,6 +489,7 @@ pub fn analyse_file_fused(
                 ),
                 path_validated: finding.path_validated,
                 guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
+                message: None,
             });
         }
 
@@ -471,7 +516,45 @@ pub fn analyse_file_fused(
                 id: cf.rule_id,
                 path_validated: false,
                 guard_kind: None,
+                message: None,
             });
+        }
+
+        // ── State-model dataflow analysis ────────────────────────────────
+        if cfg.scanner.enable_state_analysis {
+            let state_findings = state::run_state_analysis(
+                &cfg_graph,
+                entry,
+                caller_lang,
+                bytes,
+                &local_summaries,
+                global_summaries,
+            );
+            let state_lines: std::collections::HashSet<usize> = state_findings
+                .iter()
+                .map(|sf| byte_offset_to_point(&tree, sf.span.0).row + 1)
+                .collect();
+
+            for sf in &state_findings {
+                let point = byte_offset_to_point(&tree, sf.span.0);
+                out.push(Diag {
+                    path: path.to_string_lossy().into_owned(),
+                    line: point.row + 1,
+                    col: point.column + 1,
+                    severity: sf.severity,
+                    id: sf.rule_id.clone(),
+                    path_validated: false,
+                    guard_kind: None,
+                    message: Some(sf.message.clone()),
+                });
+            }
+
+            if !state_findings.is_empty() {
+                out.retain(|d| {
+                    !((d.id == "cfg-resource-leak" || d.id == "cfg-auth-gap")
+                        && state_lines.contains(&d.line))
+                });
+            }
         }
     }
 
@@ -497,6 +580,7 @@ pub fn analyse_file_fused(
                         id: cq.meta.id.to_owned(),
                         path_validated: false,
                         guard_kind: None,
+                        message: None,
                     });
                 }
             }

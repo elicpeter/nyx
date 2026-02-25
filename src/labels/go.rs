@@ -46,6 +46,16 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "statement_list"           => Kind::Block,
     "function_declaration"     => Kind::Function,
     "method_declaration"       => Kind::Function,
+    "func_literal"             => Kind::Function,
+    "expression_switch_statement"  => Kind::Block,
+    "type_switch_statement"        => Kind::Block,
+    "expression_case"              => Kind::Block,
+    "type_case"                    => Kind::Block,
+    "default_case"                 => Kind::Block,
+    "select_statement"             => Kind::Block,
+    "communication_case"           => Kind::Block,
+    "go_statement"                 => Kind::Block,
+    "defer_statement"              => Kind::Block,
 
     // data-flow
     "call_expression"          => Kind::CallFn,

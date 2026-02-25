@@ -42,11 +42,13 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // control-flow
     "if_expression"        => Kind::If,
     "loop_expression"      => Kind::InfiniteLoop,
-    "loop_statement"       => Kind::LoopBody,
     "while_statement"      => Kind::While,
+    "while_expression"     => Kind::While,
     "for_statement"        => Kind::For,
+    "for_expression"       => Kind::For,
 
     "return_statement"     => Kind::Return,
+    "return_expression"    => Kind::Return,
     "break_expression"     => Kind::Break,
     "break_statement"      => Kind::Break,
     "continue_expression"  => Kind::Continue,
@@ -55,7 +57,17 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // structure
     "source_file"          => Kind::SourceFile,
     "block"                => Kind::Block,
+    "else_clause"          => Kind::Block,
+    "match_expression"     => Kind::Block,
+    "match_block"          => Kind::Block,
+    "match_arm"            => Kind::Block,
+    "unsafe_block"         => Kind::Block,
     "function_item"        => Kind::Function,
+    "closure_expression"   => Kind::Block,
+    "async_block"          => Kind::Block,
+    "impl_item"            => Kind::Block,
+    "trait_item"           => Kind::Block,
+    "declaration_list"     => Kind::Block,
 
     // data-flow
     "call_expression"        => Kind::CallFn,

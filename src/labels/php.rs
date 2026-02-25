@@ -41,16 +41,29 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "while_statement"               => Kind::While,
     "for_statement"                 => Kind::For,
     "foreach_statement"             => Kind::For,
+    "do_statement"                  => Kind::While,
 
     "return_statement"              => Kind::Return,
+    "throw_expression"              => Kind::Return,
     "break_statement"               => Kind::Break,
     "continue_statement"            => Kind::Continue,
 
     // structure
     "program"                       => Kind::SourceFile,
     "compound_statement"            => Kind::Block,
+    "else_clause"                   => Kind::Block,
+    "else_if_clause"                => Kind::Block,
     "function_definition"           => Kind::Function,
     "method_declaration"            => Kind::Function,
+    "switch_statement"              => Kind::Block,
+    "switch_block"                  => Kind::Block,
+    "case_statement"                => Kind::Block,
+    "default_statement"             => Kind::Block,
+    "try_statement"                 => Kind::Block,
+    "catch_clause"                  => Kind::Block,
+    "finally_clause"                => Kind::Block,
+    "colon_block"                   => Kind::Block,
+    "class_declaration"             => Kind::Block,
 
     // data-flow
     "function_call_expression"      => Kind::CallFn,

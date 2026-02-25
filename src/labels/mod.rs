@@ -41,7 +41,6 @@ pub enum Kind {
     InfiniteLoop,
     While,
     For,
-    LoopBody,
     CallFn,
     CallMethod,
     CallMacro,
@@ -196,7 +195,7 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
 }
 
 /// The kind of taint source, used to refine finding severity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceKind {
     /// Direct user input (request params, argv, stdin, form data)
     UserInput,

@@ -10,6 +10,7 @@ mod interop;
 mod labels;
 mod output;
 mod patterns;
+mod state;
 mod summary;
 mod symbol;
 mod taint;

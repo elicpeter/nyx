@@ -38,6 +38,11 @@ fn cfg_rule_description(id: &str) -> Option<&'static str> {
         }
         "cfg-resource-leak" => Some("Resource acquired but not released on all exit paths"),
         "cfg-lock-not-released" => Some("Lock acquired but not released on all exit paths"),
+        "state-use-after-close" => Some("Variable used after its resource handle was closed"),
+        "state-double-close" => Some("Resource handle closed more than once"),
+        "state-resource-leak" => Some("Resource acquired but never closed"),
+        "state-resource-leak-possible" => Some("Resource may not be closed on all paths"),
+        "state-unauthed-access" => Some("Sensitive operation reached without authentication"),
         _ => None,
     }
 }
@@ -116,11 +121,17 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| d.path.clone());
 
+            // Prefer the per-finding message (e.g. from state analysis) over the generic rule description.
+            let msg_text = d
+                .message
+                .as_deref()
+                .unwrap_or_else(|| rule_description(base));
+
             json!({
                 "ruleId": base,
                 "ruleIndex": rule_index,
                 "level": severity_to_level(d.severity),
-                "message": { "text": rule_description(base) },
+                "message": { "text": msg_text },
                 "locations": [{
                     "physicalLocation": {
                         "artifactLocation": { "uri": uri },

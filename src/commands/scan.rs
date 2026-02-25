@@ -49,6 +49,9 @@ pub struct Diag {
     /// The kind of validation guard protecting this path, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guard_kind: Option<String>,
+    /// Optional human-readable message with additional context (e.g. state analysis details).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// Entry point called by the CLI.
@@ -138,6 +141,9 @@ pub fn handle(
                         d.severity.colored_tag(),
                         style(&d.id).bold()
                     );
+                    if let Some(msg) = &d.message {
+                        println!("              {}", style(msg).dim());
+                    }
                     if let Some(guard) = &d.guard_kind {
                         println!("              Path guard: {}", style(guard).cyan());
                     }
@@ -567,6 +573,7 @@ fn severity_filter_applied_at_output_stage() {
             id: "taint-unsanitised-flow".into(),
             path_validated: false,
             guard_kind: None,
+            message: None,
         },
         Diag {
             path: "src/main.rs".into(),
@@ -576,6 +583,7 @@ fn severity_filter_applied_at_output_stage() {
             id: "taint-unsanitised-flow".into(),
             path_validated: false,
             guard_kind: None,
+            message: None,
         },
     ];
 

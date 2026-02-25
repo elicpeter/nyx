@@ -24,7 +24,7 @@
 | Multi-language support | Rust, C, C++, Java, Go, PHP, Python, Ruby, TypeScript, JavaScript |
 | AST-level pattern matching | Language-specific queries written against precise parse trees |
 | Control-flow graph analysis | Auth gaps, unguarded sinks, unreachable security code, resource leaks, error fallthrough |
-| Cross-file taint tracking | BFS taint propagation from sources through sanitizers to sinks with function summaries |
+| Cross-file taint tracking | Monotone forward dataflow taint analysis from sources through sanitizers to sinks with function summaries |
 | Cross-language interop | Taint flows across language boundaries via explicit interop edges |
 | Two-pass architecture | Pass 1 extracts function summaries; Pass 2 runs taint with full cross-file context |
 | Incremental indexing | SQLite database stores file hashes, summaries, and findings to skip unchanged files |
@@ -42,7 +42,7 @@
 |---|---|
 | **Pure-Rust, single binary** | No JVM, Python, or server to install; drop the `nyx` executable into your `$PATH` and go. |
 | **Massively parallel** | Uses Rayon and a thread-pool walker; scales to all CPU cores. Scanning the entire **rust-lang/rust** codebase (~53,000 files) on an M2 MacBook Pro takes **~1 s**. |
-| **Deep analysis** | Real CFG construction and taint propagation, not just regex matching. Cross-file function summaries, capability-based sanitizer tracking, and scored findings. |
+| **Deep analysis** | Real CFG construction and monotone dataflow taint analysis with guaranteed termination, not just regex matching. Cross-file function summaries, capability-based sanitizer tracking, and scored findings. |
 | **Index-aware** | An optional SQLite index stores file hashes and findings; subsequent scans touch *only* changed files, slashing CI times. |
 | **Offline & privacy-friendly** | Requires no login, cloud account, or telemetry. Perfect for air-gapped environments and strict compliance policies. |
 | **Tree-sitter precision** | Parses real language grammars, not regexes, giving far fewer false positives than line-based scanners. |
@@ -270,7 +270,7 @@ Nyx uses a **two-pass architecture** to enable cross-file analysis without sacri
 1. **File enumeration** -- A parallel walker (Rayon + `ignore` crate) applies gitignore rules, size limits, and user exclusions.
 2. **Pass 1 -- Summary extraction** -- Each file is parsed via tree-sitter, an intra-procedural CFG is built (petgraph), and a `FuncSummary` is exported per function capturing source/sanitizer/sink capabilities (bitflags), taint propagation behavior, and callee lists. Summaries are persisted to SQLite.
 3. **Summary merge** -- All per-file summaries are merged into a `GlobalSummaries` map with conservative conflict resolution (union caps, OR booleans).
-4. **Pass 2 -- Analysis** -- Files are re-parsed and analyzed with the full cross-file context: BFS taint propagation resolves callees against local and global summaries, CFG analysis checks for auth gaps, unguarded sinks, resource leaks, and more.
+4. **Pass 2 -- Analysis** -- Files are re-parsed and analyzed with the full cross-file context: a monotone forward dataflow engine resolves callees against local and global summaries and propagates taint through a bounded lattice with guaranteed convergence. CFG analysis checks for auth gaps, unguarded sinks, resource leaks, and more.
 5. **Reporting** -- Findings are scored, ranked, deduplicated, and emitted to the console or serialized as JSON.
 
 With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged, and cached findings are served directly for AST-only results.
@@ -281,12 +281,13 @@ With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged
 
 ### Phase 1 -- Deep Static Engine
 
-| Feature | Description |
-|---|---|
-| Interprocedural call graph | Precise symbol resolution via `FuncKey`, language-scoped namespaces, cross-module linking. No name-collision merging -- full call graph with topological analysis. |
-| Path-sensitive analysis | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Dramatically reduces false positives. |
-| Dataflow & state modeling | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Semantic analysis beyond pattern matching. |
-| Attack surface ranking | Score entry points by distance-to-sink, guard strength, path complexity, and privilege escalation potential. Deterministic attack surface scoring. |
+| Feature | Status | Description |
+|---|---|---|
+| Interprocedural call graph | Done | Precise symbol resolution via `FuncKey`, language-scoped namespaces, cross-module linking. Full call graph with SCC and topological analysis. |
+| Path-sensitive analysis | Done | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Monotone predicate summaries with contradiction pruning. |
+| Dataflow & state modeling | Done | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Generic `Transfer` trait over bounded lattices with guaranteed convergence. |
+| Monotone taint analysis | Done | Replaced BFS taint engine with a forward worklist dataflow analysis over a finite `TaintState` lattice. Multi-origin tracking, dual validated-must/may sets, JS/TS two-level solve. Guaranteed termination via lattice finiteness. |
+| Attack surface ranking | Done | Score entry points by distance-to-sink, guard strength, path complexity, and privilege escalation potential. Deterministic attack surface scoring. |
 
 ### Phase 2 -- Dynamic Capability
 

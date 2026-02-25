@@ -274,6 +274,7 @@ pub mod index {
                     severity: Severity::from_str(&sev_str).unwrap(),
                     path_validated: false,
                     guard_kind: None,
+                    message: None,
                 })
             })?;
 

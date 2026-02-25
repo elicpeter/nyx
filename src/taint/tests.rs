@@ -1,6 +1,7 @@
 use super::*;
 use crate::cfg::FuncSummaries;
 use crate::interop::InteropEdge;
+use crate::labels::Cap;
 use crate::symbol::FuncKey;
 
 #[test]
@@ -52,8 +53,10 @@ fn taint_through_if_else() {
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
 
-    // exactly one path (via the True branch) should be flagged
-    assert_eq!(findings.len(), 1);
+    // Both branches have findings: the true branch uses unsanitized `x`,
+    // the else branch uses `safe` which was sanitized with HTML_ESCAPE
+    // but the sink requires SHELL_ESCAPE (wrong sanitizer → still tainted).
+    assert_eq!(findings.len(), 2);
 }
 
 #[test]
@@ -2402,10 +2405,13 @@ fn sanitize_one_branch_no_regression() {
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
 
+    // Both branches produce findings: the true branch uses unsanitized `x`,
+    // the else branch uses `safe` (HTML_ESCAPE sanitizer vs SHELL_ESCAPE sink).
+    // Previously only 1 finding because else_clause was silently dropped from CFG.
     assert_eq!(
         findings.len(),
-        1,
-        "exactly one finding expected (true branch); no regression from path sensitivity"
+        2,
+        "two findings expected (both branches reach sink with wrong/no sanitizer)"
     );
 }
 

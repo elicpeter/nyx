@@ -61,6 +61,10 @@ pub struct ScannerConfig {
     /// benchmarks, etc.) at their original severity.  When false (default),
     /// findings in these paths are downgraded by one severity tier.
     pub include_nonprod: bool,
+
+    /// Enable the state-model dataflow engine for resource lifecycle and
+    /// auth-state analysis.  Default: false (opt-in).
+    pub enable_state_analysis: bool,
 }
 impl Default for ScannerConfig {
     fn default() -> Self {
@@ -94,6 +98,7 @@ impl Default for ScannerConfig {
             follow_symlinks: false,
             scan_hidden_files: false,
             include_nonprod: false,
+            enable_state_analysis: false,
         }
     }
 }
@@ -303,6 +308,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.scanner.follow_symlinks = user.scanner.follow_symlinks;
     default.scanner.scan_hidden_files = user.scanner.scan_hidden_files;
     default.scanner.include_nonprod = user.scanner.include_nonprod;
+    default.scanner.enable_state_analysis = user.scanner.enable_state_analysis;
 
     // Merge exclusion lists (default ⊔ user), then sort & dedupe
     default
