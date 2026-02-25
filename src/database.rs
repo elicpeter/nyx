@@ -40,10 +40,11 @@ pub mod index {
             file_path TEXT NOT NULL,
             file_hash BLOB NOT NULL,
             name TEXT NOT NULL,
+            arity INTEGER NOT NULL DEFAULT -1,
             lang TEXT NOT NULL,
             summary TEXT NOT NULL,
             updated_at INTEGER NOT NULL,
-            UNIQUE(project, file_path, name)
+            UNIQUE(project, file_path, name, arity)
         );
     "#;
 
@@ -81,6 +82,38 @@ pub mod index {
                 conn.pragma_update(None, "temp_store", "MEMORY")?;
                 conn.pragma_update(None, "mmap_size", "268435456")?; // 256 MB
                 conn.execute_batch(SCHEMA)?;
+
+                // Migrate: if the function_summaries table has the old schema
+                // (missing `arity` column), drop and recreate it.
+                let has_arity: bool = conn
+                    .prepare("PRAGMA table_info(function_summaries)")
+                    .and_then(|mut s| {
+                        let cols: Vec<String> = s
+                            .query_map([], |r| r.get::<_, String>(1))?
+                            .filter_map(Result::ok)
+                            .collect();
+                        Ok(cols.iter().any(|c| c == "arity"))
+                    })
+                    .unwrap_or(true);
+
+                if !has_arity {
+                    tracing::info!("migrating function_summaries: adding arity column");
+                    conn.execute_batch("DROP TABLE IF EXISTS function_summaries;")?;
+                    conn.execute_batch(
+                        "CREATE TABLE IF NOT EXISTS function_summaries (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            project TEXT NOT NULL,
+                            file_path TEXT NOT NULL,
+                            file_hash BLOB NOT NULL,
+                            name TEXT NOT NULL,
+                            arity INTEGER NOT NULL DEFAULT -1,
+                            lang TEXT NOT NULL,
+                            summary TEXT NOT NULL,
+                            updated_at INTEGER NOT NULL,
+                            UNIQUE(project, file_path, name, arity)
+                        );",
+                    )?;
+                }
             }
             Ok(pool)
         }
@@ -228,9 +261,9 @@ pub mod index {
 
             {
                 let mut stmt = tx.prepare(
-                    "INSERT INTO function_summaries
-                        (project, file_path, file_hash, name, lang, summary, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT OR REPLACE INTO function_summaries
+                        (project, file_path, file_hash, name, arity, lang, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 )?;
 
                 for s in summaries {
@@ -241,6 +274,7 @@ pub mod index {
                         path_str,
                         file_hash,
                         s.name,
+                        s.param_count as i64,
                         s.lang,
                         json,
                         now
