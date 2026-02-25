@@ -16,19 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--keep-nonprod-severity`** — renamed from `--include-nonprod` for clarity; old name kept as hidden alias.
 - **`OutputFormat` enum** — `--format` now uses clap `ValueEnum` with typed `Console`, `Json`, `Sarif` variants (default `Console`). No more empty-string default.
 - 10 new unit tests: `SeverityFilter` parsing (single, comma list, threshold, case-insensitive, whitespace, empty rejection, invalid level rejection), `Severity::from_str` rejection of unknown values, and `severity_filter_applied_at_output_stage` integration test verifying that downgraded findings are correctly filtered.
-
-### Changed
-- **Severity filtering applied at output stage** — `--severity` (and legacy `--high-only`) filtering is now applied ONCE in `scan::handle()` after all severity normalization (nonprod downgrades, dedup, truncation). Previously `--high-only` only filtered AST patterns during analysis; taint and CFG findings bypassed the filter entirely.
-- **`--format` default is `console`** — previously defaulted to empty string, requiring fallback logic.
-- **All status/progress output goes to stderr** — "Checking...", "Finished in...", config notes, and progress bars now use `eprintln!`/stderr exclusively. JSON and SARIF output is stdout-only.
-- **`Severity::from_str` returns `Err` for unknown values** — previously returned `Ok(Severity::Low)` for any unrecognized input.
-- **Deprecated CLI flags preserved as hidden aliases** — `--high-only`, `--no-index`, `--rebuild-index`, `--ast-only`, `--cfg-only`, and `--include-nonprod` are hidden from help but still functional, mapping to their canonical replacements.
-
-### Fixed
-- **`--high-only` emitting Low/Medium taint and CFG findings** — severity filter was only applied to AST pattern queries during analysis. Taint findings (whose severity derives from `SourceKind`) and CFG structural findings passed through unfiltered. The filter is now applied at the final output stage after all severity normalization, ensuring `--severity HIGH` never emits downgraded Medium/Low findings.
-- **JSON/SARIF output contaminated with status messages on stdout** — status messages ("Checking...", "Finished in...") used `println!` and appeared in stdout alongside machine output. Now all status goes to stderr.
-
-### Added
 - **AST pattern overhaul** -- all 10 language pattern files (`src/patterns/*.rs`) rewritten with consistent conventions, structured metadata, and validated tree-sitter queries.
   - **Pattern schema extensions** -- `PatternTier` (A = structural, B = heuristic-guarded), `PatternCategory` (13 vulnerability classes), and `Hash` on `Severity`. Module-level docs explain conventions and how to add new patterns.
   - **Namespaced IDs** -- all pattern IDs follow `<lang>.<category>.<specific>` format (e.g. `java.deser.readobject`, `py.cmdi.os_system`, `js.xss.document_write`).
@@ -40,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pattern test fixtures** -- positive and negative fixture files for all 10 languages under `tests/fixtures/patterns/<lang>/`.
 
 ### Changed
+- **Severity filtering applied at output stage** — `--severity` (and legacy `--high-only`) filtering is now applied ONCE in `scan::handle()` after all severity normalization (nonprod downgrades, dedup, truncation). Previously `--high-only` only filtered AST patterns during analysis; taint and CFG findings bypassed the filter entirely.
+- **`--format` default is `console`** — previously defaulted to empty string, requiring fallback logic.
+- **All status/progress output goes to stderr** — "Checking...", "Finished in...", config notes, and progress bars now use `eprintln!`/stderr exclusively. JSON and SARIF output is stdout-only.
+- **`Severity::from_str` returns `Err` for unknown values** — previously returned `Ok(Severity::Low)` for any unrecognized input.
+- **Deprecated CLI flags preserved as hidden aliases** — `--high-only`, `--no-index`, `--rebuild-index`, `--ast-only`, `--cfg-only`, and `--include-nonprod` are hidden from help but still functional, mapping to their canonical replacements.
 - **Path-sensitive taint analysis** -- the BFS taint engine now carries a `PathState` (bounded set of branch predicates) alongside the taint map. When the BFS traverses a True or False edge from an `If` node, it records a `Predicate` with the condition's variables, kind, and polarity. This enables two new capabilities:
   - **Infeasible path pruning** -- paths with contradictory predicates (e.g. `if x.is_none() { return; } if x.is_none() { sink }`) are detected and pruned, eliminating false positives on code guarded by redundant null/empty/error checks. Contradiction detection is conservative: only whitelisted kinds (`NullCheck`, `EmptyCheck`, `ErrorCheck`) with single-variable predicates are pruned.
   - **Validation guard annotation** -- when all tainted variables reaching a sink are guarded by a `ValidationCall` predicate (e.g. `if validate(&x) { sink }` or `if !validate(&x) { return; } sink`), the finding is annotated with `path_validated: true` and `guard_kind: ValidationCall`. This metadata is surfaced in JSON and console output without changing severity.
@@ -55,8 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 8 new path-sensitivity integration tests: early-return validation guard, failed-validation branch, contradictory null-check pruning, if/else validation annotation, sanitize-one-branch regression, path-state budget graceful degradation, unknown-predicate non-pruning, multi-var non-pruning.
 - 35 new unit tests in `taint::path_state`: classify_condition variants, PathState push/truncation, contradiction detection (whitelisted kinds, single-var only), has_validation_for semantics, state_hash determinism, priority ordering.
 - 11 new unit tests: callee normalization, same-name-different-namespaces resolution, cross-language isolation, arity separation, recursive SCC detection, not-found vs ambiguous diagnostics, diamond topo ordering, interop edge resolution, namespace normalization consistency, and raw call-site preservation.
-
-### Changed
 - **Edge-aware taint traversal** -- `analyse_file()` now uses `cfg.edges(node)` instead of `cfg.neighbors(node)`, inspecting `EdgeKind` on each edge. This is required for predicate recording but also makes the taint engine aware of the CFG's branch structure for the first time.
 - **Two-tier seen-state deduplication** -- the BFS seen-state map changed from `HashSet<(NodeIndex, u64)>` to a `HashMap` keyed by `(NodeIndex, taint_hash)` mapping to a bounded list of `(path_hash, priority)` pairs. At most `MAX_PATH_VARIANTS_PER_KEY` (4) path variants are tracked per taint state, with deterministic eviction preferring non-truncated states with fewer predicates.
 - **Finding deduplication** -- taint findings are now deduplicated by `(sink, source)` pair after analysis, preferring findings with `path_validated = true` (most informative metadata).
@@ -65,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`taint::resolve_callee()` refactored** -- the global resolution step now delegates to `GlobalSummaries::resolve_callee_key()` and applies `normalize_callee_name()` before lookup, unifying resolution logic with the call graph builder.
 
 ### Fixed
+- **`--high-only` emitting Low/Medium taint and CFG findings** — severity filter was only applied to AST pattern queries during analysis. Taint findings (whose severity derives from `SourceKind`) and CFG structural findings passed through unfiltered. The filter is now applied at the final output stage after all severity normalization, ensuring `--severity HIGH` never emits downgraded Medium/Low findings.
+- **JSON/SARIF output contaminated with status messages on stdout** — status messages ("Checking...", "Finished in...") used `println!` and appeared in stdout alongside machine output. Now all status goes to stderr.
 - **CFG: False edge to then-block exits in no-else if statements** -- previously, `if (cond) { body }` without an else block created a `False` edge from the condition node directly to the then-block's exit nodes. This made the false path appear to traverse the then-block, causing incorrect predicate polarity in path-sensitive analysis and duplicate taint findings with contradictory metadata. The CFG now creates a synthetic pass-through `Seq` node for the false path with an explicit `False` edge from the condition, correctly modeling "skip the then-block." This also fixes the frontier: previously, the no-else non-terminating case duplicated `then_exits` in the frontier (`then_exits ++ then_exits.clone()`); it now correctly produces `then_exits ∪ [pass_through]`.
 
 ## [0.3.0] - 2026-02-25
