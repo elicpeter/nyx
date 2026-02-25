@@ -1,6 +1,6 @@
 pub mod index {
     use crate::commands::scan::Diag;
-    use crate::errors::NyxResult;
+    use crate::errors::{NyxError, NyxResult};
     use crate::patterns::Severity;
     use r2d2::{Pool, PooledConnection};
     use r2d2_sqlite::SqliteConnectionManager;
@@ -34,12 +34,17 @@ pub mod index {
             col INTEGER NOT NULL,
             PRIMARY KEY (file_id, rule_id, line, col));
 
-        CREATE TABLE IF NOT EXISTS function_summaries (hash TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS function_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             project TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash BLOB NOT NULL,
             name TEXT NOT NULL,
             lang TEXT NOT NULL,
             summary TEXT NOT NULL,
-            updated_at INTEGER NOT NULL);
+            updated_at INTEGER NOT NULL,
+            UNIQUE(project, file_path, name)
+        );
     "#;
 
     // TODO: ADD CLEANS FOR EACH TABLE BASED ON PROJECT WHICH RUNS ON CLEAN
@@ -196,49 +201,74 @@ pub mod index {
             Ok(issue_iter.filter_map(Result::ok).collect())
         }
 
-        // pub fn upsert_summary(
-        //     &mut self,
-        //     project: &str,
-        //     path: &Path,
-        //     hash: &str,
-        //     s: &crate::summary::FuncSummary,
-        // ) -> NyxResult<()> {
-        //     let conn = self.c();
-        //     let now  = chrono::Utc::now().timestamp_millis(); // i64
-        //
-        //     conn.execute(
-        //         "INSERT INTO function_summaries (hash, project, name, lang, summary, updated_at)
-        //              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-        //              ON CONFLICT(hash) DO UPDATE SET summary = excluded.summary,
-        //                                              updated_at = excluded.updated_at",
-        //         (
-        //             hash,
-        //             project,
-        //             &s.name,
-        //             path.extension().and_then(|e| e.to_str()).unwrap_or_default(),
-        //             serde_json::to_string(s).unwrap(), //TODO REPLACE UNWRAP
-        //             now,
-        //         ),
-        //     )?;
-        //     Ok(())
-        // }
-        //
-        // pub fn load_all_summaries(&self, project: &str) -> NyxResult<Vec<crate::summary::FuncSummary<'static>>> {
-        //     let mut stmt = self
-        //         .c()
-        //         .prepare("SELECT summary FROM function_summaries WHERE project = ?1")?;
-        //
-        //     let iter = stmt.query_map([project], |row| {
-        //         let json: String = row.get(0)?;
-        //         Ok(serde_json::from_str::<crate::summary::FuncSummary>(json.as_str()).unwrap()) // TODO: REPLACE UNWRAP
-        //     })?;
-        //
-        //     Ok(iter
-        //         .collect::<Result<Vec<_>, _>>()?
-        //         .into_iter()
-        //         .map(|s| unsafe { std::mem::transmute::<_, crate::summary::FuncSummary<'static>>(s) })
-        //         .collect())
-        // }
+        /// Atomically replace all function summaries for a single file.
+        ///
+        /// Deletes every existing summary row for `(project, file_path)` then
+        /// inserts the new set.  This keeps the table in sync when a file is
+        /// re‑parsed and its functions change.
+        pub fn replace_summaries_for_file(
+            &mut self,
+            file_path: &Path,
+            file_hash: &[u8],
+            summaries: &[crate::summary::FuncSummary],
+        ) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = file_path.to_string_lossy();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)?
+                .as_secs() as i64;
+
+            tx.execute(
+                "DELETE FROM function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT INTO function_summaries
+                        (project, file_path, file_hash, name, lang, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                )?;
+
+                for s in summaries {
+                    let json = serde_json::to_string(s)
+                        .map_err(|e| NyxError::Msg(format!("summary serialise: {e}")))?;
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        s.name,
+                        s.lang,
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Load every function summary for this project.
+        pub fn load_all_summaries(&self) -> NyxResult<Vec<crate::summary::FuncSummary>> {
+            let mut stmt = self.c().prepare(
+                "SELECT summary FROM function_summaries WHERE project = ?1",
+            )?;
+
+            let iter = stmt.query_map([&self.project], |row| {
+                let json: String = row.get(0)?;
+                Ok(json)
+            })?;
+
+            let mut out = Vec::new();
+            for row in iter {
+                let json = row?;
+                let s: crate::summary::FuncSummary = serde_json::from_str(&json)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                out.push(s);
+            }
+            Ok(out)
+        }
 
         /// gets files from the database
         pub fn get_files(&self, project: &str) -> NyxResult<Vec<PathBuf>> {

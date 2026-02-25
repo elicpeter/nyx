@@ -111,7 +111,7 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
 
                 Box::new(move |entry| {
                     if let Ok(e) = entry {
-                        let is_file = e.file_type().map_or(false, |ft| ft.is_file());
+                        let is_file = e.file_type().is_some_and(|ft| ft.is_file());
                         let under_limit = max_bytes == 0
                           || e.metadata().map(|m| m.len() <= max_bytes).unwrap_or(true);
 

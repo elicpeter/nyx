@@ -3,23 +3,9 @@ use petgraph::prelude::*;
 use tracing::debug;
 use tree_sitter::{Node, Tree};
 
-use crate::labels::{Cap, DataLabel, Kind, classify, lookup};
+use crate::labels::{Cap, DataLabel, Kind, classify, lookup, param_config};
+use crate::summary::FuncSummary;
 use std::collections::{HashMap, HashSet};
-// WHAT WE STILL NEED TO DO:
-// todo: add the cap labels and remove the bit flags after each sanitizer, checking the bit flags with the sink
-//
-//
-// 1.
-// We need to analyze the CFG and add function details to the nodes.
-// And upload each functions status to a cache with the specific status of the function, for example what source it has, what sink it has, what sanitizer it has, and what taint it has.
-//
-// 2.
-// For each taint from a function we will see if it gets tainted in a function if not, we will add it to a list of potentially tainted functions
-// then, after we analyze all the functions, we will see if any of the potentially tainted functions are actually tainted
-//
-// 3.
-
-// Questions: Do we want to analyze taint on a per function basis as we are building the CFG, or do we want to analyze the whole CFG at once?
 
 /// -------------------------------------------------------------------------
 ///  Public AST‑to‑CFG data structures
@@ -55,8 +41,33 @@ pub struct NodeInfo {
     pub callee: Option<String>,
 }
 
+/// Intra‑file function summary with graph‑local node indices.
+///
+/// Keeps all three cap dimensions independently so that a function that is
+/// *both* a source and a sink (e.g. reads env then shells out) does not
+/// lose information.
+#[derive(Debug, Clone)]
+pub struct LocalFuncSummary {
+    #[allow(dead_code)] // used for future intra-file graph traversal
+    pub entry: NodeIndex,
+    #[allow(dead_code)] // used for future intra-file graph traversal
+    pub exit: NodeIndex,
+    pub source_caps: Cap,
+    pub sanitizer_caps: Cap,
+    pub sink_caps: Cap,
+    pub param_count: usize,
+    pub param_names: Vec<String>,
+    /// Conservative: `true` if *any* parameter variable reaches the return
+    /// value on *any* code path.
+    pub propagates_taint: bool,
+    /// Which parameter indices flow to internal sinks.
+    pub tainted_sink_params: Vec<usize>,
+    /// Callee identifiers found inside this function body.
+    pub callees: Vec<String>,
+}
+
 pub type Cfg = Graph<NodeInfo, EdgeKind>;
-pub type FuncSummaries = HashMap<String, (NodeIndex, NodeIndex, Option<DataLabel>)>;
+pub type FuncSummaries = HashMap<String, LocalFuncSummary>;
 
 // -------------------------------------------------------------------------
 //                      Utility helpers
@@ -71,15 +82,17 @@ pub(crate) fn text_of<'a>(n: Node<'a>, code: &'a [u8]) -> Option<String> {
 }
 
 /// Return the callee identifier for the first call / method / macro inside `n`.
+/// Searches recursively through all descendants.
 fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
     let mut cursor = n.walk();
     for c in n.children(&mut cursor) {
         match lookup(lang, c.kind()) {
             Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
-                // Re-use the same logic we have in `push_node`
                 return match lookup(lang, c.kind()) {
                     Kind::CallFn => c
                         .child_by_field_name("function")
+                        .or_else(|| c.child_by_field_name("method"))
+                        .or_else(|| c.child_by_field_name("name"))
                         .and_then(|f| text_of(f, code)),
                     Kind::CallMethod => {
                         let func = c
@@ -88,9 +101,10 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                             .and_then(|f| text_of(f, code));
                         let recv = c
                             .child_by_field_name("object")
+                            .or_else(|| c.child_by_field_name("receiver"))
                             .and_then(|f| text_of(f, code));
                         match (recv, func) {
-                            (Some(r), Some(f)) => Some(format!("{r}::{f}")),
+                            (Some(r), Some(f)) => Some(format!("{r}.{f}")),
                             (_, Some(f)) => Some(f.to_string()),
                             _ => None,
                         }
@@ -101,49 +115,129 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                     _ => None,
                 };
             }
-            _ => {}
+            _ => {
+                // Recurse into children (handles nested declarators)
+                if let Some(found) = first_call_ident(c, lang, code) {
+                    return Some(found);
+                }
+            }
         }
     }
     None
 }
 
-/// Recursively collect every identifier that occurs inside `n`.
-fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
-    if n.kind() == "identifier" {
-        if let Some(txt) = text_of(n, code) {
-            out.push(txt);
+/// Check whether any descendant of `n` is a call expression.
+fn has_call_descendant(n: Node, lang: &str) -> bool {
+    let mut cursor = n.walk();
+    for c in n.children(&mut cursor) {
+        match lookup(lang, c.kind()) {
+            Kind::CallFn | Kind::CallMethod | Kind::CallMacro => return true,
+            _ => {
+                if has_call_descendant(c, lang) {
+                    return true;
+                }
+            }
         }
-    } else {
-        let mut c = n.walk();
-        for ch in n.children(&mut c) {
-            collect_idents(ch, code, out);
+    }
+    false
+}
+
+/// Recursively collect every identifier that occurs inside `n`.
+///
+/// Recognises `identifier` (most languages), `variable_name` (PHP),
+/// `field_identifier` (Go), and `property_identifier` (JS/TS).
+fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
+    match n.kind() {
+        "identifier" | "field_identifier" | "property_identifier" => {
+            if let Some(txt) = text_of(n, code) {
+                out.push(txt);
+            }
+        }
+        // PHP: $x is `variable_name` → `$` + `name`. Use the whole text minus `$`.
+        "variable_name" => {
+            if let Some(txt) = text_of(n, code) {
+                out.push(txt.trim_start_matches('$').to_string());
+            }
+        }
+        _ => {
+            let mut c = n.walk();
+            for ch in n.children(&mut c) {
+                collect_idents(ch, code, out);
+            }
         }
     }
 }
 
 /// Return `(defines, uses)` for the AST fragment `ast`.
 fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) {
-    // todo: figure out why lookup isn't working here
-    match ast.kind() {
-        // `let <pat> = <val>;`
-        "let_declaration" => {
+    match lookup(lang, ast.kind()) {
+        // Declaration wrappers (let, var, short_var_declaration, etc.)
+        Kind::CallWrapper => {
             let mut defs = None;
             let mut uses = Vec::new();
 
-            if let Some(pat) = ast.child_by_field_name("pattern") {
-                // first identifier inside the pattern = variable name
-                let mut tmp = Vec::<String>::new();
-                collect_idents(pat, code, &mut tmp);
-                defs = tmp.into_iter().next();
-            }
-            if let Some(val) = ast.child_by_field_name("value") {
-                collect_idents(val, code, &mut uses);
+            // Try direct field names first (Rust `let_declaration`, Go `short_var_declaration`)
+            let def_node = ast
+                .child_by_field_name("pattern")
+                .or_else(|| ast.child_by_field_name("name"))
+                .or_else(|| ast.child_by_field_name("left"));
+
+            let val_node = ast
+                .child_by_field_name("value")
+                .or_else(|| ast.child_by_field_name("right"));
+
+            if def_node.is_some() || val_node.is_some() {
+                if let Some(pat) = def_node {
+                    let mut tmp = Vec::<String>::new();
+                    collect_idents(pat, code, &mut tmp);
+                    defs = tmp.into_iter().next();
+                }
+                if let Some(val) = val_node {
+                    collect_idents(val, code, &mut uses);
+                }
+            } else {
+                // Try nested declarator pattern (JS/TS `lexical_declaration` → `variable_declarator`,
+                // Java `local_variable_declaration` → `variable_declarator`,
+                // C/C++ `declaration` → `init_declarator`,
+                // Python/Ruby `expression_statement` → `assignment`)
+                let mut cursor = ast.walk();
+                for child in ast.children(&mut cursor) {
+                    let child_name = child
+                        .child_by_field_name("name")
+                        .or_else(|| child.child_by_field_name("declarator"))
+                        .or_else(|| child.child_by_field_name("left"));
+                    let child_value = child
+                        .child_by_field_name("value")
+                        .or_else(|| child.child_by_field_name("right"));
+
+                    // Only treat this child as a declarator if it has BOTH a name
+                    // and a value (or at least a value). This prevents method_invocation
+                    // nodes (which have a `name` field) from being misinterpreted.
+                    if child_value.is_some() {
+                        if let Some(name_node) = child_name
+                            && defs.is_none()
+                        {
+                            let mut tmp = Vec::<String>::new();
+                            collect_idents(name_node, code, &mut tmp);
+                            defs = tmp.into_iter().next();
+                        }
+                        if let Some(val_node) = child_value {
+                            collect_idents(val_node, code, &mut uses);
+                        }
+                    }
+                }
+
+                // Fallback: if still nothing found, collect all idents as uses.
+                // This handles expression_statement wrappers.
+                if defs.is_none() && uses.is_empty() {
+                    collect_idents(ast, code, &mut uses);
+                }
             }
             (defs, uses)
         }
 
-        // Plain assignment `x = y  z`
-        "assignment_expression" => {
+        // Plain assignment `x = y`
+        Kind::Assignment => {
             let mut defs = None;
             let mut uses = Vec::new();
             if let Some(lhs) = ast.child_by_field_name("left") {
@@ -181,6 +275,8 @@ fn push_node<'a>(
         // plain `foo(bar)` style call
         Kind::CallFn => ast
             .child_by_field_name("function")
+            .or_else(|| ast.child_by_field_name("method"))
+            .or_else(|| ast.child_by_field_name("name"))
             .and_then(|n| text_of(n, code))
             .unwrap_or_default(),
 
@@ -192,9 +288,10 @@ fn push_node<'a>(
                 .and_then(|n| text_of(n, code));
             let recv = ast
                 .child_by_field_name("object")
+                .or_else(|| ast.child_by_field_name("receiver"))
                 .and_then(|n| text_of(n, code));
             match (recv, func) {
-                (Some(r), Some(f)) => format!("{r}::{f}"),
+                (Some(r), Some(f)) => format!("{r}.{f}"),
                 (_, Some(f)) => f,
                 _ => String::new(),
             }
@@ -210,12 +307,15 @@ fn push_node<'a>(
         _ => text_of(ast, code).unwrap_or_default(),
     };
 
-    // If this is a `let` or `expression_statement` that *contains* a call,
-    // prefer the first inner call identifier instead of the whole line.
-    if matches!(lookup(lang, ast.kind()), Kind::CallWrapper) {
-        if let Some(inner) = first_call_ident(ast, lang, code) {
-            text = inner;
-        }
+    // If this is a declaration/expression wrapper or an assignment that
+    // *contains* a call, prefer the first inner call identifier instead of
+    // the whole line.
+    if matches!(
+        lookup(lang, ast.kind()),
+        Kind::CallWrapper | Kind::Assignment
+    ) && let Some(inner) = first_call_ident(ast, lang, code)
+    {
+        text = inner;
     }
 
     /* ── 2.  LABEL LOOK-UP  ───────────────────────────────────────────── */
@@ -254,6 +354,60 @@ fn push_node<'a>(
     idx
 }
 
+/// Extract parameter names from a function AST node.
+///
+/// Uses the language's `ParamConfig` to find the parameter list field
+/// and extract identifiers from each parameter child.
+fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> Vec<String> {
+    let cfg = param_config(lang);
+    let mut names = Vec::new();
+    let Some(params) = func_node.child_by_field_name(cfg.params_field) else {
+        return names;
+    };
+    let mut cursor = params.walk();
+    for child in params.children(&mut cursor) {
+        // Self/this parameter (e.g. Rust's `self_parameter`)
+        if cfg.self_param_kinds.contains(&child.kind()) {
+            names.push("self".into());
+            continue;
+        }
+
+        // Regular parameter
+        if cfg.param_node_kinds.contains(&child.kind()) {
+            // Try each ident field in order
+            let mut found = false;
+            for &field in cfg.ident_fields {
+                if let Some(node) = child.child_by_field_name(field) {
+                    let mut tmp = Vec::new();
+                    collect_idents(node, code, &mut tmp);
+                    if let Some(first) = tmp.into_iter().next() {
+                        names.push(first);
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            // Fallback: if the param node itself is an identifier (e.g. JS/Python)
+            if !found
+                && child.kind() == "identifier"
+                && let Some(txt) = text_of(child, code)
+            {
+                names.push(txt);
+            }
+            // Fallback for C/C++: look for nested declarator → identifier
+            if !found && child.kind() == "parameter_declaration" {
+                let mut tmp = Vec::new();
+                collect_idents(child, code, &mut tmp);
+                if let Some(last) = tmp.pop() {
+                    names.push(last);
+                }
+            }
+            continue;
+        }
+    }
+    names
+}
+
 /// Add the same edge (of the same kind) from every node in `froms` to `to`.
 #[inline]
 fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind: EdgeKind) {
@@ -279,20 +433,30 @@ fn build_sub<'a>(
         // ─────────────────────────────────────────────────────────────────
         //  IF‑/ELSE: two branches that re‑merge afterwards
         // ─────────────────────────────────────────────────────────────────
-        // todo fix
         Kind::If => {
             // Condition node
             let cond = push_node(g, StmtKind::If, ast, lang, code);
             connect_all(g, preds, cond, EdgeKind::Seq);
 
-            // Locate then & else blocks
+            // Locate then & else blocks using field-based lookup first,
+            // then positional fallback (Rust uses positional blocks).
             let (then_block, else_block) = {
-                let mut cursor = ast.walk();
-                let blocks: Vec<_> = ast
-                    .children(&mut cursor)
-                    .filter(|n| n.kind() == "block")
-                    .collect();
-                (blocks.first().copied(), blocks.get(1).copied())
+                let field_then = ast
+                    .child_by_field_name("consequence")
+                    .or_else(|| ast.child_by_field_name("body"));
+                let field_else = ast.child_by_field_name("alternative");
+
+                if field_then.is_some() || field_else.is_some() {
+                    (field_then, field_else)
+                } else {
+                    // Fallback: positional block children (Rust `if_expression`)
+                    let mut cursor = ast.walk();
+                    let blocks: Vec<_> = ast
+                        .children(&mut cursor)
+                        .filter(|n| lookup(lang, n.kind()) == Kind::Block)
+                        .collect();
+                    (blocks.first().copied(), blocks.get(1).copied())
+                }
             };
 
             // THEN branch
@@ -355,7 +519,8 @@ fn build_sub<'a>(
                 .child_by_field_name("body")
                 .or_else(|| {
                     let mut c = ast.walk();
-                    ast.children(&mut c).find(|n| n.kind() == "block")
+                    ast.children(&mut c)
+                        .find(|n| lookup(lang, n.kind()) == Kind::Block)
                 })
                 .expect("loop without body");
 
@@ -403,42 +568,78 @@ fn build_sub<'a>(
         // Function item – create a header and dive into its body
         Kind::Function => {
             // 1) create a header node for this fn
+            // Try "name" first (most languages), then "declarator" (C/C++)
             let fn_name = ast
                 .child_by_field_name("name")
-                .and_then(|n| text_of(n, code))
+                .or_else(|| ast.child_by_field_name("declarator"))
+                .and_then(|n| {
+                    // For C/C++ function_declarator, extract just the identifier
+                    let mut tmp = Vec::new();
+                    collect_idents(n, code, &mut tmp);
+                    tmp.into_iter().next()
+                })
                 .unwrap_or_else(|| "<anon>".to_string());
             let entry_idx = push_node(g, StmtKind::Seq, ast, lang, code);
             connect_all(g, preds, entry_idx, EdgeKind::Seq);
+
+            // 1b) extract parameter names
+            let param_names = extract_param_names(ast, lang, code);
+            let param_count = param_names.len();
 
             // 2) build its body
             let body = ast.child_by_field_name("body").expect("fn w/o body");
             let body_exits = build_sub(body, &[entry_idx], g, lang, code, summaries);
 
-            // ───── 3) light-weight dataflow + capture both explicit & implicit returns ─
+            // ───── 3) light-weight dataflow ──────────────────────────────────────
+            //
+            // Sweep every node inside this function’s span.  Track:
+            //  • which cap bits each variable carries (var_taint)
+            //  • independent source / sanitizer / sink caps for the function
+            //  • which params flow to sinks (tainted_sink_params)
+            //  • whether any param reaches a return value (propagates_taint)
+            //  • all callees
             let mut var_taint = HashMap::<String, Cap>::new();
             let mut node_bits = HashMap::<NodeIndex, Cap>::new();
             let mut fn_src_bits = Cap::empty();
             let mut fn_sani_bits = Cap::empty();
             let mut fn_sink_bits = Cap::empty();
+            let mut callees = Vec::<String>::new();
+            let mut tainted_sink_params: Vec<usize> = Vec::new();
 
-            // first, sweep *all* nodes in this function and record their out_bits
+            let param_set: HashSet<&str> =
+                param_names.iter().map(|s| s.as_str()).collect();
+
             for idx in g.node_indices() {
                 let info = &g[idx];
                 if info.span.0 < ast.start_byte() || info.span.1 > ast.end_byte() {
                     continue;
                 }
 
-                // record any explicit sanitizer caps
+                // collect callee names
+                if let Some(callee) = &info.callee
+                    && !callees.contains(callee)
+                {
+                    callees.push(callee.clone());
+                }
+
+                // record explicit label caps (all three independently)
+                if let Some(DataLabel::Source(bits)) = info.label {
+                    fn_src_bits |= bits;
+                }
                 if let Some(DataLabel::Sanitizer(bits)) = info.label {
                     fn_sani_bits |= bits;
                 }
-                // record any explicit sink caps
                 if let Some(DataLabel::Sink(bits)) = info.label {
                     fn_sink_bits |= bits;
-                }
-                // record any explicit source caps
-                if let Some(DataLabel::Source(bits)) = info.label {
-                    fn_src_bits |= bits;
+
+                    // check whether any param flows to this sink
+                    for u in &info.uses {
+                        if let Some(pos) = param_names.iter().position(|p| p == u)
+                            && !tainted_sink_params.contains(&pos)
+                        {
+                            tainted_sink_params.push(pos);
+                        }
+                    }
                 }
 
                 //  a) incoming taint from any vars we read
@@ -472,34 +673,68 @@ fn build_sub<'a>(
                 node_bits.insert(idx, out_bits);
             }
 
-            // now fold in any *explicit* returns
+            // fold in explicit returns
             for (&idx, &bits) in &node_bits {
                 if g[idx].kind == StmtKind::Return {
                     fn_src_bits |= bits;
                 }
             }
 
-            // …and *implicit* returns via fall-through from each exit predecessor
+            // implicit returns via fall-through exits
             for &pred in &body_exits {
                 if let Some(&bits) = node_bits.get(&pred) {
                     fn_src_bits |= bits;
                 }
             }
 
-            // let fn_label = fn_src_bits
-            //     .is_empty()
-            //     .then(|| None)
-            //     .unwrap_or(Some(DataLabel::Source(fn_src_bits)));
+            // ───── propagates_taint ──────────────────────────────────────────────
+            //
+            // A function propagates taint when a parameter variable reaches a
+            // return value (explicit or implicit) while still carrying taint bits.
+            //
+            // We approximate this: if any param name still appears in `var_taint`
+            // at any return/exit node, we conservatively say yes.
+            let propagates = {
+                let mut prop = false;
 
-            let fn_summary_label = if !fn_sink_bits.is_empty() {
-                Some(DataLabel::Sink(fn_sink_bits))
-            } else if !fn_sani_bits.is_empty() {
-                Some(DataLabel::Sanitizer(fn_sani_bits))
-            } else if !fn_src_bits.is_empty() {
-                Some(DataLabel::Source(fn_src_bits))
-            } else {
-                None
+                // check explicit returns
+                for &idx in node_bits.keys() {
+                    if g[idx].kind == StmtKind::Return {
+                        for u in &g[idx].uses {
+                            if param_set.contains(u.as_str()) {
+                                prop = true;
+                            }
+                            // also check if the var was derived from a param
+                            if let Some(bits) = var_taint.get(u)
+                                && !bits.is_empty()
+                                && param_names.iter().any(|p| var_taint.contains_key(p))
+                            {
+                                prop = true;
+                            }
+                        }
+                    }
+                }
+
+                // check implicit returns (fall-through body exits)
+                for &exit_pred in &body_exits {
+                    let info = &g[exit_pred];
+                    for u in &info.uses {
+                        if param_set.contains(u.as_str()) {
+                            prop = true;
+                        }
+                    }
+                    if let Some(def) = &info.defines
+                        && param_set.contains(def.as_str())
+                    {
+                        prop = true;
+                    }
+                }
+
+                prop
             };
+
+            tainted_sink_params.sort_unstable();
+            tainted_sink_params.dedup();
 
             /* ───── 4) synthesise an explicit exit-node and wire it up ──────────── */
             let exit_idx = g.add_node(NodeInfo {
@@ -514,8 +749,19 @@ fn build_sub<'a>(
                 connect_all(g, &[b], exit_idx, EdgeKind::Seq);
             }
 
-            /* ───── 5) store the summary – *don’t* overwrite it later! ──────────── */
-            summaries.insert(fn_name.clone(), (entry_idx, exit_idx, fn_summary_label));
+            /* ───── 5) store the rich summary ──────────────────────────────────── */
+            summaries.insert(fn_name.clone(), LocalFuncSummary {
+                entry: entry_idx,
+                exit: exit_idx,
+                source_caps: fn_src_bits,
+                sanitizer_caps: fn_sani_bits,
+                sink_caps: fn_sink_bits,
+                param_count,
+                param_names,
+                propagates_taint: propagates,
+                tainted_sink_params,
+                callees,
+            });
 
             vec![exit_idx]
         }
@@ -533,12 +779,7 @@ fn build_sub<'a>(
                 return build_sub(inner, preds, g, lang, code, summaries);
             }
 
-            let has_call = ast.children(&mut cursor).any(|c| {
-                matches!(
-                    lookup(lang, c.kind()),
-                    Kind::CallFn | Kind::CallMethod | Kind::CallMacro
-                )
-            });
+            let has_call = has_call_descendant(ast, lang);
 
             let kind = if has_call {
                 StmtKind::Call
@@ -548,6 +789,27 @@ fn build_sub<'a>(
             let node = push_node(g, kind, ast, lang, code);
             connect_all(g, preds, node, EdgeKind::Seq);
             vec![node]
+        }
+
+        // Direct call nodes (Ruby `call`, Python `call`, etc. when they appear
+        // as direct children of a block rather than wrapped in expression_statement)
+        Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
+            let n = push_node(g, StmtKind::Call, ast, lang, code);
+            connect_all(g, preds, n, EdgeKind::Seq);
+            vec![n]
+        }
+
+        // Assignment that may contain a call (Python `x = os.getenv(...)`, Ruby `x = gets()`)
+        Kind::Assignment => {
+            let has_call = has_call_descendant(ast, lang);
+            let kind = if has_call {
+                StmtKind::Call
+            } else {
+                StmtKind::Seq
+            };
+            let n = push_node(g, kind, ast, lang, code);
+            connect_all(g, preds, n, EdgeKind::Seq);
+            vec![n]
         }
 
         // Trivia we drop completely ---------------------------------------------
@@ -660,6 +922,31 @@ pub(crate) fn build_cfg<'a>(
     }
 
     (g, entry, summaries)
+}
+
+/// Convert the graph‑local `FuncSummaries` into serialisable [`FuncSummary`]
+/// values suitable for cross‑file persistence.
+pub(crate) fn export_summaries(
+    summaries: &FuncSummaries,
+    file_path: &str,
+    lang: &str,
+) -> Vec<FuncSummary> {
+    summaries
+        .iter()
+        .map(|(name, local)| FuncSummary {
+            name: name.clone(),
+            file_path: file_path.to_owned(),
+            lang: lang.to_owned(),
+            param_count: local.param_count,
+            param_names: local.param_names.clone(),
+            source_caps: local.source_caps.bits(),
+            sanitizer_caps: local.sanitizer_caps.bits(),
+            sink_caps: local.sink_caps.bits(),
+            propagates_taint: local.propagates_taint,
+            tainted_sink_params: local.tainted_sink_params.clone(),
+            callees: local.callees.clone(),
+        })
+        .collect()
 }
 
 // pub(crate) fn dump_cfg(g: &Cfg) {

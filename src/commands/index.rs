@@ -5,6 +5,7 @@ use crate::patterns::Severity;
 use crate::utils::Config;
 use crate::utils::project::get_project_info;
 use crate::walk::spawn_file_walker;
+use blake3;
 use bytesize::ByteSize;
 use chrono::{DateTime, Local};
 use console::style;
@@ -95,7 +96,7 @@ pub fn build_index(
 
     tracing::debug!("Cleaned index for: {}", project_name);
 
-    let (rx, handle) = spawn_file_walker(&project_path, &config);
+    let (rx, handle) = spawn_file_walker(project_path, config);
     if let Err(err) = handle.join() {
         tracing::error!("walker thread panicked: {:#?}", err);
     }
@@ -103,8 +104,10 @@ pub fn build_index(
 
     paths.into_par_iter().try_for_each(
         |path| -> NyxResult<()> {
-            let issues = crate::commands::scan::run_rules_on_file(&path, config)?;
             let mut idx = Indexer::from_pool(project_name, &pool)?;
+
+            // Run AST-only rules (no taint yet — summaries come later in scan)
+            let issues = crate::commands::scan::run_rules_on_file(&path, config, None)?;
             let file_id = idx.upsert_file(&path)?;
 
             let rows: Vec<IssueRow> = issues
@@ -122,6 +125,18 @@ pub fn build_index(
                 .collect();
 
             idx.replace_issues(file_id, rows)?;
+
+            // Extract and persist function summaries for cross-file taint
+            let sums = crate::commands::scan::extract_summaries_from_file(&path, config)
+                .unwrap_or_default();
+            if !sums.is_empty() {
+                let bytes = std::fs::read(&path)?;
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(&bytes);
+                let hash = hasher.finalize().as_bytes().to_vec();
+                idx.replace_summaries_for_file(&path, &hash, &sums)?;
+            }
+
             Ok(())
         },
     )?;

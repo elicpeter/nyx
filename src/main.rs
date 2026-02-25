@@ -6,6 +6,7 @@ mod database;
 mod errors;
 mod labels;
 mod patterns;
+mod summary;
 mod taint;
 mod utils;
 mod walk;
@@ -54,6 +55,7 @@ fn main() -> NyxResult<()> {
     let proj_dirs = ProjectDirs::from("dev", "ecpeter23", "nyx")
         .ok_or("Unable to determine project directories")?;
 
+    // todo: check if we want to actually build a config file, maybe some environments will not want to have anything written
     let config_dir = proj_dirs.config_dir();
     fs::create_dir_all(config_dir)?;
 

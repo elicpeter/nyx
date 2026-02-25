@@ -1,4 +1,4 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -75,4 +75,11 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "attribute_item"   => Kind::Trivia,
     "mod_item"         => Kind::Trivia,
     "type_item"        => Kind::Trivia,
+};
+
+pub static PARAM_CONFIG: ParamConfig = ParamConfig {
+    params_field: "parameters",
+    param_node_kinds: &["parameter"],
+    self_param_kinds: &["self_parameter"],
+    ident_fields: &["pattern"],
 };

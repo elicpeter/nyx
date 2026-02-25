@@ -1,0 +1,74 @@
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use phf::{Map, phf_map};
+
+pub static RULES: &[LabelRule] = &[
+    // ─────────── Sources ───────────
+    LabelRule {
+        matchers: &["ENV", "gets"],
+        label: DataLabel::Source(Cap::all()),
+    },
+    LabelRule {
+        matchers: &["params"],
+        label: DataLabel::Source(Cap::all()),
+    },
+    // ───────── Sanitizers ──────────
+    LabelRule {
+        matchers: &["CGI.escapeHTML", "ERB::Util.html_escape"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["Shellwords.escape", "Shellwords.shellescape"],
+        label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
+    },
+    // ─────────── Sinks ─────────────
+    LabelRule {
+        matchers: &["system", "exec"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["eval"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["puts", "print"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+    },
+];
+
+pub static KINDS: Map<&'static str, Kind> = phf_map! {
+    // control-flow
+    "if"                    => Kind::If,
+    "unless"                => Kind::If,
+    "while"                 => Kind::While,
+    "for"                   => Kind::For,
+
+    "return"                => Kind::Return,
+    "break"                 => Kind::Break,
+    "next"                  => Kind::Continue,
+
+    // structure
+    "program"               => Kind::SourceFile,
+    "body_statement"        => Kind::Block,
+    "do_block"              => Kind::Block,
+    "then"                  => Kind::Block,
+    "else"                  => Kind::Block,
+
+    // data-flow
+    "call"                  => Kind::CallFn,
+    "method_call"           => Kind::CallFn,
+    "assignment"            => Kind::Assignment,
+    "method"                => Kind::Function,
+
+    // trivia
+    "comment"               => Kind::Trivia,
+    ";"  => Kind::Trivia, ","  => Kind::Trivia,
+    "("  => Kind::Trivia, ")"  => Kind::Trivia,
+    "\n" => Kind::Trivia,
+};
+
+pub static PARAM_CONFIG: ParamConfig = ParamConfig {
+    params_field: "parameters",
+    param_node_kinds: &["identifier"],
+    self_param_kinds: &[],
+    ident_fields: &["name"],
+};

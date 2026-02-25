@@ -9,10 +9,6 @@ pub static RULES: &[LabelRule] = &[
     },
     // ───────── Sanitizers ──────────
     LabelRule {
-        matchers: &["JSON.parse"],
-        label: DataLabel::Sanitizer(Cap::JSON_PARSE),
-    },
-    LabelRule {
         matchers: &["encodeURIComponent", "encodeURI"],
         label: DataLabel::Sanitizer(Cap::URL_ENCODE),
     },
@@ -41,6 +37,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "while_statement"       => Kind::While,
     "for_statement"         => Kind::For,
     "for_in_statement"      => Kind::For,
+    "for_of_statement"      => Kind::For,
 
     "return_statement"      => Kind::Return,
     "break_statement"       => Kind::Break,
@@ -68,11 +65,13 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "{"  => Kind::Trivia, "}"  => Kind::Trivia,
     "\n" => Kind::Trivia,
     "import_statement"      => Kind::Trivia,
+    "type_alias_declaration" => Kind::Trivia,
+    "interface_declaration" => Kind::Trivia,
 };
 
 pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     params_field: "parameters",
-    param_node_kinds: &["identifier"],
+    param_node_kinds: &["required_parameter", "optional_parameter", "identifier"],
     self_param_kinds: &[],
     ident_fields: &["name", "pattern"],
 };
