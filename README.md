@@ -183,7 +183,34 @@ Nyx supports three analysis modes, selectable via the `scanner.mode` config opti
 | Error fallthrough | `cfg-error-fallthrough` | Error-handling branches that don't terminate, allowing execution to fall through to dangerous operations |
 | Resource leak | `cfg-resource-leak` | Resources acquired but not released on all exit paths (malloc/free, fopen/fclose, Lock/Unlock) |
 
-Findings are scored and ranked by severity, proximity to entry point, path complexity, and taint confirmation.
+### Attack Surface Ranking
+
+Every finding is assigned a deterministic **attack-surface score** that estimates exploitability using only information already in memory — no extra source passes are needed. Findings are sorted by descending score before truncation, so `max_results` always keeps the most important results.
+
+The score is the sum of five components:
+
+| Component | Weight | Description |
+|---|---|---|
+| **Severity base** | High = 60, Medium = 30, Low = 10 | Primary ordering signal. Severity reflects source-kind exploitability and rule confidence. |
+| **Analysis kind** | taint = +10, state = +8, cfg = +3/+5, ast = 0 | Taint-confirmed flows are the strongest signal; AST-only pattern matches rank lowest at equal severity. CFG findings with evidence get +5, without get +3. |
+| **Evidence strength** | +1 per evidence item (max 4), +2–6 for source kind | More evidence increases confidence. Source-kind priority: user input (+6) > env/config (+5) > unknown (+4) > file system (+3) > database (+2). |
+| **State rule type** | +1 to +6 | Use-after-close and unauthenticated access (+6) rank above double-close (+3), must-leak (+2), and may-leak (+1). |
+| **Path validation** | −5 | Findings on paths guarded by a validation predicate receive a small exploitability penalty — the guard may prevent triggering. |
+
+**Score ranges** (approximate):
+
+| Finding type | Score |
+|---|---|
+| High taint + user input | ~78 |
+| High state (use-after-close) | ~74 |
+| High CFG structural | ~63 |
+| Medium taint + env source | ~47 |
+| Medium state (resource leak) | ~40 |
+| Low AST-only pattern | ~10 |
+
+Tie-breaking is deterministic: severity → rule ID → file path → line → column → message hash. The same set of findings always produces the same ordering regardless of parallelism or input order.
+
+Ranking is enabled by default. Disable it with `--no-rank` or `output.attack_surface_ranking = false` in config. When disabled, `rank_score` is omitted from JSON/SARIF output.
 
 ---
 
@@ -287,7 +314,7 @@ With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged
 | Path-sensitive analysis | Done   | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Monotone predicate summaries with contradiction pruning. |
 | Dataflow & state modeling | Done   | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Generic `Transfer` trait over bounded lattices with guaranteed convergence. |
 | Monotone taint analysis | Done   | Replaced BFS taint engine with a forward worklist dataflow analysis over a finite `TaintState` lattice. Multi-origin tracking, dual validated-must/may sets, JS/TS two-level solve. Guaranteed termination via lattice finiteness. |
-| Attack surface ranking | TODO   | Score entry points by distance-to-sink, guard strength, path complexity, and privilege escalation potential. Deterministic attack surface scoring. |
+| Attack surface ranking | Done   | Deterministic post-analysis scoring of findings by severity, analysis kind, evidence strength, source-kind exploitability, and validation state. Findings sorted by score before truncation so `max_results` keeps the most important results. |
 
 ### Phase 2 -- Dynamic Capability
 

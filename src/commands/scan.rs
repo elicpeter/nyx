@@ -54,6 +54,12 @@ pub struct Diag {
     /// Structured evidence labels (e.g. Source, Sink) for console display.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<(String, String)>,
+    /// Attack-surface ranking score (higher = more exploitable / important).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank_score: Option<f64>,
+    /// Breakdown of how the ranking score was computed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank_reason: Option<Vec<(String, String)>>,
 }
 
 /// Entry point called by the CLI.
@@ -204,6 +210,9 @@ pub(crate) fn scan_filesystem(
             .collect();
         pb.finish_and_clear();
 
+        if cfg.output.attack_surface_ranking {
+            crate::rank::rank_diags(&mut diags);
+        }
         if let Some(max) = cfg.output.max_results {
             diags.truncate(max as usize);
         }
@@ -311,6 +320,9 @@ pub(crate) fn scan_filesystem(
     };
     tracing::info!(diags = diags.len(), "pass 2 complete");
 
+    if cfg.output.attack_surface_ranking {
+        crate::rank::rank_diags(&mut diags);
+    }
     if let Some(max) = cfg.output.max_results {
         diags.truncate(max as usize);
     }
@@ -491,6 +503,9 @@ pub fn scan_with_index_parallel(
 
     let mut diags: Vec<Diag> = diag_map.into_iter().flat_map(|(_, v)| v).collect();
 
+    if cfg.output.attack_surface_ranking {
+        crate::rank::rank_diags(&mut diags);
+    }
     if let Some(max) = cfg.output.max_results {
         diags.truncate(max as usize);
     }
@@ -546,6 +561,8 @@ fn severity_filter_applied_at_output_stage() {
             guard_kind: None,
             message: None,
             evidence: vec![],
+            rank_score: None,
+            rank_reason: None,
         },
         Diag {
             path: "src/main.rs".into(),
@@ -557,6 +574,8 @@ fn severity_filter_applied_at_output_stage() {
             guard_kind: None,
             message: None,
             evidence: vec![],
+            rank_score: None,
+            rank_reason: None,
         },
     ];
 

@@ -276,6 +276,8 @@ pub mod index {
                     guard_kind: None,
                     message: None,
                     evidence: vec![],
+                    rank_score: None,
+                    rank_reason: None,
                 })
             })?;
 

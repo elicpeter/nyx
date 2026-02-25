@@ -112,6 +112,10 @@ pub enum Commands {
         #[arg(long)]
         fail_on: Option<String>,
 
+        /// Disable attack-surface ranking (findings are sorted by exploitability by default)
+        #[arg(long)]
+        no_rank: bool,
+
         // ── Deprecated aliases (hidden) ─────────────────────────────────
         /// Deprecated: use --index off
         #[arg(long, hide = true)]

@@ -27,6 +27,7 @@ pub fn handle_command(
             keep_nonprod_severity,
             quiet,
             fail_on,
+            no_rank,
             // Deprecated aliases
             no_index,
             rebuild_index,
@@ -90,6 +91,10 @@ pub fn handle_command(
 
             if quiet {
                 config.output.quiet = true;
+            }
+
+            if no_rank {
+                config.output.attack_surface_ranking = false;
             }
 
             scan::handle(

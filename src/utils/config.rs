@@ -140,6 +140,9 @@ pub struct OutputConfig {
 
     /// The maximum number of results to show.
     pub max_results: Option<u32>,
+
+    /// Enable attack-surface ranking to sort findings by exploitability.
+    pub attack_surface_ranking: bool,
 }
 
 impl Default for OutputConfig {
@@ -148,6 +151,7 @@ impl Default for OutputConfig {
             default_format: "console".into(),
             quiet: false,
             max_results: None,
+            attack_surface_ranking: true,
         }
     }
 }
@@ -334,6 +338,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.output.default_format = user.output.default_format;
     default.output.quiet = user.output.quiet;
     default.output.max_results = user.output.max_results;
+    default.output.attack_surface_ranking = user.output.attack_surface_ranking;
 
     // --- PerformanceConfig ---
     default.performance.max_depth = user.performance.max_depth;

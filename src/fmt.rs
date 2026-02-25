@@ -116,14 +116,19 @@ fn render_diag(d: &Diag, width: usize) -> String {
     let mut out = String::new();
 
     // ── Header line ──────────────────────────────────────────────────────
-    // Format: `  98:5  ⚠ [MEDIUM] taint-unsanitised-flow (source 41:5)`
+    // Format: `  98:5  ⚠ [MEDIUM] taint-unsanitised-flow (source 41:5)  Score: 87`
     let loc = format!("{}:{}", d.line, d.col);
     let sev = severity_tag(d.severity);
+    let score_suffix = match d.rank_score {
+        Some(s) => format!("  {}", style(format!("Score: {}", s as u32)).dim()),
+        None => String::new(),
+    };
     out.push_str(&format!(
-        "  {}  {} {}\n",
+        "  {}  {} {}{}\n",
         style(&loc).dim(),
         sev,
         style(&d.id).dim(),
+        score_suffix,
     ));
 
     // ── Message body ─────────────────────────────────────────────────────
@@ -476,6 +481,8 @@ mod tests {
                 guard_kind: None,
                 message: Some("test message".into()),
                 evidence: vec![],
+                rank_score: None,
+                rank_reason: None,
             },
             Diag {
                 path: "src/b.rs".into(),
@@ -487,6 +494,8 @@ mod tests {
                 guard_kind: None,
                 message: None,
                 evidence: vec![],
+                rank_score: None,
+                rank_reason: None,
             },
         ];
         let output = render_console(&diags, "test-project");
@@ -512,6 +521,8 @@ mod tests {
                 ("Source".into(), "env::var(\"HOME\") at 12:3".into()),
                 ("Sink".into(), "Command::new(\"sh\")".into()),
             ],
+            rank_score: None,
+            rank_reason: None,
         }];
         let output = render_console(&diags, "proj");
         let stripped = strip_ansi(&output);
@@ -534,6 +545,8 @@ mod tests {
                 guard_kind: None,
                 message: Some("first".into()),
                 evidence: vec![],
+                rank_score: None,
+                rank_reason: None,
             },
             Diag {
                 path: "src/a.rs".into(),
@@ -545,6 +558,8 @@ mod tests {
                 guard_kind: None,
                 message: Some("second".into()),
                 evidence: vec![],
+                rank_score: None,
+                rank_reason: None,
             },
         ];
         let output = render_console(&diags, "proj");
@@ -565,12 +580,54 @@ mod tests {
             guard_kind: None,
             message: None,
             evidence: vec![],
+            rank_score: None,
+            rank_reason: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
             !json.contains("evidence"),
             "empty evidence should be omitted from JSON"
         );
+    }
+
+    #[test]
+    fn json_omits_rank_fields_when_none() {
+        let d = Diag {
+            path: "x.rs".into(),
+            line: 1,
+            col: 1,
+            severity: Severity::Low,
+            id: "test".into(),
+            path_validated: false,
+            guard_kind: None,
+            message: None,
+            evidence: vec![],
+            rank_score: None,
+            rank_reason: None,
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(!json.contains("rank_score"), "rank_score should be omitted when None");
+        assert!(!json.contains("rank_reason"), "rank_reason should be omitted when None");
+    }
+
+    #[test]
+    fn json_includes_rank_score_when_set() {
+        let d = Diag {
+            path: "x.rs".into(),
+            line: 1,
+            col: 1,
+            severity: Severity::High,
+            id: "taint-unsanitised-flow".into(),
+            path_validated: false,
+            guard_kind: None,
+            message: None,
+            evidence: vec![],
+            rank_score: Some(120.0),
+            rank_reason: None,
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains("rank_score"), "rank_score should be present when set");
+        assert!(json.contains("120"), "rank_score value should appear");
     }
 
     // ── capitalize_first ─────────────────────────────────────────────────

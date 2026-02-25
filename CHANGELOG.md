@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Attack surface ranking** — deterministic post-analysis scoring layer that prioritizes findings by exploitability. Each `Diag` receives an `f64` score computed from five components: severity base (High=60, Medium=30, Low=10), analysis kind bonus (taint +10 > state +8 > cfg +3/5 > ast 0), evidence strength (+1 per item, +2–6 for source-kind priority), state rule type bonus (+1–6), and a path-validation penalty (−5 for guarded paths). Findings are sorted by descending score before truncation so `max_results` keeps the most important results. Tie-breaking is deterministic by severity, rule ID, file path, line, column, and message hash.
+  - **`rank_score` and `rank_reason` fields on `Diag`** — optional fields with `#[serde(skip_serializing_if = "Option::is_none")]`; JSON output is unchanged when ranking is disabled.
+  - **`--no-rank` CLI flag** — disables attack-surface ranking (enabled by default).
+  - **`output.attack_surface_ranking` config key** — boolean (default `true`) to control ranking via config file.
+  - **Console score display** — dim `Score: N` appended to each finding's header line when ranking is enabled.
+  - **New module `src/rank.rs`** — `compute_attack_rank()`, `rank_diags()`, and `sort_key()` functions. Scoring uses only in-memory data; no extra file I/O or graph recomputation.
+  - 10 new unit tests: ordering correctness (high taint > medium file-io, must-leak > may-leak, taint > cfg-only, state rules, AST lowest at same severity), determinism (input-order-independent), path-validation penalty, and JSON serialization (rank fields omitted when None, present when set).
 - **State-model dataflow analysis** — new `src/state/` module implementing a forward worklist dataflow engine over the existing CFG. Tracks per-variable resource lifecycle (`UNINIT`, `OPEN`, `CLOSED`, `MOVED`) via bitset lattice and per-path authentication level (`Unauthed`, `Authed`, `Admin`) as a composable product domain. Detects:
   - **Use-after-close** (`state-use-after-close`, High) — variable read/written after its resource handle was closed.
   - **Double-close** (`state-double-close`, Medium) — resource handle closed more than once.

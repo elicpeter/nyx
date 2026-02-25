@@ -296,6 +296,8 @@ pub fn run_rules_on_bytes(
                     "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
                 )),
                 evidence,
+                rank_score: None,
+                rank_reason: None,
             });
         }
 
@@ -325,6 +327,8 @@ pub fn run_rules_on_bytes(
                 guard_kind: None,
                 message: Some(cf.message),
                 evidence: vec![],
+                rank_score: None,
+                rank_reason: None,
             });
         }
 
@@ -356,6 +360,8 @@ pub fn run_rules_on_bytes(
                     guard_kind: None,
                     message: Some(sf.message.clone()),
                     evidence: vec![],
+                    rank_score: None,
+                    rank_reason: None,
                 });
             }
 
@@ -394,6 +400,8 @@ pub fn run_rules_on_bytes(
                         guard_kind: None,
                         message: Some(cq.meta.description.to_owned()),
                         evidence: vec![],
+                        rank_score: None,
+                        rank_reason: None,
                     });
                 }
             }
@@ -562,6 +570,8 @@ pub fn analyse_file_fused(
                     "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
                 )),
                 evidence,
+                rank_score: None,
+                rank_reason: None,
             });
         }
 
@@ -590,6 +600,8 @@ pub fn analyse_file_fused(
                 guard_kind: None,
                 message: Some(cf.message),
                 evidence: vec![],
+                rank_score: None,
+                rank_reason: None,
             });
         }
 
@@ -620,6 +632,8 @@ pub fn analyse_file_fused(
                     guard_kind: None,
                     message: Some(sf.message.clone()),
                     evidence: vec![],
+                    rank_score: None,
+                    rank_reason: None,
                 });
             }
 
@@ -656,6 +670,8 @@ pub fn analyse_file_fused(
                         guard_kind: None,
                         message: Some(cq.meta.description.to_owned()),
                         evidence: vec![],
+                        rank_score: None,
+                        rank_reason: None,
                     });
                 }
             }

@@ -11,6 +11,7 @@ mod interop;
 mod labels;
 mod output;
 mod patterns;
+mod rank;
 mod state;
 mod summary;
 mod symbol;

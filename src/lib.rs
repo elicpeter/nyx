@@ -15,6 +15,7 @@ pub mod interop;
 pub mod labels;
 pub mod output;
 pub mod patterns;
+pub mod rank;
 pub mod state;
 pub mod summary;
 pub mod symbol;
