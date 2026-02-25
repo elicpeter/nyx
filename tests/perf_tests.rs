@@ -3,7 +3,7 @@ mod common;
 
 use common::{load_expectations, test_config};
 use nyx_scanner::utils::config::AnalysisMode;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -20,7 +20,7 @@ fn is_ci_bench() -> bool {
 }
 
 /// Run `scan_no_index` N times and return the median duration in ms.
-fn bench_no_index(fixture_dir: &PathBuf, iterations: usize) -> u64 {
+fn bench_no_index(fixture_dir: &Path, iterations: usize) -> u64 {
     let cfg = test_config(AnalysisMode::Full);
     let mut durations: Vec<u64> = Vec::with_capacity(iterations);
 
@@ -35,7 +35,7 @@ fn bench_no_index(fixture_dir: &PathBuf, iterations: usize) -> u64 {
 }
 
 /// Run indexed scan (cold = new tempdir with fresh index, warm = second run).
-fn bench_indexed(fixture_dir: &PathBuf, iterations: usize) -> (u64, u64) {
+fn bench_indexed(fixture_dir: &Path, iterations: usize) -> (u64, u64) {
     use nyx_scanner::commands::index::build_index;
     use nyx_scanner::commands::scan::scan_with_index_parallel;
     use nyx_scanner::database::index::Indexer;
