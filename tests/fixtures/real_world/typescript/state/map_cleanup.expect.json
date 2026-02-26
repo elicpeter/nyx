@@ -1,0 +1,26 @@
+{
+  "description": "Batch file handle processing. processFiles opens handles in a loop but never closes them. processFilesSafe closes all handles in a separate loop.",
+  "tags": [
+    "state",
+    "resource-leak",
+    "loop",
+    "batch",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "File handles opened in loop are never closed in processFiles; scanner may not track handles stored in arrays"
+    }
+  ]
+}

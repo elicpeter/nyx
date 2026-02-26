@@ -1,0 +1,37 @@
+{
+  "description": "Double-close and use-after-close patterns with file descriptors. Both are temporal safety violations.",
+  "tags": [
+    "state",
+    "double-close",
+    "use-after-close",
+    "fd",
+    "fs"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-double-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        2,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "fd closed twice in doubleClose; scanner may not track JS fd state transitions"
+    },
+    {
+      "rule_id": "state-use-after-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        8,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "fd used in readSync after closeSync in useAfterClose; scanner may not track JS fd state transitions"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "description": "Nested callbacks where fs.readFile data flows into child_process.exec. Tests CFG handling of callback nesting and data flow across callback boundaries.",
+  "tags": [
+    "cfg",
+    "callbacks",
+    "cmdi",
+    "fs"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "Data read from fs.readFile flows into child_process.exec but data is a callback param, not a recognized taint source"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        7,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "child_process.exec receives unchecked file contents"
+    }
+  ]
+}

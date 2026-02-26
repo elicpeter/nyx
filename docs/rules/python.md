@@ -4,7 +4,34 @@ Nyx detects Python vulnerabilities through AST patterns and taint analysis, cove
 
 ## Taint Labels
 
-Python has partial taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/python.rs`.
+Python has moderate taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/python.rs`.
+
+### Sources
+
+| Matcher | Cap |
+|---------|-----|
+| `os.getenv`, `os.environ` | all |
+| `request.args`, `request.form`, `request.json`, `request.headers`, `request.cookies`, `input` | all |
+| `sys.argv` | all |
+| `argparse.parse_args`, `urllib.request.urlopen`, `requests.get`, `requests.post` | all |
+
+### Sanitizers
+
+| Matcher | Cap |
+|---------|-----|
+| `html.escape` | HTML_ESCAPE |
+| `shlex.quote` | SHELL_ESCAPE |
+| `os.path.realpath` | FILE_IO |
+
+### Sinks
+
+| Matcher | Cap |
+|---------|-----|
+| `eval`, `exec` | SHELL_ESCAPE |
+| `os.system`, `os.popen`, `subprocess.call`, `subprocess.run`, `subprocess.Popen`, `subprocess.check_output`, `subprocess.check_call` | SHELL_ESCAPE |
+| `cursor.execute`, `cursor.executemany` | SHELL_ESCAPE |
+| `send_file`, `send_from_directory` | FILE_IO |
+| `open` | FILE_IO |
 
 ---
 

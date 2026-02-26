@@ -1,0 +1,24 @@
+{
+  "description": "Double free when flag is true: free called twice on same pointer. Safe version nulls pointer after free.",
+  "tags": [
+    "cfg",
+    "state",
+    "double-free"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-double-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "Conditional double free \u2014 if flag is true, buf freed at line 6 and again at line 8. Aspirational state analysis finding."
+    }
+  ]
+}

@@ -130,7 +130,8 @@ fn clean_usage_no_state_findings() {
 
 #[test]
 fn state_analysis_off_by_default() {
-    let cfg = common::test_config(AnalysisMode::Full);
+    let mut cfg = common::test_config(AnalysisMode::Full);
+    cfg.scanner.enable_state_analysis = false;
     let diags =
         nyx_scanner::scan_no_index(&state_fixture_dir(), &cfg).expect("scan should succeed");
     let state: Vec<_> = diags.iter().filter(|d| d.id.starts_with("state-")).collect();

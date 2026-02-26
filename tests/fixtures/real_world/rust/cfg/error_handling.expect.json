@@ -1,0 +1,34 @@
+{
+  "description": "Error handling patterns: Result with ? (safe), .unwrap() (panicky), .expect() (panicky with message)",
+  "tags": [
+    "error-handling",
+    "cfg"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() in read_config_panicky \u2014 will panic on IO error"
+    },
+    {
+      "rule_id": "rs.quality.expect",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": ".expect() in read_config_expect \u2014 will panic with message on IO error"
+    }
+  ]
+}

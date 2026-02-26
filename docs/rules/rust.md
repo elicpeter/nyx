@@ -7,7 +7,6 @@ Nyx detects Rust vulnerabilities through AST patterns (memory safety, code quali
 | Function | Capability | Source Kind |
 |----------|-----------|-------------|
 | `std::env::var`, `env::var` | `all` | EnvironmentConfig |
-| `fs::read_to_string` | `all` | FileSystem |
 
 ## Taint Sinks
 
@@ -15,6 +14,7 @@ Nyx detects Rust vulnerabilities through AST patterns (memory safety, code quali
 |----------|-------------------|
 | `Command::new`, `Command::arg`, `Command::args` | `SHELL_ESCAPE` |
 | `Command::status`, `Command::output` | `SHELL_ESCAPE` |
+| `fs::read_to_string`, `fs::write`, `fs::read`, `File::open`, `File::create` | `FILE_IO` |
 
 ## Taint Sanitizers
 
@@ -22,6 +22,8 @@ Nyx detects Rust vulnerabilities through AST patterns (memory safety, code quali
 |----------|------------------|
 | `html_escape::encode_safe`, `sanitize_html` | `HTML_ESCAPE` |
 | `shell_escape::unix::escape`, `sanitize_shell` | `SHELL_ESCAPE` |
+
+> **Note:** `fs::read_to_string` was moved from taint sources to sinks to support path traversal detection (`env::var` → `fs::read_to_string`).
 
 ---
 

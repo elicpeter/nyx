@@ -1,0 +1,45 @@
+{
+  "description": "env::var flows to Command::new \u2014 command injection. Safe version uses allowlist.",
+  "tags": [
+    "taint",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "env::var(\"USER_CMD\") flows through .arg(&cmd) to Command execution"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on env::var Result"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on Command output Result"
+    }
+  ]
+}

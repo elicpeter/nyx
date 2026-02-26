@@ -50,7 +50,7 @@ Each language page lists all AST pattern rules with examples:
 
 - [Rust](rust.md) — 12 rules (memory safety, code quality)
 - [C](c.md) — 8 rules (banned functions, command execution, format strings)
-- [C++](cpp.md) — 8 rules (banned functions, dangerous casts, command execution)
+- [C++](cpp.md) — 9 rules (banned functions, dangerous casts, command execution)
 - [Java](java.md) — 8 rules (deserialization, command execution, reflection, SQL, crypto, XSS)
 - [Go](go.md) — 8 rules (command execution, unsafe pointer, TLS, crypto, SQL, secrets, deserialization)
 - [JavaScript](javascript.md) — 12 rules (code execution, XSS, prototype pollution, crypto, transport)
@@ -68,12 +68,12 @@ Taint analysis uses language-specific source/sink/sanitizer labels. Coverage var
 | Rust | Complete | Complete | Complete | Full |
 | JavaScript | Complete | Complete | Partial | Full |
 | TypeScript | Partial | Partial | Partial | Moderate |
-| Python | Partial | Partial | Minimal | Moderate |
-| C | Partial | Partial | Minimal | Moderate |
-| C++ | Partial | Partial | Minimal | Moderate |
-| Java | Partial | Partial | Minimal | Moderate |
-| Go | Partial | Partial | Minimal | Moderate |
-| PHP | Minimal | Minimal | Minimal | Starter |
-| Ruby | Minimal | Minimal | Minimal | Starter |
+| Python | Partial | Complete | Partial | Moderate |
+| C | Partial | Complete | Minimal | Moderate |
+| C++ | Partial | Complete | Minimal | Moderate |
+| Java | Partial | Partial | Partial | Moderate |
+| Go | Complete | Complete | Partial | Full |
+| PHP | Complete | Complete | Partial | Full |
+| Ruby | Partial | Partial | Partial | Moderate |
 
 "Starter" coverage means basic rules exist but many common library functions are not yet labeled. Contributions welcome.

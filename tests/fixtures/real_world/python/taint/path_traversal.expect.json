@@ -1,0 +1,25 @@
+{
+  "description": "Path traversal via user-controlled filename passed to send_file",
+  "tags": [
+    "taint",
+    "path-traversal",
+    "flask",
+    "file-io"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('file') flows into os.path.join then send_file without validation"
+    }
+  ]
+}

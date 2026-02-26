@@ -1,0 +1,34 @@
+{
+  "description": "C++ new[]/delete[] lifecycle: leak and double delete patterns",
+  "tags": [
+    "state",
+    "resource-lifecycle"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        2,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "new char[1024] at line 4 never deleted \u2014 aspirational, requires new/delete tracking"
+    },
+    {
+      "rule_id": "state-double-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        14,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "delete[] called twice \u2014 aspirational, requires new/delete tracking"
+    }
+  ]
+}

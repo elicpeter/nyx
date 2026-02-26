@@ -29,6 +29,8 @@ JavaScript has the most complete taint label coverage alongside Rust. Nyx detect
 | `encodeURIComponent`, `encodeURI` | `URL_ENCODE` |
 | `DOMPurify.sanitize` | `HTML_ESCAPE` |
 
+> **Note:** Anonymous function expressions and arrow functions passed as callback arguments (e.g., Express `app.get('/path', function(req, res) { ... })`) are automatically walked as separate function scopes for taint analysis. Each anonymous function gets a unique scope identifier to prevent cross-function taint leakage.
+
 ---
 
 ## AST Pattern Rules

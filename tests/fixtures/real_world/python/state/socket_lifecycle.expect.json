@@ -1,0 +1,24 @@
+{
+  "description": "Socket resource lifecycle - leaked vs properly closed with try/finally",
+  "tags": [
+    "state",
+    "resource-leak",
+    "socket"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "connect_and_leak creates socket but never closes it"
+    }
+  ]
+}

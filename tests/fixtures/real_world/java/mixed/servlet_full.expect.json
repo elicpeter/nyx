@@ -1,0 +1,61 @@
+{
+  "description": "Servlet with multiple vuln types: command injection, SQL injection via concat, and file resource leak",
+  "tags": [
+    "taint",
+    "state",
+    "cmdi",
+    "sqli",
+    "resource-leak",
+    "servlet",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "request.getParameter(\"input\") flows into Runtime.getRuntime().exec(input)"
+    },
+    {
+      "rule_id": "java.sqli.execute_concat",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        15,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects string concatenation inside executeQuery argument"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "request.getParameter(\"input\") concatenated into SQL query passed to executeQuery"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        21,
+        29
+      ],
+      "evidence_contains": [],
+      "notes": "FileInputStream opened on line 23 but never closed"
+    }
+  ]
+}

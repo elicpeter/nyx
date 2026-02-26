@@ -1,0 +1,25 @@
+{
+  "description": "cURL handle used after being closed",
+  "tags": [
+    "state",
+    "use-after-close",
+    "curl",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-use-after-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "curl_exec called after curl_close on same handle"
+    }
+  ]
+}

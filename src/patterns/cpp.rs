@@ -48,6 +48,14 @@ pub const PATTERNS: &[Pattern] = &[
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
     },
+    Pattern {
+        id: "cpp.cmdi.popen",
+        description: "popen() — shell command execution",
+        query: r#"(call_expression function: (identifier) @id (#eq? @id "popen")) @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CommandExec,
+    },
     // ── Tier A: Dangerous casts ────────────────────────────────────────
     // C++ casts are parsed as call_expression with template_function
     Pattern {

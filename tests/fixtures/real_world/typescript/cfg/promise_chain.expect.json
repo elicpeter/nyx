@@ -1,0 +1,37 @@
+{
+  "description": "Promise chain with promisified exec. Input flows through multiple await steps. Scanner cannot trace through promisify wrappers.",
+  "tags": [
+    "cfg",
+    "async",
+    "promise",
+    "cmdi",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        5,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "input flows to execAsync but execAsync is a promisified wrapper not recognized as a taint sink"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "execAsync called without validation of input"
+    }
+  ]
+}

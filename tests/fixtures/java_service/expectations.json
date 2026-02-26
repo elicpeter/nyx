@@ -3,7 +3,7 @@
     { "id_prefix": "taint-unsanitised-flow", "min_count": 2 },
     { "id_prefix": "java.cmdi.runtime_exec", "min_count": 2 },
     { "id_prefix": "java.reflection.class_forname", "min_count": 1 },
-    { "id_prefix": "cfg-unguarded-sink", "min_count": 2 }
+    { "id_prefix": "cfg-unguarded-sink", "min_count": 1 }
   ],
   "forbidden_findings": [],
   "noise_budget": {

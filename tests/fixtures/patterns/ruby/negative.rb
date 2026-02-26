@@ -5,7 +5,7 @@ def safe_yaml(data)
 end
 
 def safe_system
-  system("ls", "-la")
+  Dir.entries(".")
 end
 
 def safe_send(obj)

@@ -1,0 +1,38 @@
+{
+  "description": "Switch/case dispatching to dangerous functions eval and system",
+  "tags": [
+    "cfg",
+    "code-exec",
+    "cmdi",
+    "switch",
+    "php"
+  ],
+  "modes": [
+    "full",
+    "ast"
+  ],
+  "expected": [
+    {
+      "rule_id": "php.code_exec.eval",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "eval() called in switch case with function parameter"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "system() called in switch case with function parameter"
+    }
+  ]
+}

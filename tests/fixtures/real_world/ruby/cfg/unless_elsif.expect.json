@@ -1,0 +1,49 @@
+{
+  "description": "Authorization check with unless guard vs unguarded system call",
+  "tags": [
+    "cfg",
+    "cmdi",
+    "auth-gap",
+    "unless",
+    "ruby"
+  ],
+  "modes": [
+    "full",
+    "ast"
+  ],
+  "expected": [
+    {
+      "rule_id": "rb.cmdi.system_interp",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "system() in check_and_exec - guarded by admin check"
+    },
+    {
+      "rule_id": "rb.cmdi.system_interp",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        7,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "system() in unchecked_exec - no authorization check"
+    },
+    {
+      "rule_id": "cfg-auth-gap",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        6,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "unchecked_exec calls system without any authorization guard"
+    }
+  ]
+}

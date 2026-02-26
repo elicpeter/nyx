@@ -8,7 +8,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
-        matchers: &["fs::read_to_string", "source_file"],
+        matchers: &["source_file"],
         label: DataLabel::Source(Cap::all()),
     },
     // ───────── Sanitizers ──────────
@@ -35,6 +35,10 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["sink_html"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["fs::read_to_string", "fs::write", "fs::read", "File::open", "File::create"],
+        label: DataLabel::Sink(Cap::FILE_IO),
     },
 ];
 

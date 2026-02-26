@@ -1,0 +1,25 @@
+{
+  "description": "Flask handler passes user input directly to subprocess.run with shell=True",
+  "tags": [
+    "taint",
+    "cmdi",
+    "flask",
+    "subprocess"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('cmd') flows directly into subprocess.run with shell=True"
+    }
+  ]
+}

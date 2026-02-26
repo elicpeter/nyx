@@ -1,0 +1,23 @@
+{
+  "description": "Finally-based safe close pattern vs exception-path resource leak",
+  "tags": [
+    "cfg",
+    "resource-leak"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        20,
+        29
+      ],
+      "evidence_contains": [],
+      "notes": "processLeaky throws on line 26 without closing fis \u2014 resource leaked on exception path"
+    }
+  ]
+}

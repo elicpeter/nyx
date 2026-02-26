@@ -1,0 +1,48 @@
+{
+  "description": "File handle lifecycle patterns: leak, proper close, double close, use after close",
+  "tags": [
+    "state",
+    "resource-leak",
+    "double-close",
+    "use-after-close",
+    "file-io"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "read_and_leak opens file but never closes it"
+    },
+    {
+      "rule_id": "state-double-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        10,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "double_close calls f.close() twice"
+    },
+    {
+      "rule_id": "state-use-after-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        15,
+        23
+      ],
+      "evidence_contains": [],
+      "notes": "use_after_close reads from file handle after closing it"
+    }
+  ]
+}

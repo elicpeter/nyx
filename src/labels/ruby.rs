@@ -50,7 +50,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // structure
     "program"               => Kind::SourceFile,
     "body_statement"        => Kind::Block,
-    "do_block"              => Kind::Block,
+    "do_block"              => Kind::Function,
     "then"                  => Kind::Block,
     "else"                  => Kind::Block,
     "elsif"                 => Kind::If,
@@ -63,7 +63,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "class"                 => Kind::Block,
     "module"                => Kind::Block,
     "do"                    => Kind::Block,
-    "block"                 => Kind::Block,
+    "block"                 => Kind::Function,
 
     // data-flow
     "call"                  => Kind::CallFn,

@@ -1,0 +1,36 @@
+{
+  "description": "Goroutine with select-based timeout running user-controlled command via exec.Command",
+  "tags": [
+    "cfg",
+    "cmdi",
+    "concurrency"
+  ],
+  "modes": [
+    "full",
+    "ast"
+  ],
+  "expected": [
+    {
+      "rule_id": "go.cmdi.exec_command",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects exec.Command in runWithTimeout"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        27,
+        32
+      ],
+      "evidence_contains": [],
+      "notes": "os.Getenv(\"CMD\") flows through runWithTimeout to exec.Command \u2014 cross-function taint may not resolve"
+    }
+  ]
+}

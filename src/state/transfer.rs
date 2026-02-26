@@ -27,6 +27,9 @@ static RESOURCE_USE_PATTERNS: &[&str] = &[
     "read", "write", "send", "recv", "fread", "fwrite", "fgets", "fputs", "fprintf", "fscanf",
     "fflush", "fseek", "ftell", "rewind", "feof", "ferror", "fgetc", "fputc", "getc", "putc",
     "ungetc", "query", "execute", "fetch", "sendto", "recvfrom", "ioctl", "fcntl",
+    // Memory access functions (for malloc/free use-after-free detection)
+    "strcpy", "strncpy", "strcat", "strncat", "memcpy", "memmove", "memset", "memcmp",
+    "strcmp", "strncmp", "strlen", "sprintf", "snprintf",
 ];
 
 /// Auth-call matchers for admin-level privilege.

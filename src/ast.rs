@@ -383,7 +383,7 @@ pub fn run_rules_on_bytes(
         let mut cursor = QueryCursor::new();
 
         for cq in compiled.iter() {
-            if cfg.scanner.min_severity <= cq.meta.severity {
+            if cq.meta.severity > cfg.scanner.min_severity {
                 continue;
             }
             let mut matches = cursor.matches(&cq.query, root, bytes);
@@ -653,7 +653,7 @@ pub fn analyse_file_fused(
         let mut cursor = QueryCursor::new();
 
         for cq in compiled.iter() {
-            if cfg.scanner.min_severity <= cq.meta.severity {
+            if cq.meta.severity > cfg.scanner.min_severity {
                 continue;
             }
             let mut matches = cursor.matches(&cq.query, root, bytes);

@@ -1,0 +1,25 @@
+{
+  "description": "Class-based resource management. leak() creates Database without calling close(). clean() properly closes.",
+  "tags": [
+    "state",
+    "resource-leak",
+    "class",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        20,
+        26
+      ],
+      "evidence_contains": [],
+      "notes": "Database created in leak() but close() never called; scanner may not track class-based resource lifecycle in TS"
+    }
+  ]
+}

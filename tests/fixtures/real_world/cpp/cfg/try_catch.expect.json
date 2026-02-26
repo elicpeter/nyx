@@ -1,0 +1,24 @@
+{
+  "description": "Resource leak in exception path: fopen not closed when exception thrown. Safe version closes before throw.",
+  "tags": [
+    "cfg",
+    "resource-leak",
+    "exception"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "fopen at line 5 leaked when exception thrown at line 9 \u2014 catch block re-throws without closing. Aspirational."
+    }
+  ]
+}

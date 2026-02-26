@@ -1,0 +1,45 @@
+{
+  "description": "env::var flows to serde_json::from_str \u2014 deserialization of untrusted input",
+  "tags": [
+    "taint",
+    "deserialization"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        2,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "Depends on serde_json::from_str being classified as a sink \u2014 aspirational"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        2,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on env::var Result"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on from_str Result"
+    }
+  ]
+}

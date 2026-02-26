@@ -1,0 +1,24 @@
+{
+  "description": "C++ malloc branch leak: only freed in one branch of conditional",
+  "tags": [
+    "state",
+    "resource-leak",
+    "branching"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "malloc at line 5 only freed when flag is true \u2014 aspirational branch-aware state analysis"
+    }
+  ]
+}

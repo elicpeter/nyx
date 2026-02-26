@@ -1,0 +1,26 @@
+{
+  "description": "File handle management with begin/rescue/ensure vs early return leak",
+  "tags": [
+    "cfg",
+    "resource-leak",
+    "begin-rescue-ensure",
+    "file-io",
+    "ruby"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        11,
+        23
+      ],
+      "evidence_contains": [],
+      "notes": "leaky_process returns nil on empty data without closing file handle"
+    }
+  ]
+}

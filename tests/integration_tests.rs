@@ -160,13 +160,9 @@ fn binary_json_output() {
     );
 
     let stdout = String::from_utf8_lossy(&cmd.stdout);
-    // Find the JSON array line in stdout (config notes and "Finished" surround it)
+    // Find the JSON array in stdout (config notes and "Finished" surround it)
     let json_start = stdout.find('[').expect("Expected JSON array in stdout");
-    let json_end = stdout[json_start..]
-        .find(']')
-        .expect("Expected closing bracket in JSON")
-        + json_start
-        + 1;
+    let json_end = stdout.rfind(']').expect("Expected closing bracket in JSON") + 1;
     let json_str = &stdout[json_start..json_end];
     let parsed: Vec<serde_json::Value> =
         serde_json::from_str(json_str).expect("stdout should contain valid JSON array");

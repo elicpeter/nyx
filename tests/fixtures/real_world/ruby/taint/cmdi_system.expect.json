@@ -1,0 +1,37 @@
+{
+  "description": "Sinatra handler passes user input directly to system() for command execution",
+  "tags": [
+    "taint",
+    "cmdi",
+    "sinatra",
+    "system",
+    "ruby"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rb.cmdi.system_interp",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "system() called with user-controlled params[:cmd]"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        2,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "params[:cmd] flows directly into system() without sanitization"
+    }
+  ]
+}

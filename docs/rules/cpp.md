@@ -27,6 +27,7 @@ C++ shares taint labels with C. See [C Rules](c.md) for the full source/sink/san
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
 | `cpp.cmdi.system` | High | A | `system()` — shell command execution |
+| `cpp.cmdi.popen` | High | A | `popen()` — shell command execution |
 
 ---
 

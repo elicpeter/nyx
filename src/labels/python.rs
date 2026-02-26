@@ -24,7 +24,7 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &["open"],
-        label: DataLabel::Source(Cap::all()),
+        label: DataLabel::Sink(Cap::FILE_IO),
     },
     LabelRule {
         matchers: &[
@@ -64,6 +64,14 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["cursor.execute", "cursor.executemany"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["send_file", "send_from_directory"],
+        label: DataLabel::Sink(Cap::FILE_IO),
+    },
+    LabelRule {
+        matchers: &["os.path.realpath"],
+        label: DataLabel::Sanitizer(Cap::FILE_IO),
     },
 ];
 

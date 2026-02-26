@@ -1,0 +1,23 @@
+{
+  "description": "C++ format string vulnerability: printf with user-controlled format argument",
+  "tags": [
+    "taint",
+    "fmt"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.memory.printf_no_fmt",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "printf(user_input) \u2014 user-controlled format string"
+    }
+  ]
+}

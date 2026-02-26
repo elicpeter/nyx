@@ -1,0 +1,25 @@
+{
+  "description": "TCP socket resource lifecycle - leaked vs properly closed with ensure",
+  "tags": [
+    "state",
+    "resource-leak",
+    "socket",
+    "ruby"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "connect_leak creates TCP socket but never closes it"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "description": "Generic function passing typed input to child_process.exec. Requires tracking through generic type parameter and object property access.",
+  "tags": [
+    "taint",
+    "cmdi",
+    "generics",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        2,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "input.cmd flows to child_process.exec but input is a function param, not a recognized source; requires interprocedural analysis"
+    }
+  ]
+}

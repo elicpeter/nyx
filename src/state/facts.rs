@@ -60,10 +60,30 @@ pub fn extract_findings(
         }
     }
 
-    // ── 2. Resource leaks at Exit nodes ──────────────────────────────────
+    // ── 2. Resource leaks at Exit and function-Return nodes ──────────────
     for (idx, info) in cfg.node_references() {
-        if info.kind != StmtKind::Exit {
+        // Check both the file-level Exit node and the *synthesised* function
+        // exit node (a Return node).  Skip early-return nodes — they flow
+        // into the synthesised exit and carry only path-specific state.
+        // The synthesised exit is the one Return node that does NOT have an
+        // outgoing edge to another Return in the same function.
+        let is_exit = info.kind == StmtKind::Exit;
+        let is_func_exit = info.kind == StmtKind::Return && info.enclosing_func.is_some();
+        if !is_exit && !is_func_exit {
             continue;
+        }
+        if is_func_exit {
+            use petgraph::Direction;
+            let is_early_return = cfg
+                .neighbors_directed(idx, Direction::Outgoing)
+                .any(|succ| {
+                    let s = &cfg[succ];
+                    s.kind == StmtKind::Return
+                        && s.enclosing_func == info.enclosing_func
+                });
+            if is_early_return {
+                continue;
+            }
         }
         let Some(state) = result.states.get(&idx) else {
             continue;

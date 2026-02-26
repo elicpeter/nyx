@@ -1,0 +1,25 @@
+{
+  "description": "Unsafe file upload with user-controlled filename used in move_uploaded_file",
+  "tags": [
+    "taint",
+    "file-upload",
+    "path-traversal",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        1,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "$_FILES['upload']['name'] flows into file path without sanitization"
+    }
+  ]
+}

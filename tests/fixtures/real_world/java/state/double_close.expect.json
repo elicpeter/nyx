@@ -1,0 +1,35 @@
+{
+  "description": "Double close of FileInputStream and use-after-close read operation",
+  "tags": [
+    "state",
+    "double-close",
+    "use-after-close"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-double-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "fis.close() called twice on lines 6 and 7"
+    },
+    {
+      "rule_id": "state-use-after-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        9,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "fis.read(data) on line 14 after fis.close() on line 12"
+    }
+  ]
+}

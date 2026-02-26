@@ -1,0 +1,35 @@
+{
+  "description": "Express req.query flows into child_process.exec (command injection). Safe version uses regex replace but scanner lacks custom sanitizer recognition.",
+  "tags": [
+    "taint",
+    "cmdi",
+    "express"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.host flows directly into child_process.exec via string concatenation"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "Safe version still fires because .replace is not a recognized sanitizer for SHELL_ESCAPE cap"
+    }
+  ]
+}

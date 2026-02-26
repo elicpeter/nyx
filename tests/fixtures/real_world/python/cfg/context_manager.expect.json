@@ -1,0 +1,25 @@
+{
+  "description": "File handle resource management comparing manual open vs context manager",
+  "tags": [
+    "cfg",
+    "resource-leak",
+    "context-manager",
+    "file-io"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "read_file_unsafe opens file handle but never closes it"
+    }
+  ]
+}

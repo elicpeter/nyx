@@ -1,0 +1,38 @@
+{
+  "description": "Unsafe YAML.load vs safe YAML.safe_load with user input",
+  "tags": [
+    "taint",
+    "deser",
+    "yaml",
+    "sinatra",
+    "ruby"
+  ],
+  "modes": [
+    "full",
+    "ast"
+  ],
+  "expected": [
+    {
+      "rule_id": "rb.deser.yaml_load",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "YAML.load on user-controlled data enables arbitrary object instantiation"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "Request body flows into YAML.load - aspirational taint finding"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "description": "Format string vulnerabilities: printf with user-controlled format and sprintf with user-controlled format",
+  "tags": [
+    "taint",
+    "fmt"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "c.memory.printf_no_fmt",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "printf(input) \u2014 user-controlled format string"
+    },
+    {
+      "rule_id": "c.memory.sprintf",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "sprintf with user-controlled format string \u2014 both format vuln and buffer overflow risk"
+    }
+  ]
+}

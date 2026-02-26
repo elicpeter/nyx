@@ -1,0 +1,35 @@
+{
+  "description": "if-let binding of env::var flows to Command execution",
+  "tags": [
+    "taint",
+    "cmdi",
+    "cfg"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "env::var(\"CMD\") bound via if-let flows to Command .arg(&cmd)"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on Command output Result"
+    }
+  ]
+}

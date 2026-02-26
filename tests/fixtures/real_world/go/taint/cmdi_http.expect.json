@@ -1,0 +1,45 @@
+{
+  "description": "HTTP query parameter flows into exec.Command \u2014 both direct args and shell concatenation variants",
+  "tags": [
+    "taint",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "go.cmdi.exec_command",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects exec.Command call in pingHandler"
+    },
+    {
+      "rule_id": "go.cmdi.exec_command",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        16,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects exec.Command call in unsafePing"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        15,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "r.URL.Query().Get(\"host\") concatenated into shell command string in unsafePing"
+    }
+  ]
+}

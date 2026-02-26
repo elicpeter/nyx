@@ -1,0 +1,45 @@
+{
+  "description": "malloc lifecycle: leak (no free), double free, and use after free patterns",
+  "tags": [
+    "state",
+    "resource-lifecycle"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "malloc at line 5 never freed in alloc_leak"
+    },
+    {
+      "rule_id": "state-double-close",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        15,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "free called twice on same pointer in double_free"
+    },
+    {
+      "rule_id": "state-use-after-close",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        21,
+        26
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy on buf after free in use_after_free"
+    }
+  ]
+}

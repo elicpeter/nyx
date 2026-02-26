@@ -1,0 +1,23 @@
+{
+  "description": "Try-with-resources safe pattern vs manual close with early return leak",
+  "tags": [
+    "cfg",
+    "resource-leak"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        9,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "readUnsafe returns early on line 14 without closing reader \u2014 resource leak on that path"
+    }
+  ]
+}

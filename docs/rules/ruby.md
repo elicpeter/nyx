@@ -4,7 +4,31 @@ Nyx detects Ruby vulnerabilities through AST patterns and taint analysis, coveri
 
 ## Taint Labels
 
-Ruby has minimal taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/ruby.rs`.
+Ruby has moderate taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/ruby.rs`.
+
+### Sources
+
+| Matcher | Cap |
+|---------|-----|
+| `ENV`, `gets` | all |
+| `params` | all |
+
+> **Note:** Ruby's `params[:cmd]` subscript access is detected via `element_reference` node handling in the CFG. Sinatra/Rails `do...end` blocks are walked as function scopes.
+
+### Sanitizers
+
+| Matcher | Cap |
+|---------|-----|
+| `CGI.escapeHTML`, `ERB::Util.html_escape` | HTML_ESCAPE |
+| `Shellwords.escape`, `Shellwords.shellescape` | SHELL_ESCAPE |
+
+### Sinks
+
+| Matcher | Cap |
+|---------|-----|
+| `system`, `exec` | SHELL_ESCAPE |
+| `eval` | SHELL_ESCAPE |
+| `puts`, `print` | HTML_ESCAPE |
 
 ---
 
@@ -23,7 +47,7 @@ Ruby has minimal taint label coverage. Sources, sinks, and sanitizers are define
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
 | `rb.cmdi.backtick` | High | A | Backtick shell execution (`` `cmd` ``) |
-| `rb.cmdi.system_interp` | High | B | `system`/`exec` with string interpolation |
+| `rb.cmdi.system_interp` | High | A | `system`/`exec` call — command execution risk |
 
 ### Deserialization
 

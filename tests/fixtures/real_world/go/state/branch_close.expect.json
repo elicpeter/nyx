@@ -1,0 +1,23 @@
+{
+  "description": "File handle only closed inside if branch \u2014 leaked when flag is false",
+  "tags": [
+    "state",
+    "resource-leak"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        4,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "f only closed inside if(flag) block \u2014 leaked on the else path"
+    }
+  ]
+}

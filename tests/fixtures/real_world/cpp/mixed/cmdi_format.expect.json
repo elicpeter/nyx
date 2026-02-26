@@ -1,0 +1,35 @@
+{
+  "description": "Multiple vulnerabilities: command injection via system() and format string via printf(user_input)",
+  "tags": [
+    "cmdi",
+    "fmt",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "system(cmd) where cmd built from user input via sprintf"
+    },
+    {
+      "rule_id": "cpp.memory.printf_no_fmt",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        7,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "printf(user_input) \u2014 user-controlled format string"
+    }
+  ]
+}

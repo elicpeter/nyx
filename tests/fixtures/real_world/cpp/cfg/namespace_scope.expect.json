@@ -1,0 +1,35 @@
+{
+  "description": "system() in namespace \u2014 validation function does not actually sanitize input",
+  "tags": [
+    "cmdi",
+    "cfg",
+    "namespace"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        10,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "system(cmd) in execution::run \u2014 AST pattern detects system() call"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        15,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "user_input flows through validate (which only null-checks) to system \u2014 aspirational cross-function taint"
+    }
+  ]
+}

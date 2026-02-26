@@ -1,0 +1,37 @@
+{
+  "description": "File upload with command injection via unsanitized filename in system() call",
+  "tags": [
+    "taint",
+    "cmdi",
+    "file-upload",
+    "php",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        1,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "$_FILES filename flows through concatenation into system() chmod call"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "system() with string concatenation containing user-controlled filename"
+    }
+  ]
+}

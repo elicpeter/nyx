@@ -1,0 +1,24 @@
+{
+  "description": "RAII ifstream vs manual FILE* \u2014 RAII auto-closes, manual version leaks",
+  "tags": [
+    "cfg",
+    "resource-leak",
+    "raii"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        12,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "fopen at line 14 never fclose'd in read_manual \u2014 aspirational CFG finding"
+    }
+  ]
+}

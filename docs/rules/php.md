@@ -4,7 +4,36 @@ Nyx detects PHP vulnerabilities through AST patterns and taint analysis, coverin
 
 ## Taint Labels
 
-PHP has minimal taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/php.rs`.
+PHP has moderate taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/php.rs`.
+
+### Sources
+
+| Matcher | Cap |
+|---------|-----|
+| `$_GET` / `_GET`, `$_POST` / `_POST`, `$_REQUEST` / `_REQUEST`, `$_COOKIE` / `_COOKIE`, `$_FILES` / `_FILES`, `$_SERVER` / `_SERVER`, `$_ENV` / `_ENV` | all |
+| `file_get_contents`, `fread` | all |
+
+> **Note:** PHP superglobal names are matched both with and without the `$` prefix because the CFG's `collect_idents` strips the leading `$` from variable names. Subscript access like `$_GET['cmd']` is handled via `element_reference` / `subscript_expression` node detection.
+
+### Sanitizers
+
+| Matcher | Cap |
+|---------|-----|
+| `htmlspecialchars`, `htmlentities` | HTML_ESCAPE |
+| `escapeshellarg`, `escapeshellcmd` | SHELL_ESCAPE |
+| `basename` | FILE_IO |
+
+### Sinks
+
+| Matcher | Cap |
+|---------|-----|
+| `system`, `exec`, `passthru`, `shell_exec`, `proc_open`, `popen` | SHELL_ESCAPE |
+| `eval`, `assert` | SHELL_ESCAPE |
+| `include`, `include_once`, `require`, `require_once` | FILE_IO |
+| `unserialize` | SHELL_ESCAPE |
+| `move_uploaded_file`, `copy`, `file_put_contents`, `fwrite` | FILE_IO |
+| `echo`, `print` | HTML_ESCAPE |
+| `mysqli_query`, `pg_query`, `query` | SHELL_ESCAPE |
 
 ---
 

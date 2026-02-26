@@ -1,0 +1,36 @@
+{
+  "description": "eval() with user-controlled input from req.query. AST pattern detects eval call; taint detects source-to-sink flow.",
+  "tags": [
+    "taint",
+    "code-exec",
+    "eval",
+    "express"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "js.code_exec.eval",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern matches eval() call regardless of arguments"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.expr flows directly into eval() which is a SHELL_ESCAPE sink"
+    }
+  ]
+}

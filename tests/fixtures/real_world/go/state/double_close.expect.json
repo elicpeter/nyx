@@ -1,0 +1,35 @@
+{
+  "description": "Double close and use-after-close on os.File handle",
+  "tags": [
+    "state",
+    "double-close",
+    "use-after-close"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-double-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        4,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "f.Close() called on line 7 and again on line 8"
+    },
+    {
+      "rule_id": "state-use-after-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        10,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "f.Read(buf) on line 15 after f.Close() on line 13"
+    }
+  ]
+}

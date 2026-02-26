@@ -1,0 +1,34 @@
+{
+  "description": "C++ legacy C function usage: strcpy and gets without bounds checking",
+  "tags": [
+    "mem",
+    "buffer-overflow"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.memory.strcpy",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy without bounds check in C++ code"
+    },
+    {
+      "rule_id": "cpp.memory.gets",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "gets() always unsafe \u2014 no bounds checking"
+    }
+  ]
+}

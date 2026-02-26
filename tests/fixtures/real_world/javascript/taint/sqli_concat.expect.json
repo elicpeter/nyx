@@ -1,0 +1,24 @@
+{
+  "description": "SQL injection via string concatenation with userId parameter. connection.query is not a recognized taint sink.",
+  "tags": [
+    "taint",
+    "sqli",
+    "mysql"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        2,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "userId flows into SQL string via concat, but connection.query is not a defined sink and userId as a function param is not auto-tainted"
+    }
+  ]
+}

@@ -45,18 +45,15 @@ pub const PATTERNS: &[Pattern] = &[
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
     },
-    // ── Tier B: Shell with interpolation ───────────────────────────────
+    // ── Tier A: Shell execution ─────────────────────────────────────────
     Pattern {
         id: "rb.cmdi.system_interp",
-        description: "system/exec with string interpolation — command injection risk",
+        description: "system/exec call — command execution risk",
         query: r#"(call
-                     method: (identifier) @m (#match? @m "^(system|exec)$")
-                     arguments: (argument_list
-                       (string
-                         (interpolation)+ @vuln)))
-        "#,
+                     method: (identifier) @m (#match? @m "^(system|exec)$"))
+                   @vuln"#,
         severity: Severity::High,
-        tier: PatternTier::B,
+        tier: PatternTier::A,
         category: PatternCategory::CommandExec,
     },
     // ── Tier A: Deserialization ────────────────────────────────────────

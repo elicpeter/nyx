@@ -16,6 +16,7 @@ Nyx detects C vulnerabilities through AST patterns (banned functions, format str
 | `system`, `popen`, `exec*` family | `SHELL_ESCAPE` |
 | `sprintf`, `strcpy`, `strcat` | `HTML_ESCAPE` |
 | `printf`, `fprintf` | `FMT_STRING` |
+| `fopen`, `open` | `FILE_IO` |
 
 ---
 

@@ -31,6 +31,10 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["printf", "fprintf"],
         label: DataLabel::Sink(Cap::FMT_STRING),
     },
+    LabelRule {
+        matchers: &["fopen", "open"],
+        label: DataLabel::Sink(Cap::FILE_IO),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

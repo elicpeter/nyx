@@ -65,6 +65,12 @@ f.Close()  // closed here
 
 A function identified as a web handler reaches a privileged sink (shell execution, file I/O) without any authentication check on the path.
 
+A function is identified as a web handler if:
+1. Its name starts with `handle_`, `route_`, or `api_` (strong match — sufficient on its own), OR
+2. Its name starts with `serve_` or `process_` AND any function in the file has web-like parameter names (`request`, `req`, `ctx`, `res`, `response`, `w`, `writer`, etc., varying by language).
+
+The function name `main` is explicitly excluded.
+
 ```javascript
 app.post('/admin/exec', (req, res) => {
     // No auth check
@@ -167,7 +173,9 @@ The following operations on a closed resource trigger `state-use-after-close`:
 ```
 read, write, send, recv, fread, fwrite, fgets, fputs, fprintf, fscanf,
 fflush, fseek, ftell, rewind, feof, ferror, fgetc, fputc, getc, putc,
-ungetc, query, execute, fetch, sendto, recvfrom, ioctl, fcntl
+ungetc, query, execute, fetch, sendto, recvfrom, ioctl, fcntl,
+strcpy, strncpy, strcat, strncat, memcpy, memmove, memset, memcmp,
+strcmp, strncmp, strlen, sprintf, snprintf
 ```
 
 ## Technical Details
@@ -180,6 +188,12 @@ UNINIT → OPEN → CLOSED
 ```
 
 States are tracked as bitflags, allowing the lattice to represent uncertainty (e.g. OPEN|CLOSED means the resource is open on some paths and closed on others).
+
+### Leak Detection Scope
+
+Resource leaks are checked at the file-level exit node and the **synthesized** function exit node (a single Return node that all early returns feed into). Early-return nodes are **not** checked individually — only the merged state at the function's synthesized exit is inspected. This prevents duplicate findings where an early-return path reports a definite leak while the merged exit correctly reports a possible leak.
+
+This per-function exit inspection ensures that a variable leaked inside one function is not masked by a same-named variable that is properly closed in a subsequent function.
 
 ### Auth Level Lattice
 

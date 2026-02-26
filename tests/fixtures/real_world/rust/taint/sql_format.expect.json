@@ -1,0 +1,34 @@
+{
+  "description": "SQL injection via format! string interpolation \u2014 env var concatenated into SQL query",
+  "tags": [
+    "taint",
+    "sqli"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        6,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "env::var flows through format! into println \u2014 benign sink, but SQL string construction is interesting. Aspirational."
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on env::var Result"
+    }
+  ]
+}

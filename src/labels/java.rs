@@ -8,7 +8,12 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
-        matchers: &["getParameter", "getInputStream", "getHeader", "getCookies"],
+        matchers: &["getParameter", "getInputStream", "getHeader", "getCookies",
+                     "getReader", "getQueryString", "getPathInfo"],
+        label: DataLabel::Source(Cap::all()),
+    },
+    LabelRule {
+        matchers: &["readObject", "readLine"],
         label: DataLabel::Source(Cap::all()),
     },
     // ───────── Sanitizers ──────────
@@ -18,12 +23,20 @@ pub static RULES: &[LabelRule] = &[
     },
     // ─────────── Sinks ─────────────
     LabelRule {
-        matchers: &["Runtime.exec"],
+        matchers: &["Runtime.exec", "ProcessBuilder"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
     LabelRule {
         matchers: &["executeQuery", "executeUpdate", "prepareStatement"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["Class.forName"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["println", "print", "write"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
     },
 ];
 

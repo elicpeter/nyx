@@ -1,0 +1,45 @@
+{
+  "description": "malloc leak on early return: process_data returns without free when strlen > 100",
+  "tags": [
+    "cfg",
+    "resource-leak"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "c.memory.strcpy",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy in duplicate_string \u2014 AST pattern match"
+    },
+    {
+      "rule_id": "c.memory.strcpy",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy in process_data \u2014 AST pattern match"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        15,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "malloc at line 12 not freed before return at line 17 \u2014 aspirational CFG finding"
+    }
+  ]
+}

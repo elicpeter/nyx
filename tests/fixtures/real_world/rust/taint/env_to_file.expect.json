@@ -1,0 +1,45 @@
+{
+  "description": "env::var flows to fs::read_to_string \u2014 path traversal / arbitrary file read",
+  "tags": [
+    "taint",
+    "path-traversal"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "env::var(\"FILE_PATH\") flows to fs::read_to_string \u2014 arbitrary file read"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on env::var Result"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on read_to_string Result"
+    }
+  ]
+}

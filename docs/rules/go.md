@@ -4,7 +4,35 @@ Nyx detects Go vulnerabilities through AST patterns and taint analysis, covering
 
 ## Taint Labels
 
-Go has partial taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/go.rs`.
+Go has moderate taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/go.rs`.
+
+### Sources
+
+| Matcher | Cap |
+|---------|-----|
+| `os.Getenv` | all |
+| `http.Request`, `r.FormValue`, `r.URL`, `r.Body`, `r.Header` | all |
+| `r.URL.Query`, `r.URL.Query.Get`, `Request.FormValue`, `Request.URL` | all |
+
+### Sanitizers
+
+| Matcher | Cap |
+|---------|-----|
+| `html.EscapeString`, `template.HTMLEscapeString` | HTML_ESCAPE |
+| `url.QueryEscape`, `url.PathEscape` | URL_ENCODE |
+| `filepath.Clean`, `filepath.Base` | FILE_IO |
+
+### Sinks
+
+| Matcher | Cap |
+|---------|-----|
+| `exec.Command` | SHELL_ESCAPE |
+| `db.Query`, `db.Exec`, `db.QueryRow`, `db.Prepare` | SHELL_ESCAPE |
+| `fmt.Fprintf`, `fmt.Sprintf`, `fmt.Printf` | FMT_STRING |
+| `os.Open`, `os.OpenFile`, `os.Create`, `ioutil.ReadFile`, `os.ReadFile` | FILE_IO |
+| `template.HTML` | HTML_ESCAPE |
+
+> **Note:** Chained calls like `r.URL.Query().Get("host")` are normalized by stripping internal `()` segments before matching, so `r.URL.Query.Get` matches the source rule.
 
 ---
 

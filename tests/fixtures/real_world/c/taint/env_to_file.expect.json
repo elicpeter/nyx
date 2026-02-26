@@ -1,0 +1,23 @@
+{
+  "description": "Environment variable flows to fopen path \u2014 path traversal / arbitrary file write",
+  "tags": [
+    "taint",
+    "path-traversal"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "getenv(\"CONFIG_PATH\") flows directly into fopen as file path \u2014 arbitrary file write"
+    }
+  ]
+}

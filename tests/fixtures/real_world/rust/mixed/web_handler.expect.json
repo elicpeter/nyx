@@ -1,0 +1,80 @@
+{
+  "description": "Multiple taint flows: env::var to Command (cmdi) and env::var to read_to_string (path traversal)",
+  "tags": [
+    "taint",
+    "cmdi",
+    "path-traversal",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "env::var(\"USER_CMD\") flows to Command .arg(&cmd) \u2014 command injection"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "env::var(\"USER_PATH\") flows to fs::read_to_string \u2014 path traversal"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on env::var for USER_CMD"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on Command output"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on env::var for USER_PATH"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on read_to_string"
+    }
+  ]
+}

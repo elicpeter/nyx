@@ -1,0 +1,35 @@
+{
+  "description": "SQL injection via string concatenation in doGet; safe PreparedStatement in doPost",
+  "tags": [
+    "taint",
+    "sqli",
+    "servlet"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "java.sqli.execute_concat",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        10,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects string concatenation inside executeQuery argument"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "request.getParameter(\"id\") concatenated into SQL query string passed to executeQuery"
+    }
+  ]
+}

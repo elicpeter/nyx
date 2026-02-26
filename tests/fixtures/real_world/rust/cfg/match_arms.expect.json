@@ -1,0 +1,23 @@
+{
+  "description": "Command execution inside match arm \u2014 pattern matching dispatches to shell execution",
+  "tags": [
+    "cmdi",
+    "cfg"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on Command output Result"
+    }
+  ]
+}

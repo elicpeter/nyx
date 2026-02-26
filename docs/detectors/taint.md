@@ -45,7 +45,7 @@ One rule ID covers all taint findings. The parenthetical identifies the specific
 |----------|----------------|
 | Third-party library calls | No summary available; callee treated as opaque |
 | Taint through global/static variables | Not tracked across function boundaries |
-| Taint through closures/callbacks in some languages | Closure capture analysis is limited |
+| Taint through closures/callbacks in some languages | Closure capture analysis is limited (JS/TS/Ruby/Go anonymous functions ARE analyzed) |
 | Flows spanning more than two files | Summary approximation loses precision at depth |
 
 ## Confidence Signals
@@ -156,10 +156,41 @@ Taint uses a bitflag capability system to match sources with appropriate sanitiz
 | `SHELL_ESCAPE` | 0x04 | — | `shell_escape` | `Command::new`, `system()`, `eval()` |
 | `URL_ENCODE` | 0x08 | — | `encodeURIComponent` | `location.href` |
 | `JSON_PARSE` | 0x10 | — | `JSON.parse` | — |
-| `FILE_IO` | 0x20 | `fs::read_to_string` | — | File write operations |
+| `FILE_IO` | 0x20 | — | `filepath.Clean`, `basename`, `os.path.realpath` | `fopen`, `open`, `send_file`, `fs::read_to_string` |
 | `FMT_STRING` | 0x40 | — | — | `printf(var)` |
 
 Sources typically use `Cap::all()` to match any sink. A sanitizer strips specific capability bits. A finding fires when a tainted variable reaches a sink and the taint still has the matching capability bit set.
+
+### Nested Function Analysis
+
+The CFG builder recursively discovers function expressions nested inside call arguments:
+
+- **JavaScript/TypeScript**: `function_expression`, `arrow_function` inside call arguments (e.g., Express route handlers)
+- **Ruby**: `do_block` and `block` nodes (e.g., Sinatra `get '/path' do...end`)
+- **Go**: `func_literal` (anonymous function literals)
+
+Each nested function is walked as a separate scope and receives a unique identifier (`<anon@{byte_offset}>`) to prevent collisions when multiple anonymous functions exist in the same file.
+
+### Chained Call Classification
+
+Method chains like `r.URL.Query().Get("host")` are normalized by stripping internal `()` segments between `.` separators. The classifier matches against both the original text and the normalized form, enabling rules like `r.URL` to match within `r.URL.Query.Get`.
+
+### Nested Call Fallback
+
+When the outermost call in an expression doesn't classify as a source/sink, the engine tries all nested inner calls. This handles patterns like `str(eval(expr))` where `str` is not a sink but the inner `eval` is.
+
+### Rust `if let` / `while let` Pattern Bindings
+
+The CFG builder recognizes Rust `let_condition` nodes inside `if` and `while` expressions. The value expression is classified for source/sink labels, and the pattern binding is extracted as a variable definition:
+
+```rust
+if let Ok(cmd) = env::var("CMD") {
+    // cmd is tainted — env::var is a source, cmd is the binding
+    Command::new("sh").arg("-c").arg(&cmd).output();  // taint-unsanitised-flow
+}
+```
+
+This also works for `while let` patterns.
 
 ### JS/TS Two-Level Solve
 

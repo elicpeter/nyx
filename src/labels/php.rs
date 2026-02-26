@@ -3,8 +3,11 @@ use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
     // ─────────── Sources ───────────
+    // Note: PHP `$` prefix is stripped by collect_idents, so match without `$`.
     LabelRule {
-        matchers: &["$_GET", "$_POST", "$_REQUEST", "$_COOKIE"],
+        matchers: &["$_GET", "_GET", "$_POST", "_POST", "$_REQUEST", "_REQUEST",
+                     "$_COOKIE", "_COOKIE", "$_FILES", "_FILES", "$_SERVER", "_SERVER",
+                     "$_ENV", "_ENV"],
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
@@ -20,17 +23,37 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["escapeshellarg", "escapeshellcmd"],
         label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
     },
+    LabelRule {
+        matchers: &["basename"],
+        label: DataLabel::Sanitizer(Cap::FILE_IO),
+    },
     // ─────────── Sinks ─────────────
     LabelRule {
-        matchers: &["system", "exec", "passthru", "shell_exec"],
+        matchers: &["system", "exec", "passthru", "shell_exec", "proc_open", "popen"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["eval", "assert"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["include", "include_once", "require", "require_once"],
+        label: DataLabel::Sink(Cap::FILE_IO),
+    },
+    LabelRule {
+        matchers: &["unserialize"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["move_uploaded_file", "copy", "file_put_contents", "fwrite"],
+        label: DataLabel::Sink(Cap::FILE_IO),
     },
     LabelRule {
         matchers: &["echo", "print"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
     },
     LabelRule {
-        matchers: &["mysqli_query", "pg_query"],
+        matchers: &["mysqli_query", "pg_query", "query"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
 ];

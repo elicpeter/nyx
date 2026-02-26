@@ -4,7 +4,30 @@ Nyx detects Java vulnerabilities through AST patterns and taint analysis, coveri
 
 ## Taint Labels
 
-Java has partial taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/java.rs`.
+Java has moderate taint label coverage. Sources, sinks, and sanitizers are defined in `src/labels/java.rs`.
+
+### Sources
+
+| Matcher | Cap |
+|---------|-----|
+| `System.getenv` | all |
+| `getParameter`, `getInputStream`, `getHeader`, `getCookies`, `getReader`, `getQueryString`, `getPathInfo` | all |
+| `readObject`, `readLine` | all |
+
+### Sanitizers
+
+| Matcher | Cap |
+|---------|-----|
+| `HtmlUtils.htmlEscape`, `StringEscapeUtils.escapeHtml4` | HTML_ESCAPE |
+
+### Sinks
+
+| Matcher | Cap |
+|---------|-----|
+| `Runtime.exec`, `ProcessBuilder` | SHELL_ESCAPE |
+| `executeQuery`, `executeUpdate`, `prepareStatement` | SHELL_ESCAPE |
+| `Class.forName` | SHELL_ESCAPE |
+| `println`, `print`, `write` | HTML_ESCAPE |
 
 ---
 

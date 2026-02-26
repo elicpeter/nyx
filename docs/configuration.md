@@ -60,7 +60,7 @@ excluded_extensions = ["foo", "jpg"]
 | `follow_symlinks` | bool | `false` | Follow symbolic links |
 | `scan_hidden_files` | bool | `false` | Scan dot-files |
 | `include_nonprod` | bool | `false` | Keep original severity for test/vendor paths |
-| `enable_state_analysis` | bool | `false` | Enable resource lifecycle + auth state analysis |
+| `enable_state_analysis` | bool | `false` | Enable resource lifecycle + auth state analysis. Detects use-after-close, double-close, resource leaks (per-function scope), and unauthenticated access. Requires `mode = "full"` or `mode = "cfg"`. |
 
 ### `[database]`
 
