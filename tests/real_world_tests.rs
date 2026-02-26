@@ -28,6 +28,7 @@ use std::sync::OnceLock;
 // ── Expectation schema ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct RealWorldExpectations {
     /// Human description of what this fixture tests.
     #[serde(default)]
@@ -243,26 +244,41 @@ fn match_expectations(
                 return false;
             }
             // Check severity if specified
-            if let Some(ref sev) = exp.severity {
-                if d.severity.as_db_str() != sev.to_uppercase() {
-                    return false;
-                }
+            if let Some(ref sev) = exp.severity
+                && d.severity.as_db_str() != sev.to_uppercase()
+            {
+                return false;
             }
             // Check line range if specified
-            if let Some((start, end)) = exp.line_range {
-                if d.line < start || d.line > end {
-                    return false;
-                }
+            if let Some((start, end)) = exp.line_range
+                && (d.line < start || d.line > end)
+            {
+                return false;
             }
             // Check evidence substrings
             for substr in &exp.evidence_contains {
                 let msg = d.message.as_deref().unwrap_or("");
-                let ev_text: String = d
-                    .evidence
-                    .iter()
-                    .map(|(k, v)| format!("{k}: {v}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let ev_text = if let Some(ev) = &d.evidence {
+                    let mut parts = Vec::new();
+                    if let Some(src) = &ev.source {
+                        parts.push(format!(
+                            "source: {}",
+                            src.snippet.as_deref().unwrap_or(&src.kind)
+                        ));
+                    }
+                    if let Some(snk) = &ev.sink {
+                        parts.push(format!(
+                            "sink: {}",
+                            snk.snippet.as_deref().unwrap_or(&snk.kind)
+                        ));
+                    }
+                    for note in &ev.notes {
+                        parts.push(note.clone());
+                    }
+                    parts.join(" ")
+                } else {
+                    String::new()
+                };
                 let combined = format!("{msg} {ev_text}");
                 if !combined.to_lowercase().contains(&substr.to_lowercase()) {
                     return false;
@@ -374,20 +390,20 @@ fn get_fixtures() -> &'static [Fixture] {
 }
 
 fn should_run(fixture: &Fixture) -> bool {
-    if let Ok(lang) = std::env::var("NYX_TEST_LANG") {
-        if !fixture.lang.eq_ignore_ascii_case(&lang) {
-            return false;
-        }
+    if let Ok(lang) = std::env::var("NYX_TEST_LANG")
+        && !fixture.lang.eq_ignore_ascii_case(&lang)
+    {
+        return false;
     }
-    if let Ok(name) = std::env::var("NYX_TEST_FIXTURE") {
-        if !fixture.name.contains(&name) {
-            return false;
-        }
+    if let Ok(name) = std::env::var("NYX_TEST_FIXTURE")
+        && !fixture.name.contains(&name)
+    {
+        return false;
     }
-    if let Ok(cat) = std::env::var("NYX_TEST_CATEGORY") {
-        if !fixture.category.eq_ignore_ascii_case(&cat) {
-            return false;
-        }
+    if let Ok(cat) = std::env::var("NYX_TEST_CATEGORY")
+        && !fixture.category.eq_ignore_ascii_case(&cat)
+    {
+        return false;
     }
     true
 }
@@ -443,18 +459,16 @@ fn real_world_fixture_suite() {
             total_matched += result.matched;
             total_unexpected += result.unexpected.len();
 
-            if verbose || !result.hard_misses.is_empty() {
-                if !result.hard_misses.is_empty() {
-                    let mut msg = format!("FAIL  {fixture_label} [{mode_str}]:");
-                    for (exp, reason) in &result.hard_misses {
-                        msg.push_str(&format!(
-                            "\n       MISSING (must_match): {} — {}",
-                            reason, exp.notes
-                        ));
-                    }
-                    failure_details.push(msg);
-                    total_hard_fails += result.hard_misses.len();
+            if !result.hard_misses.is_empty() {
+                let mut msg = format!("FAIL  {fixture_label} [{mode_str}]:");
+                for (exp, reason) in &result.hard_misses {
+                    msg.push_str(&format!(
+                        "\n       MISSING (must_match): {} — {}",
+                        reason, exp.notes
+                    ));
                 }
+                failure_details.push(msg);
+                total_hard_fails += result.hard_misses.len();
             }
 
             if !result.soft_misses.is_empty() {
