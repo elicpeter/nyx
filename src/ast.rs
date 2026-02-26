@@ -4,7 +4,7 @@ use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
 use crate::evidence::{Evidence, SpanEvidence, StateEvidence};
 use crate::labels::{build_lang_rules, severity_for_source_kind};
-use crate::patterns::Severity;
+use crate::patterns::{FindingCategory, Severity};
 use crate::state;
 use crate::summary::{FuncSummary, GlobalSummaries};
 use crate::symbol::{Lang, normalize_namespace};
@@ -305,6 +305,7 @@ pub fn run_rules_on_bytes(
                     source_point.row + 1,
                     source_point.column + 1
                 ),
+                category: FindingCategory::Security,
                 path_validated: finding.path_validated,
                 guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
                 message: Some(format!(
@@ -347,6 +348,7 @@ pub fn run_rules_on_bytes(
                 rank_reason: None,
                 suppressed: false,
                 suppression: None,
+                rollup: None,
             });
         }
 
@@ -377,6 +379,7 @@ pub fn run_rules_on_bytes(
                 col: point.column + 1,
                 severity: cf.severity,
                 id: cf.rule_id,
+                category: FindingCategory::Security,
                 path_validated: false,
                 guard_kind: None,
                 message: Some(cf.message),
@@ -400,6 +403,7 @@ pub fn run_rules_on_bytes(
                 rank_reason: None,
                 suppressed: false,
                 suppression: None,
+                rollup: None,
             });
         }
 
@@ -427,6 +431,7 @@ pub fn run_rules_on_bytes(
                     col: point.column + 1,
                     severity: sf.severity,
                     id: sf.rule_id.clone(),
+                    category: FindingCategory::Security,
                     path_validated: false,
                     guard_kind: None,
                     message: Some(sf.message.clone()),
@@ -455,6 +460,7 @@ pub fn run_rules_on_bytes(
                     rank_reason: None,
                     suppressed: false,
                     suppression: None,
+                    rollup: None,
                 });
             }
 
@@ -489,6 +495,7 @@ pub fn run_rules_on_bytes(
                         col: point.column + 1,
                         severity: cq.meta.severity,
                         id: cq.meta.id.to_owned(),
+                        category: cq.meta.category.finding_category(),
                         path_validated: false,
                         guard_kind: None,
                         message: Some(cq.meta.description.to_owned()),
@@ -512,6 +519,7 @@ pub fn run_rules_on_bytes(
                         rank_reason: None,
                         suppressed: false,
                         suppression: None,
+                        rollup: None,
                     });
                 }
             }
@@ -688,6 +696,7 @@ pub fn analyse_file_fused(
                     source_point.row + 1,
                     source_point.column + 1
                 ),
+                category: FindingCategory::Security,
                 path_validated: finding.path_validated,
                 guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
                 message: Some(format!(
@@ -730,6 +739,7 @@ pub fn analyse_file_fused(
                 rank_reason: None,
                 suppressed: false,
                 suppression: None,
+                rollup: None,
             });
         }
 
@@ -759,6 +769,7 @@ pub fn analyse_file_fused(
                 col: point.column + 1,
                 severity: cf.severity,
                 id: cf.rule_id,
+                category: FindingCategory::Security,
                 path_validated: false,
                 guard_kind: None,
                 message: Some(cf.message),
@@ -782,6 +793,7 @@ pub fn analyse_file_fused(
                 rank_reason: None,
                 suppressed: false,
                 suppression: None,
+                rollup: None,
             });
         }
 
@@ -808,6 +820,7 @@ pub fn analyse_file_fused(
                     col: point.column + 1,
                     severity: sf.severity,
                     id: sf.rule_id.clone(),
+                    category: FindingCategory::Security,
                     path_validated: false,
                     guard_kind: None,
                     message: Some(sf.message.clone()),
@@ -836,6 +849,7 @@ pub fn analyse_file_fused(
                     rank_reason: None,
                     suppressed: false,
                     suppression: None,
+                    rollup: None,
                 });
             }
 
@@ -868,6 +882,7 @@ pub fn analyse_file_fused(
                         col: point.column + 1,
                         severity: cq.meta.severity,
                         id: cq.meta.id.to_owned(),
+                        category: cq.meta.category.finding_category(),
                         path_validated: false,
                         guard_kind: None,
                         message: Some(cq.meta.description.to_owned()),
@@ -891,6 +906,7 @@ pub fn analyse_file_fused(
                         rank_reason: None,
                         suppressed: false,
                         suppression: None,
+                        rollup: None,
                     });
                 }
             }

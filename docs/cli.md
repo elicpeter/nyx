@@ -66,6 +66,13 @@ nyx scan [PATH] [OPTIONS]
 | `--fail-on <SEV>` | *(none)* | Exit code 1 if any finding >= this severity |
 | `--show-suppressed` | off | Show inline-suppressed findings (dimmed, tagged `[SUPPRESSED]`) |
 | `--keep-nonprod-severity` | off | Don't downgrade severity for test/vendor paths |
+| `--all` | off | Disable category filtering, rollups, and LOW budgets — show everything |
+| `--include-quality` | off | Include Quality-category findings (hidden by default) |
+| `--max-low <N>` | `20` | Maximum total LOW findings to show |
+| `--max-low-per-file <N>` | `1` | Maximum LOW findings per file |
+| `--max-low-per-rule <N>` | `10` | Maximum LOW findings per rule |
+| `--rollup-examples <N>` | `5` | Number of example locations in rollup findings |
+| `--show-instances <RULE>` | *(none)* | Expand all instances of a specific rule (bypass rollup) |
 
 **Severity expression formats**:
 
@@ -101,6 +108,18 @@ nyx scan . --min-score 50
 
 # Only medium+ confidence findings
 nyx scan . --min-confidence medium
+
+# Show everything (no filtering, no rollups)
+nyx scan . --all
+
+# Include quality findings but keep rollups and budgets
+nyx scan . --include-quality
+
+# See all unwrap findings expanded
+nyx scan . --include-quality --show-instances rs.quality.unwrap
+
+# Allow more LOW findings
+nyx scan . --max-low 50 --max-low-per-file 5
 ```
 
 ---

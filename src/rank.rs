@@ -266,6 +266,7 @@ mod tests {
             col: 1,
             severity,
             id: id.into(),
+            category: crate::patterns::FindingCategory::Security,
             path_validated,
             guard_kind: None,
             message: None,
@@ -276,6 +277,7 @@ mod tests {
             rank_reason: None,
             suppressed: false,
             suppression: None,
+            rollup: None,
         }
     }
 

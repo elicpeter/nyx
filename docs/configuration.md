@@ -78,6 +78,12 @@ excluded_extensions = ["foo", "jpg"]
 | `attack_surface_ranking` | bool | `true` | Enable attack-surface ranking |
 | `min_score` | int \| null | null | Minimum rank score to include; null = no minimum |
 | `min_confidence` | string \| null | null | Minimum confidence level (`"low"`, `"medium"`, `"high"`); null = no minimum |
+| `include_quality` | bool | `false` | Include Quality-category findings (hidden by default) |
+| `show_all` | bool | `false` | Disable category filtering, rollups, and LOW budgets |
+| `max_low` | int | `20` | Maximum total LOW findings to show (rollups count as 1) |
+| `max_low_per_file` | int | `1` | Maximum LOW findings per file (rollups count as 1) |
+| `max_low_per_rule` | int | `10` | Maximum LOW findings per rule (rollups count as 1) |
+| `rollup_examples` | int | `5` | Number of example locations stored in rollup findings |
 
 ### `[performance]`
 

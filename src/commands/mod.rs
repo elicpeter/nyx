@@ -29,6 +29,13 @@ pub fn handle_command(
             fail_on,
             no_rank,
             show_suppressed,
+            show_all,
+            include_quality,
+            max_low,
+            max_low_per_file,
+            max_low_per_rule,
+            rollup_examples,
+            show_instances,
             min_score,
             min_confidence,
             // Deprecated aliases
@@ -113,6 +120,18 @@ pub fn handle_command(
                     })?);
             }
 
+            if show_all {
+                config.output.show_all = true;
+            }
+            if include_quality {
+                config.output.include_quality = true;
+            }
+            // CLI values override config defaults (clap provides defaults)
+            config.output.max_low = max_low;
+            config.output.max_low_per_file = max_low_per_file;
+            config.output.max_low_per_rule = max_low_per_rule;
+            config.output.rollup_examples = rollup_examples;
+
             scan::handle(
                 &path,
                 effective_index,
@@ -120,6 +139,7 @@ pub fn handle_command(
                 severity_filter,
                 fail_on_sev,
                 show_suppressed,
+                show_instances.as_deref(),
                 database_dir,
                 config,
             )?;

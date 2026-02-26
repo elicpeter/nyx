@@ -8,16 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Low-noise prioritization system** — post-analysis pipeline that reduces noise from high-frequency LOW/Quality findings without hiding security signal. Three-stage process: category filtering, rollup grouping, and LOW budgets.
+  - **`FindingCategory` enum** (`Security`, `Reliability`, `Quality`) — every `Diag` now carries a `category` field. AST pattern findings derive their category from `PatternCategory` metadata (`CodeQuality` → `Quality`, all others → `Security`). Taint, CFG, and state findings are always `Security`.
+  - **Category filtering** — Quality-category findings (e.g. `rs.quality.unwrap`, `rs.quality.expect`) are excluded by default. Use `--include-quality` to include them.
+  - **Rollup grouping** — eligible HIGH-frequency rules (`rs.quality.unwrap`, `rs.quality.expect`, `rs.quality.panic_macro`) are grouped by `(file, rule)` into a single rollup finding with occurrence count and example locations. Canonical location is the first sorted occurrence. Example count controlled by `--rollup-examples` (default 5).
+  - **LOW budgets** — three configurable limits enforce noise caps: `--max-low` (default 20, total), `--max-low-per-file` (default 1), `--max-low-per-rule` (default 10). Rollups count as one finding for all budgets. High/Medium findings are never dropped.
+  - **`--all` CLI flag** — disables all prioritization (no category filtering, no rollups, no budgets).
+  - **`--show-instances <RULE>`** — bypasses rollup for a specific rule, expanding all individual occurrences.
+  - **Console suppression footer** — when findings are suppressed, a footer displays the count and active filter values with adjustment hints.
+  - **`rollup` field on `Diag`** — optional `RollupData` with `count` and `occurrences` (example `Location`s). Serializes to JSON automatically; omitted when not a rollup.
+  - **SARIF rollup support** — `category` in result properties, rollup count in `properties.rollup.count`, example locations in `relatedLocations`.
+  - **`max_results` severity stability** — when `max_results` truncation is needed, High findings are kept first, then Medium, then Low. Low findings never displace higher-severity ones.
+  - New config fields in `[output]`: `include_quality`, `show_all`, `max_low`, `max_low_per_file`, `max_low_per_rule`, `rollup_examples`.
+  - 14 new unit tests covering category filtering, rollup grouping/examples/canonical, LOW budgets (per-file/per-rule/total), High/Medium immunity, rollup-counts-as-one, show_instances bypass, JSON serialization, and determinism.
 - **Pattern-level confidence for AST rules** — each AST pattern in `src/patterns/` now carries an explicit `confidence: Confidence` field (High, Medium, or Low). Confidence is set at the pattern definition site and flows directly into emitted `Diag`s, replacing the old heuristic that inferred AST confidence from severity alone. `compute_confidence()` is retained as a fallback for detectors that don't set confidence (taint, state, legacy).
   - Tier A patterns with High/Medium severity → `Confidence::High` (deterministic structural match).
   - Tier A patterns with Low severity → `Confidence::Medium` (quality/crypto signals).
   - Tier B patterns (heuristic-guarded) → `Confidence::Medium`.
   - Example: `rs.quality.expect` now produces `Confidence: High` regardless of its Low severity.
-
-### Changed
-- **Console header line now includes confidence** — the finding header shows score and confidence together as a parenthesized suffix: `(Score: 36, Confidence: Medium)`. The previous standalone `Confidence: ...` body line is removed. All four combinations are handled (both, score-only, confidence-only, neither).
-- **Confidence display uses Title Case** — `Confidence::Display` now renders as `Low`, `Medium`, `High` (previously lowercase).
-
 - **Inline per-finding suppressions** — suppress specific findings directly in source code using `nyx:ignore` comments. Two directive forms: `nyx:ignore <RULE_ID>` (same line) and `nyx:ignore-next-line <RULE_ID>` (next line). Supports comma-separated IDs, wildcard suffixes (`rs.quality.*`), and automatic canonicalization of taint rule IDs (parenthetical suffixes stripped). Comment detection covers all 10 languages with string/raw-string/template-literal guards to avoid false positives.
   - **`--show-suppressed` CLI flag** — reveal suppressed findings in output, dimmed with `[SUPPRESSED]` tag. Summary shows `"N issues (M suppressed)"`. In JSON/SARIF mode, suppressed findings include `"suppressed": true` and `"suppression": {...}` metadata fields.
   - **`suppressed` and `suppression` fields on `Diag`** — conditionally serialized; JSON output is unchanged when no suppressions are active.
@@ -71,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Changed
+- **Console header line now includes confidence** — the finding header shows score and confidence together as a parenthesized suffix: `(Score: 36, Confidence: Medium)`. The previous standalone `Confidence: ...` body line is removed. All four combinations are handled (both, score-only, confidence-only, neither).
+- **Confidence display uses Title Case** — `Confidence::Display` now renders as `Low`, `Medium`, `High` (previously lowercase).
 - **Breaking**: Config and data directory changed from `dev.ecpeter23.nyx` to `nyx` (e.g. `~/Library/Application Support/nyx/` on macOS). Existing config files (`nyx.conf`, `nyx.local`) and SQLite indexes at the old path will not be picked up automatically — copy them to the new location or re-run `nyx scan` to regenerate.
 - **Improved diagnostic output formatting** — overhauled console renderer for a professional, security-tool-grade look:
   - Severity is now the strongest visual anchor: HIGH (bold red with ✖), MEDIUM (bold orange ⚠), LOW (muted blue-gray ●). Fewer colors, clearer hierarchy.

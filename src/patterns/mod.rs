@@ -191,6 +191,24 @@ pub enum PatternTier {
     B,
 }
 
+/// High-level finding category for noise reduction and prioritization.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum FindingCategory {
+    Security,
+    Reliability,
+    Quality,
+}
+
+impl std::fmt::Display for FindingCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FindingCategory::Security => write!(f, "Security"),
+            FindingCategory::Reliability => write!(f, "Reliability"),
+            FindingCategory::Quality => write!(f, "Quality"),
+        }
+    }
+}
+
 /// Vulnerability class that a pattern detects.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum PatternCategory {
@@ -207,6 +225,16 @@ pub enum PatternCategory {
     MemorySafety,
     Prototype,
     CodeQuality,
+}
+
+impl PatternCategory {
+    /// Map this vulnerability class to a high-level finding category.
+    pub fn finding_category(self) -> FindingCategory {
+        match self {
+            PatternCategory::CodeQuality => FindingCategory::Quality,
+            _ => FindingCategory::Security,
+        }
+    }
 }
 
 /// One AST pattern with a tree-sitter query and meta-data.

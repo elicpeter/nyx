@@ -143,12 +143,46 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                 }]
             });
 
-            // Add confidence to properties if set
+            // Build properties object
+            let mut props = serde_json::Map::new();
+            props.insert(
+                "category".into(),
+                json!(d.category.to_string()),
+            );
             if let Some(conf) = d.confidence {
-                result["properties"] = json!({
-                    "confidence": conf.to_string(),
-                });
+                props.insert("confidence".into(), json!(conf.to_string()));
             }
+
+            // Add rollup data if present
+            if let Some(ref rollup) = d.rollup {
+                props.insert("rollup".into(), json!({
+                    "count": rollup.count,
+                }));
+
+                // Add rollup occurrences as relatedLocations
+                let related: Vec<Value> = rollup
+                    .occurrences
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, loc)| {
+                        json!({
+                            "id": idx,
+                            "physicalLocation": {
+                                "artifactLocation": { "uri": &uri },
+                                "region": {
+                                    "startLine": loc.line,
+                                    "startColumn": loc.col
+                                }
+                            }
+                        })
+                    })
+                    .collect();
+                if !related.is_empty() {
+                    result["relatedLocations"] = json!(related);
+                }
+            }
+
+            result["properties"] = Value::Object(props);
 
             result
         })

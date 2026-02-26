@@ -119,6 +119,34 @@ pub enum Commands {
         #[arg(long)]
         show_suppressed: bool,
 
+        /// Show all findings: disables category filtering, rollups, and LOW budgets
+        #[arg(long = "all")]
+        show_all: bool,
+
+        /// Include Quality findings (excluded by default)
+        #[arg(long)]
+        include_quality: bool,
+
+        /// Maximum total LOW findings to show
+        #[arg(long, default_value_t = 20)]
+        max_low: u32,
+
+        /// Maximum LOW findings per file
+        #[arg(long, default_value_t = 1)]
+        max_low_per_file: u32,
+
+        /// Maximum LOW findings per rule
+        #[arg(long, default_value_t = 10)]
+        max_low_per_rule: u32,
+
+        /// Number of example locations in rollup findings
+        #[arg(long, default_value_t = 5)]
+        rollup_examples: u32,
+
+        /// Show all instances for a specific rule (bypasses rollup for that rule)
+        #[arg(long)]
+        show_instances: Option<String>,
+
         /// Minimum attack-surface score to include in output
         ///
         /// Findings with a rank score below this threshold are suppressed.

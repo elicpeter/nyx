@@ -3,7 +3,7 @@
 //! Produces professional, security-tool-grade aligned output with a clear
 //! severity hierarchy, normalised taint flow rendering, and stable wrapping.
 
-use crate::commands::scan::Diag;
+use crate::commands::scan::{Diag, SuppressionStats};
 use crate::patterns::Severity;
 use console::style;
 use std::collections::BTreeMap;
@@ -16,7 +16,11 @@ const DEFAULT_WIDTH: usize = 100;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Render all diagnostics as grouped, formatted console output with a summary.
-pub fn render_console(diags: &[Diag], project_name: &str) -> String {
+pub fn render_console(
+    diags: &[Diag],
+    project_name: &str,
+    suppression_stats: Option<&SuppressionStats>,
+) -> String {
     let width = terminal_width();
     let mut out = String::new();
 
@@ -54,6 +58,45 @@ pub fn render_console(diags: &[Diag], project_name: &str) -> String {
             style(diags.len()).bold(),
             if diags.len() == 1 { "issue" } else { "issues" },
         ));
+    }
+
+    // ── Suppression footer ─────────────────────────────────────────────
+    if let Some(stats) = suppression_stats {
+        let total = stats.total_suppressed();
+        if total > 0 {
+            out.push_str(&format!(
+                "{}\n",
+                style(format!("Suppressed {total} LOW/Quality findings."))
+                    .dim()
+            ));
+            out.push_str(&format!("{}\n", style("Active filters:").dim()));
+            if !stats.include_quality {
+                out.push_str(&format!(
+                    "  {} {}\n",
+                    style("include_quality =").dim(),
+                    style("false").dim()
+                ));
+            }
+            out.push_str(&format!(
+                "  {} {}\n",
+                style("max_low =").dim(),
+                style(stats.max_low).dim()
+            ));
+            out.push_str(&format!(
+                "  {} {}\n",
+                style("max_low_per_file =").dim(),
+                style(stats.max_low_per_file).dim()
+            ));
+            out.push_str(&format!(
+                "  {} {}\n",
+                style("max_low_per_rule =").dim(),
+                style(stats.max_low_per_rule).dim()
+            ));
+            out.push_str(&format!(
+                "\n{}\n",
+                style("Use --include-quality, --max-low, or --all to adjust.").dim()
+            ));
+        }
     }
 
     out
@@ -154,8 +197,34 @@ fn render_diag(d: &Diag, width: usize) -> String {
         meta_suffix,
     ));
 
-    // ── Message body ─────────────────────────────────────────────────────
+    // ── Rollup body ─────────────────────────────────────────────────────
     let indent_str = " ".repeat(BODY_INDENT);
+    if let Some(ref rollup) = d.rollup {
+        out.push_str(&format!(
+            "{indent_str}{} ({} occurrences)\n",
+            style(&d.id).dim(),
+            rollup.count
+        ));
+        if !rollup.occurrences.is_empty() {
+            let examples: Vec<String> = rollup
+                .occurrences
+                .iter()
+                .map(|loc| format!("{}:{}", loc.line, loc.col))
+                .collect();
+            out.push_str(&format!(
+                "{indent_str}{} {}\n",
+                style("Examples:").dim(),
+                style(examples.join(", ")).dim()
+            ));
+        }
+        out.push_str(&format!(
+            "{indent_str}{}\n",
+            style(format!("Run: nyx scan --show-instances {}", d.id)).dim()
+        ));
+        return out;
+    }
+
+    // ── Message body ─────────────────────────────────────────────────────
     if let Some(msg) = &d.message {
         let capitalized = capitalize_first(msg);
         let wrapped = wrap_text(&capitalized, width, BODY_INDENT);
@@ -494,6 +563,7 @@ mod tests {
                 col: 5,
                 severity: Severity::High,
                 id: "test-rule".into(),
+                category: crate::patterns::FindingCategory::Security,
                 path_validated: false,
                 guard_kind: None,
                 message: Some("test message".into()),
@@ -504,6 +574,7 @@ mod tests {
                 rank_reason: None,
                 suppressed: false,
                 suppression: None,
+                rollup: None,
             },
             Diag {
                 path: "src/b.rs".into(),
@@ -511,6 +582,7 @@ mod tests {
                 col: 1,
                 severity: Severity::Low,
                 id: "another-rule".into(),
+                category: crate::patterns::FindingCategory::Security,
                 path_validated: false,
                 guard_kind: None,
                 message: None,
@@ -521,9 +593,10 @@ mod tests {
                 rank_reason: None,
                 suppressed: false,
                 suppression: None,
+                rollup: None,
             },
         ];
-        let output = render_console(&diags, "test-project");
+        let output = render_console(&diags, "test-project", None);
         let stripped = strip_ansi(&output);
         assert!(stripped.contains("src/a.rs"));
         assert!(stripped.contains("src/b.rs"));
@@ -539,6 +612,7 @@ mod tests {
             col: 5,
             severity: Severity::High,
             id: "taint-unsanitised-flow (source 12:3)".into(),
+            category: crate::patterns::FindingCategory::Security,
             path_validated: false,
             guard_kind: None,
             message: Some("unsanitised input".into()),
@@ -552,8 +626,9 @@ mod tests {
             rank_reason: None,
             suppressed: false,
             suppression: None,
+            rollup: None,
         }];
-        let output = render_console(&diags, "proj");
+        let output = render_console(&diags, "proj", None);
         let stripped = strip_ansi(&output);
         assert!(stripped.contains("Source:"), "should contain Source label");
         assert!(stripped.contains("Sink:"), "should contain Sink label");
@@ -573,6 +648,7 @@ mod tests {
                 col: 1,
                 severity: Severity::High,
                 id: "rule-a".into(),
+                category: crate::patterns::FindingCategory::Security,
                 path_validated: false,
                 guard_kind: None,
                 message: Some("first".into()),
@@ -583,6 +659,7 @@ mod tests {
                 rank_reason: None,
                 suppressed: false,
                 suppression: None,
+                rollup: None,
             },
             Diag {
                 path: "src/a.rs".into(),
@@ -590,6 +667,7 @@ mod tests {
                 col: 1,
                 severity: Severity::Medium,
                 id: "rule-b".into(),
+                category: crate::patterns::FindingCategory::Security,
                 path_validated: false,
                 guard_kind: None,
                 message: Some("second".into()),
@@ -600,9 +678,10 @@ mod tests {
                 rank_reason: None,
                 suppressed: false,
                 suppression: None,
+                rollup: None,
             },
         ];
-        let output = render_console(&diags, "proj");
+        let output = render_console(&diags, "proj", None);
         let stripped = strip_ansi(&output);
         // There should be a blank line between the two findings
         assert!(
@@ -619,6 +698,7 @@ mod tests {
             col: 1,
             severity: Severity::Low,
             id: "test".into(),
+            category: crate::patterns::FindingCategory::Security,
             path_validated: false,
             guard_kind: None,
             message: None,
@@ -629,6 +709,7 @@ mod tests {
             rank_reason: None,
             suppressed: false,
             suppression: None,
+            rollup: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -645,6 +726,7 @@ mod tests {
             col: 1,
             severity: Severity::Low,
             id: "test".into(),
+            category: crate::patterns::FindingCategory::Security,
             path_validated: false,
             guard_kind: None,
             message: None,
@@ -655,6 +737,7 @@ mod tests {
             rank_reason: None,
             suppressed: false,
             suppression: None,
+            rollup: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -675,6 +758,7 @@ mod tests {
             col: 1,
             severity: Severity::High,
             id: "taint-unsanitised-flow".into(),
+            category: crate::patterns::FindingCategory::Security,
             path_validated: false,
             guard_kind: None,
             message: None,
@@ -685,6 +769,7 @@ mod tests {
             rank_reason: None,
             suppressed: false,
             suppression: None,
+            rollup: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -740,6 +825,7 @@ mod tests {
             col: 5,
             severity: Severity::Medium,
             id: "cfg-unguarded-sink".into(),
+            category: crate::patterns::FindingCategory::Security,
             path_validated: false,
             guard_kind: None,
             message: Some("dangerous sink".into()),
@@ -750,6 +836,7 @@ mod tests {
             rank_reason: None,
             suppressed: false,
             suppression: None,
+            rollup: None,
         };
         let output = render_diag(&d, 120);
         let stripped = strip_ansi(&output);
@@ -780,6 +867,7 @@ mod tests {
                 col: 1,
                 severity: Severity::Low,
                 id: "test".into(),
+                category: crate::patterns::FindingCategory::Security,
                 path_validated: false,
                 guard_kind: None,
                 message: None,
@@ -790,6 +878,7 @@ mod tests {
                 rank_reason: None,
                 suppressed: false,
                 suppression: None,
+                rollup: None,
             };
             let output = render_diag(&d, 100);
             let stripped = strip_ansi(&output);
@@ -808,6 +897,7 @@ mod tests {
             col: 5,
             severity: Severity::High,
             id: "test-rule".into(),
+            category: crate::patterns::FindingCategory::Security,
             path_validated: false,
             guard_kind: None,
             message: Some("test message".into()),
@@ -818,6 +908,7 @@ mod tests {
             rank_reason: None,
             suppressed: false,
             suppression: None,
+            rollup: None,
         };
         let output = render_diag(&d, 100);
         let stripped = strip_ansi(&output);
@@ -840,6 +931,7 @@ mod tests {
             col: 5,
             severity: Severity::High,
             id: "test-rule".into(),
+            category: crate::patterns::FindingCategory::Security,
             path_validated: false,
             guard_kind: None,
             message: None,
@@ -850,6 +942,7 @@ mod tests {
             rank_reason: None,
             suppressed: false,
             suppression: None,
+            rollup: None,
         };
         let output = render_diag(&d, 100);
         let stripped = strip_ansi(&output);
@@ -868,6 +961,7 @@ mod tests {
             col: 1,
             severity: Severity::Low,
             id: "test".into(),
+            category: crate::patterns::FindingCategory::Security,
             path_validated: false,
             guard_kind: None,
             message: None,
@@ -878,6 +972,7 @@ mod tests {
             rank_reason: None,
             suppressed: false,
             suppression: None,
+            rollup: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(

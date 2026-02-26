@@ -41,6 +41,34 @@ Taint and state findings include structured evidence:
 
 When attack-surface ranking is enabled (default), each finding shows a `Score` value. Higher scores indicate greater exploitability. See [Detector Overview](detectors.md) for the scoring formula.
 
+### Rollup findings
+
+High-frequency LOW Quality findings (e.g. `rs.quality.unwrap`) are grouped into rollup findings by `(file, rule)`:
+
+```
+  21:10  ● [LOW]   rs.quality.unwrap
+      rs.quality.unwrap (38 occurrences)
+      Examples: 21:10, 50:10, 79:10, 105:10, 134:10
+      Run: nyx scan --show-instances rs.quality.unwrap
+```
+
+Rollups count as **one finding** for LOW budget enforcement. Use `--show-instances <RULE>` to expand a specific rule or `--all` to disable rollups entirely.
+
+### Suppression footer
+
+When findings are suppressed by the prioritization pipeline, a footer is shown:
+
+```
+Suppressed 195 LOW/Quality findings.
+Active filters:
+  include_quality = false
+  max_low = 20
+  max_low_per_file = 1
+  max_low_per_rule = 10
+
+Use --include-quality, --max-low, or --all to adjust.
+```
+
 ---
 
 ## JSON
@@ -98,6 +126,7 @@ Machine-readable JSON array. Each finding is an object:
 | `col` | int | yes | 1-indexed column number |
 | `severity` | string | yes | `"High"`, `"Medium"`, or `"Low"` |
 | `id` | string | yes | Rule ID |
+| `category` | string | yes | Finding category: `"Security"`, `"Reliability"`, or `"Quality"` |
 | `path_validated` | bool | no | True if guarded by validation predicate |
 | `guard_kind` | string | no | Predicate type (e.g. `"NullCheck"`, `"ValidationCall"`) |
 | `message` | string | no | Human-readable context (state analysis findings) |
@@ -106,6 +135,7 @@ Machine-readable JSON array. Each finding is an object:
 | `evidence` | object | no | Structured evidence (source/sink spans, state, notes) |
 | `rank_score` | float | no | Attack-surface score (omitted when ranking disabled) |
 | `rank_reason` | array | no | Score breakdown (omitted when ranking disabled) |
+| `rollup` | object | no | Rollup data when findings are grouped (see below) |
 
 Fields marked "no" are omitted when empty/null/false to keep output compact.
 
@@ -132,6 +162,28 @@ The `evidence` field provides structured provenance data:
 
 All fields are omitted when empty/null.
 
+### Rollup object
+
+When a finding is a rollup (grouped from multiple occurrences), the `rollup` field is present:
+
+```json
+{
+  "rollup": {
+    "count": 38,
+    "occurrences": [
+      { "line": 21, "col": 10 },
+      { "line": 50, "col": 10 },
+      { "line": 79, "col": 10 }
+    ]
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `count` | int | Total number of occurrences |
+| `occurrences` | array | First N example locations (controlled by `rollup_examples`) |
+
 ---
 
 ## SARIF (Static Analysis Results Interchange Format)
@@ -147,6 +199,8 @@ The SARIF output includes:
 - **Tool metadata** — Nyx name and version
 - **Rules** — Rule ID, description, severity mapping
 - **Results** — One result per finding with location, message, and properties
+- **Properties** — Each result includes `category` and optionally `confidence` and `rollup.count`
+- **Related locations** — Rollup findings include example locations in `relatedLocations`
 - **Artifacts** — File paths referenced by findings
 
 ### GitHub Code Scanning integration
