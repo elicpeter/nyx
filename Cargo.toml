@@ -21,6 +21,7 @@ exclude = [
     "tests/",
     "benches/",
     "examples/",
+    "docs/",
 ]
 
 autoexamples = false
