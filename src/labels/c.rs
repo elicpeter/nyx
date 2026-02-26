@@ -31,6 +31,10 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["printf", "fprintf"],
         label: DataLabel::Sink(Cap::FMT_STRING),
     },
+    LabelRule {
+        matchers: &["fopen", "open"],
+        label: DataLabel::Sink(Cap::FILE_IO),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {
@@ -39,6 +43,9 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "while_statement"       => Kind::While,
     "for_statement"         => Kind::For,
     "do_statement"          => Kind::While,
+    "switch_statement"      => Kind::Block,
+    "case_statement"        => Kind::Block,
+    "labeled_statement"     => Kind::Block,
 
     "return_statement"      => Kind::Return,
     "break_statement"       => Kind::Break,
@@ -47,6 +54,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // structure
     "translation_unit"      => Kind::SourceFile,
     "compound_statement"    => Kind::Block,
+    "else_clause"           => Kind::Block,
     "function_definition"   => Kind::Function,
 
     // data-flow

@@ -1,0 +1,34 @@
+{
+  "description": "Switch dispatches to dangerous operations including exec and file write based on action string",
+  "tags": [
+    "cfg",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        2,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "input parameter flows into Runtime.exec \u2014 depends on whether scanner models method params as taint sources"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        4,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "No validation of input before exec call in exec case"
+    }
+  ]
+}

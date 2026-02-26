@@ -1,0 +1,36 @@
+{
+  "description": "SQL injection via string concatenation with user input in cursor.execute",
+  "tags": [
+    "taint",
+    "sqli",
+    "flask",
+    "sqlite"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('id') concatenated directly into SQL query string"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        14,
+        22
+      ],
+      "evidence_contains": [],
+      "notes": "Safe version uses parameterized query - should not trigger"
+    }
+  ]
+}

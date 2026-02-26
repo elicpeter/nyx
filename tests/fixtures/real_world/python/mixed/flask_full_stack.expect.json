@@ -1,0 +1,72 @@
+{
+  "description": "Flask app with multiple vulnerability types: cmdi, path traversal, eval, resource leak",
+  "tags": [
+    "taint",
+    "state",
+    "cmdi",
+    "path-traversal",
+    "eval",
+    "flask",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        7,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('cmd') flows into subprocess.run with shell=True"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        13,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('path') flows into open() - path traversal"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        21,
+        26
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('expr') flows into eval()"
+    },
+    {
+      "rule_id": "py.code_exec.eval",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        22,
+        26
+      ],
+      "evidence_contains": [],
+      "notes": "eval() is a dangerous function - AST pattern match"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        12,
+        21
+      ],
+      "evidence_contains": [],
+      "notes": "File handle opened in read_file but never closed"
+    }
+  ]
+}

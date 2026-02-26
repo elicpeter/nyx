@@ -40,6 +40,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "if"                    => Kind::If,
     "unless"                => Kind::If,
     "while"                 => Kind::While,
+    "until"                 => Kind::While,
     "for"                   => Kind::For,
 
     "return"                => Kind::Return,
@@ -49,15 +50,26 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // structure
     "program"               => Kind::SourceFile,
     "body_statement"        => Kind::Block,
-    "do_block"              => Kind::Block,
+    "do_block"              => Kind::Function,
     "then"                  => Kind::Block,
     "else"                  => Kind::Block,
+    "elsif"                 => Kind::If,
+
+    "begin"                 => Kind::Block,
+    "rescue"                => Kind::Block,
+    "ensure"                => Kind::Block,
+    "case"                  => Kind::Block,
+    "when"                  => Kind::Block,
+    "class"                 => Kind::Block,
+    "module"                => Kind::Block,
+    "do"                    => Kind::Block,
+    "block"                 => Kind::Function,
 
     // data-flow
     "call"                  => Kind::CallFn,
-    "method_call"           => Kind::CallFn,
     "assignment"            => Kind::Assignment,
     "method"                => Kind::Function,
+    "singleton_method"      => Kind::Function,
 
     // trivia
     "comment"               => Kind::Trivia,

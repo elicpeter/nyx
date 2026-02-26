@@ -62,6 +62,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "while_statement"       => Kind::While,
     "for_statement"         => Kind::For,
     "for_in_statement"      => Kind::For,
+    "do_statement"          => Kind::While,
 
     "return_statement"      => Kind::Return,
     "throw_statement"       => Kind::Return,
@@ -71,9 +72,24 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // structure
     "program"               => Kind::SourceFile,
     "statement_block"       => Kind::Block,
+    "else_clause"           => Kind::Block,
     "function_declaration"  => Kind::Function,
+    "function_expression"   => Kind::Function,
     "arrow_function"        => Kind::Function,
     "method_definition"     => Kind::Function,
+    "generator_function_declaration" => Kind::Function,
+    "generator_function"    => Kind::Function,
+    "switch_statement"      => Kind::Block,
+    "switch_body"           => Kind::Block,
+    "switch_case"           => Kind::Block,
+    "switch_default"        => Kind::Block,
+    "try_statement"         => Kind::Block,
+    "catch_clause"          => Kind::Block,
+    "finally_clause"        => Kind::Block,
+    "class_declaration"     => Kind::Block,
+    "class"                 => Kind::Block,
+    "class_body"            => Kind::Block,
+    "export_statement"      => Kind::Block,
 
     // data-flow
     "call_expression"       => Kind::CallFn,

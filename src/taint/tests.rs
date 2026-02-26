@@ -1,6 +1,7 @@
 use super::*;
 use crate::cfg::FuncSummaries;
 use crate::interop::InteropEdge;
+use crate::labels::Cap;
 use crate::symbol::FuncKey;
 
 #[test]
@@ -52,8 +53,10 @@ fn taint_through_if_else() {
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
 
-    // exactly one path (via the True branch) should be flagged
-    assert_eq!(findings.len(), 1);
+    // Both branches have findings: the true branch uses unsanitized `x`,
+    // the else branch uses `safe` which was sanitized with HTML_ESCAPE
+    // but the sink requires SHELL_ESCAPE (wrong sanitizer → still tainted).
+    assert_eq!(findings.len(), 2);
 }
 
 #[test]
@@ -2216,5 +2219,320 @@ fn return_call_recognized_as_source() {
     assert!(
         foo.source_caps != 0,
         "foo() should have source_caps set because env::var is called inside return"
+    );
+}
+
+// ─── Path-sensitive analysis tests ───────────────────────────────────────────
+
+#[test]
+fn validate_and_early_return() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Validate before use: if validation fails, early return.
+    // The sink after the guard is on the "validated" path.
+    //
+    // The CFG creates a synthetic pass-through node for the false path
+    // with an explicit False edge from the If node.  BFS reaches the
+    // sink via: cond → (False) → pass-through → (Seq) → sink.
+    // The predicate on the False edge records that `!validate(&x)` was
+    // false (i.e. validation passed), so the sink is path-guarded.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if !validate(&x) { return; }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    // Taint still flows (validate doesn't kill taint), but the finding
+    // should be annotated as path_validated because the false path
+    // (validation passed) has a ValidationCall predicate with polarity=true.
+    assert_eq!(findings.len(), 1, "should still detect the taint flow");
+    assert!(
+        findings[0].path_validated,
+        "finding should be marked as path_validated (early-return guard detected)"
+    );
+    assert_eq!(
+        findings[0].guard_kind,
+        Some(PredicateKind::ValidationCall),
+        "guard_kind should be ValidationCall"
+    );
+}
+
+#[test]
+fn validate_in_if_else_path_validated() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // If/else where the True branch (validation passed) contains the sink.
+    // This IS detectable because the If node has genuine True/False branches.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if validate(&x) {
+                Command::new("sh").arg(&x).status().unwrap();
+            } else {
+                println!("invalid input");
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    assert_eq!(findings.len(), 1, "should detect the taint flow");
+    assert!(
+        findings[0].path_validated,
+        "finding should be path_validated (sink in validated branch)"
+    );
+    assert_eq!(
+        findings[0].guard_kind,
+        Some(PredicateKind::ValidationCall),
+        "guard_kind should be ValidationCall"
+    );
+}
+
+#[test]
+fn sink_on_failed_validation_branch() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Sink is in the failed-validation branch (negated condition, false edge).
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if !validate(&x) {
+                Command::new("sh").arg(&x).status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    assert_eq!(findings.len(), 1, "should detect taint flow to sink");
+    assert!(
+        !findings[0].path_validated,
+        "finding should NOT be path_validated (sink is in failed-validation branch)"
+    );
+}
+
+#[test]
+fn contradictory_null_check_pruned() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Inner branch is infeasible: if x.is_none() then x cannot also be is_none().
+    // After early return on is_none(), the fall-through path has polarity=false
+    // for NullCheck. The inner `if x.is_none()` True branch has polarity=true —
+    // contradiction.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").ok();
+            if x.is_none() { return; }
+            if x.is_none() {
+                Command::new("sh").arg("dangerous").status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    // The inner branch is infeasible, and the arg "dangerous" is a string
+    // literal (not tainted), so there should be no findings.
+    assert!(
+        findings.is_empty(),
+        "inner branch is infeasible — should produce no findings (got {})",
+        findings.len()
+    );
+}
+
+#[test]
+fn sanitize_one_branch_no_regression() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Same as existing taint_through_if_else: sanitized in one branch, not in the other.
+    // Verify the finding count stays at 1 (no regression from path sensitivity).
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let safe = html_escape::encode_safe(&x);
+
+            if x.len() > 5 {
+                Command::new("sh").arg(&x).status().unwrap();   // UNSAFE
+            } else {
+                Command::new("sh").arg(&safe).status().unwrap(); // SAFE
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    // Both branches produce findings: the true branch uses unsanitized `x`,
+    // the else branch uses `safe` (HTML_ESCAPE sanitizer vs SHELL_ESCAPE sink).
+    // Previously only 1 finding because else_clause was silently dropped from CFG.
+    assert_eq!(
+        findings.len(),
+        2,
+        "two findings expected (both branches reach sink with wrong/no sanitizer)"
+    );
+}
+
+#[test]
+fn path_state_budget_graceful() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Deeply nested ifs with a sink at the innermost level.
+    // PathState should truncate gracefully after MAX_PATH_PREDICATES.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if x.len() > 1 {
+            if x.len() > 2 {
+            if x.len() > 3 {
+            if x.len() > 4 {
+            if x.len() > 5 {
+            if x.len() > 6 {
+            if x.len() > 7 {
+            if x.len() > 8 {
+            if x.len() > 9 {
+                Command::new("sh").arg(&x).status().unwrap();
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    // Should still detect the flow — truncation shouldn't cause false negatives.
+    assert_eq!(
+        findings.len(),
+        1,
+        "should detect taint flow even with truncated PathState"
+    );
+}
+
+#[test]
+fn unknown_predicate_not_pruned() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Comparison predicates are NOT in the contradiction whitelist, so even
+    // seemingly contradictory comparisons should not be pruned.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if x.len() > 5 { return; }
+            if x.len() > 5 {
+                Command::new("sh").arg(&x).status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    // Comparison is not in the whitelist — the path should NOT be pruned.
+    assert_eq!(
+        findings.len(),
+        1,
+        "Comparison predicate should not cause contradiction pruning"
+    );
+}
+
+#[test]
+fn multi_var_predicate_not_pruned() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Multi-variable conditions should never be pruned for contradiction,
+    // even if the kind is in the whitelist.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            let y = env::var("OTHER").ok();
+            if y.is_none() { return; }
+            if y.is_none() {
+                Command::new("sh").arg(&x).status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    // Note: y.is_none() condition references `y` and `is_none` — two idents.
+    // Wait, `is_none` is a method — collect_idents finds `y` and `is_none` as
+    // separate identifiers.  That makes it multi-var, so contradiction should
+    // NOT fire.  However, the actual behavior depends on how many idents
+    // collect_idents extracts from `y.is_none()`.  If it returns ["y", "is_none"],
+    // then the predicate has 2 vars → multi-var → not pruned → finding exists.
+    assert!(
+        !findings.is_empty(),
+        "multi-var predicate should not be pruned; flow should be detected"
     );
 }

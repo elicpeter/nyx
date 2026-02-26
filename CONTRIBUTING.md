@@ -1,142 +1,351 @@
 # Contributing to Nyx
 
-First off, **thank you for taking the time to contribute!** By participating in this project, you agree to abide by the community values and expectations described in our [Code of Conduct](CODE_OF_CONDUCT.md).
+Thank you for your interest in improving Nyx. This guide covers everything you need to contribute effectively.
 
-Nyx is dual‑licensed under **MIT** and **Apache‑2.0**. By submitting code, documentation, or any other material, you agree to license your contribution under these same terms.
+Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 ---
 
 ## Table of Contents
 
-1. [Getting Started](#getting-started)
-2. [How to Contribute](#how-to-contribute)
-
-    * [Bug Reports](#bug-reports)
-    * [Feature Requests](#feature-requests)
-    * [Pull Requests](#pull-requests)
-3. [Development Workflow](#development-workflow)
-4. [Commit & Branching Conventions](#commit--branching-conventions)
-5. [Style Guide](#style-guide)
-6. [Security Policy](#security-policy)
-7. [Community Standards](#community-standards)
+1. [Development Setup](#development-setup)
+2. [Project Layout](#project-layout)
+3. [How to Add a New AST Pattern](#how-to-add-a-new-ast-pattern)
+4. [How to Add a New Taint Rule](#how-to-add-a-new-taint-rule)
+5. [How to Add a New Language](#how-to-add-a-new-language)
+6. [Testing](#testing)
+7. [Pull Request Guidelines](#pull-request-guidelines)
+8. [Bug Reports](#bug-reports)
+9. [Feature Requests](#feature-requests)
+10. [Release Process](#release-process)
 
 ---
 
-## Getting Started
+## Development Setup
 
-Clone the repository and build Nyx in release mode:
+### Prerequisites
+
+- **Rust 1.85+** (edition 2024)
+- Git
+
+### Building
 
 ```bash
-git clone https://github.com/<your‑org>/nyx.git
+git clone https://github.com/elicpeter/nyx.git
 cd nyx
-cargo build --release
+
+cargo build            # Debug build
+cargo build --release  # Release build
+cargo install --path . # Install as `nyx` binary
 ```
 
-Run the test‑suite:
+### Running Quality Checks
 
 ```bash
-cargo test
+cargo test --bin nyx                   # Unit tests (inline in modules)
+cargo clippy --all -- -D warnings      # Lint — treats warnings as errors
+cargo fmt                              # Format code
+cargo fmt -- --check                   # Check formatting without modifying
 ```
 
-> **Tip**: The first build downloads and compiles several `tree‑sitter` grammars. Later builds will be faster.
+> **Note**: The first build downloads and compiles tree-sitter grammars for all 10 languages. Subsequent builds are faster.
+
+### Benchmarks
+
+```bash
+cargo bench --bench scan_bench
+```
+
+Benchmark fixtures live in `benches/fixtures/`. Criterion produces HTML reports in `target/criterion/`.
 
 ---
 
-## How to Contribute
+## Project Layout
 
-### Bug Reports
-
-* Search existing [issues](https://github.com/<your‑org>/nyx/issues) to ensure the bug has not already been reported.
-* Include **steps to reproduce**, expected vs. actual behaviour, and your environment details (`nyx --version`, `rustc --version`).
-* Attach a minimal code sample if possible.
-
-### Feature Requests
-
-We welcome well‑motivated feature proposals. Please describe:
-
-1. **Problem statement** – what pain point does this solve?
-2. **Proposed solution** – high‑level description, optionally with pseudo‑code.
-3. **Alternatives considered** – why existing functionality is not enough.
-
-### Pull Requests
-
-Every PR should:
-
-1. Target the `main` branch.
-2. Contain a single, focused change (small orthogonal fixes are okay).
-3. Pass `cargo test`, `cargo fmt --check`, and `cargo clippy -- -D warnings`.
-4. Update documentation and, when relevant, add tests.
-5. Reference related issue numbers in the description (`Fixes #123`).
-
-A reviewer will provide feedback within **3 business days**. Squash‑merge is the default strategy; maintainers may edit commit messages for clarity.
+```
+src/
+  main.rs               CLI entry point
+  lib.rs                 Library re-exports (benchmarks, integration tests)
+  cli.rs                 Clap command definitions
+  commands/
+    mod.rs               Command dispatch
+    scan.rs              Two-pass scan orchestration, Diag struct
+  ast.rs                 Entry points for both passes; tree-sitter parsing
+  cfg.rs                 CFG construction from AST
+  cfg_analysis/          CFG structural detectors
+    guards.rs            Unguarded sink detection (dominator analysis)
+    auth.rs              Auth gap detection
+    resources.rs         Resource leak detection
+    error_handling.rs    Error fallthrough detection
+    unreachable.rs       Unreachable security code detection
+    rules.rs             Guard rules, auth rules, resource pairs
+  taint/
+    mod.rs               Taint analysis facade + JS two-level solve
+    domain.rs            TaintState lattice (VarTaint, Cap, TaintOrigin)
+    transfer.rs          TaintTransfer function (source/sanitizer/sink/call)
+    path_state.rs        Predicate tracking and contradiction pruning
+  state/
+    engine.rs            Generic monotone dataflow engine (Transfer<S: Lattice>)
+    transfer.rs          DefaultTransfer — resource lifecycle + auth state
+  summary.rs             FuncSummary, GlobalSummaries, conservative merge
+  labels/                Per-language label rules
+    mod.rs               classify() dispatch, Cap bitflags, DataLabel, LabelRule
+    rust.rs              Rust sources, sinks, sanitizers
+    javascript.rs        JS sources, sinks, sanitizers
+    ...                  (one file per language)
+  patterns/              Per-language AST pattern queries
+    mod.rs               Pattern struct, Severity, SeverityFilter, registry
+    rust.rs              Rust patterns
+    javascript.rs        JS patterns
+    ...                  (one file per language)
+  callgraph.rs           Call graph construction (petgraph), SCC, topo sort
+  database.rs            SQLite indexing via r2d2 pool
+  rank.rs                Attack-surface ranking
+  fmt.rs                 Output formatting and evidence normalization
+  output.rs              SARIF 2.1 builder
+  walk.rs                Parallel file walker (ignore crate, respects .gitignore)
+  symbol.rs              Symbol interning (SymbolId)
+  interop.rs             Cross-language interop edges
+  errors.rs              NyxError, NyxResult types
+  utils/
+    config.rs            TOML config loading, merging, Config struct
+```
 
 ---
 
-## Development Workflow
+## How to Add a New AST Pattern
 
-1. **Fork** the repo and create your feature branch:
+AST patterns are the simplest detector to add. Each pattern is a tree-sitter query that matches a structural code construct.
 
-   ```bash
-   git checkout -b feature/my‑feature
+### Step-by-step
+
+1. **Pick the language file** under `src/patterns/<lang>.rs`.
+
+2. **Choose the metadata**:
+
+   | Field | Options | Guidelines |
+   |-------|---------|------------|
+   | **ID** | `<lang>.<category>.<specific>` | e.g. `py.cmdi.os_popen` |
+   | **Tier** | `A` or `B` | `A` = presence alone is high-signal; `B` = query includes a heuristic guard |
+   | **Severity** | `High`, `Medium`, `Low` | High: command exec, deser, banned functions. Medium: SQL concat, reflection, XSS. Low: weak crypto, code quality. |
+   | **Category** | See `PatternCategory` enum | `CommandExec`, `CodeExec`, `Deserialization`, `SqlInjection`, `PathTraversal`, `Xss`, `Crypto`, `Secrets`, `InsecureTransport`, `Reflection`, `MemorySafety`, `Prototype`, `CodeQuality` |
+
+3. **Write the tree-sitter query**:
+
+   ```rust
+   Pattern {
+       id: "py.cmdi.os_popen",
+       description: "os.popen() — shell command execution",
+       query: r#"(call
+                    function: (attribute
+                      object: (identifier) @pkg (#eq? @pkg "os")
+                      attribute: (identifier) @fn (#eq? @fn "popen")))
+                  @vuln"#,
+       severity: Severity::High,
+       tier: PatternTier::A,
+       category: PatternCategory::CommandExec,
+   },
    ```
 
-2. Make your changes, then run:
+   The query **must** capture a `@vuln` node. That node's span determines the reported location.
+
+4. **Test it**:
 
    ```bash
-   cargo fmt
-   cargo clippy --all-targets --all-features -- -D warnings
-   cargo test
+   cargo test --bin nyx
    ```
 
-3. **Sign‑off** your commits if your employer requires a Developer Certificate of Origin (DCO):
+5. **Update docs**: Add the new rule to `docs/rules/<lang>.md`.
 
+### Tips
+
+- Use the [tree-sitter playground](https://tree-sitter.github.io/tree-sitter/playground) to develop and test queries.
+- Avoid duplicating taint coverage. If the same function is already a labeled sink in `src/labels/<lang>.rs`, the AST pattern is still useful for `--mode ast`, but use a distinct ID namespace. The dedup pass prevents exact-duplicate findings at the same location.
+- Test with real-world code to check false positive rates before choosing a tier.
+
+---
+
+## How to Add a New Taint Rule
+
+Taint rules define sources (where untrusted data enters), sinks (where dangerous operations happen), and sanitizers (where data is made safe).
+
+### Step-by-step
+
+1. **Open the language file** in `src/labels/<lang>.rs`.
+
+2. **Add an entry** to the `RULES` slice:
+
+   ```rust
+   LabelRule {
+       matchers: &["dangerouslySetInnerHTML"],
+       label: DataLabel::Sink(Cap::HTML_ESCAPE),
+   },
+   ```
+
+3. **Choose the right label type**:
+
+   | Type | Purpose | Example |
+   |------|---------|---------|
+   | `DataLabel::Source(cap)` | Introduces tainted data | `env::var`, `req.body` |
+   | `DataLabel::Sanitizer(cap)` | Strips matching capability bits | `html_escape`, `encodeURIComponent` |
+   | `DataLabel::Sink(cap)` | Dangerous operation requiring sanitization | `eval`, `innerHTML`, `Command::new` |
+
+4. **Choose capabilities**:
+
+   | Capability | When to use |
+   |-----------|-------------|
+   | `Cap::all()` | Sources that produce universally dangerous data |
+   | `Cap::SHELL_ESCAPE` | Shell command injection sinks/sanitizers |
+   | `Cap::HTML_ESCAPE` | XSS sinks/sanitizers |
+   | `Cap::URL_ENCODE` | URL injection sinks/sanitizers |
+   | `Cap::JSON_PARSE` | JSON parsing sanitizers |
+   | `Cap::FILE_IO` | File I/O sinks |
+   | `Cap::FMT_STRING` | Format string sinks |
+   | `Cap::ENV_VAR` | Environment/config data sources |
+
+5. **Matcher semantics**:
+   - Case-insensitive suffix matching by default.
+   - If a matcher ends with `_`, it acts as a prefix match.
+   - Multiple matchers in one rule are alternatives (any match triggers the rule).
+
+### User-defined rules (no code change needed)
+
+Users can add taint rules via config:
+
+```toml
+[[analysis.languages.javascript.rules]]
+matchers = ["dangerouslySetInnerHTML"]
+kind = "sink"
+cap = "html_escape"
+```
+
+Or via CLI:
+
+```bash
+nyx config add-rule --lang javascript --matcher dangerouslySetInnerHTML --kind sink --cap html_escape
+```
+
+---
+
+## How to Add a New Language
+
+Adding a new language requires changes across several modules. Use an existing language (e.g. Go or Python) as a template.
+
+### Checklist
+
+1. **Tree-sitter parser**: Add `tree-sitter-<lang>` to `Cargo.toml`.
+
+2. **Language registration**: Register the parser in `ast.rs` (language detection from file extension, parser initialization).
+
+3. **CFG node kinds**: Create `src/labels/<lang>.rs` with a `KINDS` map that maps tree-sitter node types to the internal `Kind` enum (`Block`, `If`, `While`, `For`, `Return`, `CallFn`, `CallMethod`, `Assignment`, etc.).
+
+4. **Parameter extraction**: Add a `PARAM_CONFIG` constant specifying how to extract function parameters from the AST (field name for parameter list, node type for individual parameters, extraction field for parameter names).
+
+5. **Label rules**: Add `RULES` (sources, sinks, sanitizers) and `TERMINATORS` to the labels file.
+
+6. **AST patterns**: Create `src/patterns/<lang>.rs` with a `PATTERNS` constant.
+
+7. **Registry updates**:
+   - `src/patterns/mod.rs` — add to the `REGISTRY` HashMap
+   - `src/labels/mod.rs` — add to the `classify()` dispatch
+
+8. **File extension mapping**: Add the extension in `ast.rs`.
+
+9. **Tests**: Write unit tests and add test fixtures.
+
+---
+
+## Testing
+
+### Unit Tests
+
+All tests are inline `#[test]` blocks inside source modules. Run them with:
+
+```bash
+cargo test --bin nyx
+```
+
+### What to Test
+
+- **New AST patterns**: Ensure the tree-sitter query matches the intended construct and does not match safe alternatives.
+- **New taint rules**: Verify that source-to-sink flows are detected and that sanitizers properly neutralize findings.
+- **New CFG rules**: Test that guard dominance logic correctly suppresses findings when guards are present.
+- **Edge cases**: Empty files, files with syntax errors (tree-sitter is error-tolerant), deeply nested structures.
+
+### Linting
+
+CI runs Clippy with strict settings. Before submitting:
+
+```bash
+cargo clippy --all -- -D warnings
+```
+
+---
+
+## Pull Request Guidelines
+
+1. **Branch from `master`**. Use descriptive branch names: `feat/add-kotlin-support`, `fix/false-positive-sql-concat`, `docs/update-rule-reference`.
+
+2. **Keep PRs focused**. One logical change per PR.
+
+3. **Ensure CI passes**:
    ```bash
-   git commit -s -m "feat: add XYZ"
+   cargo test --bin nyx
+   cargo clippy --all -- -D warnings
+   cargo fmt -- --check
    ```
 
-4. Push the branch and open a PR against `main`.
+4. **Commit style**: Use [Conventional Commits](https://www.conventionalcommits.org/).
+   ```
+   feat(patterns): add Python subprocess.Popen pattern
+   fix(taint): prevent false positive on sanitized innerHTML
+   docs(rules): update JavaScript rule reference
+   ```
+
+5. **Document new rules**. If you add patterns or taint rules, update the corresponding `docs/rules/<lang>.md` page.
+
+6. **Include test cases** for any new detection rules.
 
 ---
 
-## Commit & Branching Conventions
+## Bug Reports
 
-* **Branch names**: `feature/<slug>`, `fix/<slug>`, `docs/<slug>`
-* **Commit style** – Conventional Commits (simplified):
+Please [open an issue](https://github.com/elicpeter/nyx/issues) for:
 
-  ```text
-  type(scope): subject
-
-  body (optional)
-  ```
-
-  | Type       | Use for                              |
-  |------------|--------------------------------------|
-  | `feat`     | New functionality                    |
-  | `fix`      | Bug fixes                            |
-  | `docs`     | Documentation only                   |
-  | `refactor` | Code change without behaviour change |
-  | `test`     | Adding or changing tests             |
-  | `chore`    | Build process, tooling               |
+- **Crashes or panics** — include the backtrace (`RUST_BACKTRACE=1 nyx scan .`)
+- **False positives** — include the minimal code snippet, rule ID, and Nyx version
+- **False negatives** — describe what you expected Nyx to find and why
+- **Documentation errors** — point to the specific page and what's wrong
 
 ---
 
-## Style Guide
+## Feature Requests
 
-* **Formatting**: run `cargo fmt` before committing.
-* **Linting**: CI runs Clippy with `-D warnings`; keep the tree warning‑free.
-* **Unsafe Rust**: prohibited unless absolutely necessary. Justify with in‑code comments.
-* **Public API stability**: avoid breaking changes on exported types and functions without prior discussion.
+We welcome well-motivated feature proposals. Please describe:
 
----
-
-## Security Policy
-
-Please do **not** open public issues for security‑sensitive bugs. Instead, email the maintainers at `<security@example.com>` with the details and a proof of concept. We aim to acknowledge reports within **48 hours**.
+1. **Problem statement** — what pain point does this solve?
+2. **Proposed solution** — high-level description, optionally with pseudo-code.
+3. **Alternatives considered** — why existing functionality is not enough.
 
 ---
 
-## Community Standards
+## Release Process
 
-We strive to maintain a welcoming and inclusive community. Harassment, discrimination, or other forms of unacceptable behavior will be addressed per the [Code of Conduct](CODE_OF_CONDUCT.md).
+1. Update version in `Cargo.toml`.
+2. Update `CHANGELOG.md` with the new version section.
+3. Run full test suite: `cargo test --bin nyx && cargo clippy --all -- -D warnings`.
+4. Create a git tag: `git tag v0.x.y`.
+5. Push tag: `git push origin v0.x.y`.
+6. CI builds release binaries and publishes to crates.io.
 
-Thank you for helping to make Nyx better!
+---
+
+## Security Issues
+
+Please do **not** open public issues for security-sensitive bugs. See [SECURITY.md](SECURITY.md) for our responsible disclosure process.
+
+---
+
+## License
+
+By contributing to Nyx, you agree that your contributions will be licensed under the [GPL-3.0](./LICENSE).

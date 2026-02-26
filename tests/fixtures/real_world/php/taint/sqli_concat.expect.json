@@ -1,0 +1,25 @@
+{
+  "description": "SQL injection via string concatenation with user input in mysqli query",
+  "tags": [
+    "taint",
+    "sqli",
+    "mysqli",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        1,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "$_GET['id'] concatenated directly into SQL query string"
+    }
+  ]
+}

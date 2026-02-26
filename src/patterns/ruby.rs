@@ -1,133 +1,141 @@
-use crate::patterns::{Pattern, Severity};
+use crate::evidence::Confidence;
+use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
+
+/// Ruby AST patterns.
+///
+/// Taint rules cover `system`/`exec` (command injection), `eval` (code
+/// execution), and `puts`/`print` (output sinks).  AST patterns here focus on
+/// **deserialization** (YAML.load, Marshal.load), **instance_eval/class_eval**,
+/// **backtick shell**, **send with dynamic arg**, and **constantize**.
 pub const PATTERNS: &[Pattern] = &[
-    // ---------- Runtime code-execution primitives ----------
+    // ── Tier A: Code execution ─────────────────────────────────────────
     Pattern {
-        id: "eval_call",
-        description: "Kernel#eval usage",
-        query: r#"
-          (call
-            (identifier) @id
-            (#eq? @id "eval")
-          ) @vuln
-        "#,
+        id: "rb.code_exec.eval",
+        description: "Kernel#eval — dynamic code execution",
+        query: r#"(call (identifier) @id (#eq? @id "eval")) @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
-        id: "instance_eval_call",
-        description: "Object#instance_eval usage",
-        query: r#"
-          (call
-            (identifier) @id
-            (#eq? @id "instance_eval")
-          ) @vuln
-        "#,
+        id: "rb.code_exec.instance_eval",
+        description: "instance_eval — evaluates string in object context",
+        query: r#"(call
+                     method: (identifier) @id (#eq? @id "instance_eval"))
+                   @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
-        id: "class_eval_call",
-        description: "Module#class_eval / module_eval usage",
-        query: r#"
-          (call
-            (identifier) @id
-            (#match? @id "^(class_eval|module_eval)$")
-          ) @vuln
-        "#,
+        id: "rb.code_exec.class_eval",
+        description: "class_eval / module_eval — evaluates string in class context",
+        query: r#"(call
+                     method: (identifier) @id (#match? @id "^(class_eval|module_eval)$"))
+                   @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
-    // ---------- Shell execution ----------
+    // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
-        id: "system_exec_interp",
-        description: "system/exec with string interpolation",
-        query: r#"
-          (call
-            method: (identifier) @m
-            (#match? @m "^(system|exec)$")
-            arguments: (argument_list
-              (string
-                (interpolation)+ @vuln
-              )
-            )
-          )
-        "#,
+        id: "rb.cmdi.backtick",
+        description: "Backtick shell execution",
+        query: r#"(subshell) @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
+    // ── Tier A: Shell execution ─────────────────────────────────────────
     Pattern {
-        id: "backtick_command",
-        description: "Back-tick shell execution",
-        // `uname -a`
-        query: r#"(shell_command) @vuln"#,
+        id: "rb.cmdi.system_interp",
+        description: "system/exec call — command execution risk",
+        query: r#"(call
+                     method: (identifier) @m (#match? @m "^(system|exec)$"))
+                   @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
-    // ---------- Dangerous deserialisation ----------
+    // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
-        id: "yaml_load",
-        description: "YAML.load / Psych.load (arbitrary object deserialisation)",
-        query: r#"
-          (call
-            receiver: (constant) @recv
-            (#match? @recv "^(YAML|Psych)$")
-            method: (identifier) @m
-            (#eq? @m "load")
-          ) @vuln
-        "#,
+        id: "rb.deser.yaml_load",
+        description: "YAML.load — arbitrary object deserialization (use safe_load instead)",
+        query: r#"(call
+                     receiver: (constant) @recv (#match? @recv "^(YAML|Psych)$")
+                     method: (identifier) @m (#eq? @m "load"))
+                   @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
     Pattern {
-        id: "marshal_load",
-        description: "Marshal.load usage",
-        query: r#"
-          (call
-            receiver: (constant) @recv
-            (#eq? @recv "Marshal")
-            method: (identifier) @m
-            (#eq? @m "load")
-          ) @vuln
-        "#,
+        id: "rb.deser.marshal_load",
+        description: "Marshal.load — arbitrary Ruby object deserialization",
+        query: r#"(call
+                     receiver: (constant) @recv (#eq? @recv "Marshal")
+                     method: (identifier) @m (#eq? @m "load"))
+                   @vuln"#,
         severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
-    // ---------- Reflection / meta-programming ----------
+    // ── Tier A: Reflection ─────────────────────────────────────────────
     Pattern {
-        id: "send_dynamic",
-        description: "send() with dynamic first argument (not a literal symbol)",
-        query: r#"
-          (call
-            method: (identifier) @m
-            (#eq? @m "send")
-            arguments: (argument_list
-              [
-                (identifier)                ; send(method_name_var, …)
-                (string (interpolation)+)   ; send("user_#{role}", …)
-              ] @vuln
-            )
-          )
+        id: "rb.reflection.send_dynamic",
+        description: "send() with non-symbol argument — arbitrary method dispatch",
+        query: r#"(call
+                     method: (identifier) @m (#eq? @m "send")
+                     arguments: (argument_list
+                       [(identifier) (string (interpolation)+)] @vuln))
         "#,
         severity: Severity::Medium,
+        tier: PatternTier::B,
+        category: PatternCategory::Reflection,
+        confidence: Confidence::Medium,
     },
     Pattern {
-        id: "constantize_call",
-        description: "ActiveSupport constantize / safe_constantize on tainted data",
-        query: r#"
-          (call
-            method: (identifier) @m
-            (#match? @m "^(constantize|safe_constantize)$")
-          ) @vuln
-        "#,
+        id: "rb.reflection.constantize",
+        description: "constantize / safe_constantize — dynamic class resolution",
+        query: r#"(call
+                     method: (identifier) @m (#match? @m "^(constantize|safe_constantize)$"))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Reflection,
+        confidence: Confidence::High,
     },
-    // ---------- Insecure resource access ----------
+    // ── Tier A: SSRF ───────────────────────────────────────────────────
     Pattern {
-        id: "open_uri_http",
-        description: "Kernel#open with HTTP(S) URL (open-uri auto-follow)",
-        query: r#"
-          (call
-            method: (identifier) @m
-            (#eq? @m "open")
-            arguments: (argument_list
-              (string) @url
-              (#match? @url "^\"https?://")
-            )
-          ) @vuln
-        "#,
+        id: "rb.ssrf.open_uri",
+        description: "Kernel#open with HTTP URL — SSRF via open-uri",
+        query: r#"(call
+                     method: (identifier) @m (#eq? @m "open")
+                     arguments: (argument_list
+                       (string) @url (#match? @url "^\"https?://")))
+                   @vuln"#,
         severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureTransport,
+        confidence: Confidence::High,
+    },
+    // ── Tier A: Crypto ─────────────────────────────────────────────────
+    Pattern {
+        id: "rb.crypto.md5",
+        description: "Digest::MD5 — weak hash algorithm",
+        query: r#"(scope_resolution
+                     name: (constant) @c (#eq? @c "MD5"))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
 ];

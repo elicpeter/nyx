@@ -1,0 +1,34 @@
+{
+  "description": "Dangerous C++ casts: reinterpret_cast and const_cast used to parse raw data",
+  "tags": [
+    "cast",
+    "unsafe"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.memory.reinterpret_cast",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "reinterpret_cast<Header*> \u2014 type punning raw bytes to struct pointer"
+    },
+    {
+      "rule_id": "cpp.memory.const_cast",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "const_cast<char*> removes const qualifier from data pointer"
+    }
+  ]
+}

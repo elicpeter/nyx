@@ -1,0 +1,37 @@
+{
+  "description": "eval() called with user-controlled input from Sinatra params",
+  "tags": [
+    "taint",
+    "code-exec",
+    "eval",
+    "sinatra",
+    "ruby"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rb.code_exec.eval",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "eval() is a dangerous function - AST pattern match"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        2,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "params[:code] flows directly into eval()"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "description": "C++ command injection: std::getenv flows to system(). Safe version uses allowlist.",
+  "tags": [
+    "taint",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "system(cmd) where cmd comes from std::getenv"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "std::getenv flows directly to system() without sanitization"
+    },
+    {
+      "rule_id": "cpp.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern still matches system() in safe version"
+    }
+  ]
+}

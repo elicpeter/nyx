@@ -1,0 +1,25 @@
+{
+  "description": "Event listener leak: socket connections accumulate without cleanup handlers. Safe version registers close and error handlers.",
+  "tags": [
+    "state",
+    "resource-leak",
+    "event-listener",
+    "net"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "Socket connections accumulate in array without close/error handlers; scanner likely cannot track event listener patterns"
+    }
+  ]
+}

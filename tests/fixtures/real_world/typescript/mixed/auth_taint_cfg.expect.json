@@ -1,0 +1,50 @@
+{
+  "description": "Two Express routes: /run without auth, /run-authed with auth check. Both have command injection via req.query.cmd since auth does not sanitize input.",
+  "tags": [
+    "mixed",
+    "taint",
+    "cfg",
+    "auth",
+    "cmdi",
+    "express",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.cmd flows into child_process.exec in unauthenticated /run route"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        20,
+        25
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.cmd flows into child_process.exec in /run-authed; auth check does not sanitize the input"
+    },
+    {
+      "rule_id": "cfg-auth-gap",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        8,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "No auth check before child_process.exec in /run handler"
+    }
+  ]
+}

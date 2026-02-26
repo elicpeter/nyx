@@ -1,0 +1,34 @@
+{
+  "description": "Command-line argument passed directly to Command::new \u2014 command injection via CLI args",
+  "tags": [
+    "taint",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "env::args() flows to Command::new \u2014 aspirational, depends on args() being classified as source"
+    },
+    {
+      "rule_id": "rs.quality.expect",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": ".expect() on Command output Result"
+    }
+  ]
+}

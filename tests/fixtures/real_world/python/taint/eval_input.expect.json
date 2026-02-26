@@ -1,0 +1,36 @@
+{
+  "description": "eval() called with user-controlled input from Flask request",
+  "tags": [
+    "taint",
+    "code-exec",
+    "eval",
+    "flask"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "py.code_exec.eval",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "eval() is an AST-level dangerous function pattern"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('expr') flows directly into eval()"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "description": "Error handling fallthrough: readConfigUnsafe logs error but falls through to return config.value. readConfigSafe properly throws.",
+  "tags": [
+    "cfg",
+    "error-fallthrough",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-error-fallthrough",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        4,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "Error condition detected but execution falls through to return config.value without return or throw"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "description": "mem::forget prevents RAII drop \u2014 intentional resource leak of File handle",
+  "tags": [
+    "mem",
+    "resource-leak"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rs.memory.mem_forget",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "mem::forget(f) prevents File destructor from running \u2014 resource leak"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on File::open Result"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "mem::forget prevents RAII cleanup \u2014 aspirational, requires forget-aware state analysis"
+    }
+  ]
+}

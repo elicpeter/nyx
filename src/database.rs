@@ -272,6 +272,18 @@ pub mod index {
                     line: row.get::<_, i64>(2)? as usize,
                     col: row.get::<_, i64>(3)? as usize,
                     severity: Severity::from_str(&sev_str).unwrap(),
+                    category: crate::patterns::FindingCategory::Security,
+                    path_validated: false,
+                    guard_kind: None,
+                    message: None,
+                    labels: vec![],
+                    confidence: None,
+                    evidence: None,
+                    rank_score: None,
+                    rank_reason: None,
+                    suppressed: false,
+                    suppression: None,
+                    rollup: None,
                 })
             })?;
 

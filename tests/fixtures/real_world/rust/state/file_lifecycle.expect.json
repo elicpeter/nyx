@@ -1,0 +1,45 @@
+{
+  "description": "Rust RAII file lifecycle: File::open auto-closes on drop, no resource leak",
+  "tags": [
+    "state",
+    "raii"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on File::open Result in read_and_drop"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on read_to_string Result"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on File::open Result in explicit_drop"
+    }
+  ]
+}

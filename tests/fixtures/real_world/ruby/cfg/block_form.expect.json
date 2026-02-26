@@ -1,0 +1,26 @@
+{
+  "description": "Block form auto-closes file handle vs manual open without close",
+  "tags": [
+    "cfg",
+    "resource-leak",
+    "block",
+    "file-io",
+    "ruby"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        5,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "unsafe_read opens file without block form and never closes it"
+    }
+  ]
+}

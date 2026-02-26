@@ -7,11 +7,13 @@ use std::path::Path;
 
 // ── Deterministic test config ──────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn test_config(mode: AnalysisMode) -> Config {
     let mut cfg = Config::default();
     cfg.scanner.mode = mode;
     cfg.scanner.read_vcsignore = false;
     cfg.scanner.require_git_to_read_vcsignore = false;
+    cfg.scanner.enable_state_analysis = true;
     cfg.performance.worker_threads = Some(1);
     cfg.performance.batch_size = 64;
     cfg.performance.channel_multiplier = 1;
@@ -21,6 +23,7 @@ pub fn test_config(mode: AnalysisMode) -> Config {
 // ── Scan helpers ───────────────────────────────────────────────────────────
 
 /// Full two-pass scan of a directory (filesystem only, no index).
+#[allow(dead_code)]
 pub fn scan_fixture_dir(path: &Path, mode: AnalysisMode) -> Vec<Diag> {
     let cfg = test_config(mode);
     nyx_scanner::scan_no_index(path, &cfg).expect("scan_no_index should succeed")
@@ -28,10 +31,12 @@ pub fn scan_fixture_dir(path: &Path, mode: AnalysisMode) -> Vec<Diag> {
 
 // ── Counting / assertion helpers ───────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn count_by_prefix(diags: &[Diag], prefix: &str) -> usize {
     diags.iter().filter(|d| d.id.starts_with(prefix)).count()
 }
 
+#[allow(dead_code)]
 pub fn assert_min_findings(diags: &[Diag], prefix: &str, min: usize) {
     let count = count_by_prefix(diags, prefix);
     assert!(
@@ -52,6 +57,7 @@ pub fn assert_min_findings(diags: &[Diag], prefix: &str, min: usize) {
     );
 }
 
+#[allow(dead_code)]
 pub fn assert_no_findings(diags: &[Diag], prefix: &str) {
     let matching: Vec<_> = diags.iter().filter(|d| d.id.starts_with(prefix)).collect();
     assert!(
@@ -65,6 +71,7 @@ pub fn assert_no_findings(diags: &[Diag], prefix: &str) {
     );
 }
 
+#[allow(dead_code)]
 pub fn assert_max_findings(diags: &[Diag], max_total: usize, max_high: usize) {
     let high_count = diags
         .iter()
@@ -130,6 +137,7 @@ pub struct PerformanceExpectations {
 }
 
 /// Load and parse `expectations.json` from a fixture directory.
+#[allow(dead_code)]
 pub fn load_expectations(fixture_dir: &Path) -> Expectations {
     let path = fixture_dir.join("expectations.json");
     let content = std::fs::read_to_string(&path)
@@ -139,6 +147,7 @@ pub fn load_expectations(fixture_dir: &Path) -> Expectations {
 }
 
 /// Validate a set of diagnostics against a fixture's expectations.json.
+#[allow(dead_code)]
 pub fn validate_expectations(diags: &[Diag], fixture_dir: &Path) {
     let exp = load_expectations(fixture_dir);
 

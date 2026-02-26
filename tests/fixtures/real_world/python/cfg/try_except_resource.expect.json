@@ -1,0 +1,25 @@
+{
+  "description": "Database connection resource management with try/except/finally vs missing close",
+  "tags": [
+    "cfg",
+    "resource-leak",
+    "sqlite",
+    "try-finally"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        14,
+        23
+      ],
+      "evidence_contains": [],
+      "notes": "query_db_leak opens sqlite3 connection but never closes it"
+    }
+  ]
+}

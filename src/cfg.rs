@@ -32,6 +32,9 @@ pub enum EdgeKind {
     Back,  // back‑edge that closes a loop
 }
 
+/// Maximum number of identifiers to store from a condition expression.
+const MAX_COND_VARS: usize = 8;
+
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     pub kind: StmtKind,
@@ -44,6 +47,12 @@ pub struct NodeInfo {
     pub enclosing_func: Option<String>,
     /// Per-function call ordinal (0-based, only meaningful for Call nodes).
     pub call_ordinal: u32,
+    /// For If nodes: raw condition text (truncated to 128 chars). None for non-If nodes.
+    pub condition_text: Option<String>,
+    /// For If nodes: identifiers referenced in the condition (sorted, deduped, max 8).
+    pub condition_vars: Vec<String>,
+    /// For If nodes: whether the condition has a leading negation (`!` / `not`).
+    pub condition_negated: bool,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -122,6 +131,7 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                         .child_by_field_name("function")
                         .or_else(|| c.child_by_field_name("method"))
                         .or_else(|| c.child_by_field_name("name"))
+                        .or_else(|| c.child_by_field_name("type"))
                         .and_then(|f| text_of(f, code)),
                     Kind::CallMethod => {
                         let func = c
@@ -147,6 +157,65 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
             _ => {
                 // Recurse into children (handles nested declarators)
                 if let Some(found) = first_call_ident(c, lang, code) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Search recursively for any nested call whose identifier classifies as a label.
+/// Used for cases like `str(eval(expr))` where `str` doesn't match but `eval` does.
+fn find_classifiable_inner_call<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+    extra: Option<&[crate::labels::RuntimeLabelRule]>,
+) -> Option<(String, DataLabel)> {
+    let mut cursor = n.walk();
+    for c in n.children(&mut cursor) {
+        match lookup(lang, c.kind()) {
+            Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
+                let ident = match lookup(lang, c.kind()) {
+                    Kind::CallFn => c
+                        .child_by_field_name("function")
+                        .or_else(|| c.child_by_field_name("method"))
+                        .or_else(|| c.child_by_field_name("name"))
+                        .or_else(|| c.child_by_field_name("type"))
+                        .and_then(|f| text_of(f, code)),
+                    Kind::CallMethod => {
+                        let func = c
+                            .child_by_field_name("method")
+                            .or_else(|| c.child_by_field_name("name"))
+                            .and_then(|f| text_of(f, code));
+                        let recv = c
+                            .child_by_field_name("object")
+                            .or_else(|| c.child_by_field_name("receiver"))
+                            .and_then(|f| root_receiver_text(f, lang, code));
+                        match (recv, func) {
+                            (Some(r), Some(f)) => Some(format!("{r}.{f}")),
+                            (_, Some(f)) => Some(f),
+                            _ => None,
+                        }
+                    }
+                    Kind::CallMacro => c
+                        .child_by_field_name("macro")
+                        .and_then(|f| text_of(f, code)),
+                    _ => None,
+                };
+                if let Some(ref id) = ident
+                    && let Some(lbl) = classify(lang, id, extra)
+                {
+                    return Some((id.clone(), lbl));
+                }
+                // Recurse into arguments of this call
+                if let Some(found) = find_classifiable_inner_call(c, lang, code, extra) {
+                    return Some(found);
+                }
+            }
+            _ => {
+                if let Some(found) = find_classifiable_inner_call(c, lang, code, extra) {
                     return Some(found);
                 }
             }
@@ -209,6 +278,25 @@ fn first_member_label(
                 }
             }
         }
+        // PHP/Python/Ruby subscript access: `$_GET['cmd']`, `os.environ['KEY']`, `params[:cmd]`
+        // Try to classify the object (before the `[`) as a source.
+        "subscript_expression" | "subscript" | "element_reference" => {
+            if let Some(obj) = n
+                .child_by_field_name("object")
+                .or_else(|| n.child_by_field_name("value"))
+                .or_else(|| n.child(0))
+            {
+                if let Some(txt) = text_of(obj, code)
+                    && let Some(lbl) = classify(lang, &txt, extra_labels)
+                {
+                    return Some(lbl);
+                }
+                // Recurse into the object for nested member accesses
+                if let Some(lbl) = first_member_label(obj, lang, code, extra_labels) {
+                    return Some(lbl);
+                }
+            }
+        }
         _ => {}
     }
     let mut cursor = n.walk();
@@ -224,6 +312,11 @@ fn first_member_label(
 fn first_member_text(n: Node, code: &[u8]) -> Option<String> {
     match n.kind() {
         "member_expression" | "attribute" | "selector_expression" => member_expr_text(n, code),
+        "subscript_expression" | "subscript" | "element_reference" => n
+            .child_by_field_name("object")
+            .or_else(|| n.child_by_field_name("value"))
+            .or_else(|| n.child(0))
+            .and_then(|obj| text_of(obj, code)),
         _ => {
             let mut cursor = n.walk();
             for child in n.children(&mut cursor) {
@@ -237,6 +330,42 @@ fn first_member_text(n: Node, code: &[u8]) -> Option<String> {
 }
 
 /// Check whether any descendant of `n` is a call expression.
+/// Collect function-expression nodes nested inside a call's arguments.
+///
+/// This finds anonymous functions / arrow functions / closures that are
+/// passed as arguments to a call and should be analysed as separate
+/// function scopes.  Only direct function-argument children are collected
+/// (not functions nested inside other functions — those get handled when
+/// the outer function is recursed into).
+fn collect_nested_function_nodes<'a>(n: Node<'a>, lang: &str) -> Vec<Node<'a>> {
+    let mut funcs = Vec::new();
+    collect_nested_functions_rec(n, lang, &mut funcs, false);
+    funcs
+}
+
+fn collect_nested_functions_rec<'a>(
+    n: Node<'a>,
+    lang: &str,
+    out: &mut Vec<Node<'a>>,
+    inside_function: bool,
+) {
+    let kind = lookup(lang, n.kind());
+    // Only treat as a function if it's a real function node (has children),
+    // not a keyword token like `function` in JS which shares the same kind name.
+    if kind == Kind::Function && n.child_count() > 0 {
+        if inside_function {
+            // Don't recurse into nested functions of nested functions
+            return;
+        }
+        out.push(n);
+        return;
+    }
+    let mut cursor = n.walk();
+    for c in n.children(&mut cursor) {
+        collect_nested_functions_rec(c, lang, out, inside_function);
+    }
+}
+
 fn has_call_descendant(n: Node, lang: &str) -> bool {
     let mut cursor = n.walk();
     for c in n.children(&mut cursor) {
@@ -361,6 +490,36 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
             (defs, uses)
         }
 
+        // if‑let / while‑let — the `let_condition` binds a variable from
+        // the value expression.  E.g. `if let Ok(cmd) = env::var("CMD")`
+        // defines `cmd` and uses `env`, `var`, `CMD`.
+        Kind::If | Kind::While => {
+            let cond = ast.child_by_field_name("condition");
+            if let Some(c) = cond
+                && c.kind() == "let_condition"
+            {
+                let mut defs = None;
+                let mut uses = Vec::new();
+
+                if let Some(pat) = c.child_by_field_name("pattern") {
+                    let mut tmp = Vec::<String>::new();
+                    collect_idents(pat, code, &mut tmp);
+                    // The first plain identifier in the pattern is the binding.
+                    // Skip type identifiers (e.g. "Ok" in Ok(cmd)) — take the
+                    // last ident which is the inner binding name.
+                    defs = tmp.into_iter().last();
+                }
+                if let Some(val) = c.child_by_field_name("value") {
+                    collect_idents(val, code, &mut uses);
+                }
+                return (defs, uses);
+            }
+
+            let mut uses = Vec::new();
+            collect_idents(ast, code, &mut uses);
+            (None, uses)
+        }
+
         // everything else – no definition, but may read vars
         _ => {
             let mut uses = Vec::new();
@@ -368,6 +527,109 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
             (None, uses)
         }
     }
+}
+
+/// Extract raw condition metadata from an If AST node.
+///
+/// Returns `(condition_text, condition_vars, condition_negated)`.
+/// The condition subtree is located via `child_by_field_name("condition")`
+/// for most languages, with a positional fallback for Rust `if_expression`.
+///
+/// Negation is detected by checking for a leading unary `!` operator or
+/// `not` keyword.  Variables are sorted, deduped, and capped at
+/// [`MAX_COND_VARS`].
+fn extract_condition_raw<'a>(
+    ast: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+) -> (Option<String>, Vec<String>, bool) {
+    // 1. Find the condition subtree.
+    let cond_node = ast.child_by_field_name("condition").or_else(|| {
+        // Rust `if_expression` uses positional children: the condition is
+        // the first child that is not a keyword, block, or `let` pattern.
+        let mut cursor = ast.walk();
+        ast.children(&mut cursor).find(|c| {
+            let k = c.kind();
+            !matches!(lookup(lang, k), Kind::Block | Kind::Trivia)
+                && k != "if"
+                && k != "else"
+                && k != "let"
+                && k != "{"
+                && k != "}"
+                && k != "("
+                && k != ")"
+        })
+    });
+
+    let Some(cond) = cond_node else {
+        return (None, Vec::new(), false);
+    };
+
+    // 2. Detect leading negation (`!expr`, `not expr`, Ruby `unless`).
+    let (inner, negated) = detect_negation(cond, ast, lang);
+
+    // 3. Collect identifiers from the (inner) condition subtree.
+    let mut vars = Vec::new();
+    collect_idents(inner, code, &mut vars);
+    vars.sort();
+    vars.dedup();
+    vars.truncate(MAX_COND_VARS);
+
+    // 4. Extract text, truncated.
+    let text = text_of(cond, code).map(|t| {
+        if t.len() > 128 {
+            t[..128].to_string()
+        } else {
+            t
+        }
+    });
+
+    (text, vars, negated)
+}
+
+/// Detect leading negation and return the inner expression.
+///
+/// Handles:
+/// - `!expr` (unary_expression / prefix_unary_expression with `!` operator)
+/// - `not expr` (Python `not_operator`, Ruby)
+/// - Ruby `unless` (the whole If node kind is `unless`)
+fn detect_negation<'a>(cond: Node<'a>, if_ast: Node<'a>, _lang: &str) -> (Node<'a>, bool) {
+    // Ruby `unless` is mapped to Kind::If but is semantically negated.
+    if if_ast.kind() == "unless" {
+        return (cond, true);
+    }
+
+    // `!expr` appears as unary_expression, not_operator, or prefix_unary_expression
+    // with a `!` or `not` operator child.
+    let is_negation_wrapper = matches!(
+        cond.kind(),
+        "unary_expression" | "not_operator" | "prefix_unary_expression" | "unary_not"
+    );
+
+    if is_negation_wrapper {
+        // Check if the first child is a `!` or `not` operator.
+        let has_not = cond
+            .child(0)
+            .is_some_and(|c| c.kind() == "!" || c.kind() == "not");
+
+        if has_not {
+            // Return the operand (inner expression after the `!` / `not`).
+            let inner = cond
+                .child_by_field_name("argument")
+                .or_else(|| cond.child_by_field_name("operand"))
+                .or_else(|| {
+                    // Last non-operator child.
+                    let mut cursor = cond.walk();
+                    cond.children(&mut cursor)
+                        .filter(|c| c.kind() != "!" && c.kind() != "not")
+                        .last()
+                })
+                .unwrap_or(cond);
+            return (inner, true);
+        }
+    }
+
+    (cond, false)
 }
 
 /// Create a node in one short borrow and optionally attach a taint label.
@@ -391,6 +653,7 @@ fn push_node<'a>(
             .child_by_field_name("function")
             .or_else(|| ast.child_by_field_name("method"))
             .or_else(|| ast.child_by_field_name("name"))
+            .or_else(|| ast.child_by_field_name("type"))
             .and_then(|n| text_of(n, code))
             .unwrap_or_default(),
 
@@ -426,7 +689,7 @@ fn push_node<'a>(
     // the whole line.
     if matches!(
         lookup(lang, ast.kind()),
-        Kind::CallWrapper | Kind::Assignment
+        Kind::CallWrapper | Kind::Assignment | Kind::Return
     ) && let Some(inner) = first_call_ident(ast, lang, code)
     {
         text = inner;
@@ -436,6 +699,20 @@ fn push_node<'a>(
 
     let extra = analysis_rules.map(|r| r.extra_labels.as_slice());
     let mut label = classify(lang, &text, extra);
+
+    // If the outermost call didn't classify, try inner/nested calls.
+    // E.g. `str(eval(expr))` — `str` is not a sink, but `eval` is.
+    if label.is_none()
+        && matches!(
+            lookup(lang, ast.kind()),
+            Kind::CallWrapper | Kind::Assignment | Kind::Return
+        )
+        && let Some((inner_text, inner_label)) =
+            find_classifiable_inner_call(ast, lang, code, extra)
+    {
+        label = Some(inner_label);
+        text = inner_text;
+    }
 
     // For assignments like `element.innerHTML = value`, the inner-call heuristic
     // above may have overridden `text` with a call on the RHS (e.g. getElementById).
@@ -493,16 +770,47 @@ fn push_node<'a>(
         }
     }
 
+    // For `if let` / `while let` patterns: try to classify the value expression
+    // in the let-condition as a source/sink.  E.g. `if let Ok(cmd) = env::var("CMD")`
+    // should recognise `env::var` as a taint source and label this node accordingly.
+    if label.is_none()
+        && matches!(lookup(lang, ast.kind()), Kind::If | Kind::While)
+        && let Some(cond) = ast.child_by_field_name("condition")
+        && cond.kind() == "let_condition"
+        && let Some(val) = cond.child_by_field_name("value")
+    {
+        if let Some(ident) = first_call_ident(val, lang, code)
+            && let Some(l) = classify(lang, &ident, extra)
+        {
+            label = Some(l);
+            text = ident;
+        }
+        if label.is_none()
+            && let Some(ident_text) = text_of(val, code)
+            && let Some(l) = classify(lang, &ident_text, extra)
+        {
+            label = Some(l);
+            text = ident_text;
+        }
+    }
+
     let span = (ast.start_byte(), ast.end_byte());
 
     /* ── 3.  GRAPH INSERTION + DEBUG ──────────────────────────────────── */
 
     let (defines, uses) = def_use(ast, lang, code);
 
-    let callee = if kind == StmtKind::Call {
+    let callee = if kind == StmtKind::Call || label.is_some() {
         Some(text.clone())
     } else {
         None
+    };
+
+    // Extract condition metadata for If nodes.
+    let (condition_text, condition_vars, condition_negated) = if kind == StmtKind::If {
+        extract_condition_raw(ast, lang, code)
+    } else {
+        (None, Vec::new(), false)
     };
 
     let idx = g.add_node(NodeInfo {
@@ -514,6 +822,9 @@ fn push_node<'a>(
         callee,
         enclosing_func: enclosing_func.map(|s| s.to_string()),
         call_ordinal,
+        condition_text,
+        condition_vars,
+        condition_negated,
     });
 
     debug!(
@@ -717,19 +1028,27 @@ fn build_sub<'a>(
                 }
                 exits
             } else {
-                // No explicit else → if the then-branch falls through
-                // (non-empty exits), the false branch merges with those exits.
-                // If the then-branch terminates (break/return/continue →
-                // empty exits), the false branch flows from the condition
-                // to whatever comes next.
-                if then_exits.is_empty() {
-                    vec![cond]
-                } else {
-                    if let Some(&first) = then_exits.first() {
-                        connect_all(g, &[cond], first, EdgeKind::False);
-                    }
-                    then_exits.clone()
-                }
+                // No explicit else → create a synthetic pass-through node
+                // for the false path.  This avoids routing the False edge
+                // to a then-block exit (which would make it appear that the
+                // false path goes *through* the then-block) and gives
+                // path-sensitive analysis an explicit False edge to record
+                // predicates on.
+                let pass = g.add_node(NodeInfo {
+                    kind: StmtKind::Seq,
+                    span: (ast.end_byte(), ast.end_byte()),
+                    label: None,
+                    defines: None,
+                    uses: Vec::new(),
+                    callee: None,
+                    enclosing_func: enclosing_func.map(|s| s.to_string()),
+                    call_ordinal: 0,
+                    condition_text: None,
+                    condition_vars: Vec::new(),
+                    condition_negated: false,
+                });
+                connect_all(g, &[cond], pass, EdgeKind::False);
+                vec![pass]
             };
 
             // Frontier = union of both branches
@@ -995,7 +1314,7 @@ fn build_sub<'a>(
                     collect_idents(n, code, &mut tmp);
                     tmp.into_iter().next()
                 })
-                .unwrap_or_else(|| "<anon>".to_string());
+                .unwrap_or_else(|| format!("<anon@{}>", ast.start_byte()));
             let entry_idx = push_node(
                 g,
                 StmtKind::Seq,
@@ -1016,7 +1335,20 @@ fn build_sub<'a>(
             // Snapshot the current node count so we can iterate only over nodes
             // created within this function (avoids O(N²) scan of the full graph).
             let fn_first_node: NodeIndex = NodeIndex::new(g.node_count());
-            let body = ast.child_by_field_name("body").expect("fn w/o body");
+            let body = ast.child_by_field_name("body").unwrap_or_else(|| {
+                // Some function expressions (e.g. JS anonymous `function(…) { … }`)
+                // don't have a named "body" field — find the first block child.
+                let mut c = ast.walk();
+                ast.children(&mut c)
+                    .find(|n| matches!(lookup(lang, n.kind()), Kind::Block | Kind::SourceFile))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "fn w/o body: kind={} text='{}'",
+                            ast.kind(),
+                            text_of(ast, code).unwrap_or_default()
+                        )
+                    })
+            });
             let mut fn_call_ordinal: u32 = 0;
             let mut fn_breaks = Vec::new();
             let mut fn_continues = Vec::new();
@@ -1191,6 +1523,9 @@ fn build_sub<'a>(
                 callee: None,
                 enclosing_func: Some(fn_name.clone()),
                 call_ordinal: 0,
+                condition_text: None,
+                condition_vars: Vec::new(),
+                condition_negated: false,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -1300,6 +1635,28 @@ fn build_sub<'a>(
             {
                 return Vec::new();
             }
+
+            // Recurse into any function expressions nested in arguments
+            // (e.g. `app.get('/path', function(req, res) { ... })`)
+            // so that they get proper function summaries.
+            let nested = collect_nested_function_nodes(ast, lang);
+            for func_node in nested {
+                build_sub(
+                    func_node,
+                    &[node],
+                    g,
+                    lang,
+                    code,
+                    summaries,
+                    file_path,
+                    enclosing_func,
+                    call_ordinal,
+                    analysis_rules,
+                    break_targets,
+                    continue_targets,
+                );
+            }
+
             vec![node]
         }
 
@@ -1326,6 +1683,26 @@ fn build_sub<'a>(
             {
                 return Vec::new();
             }
+
+            // Recurse into any function expressions nested in arguments
+            let nested = collect_nested_function_nodes(ast, lang);
+            for func_node in nested {
+                build_sub(
+                    func_node,
+                    &[n],
+                    g,
+                    lang,
+                    code,
+                    summaries,
+                    file_path,
+                    enclosing_func,
+                    call_ordinal,
+                    analysis_rules,
+                    break_targets,
+                    continue_targets,
+                );
+            }
+
             vec![n]
         }
 
@@ -1412,6 +1789,9 @@ pub(crate) fn build_cfg<'a>(
         callee: None,
         enclosing_func: None,
         call_ordinal: 0,
+        condition_text: None,
+        condition_vars: Vec::new(),
+        condition_negated: false,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -1422,6 +1802,9 @@ pub(crate) fn build_cfg<'a>(
         callee: None,
         enclosing_func: None,
         call_ordinal: 0,
+        condition_text: None,
+        condition_vars: Vec::new(),
+        condition_negated: false,
     });
 
     // Build the body below the synthetic ENTRY.

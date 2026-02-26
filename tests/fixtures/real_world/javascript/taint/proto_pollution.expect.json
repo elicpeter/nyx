@@ -1,0 +1,35 @@
+{
+  "description": "Prototype pollution via recursive merge of user-controlled req.body. The __proto__ assignment is indirect (dynamic key).",
+  "tags": [
+    "taint",
+    "prototype-pollution",
+    "express"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "js.prototype.proto_assignment",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        2,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "Dynamic property assignment target[key] could pollute __proto__ but AST pattern only matches literal __proto__ property access"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        13,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "req.body flows through merge into config but no recognized sink is reached"
+    }
+  ]
+}

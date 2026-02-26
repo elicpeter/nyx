@@ -1,0 +1,35 @@
+{
+  "description": "User-controlled class name flows into Class.forName \u2014 arbitrary class instantiation",
+  "tags": [
+    "taint",
+    "reflection",
+    "servlet"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "java.reflection.class_forname",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects Class.forName() call"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "request.getParameter(\"class\") flows directly into Class.forName(className)"
+    }
+  ]
+}

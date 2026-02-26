@@ -1,13 +1,13 @@
 [package]
 name = "nyx-scanner"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "A CLI security scanner for automating vulnerability checks"
 license = "GPL-3.0"
 authors = ["Eli Peter <elicpeter@exmaple.com>"]
 homepage = "https://github.com/elicpeter/nyx"
 repository = "https://github.com/elicpeter/nyx"
-documentation = "https://github.com/elicpeter/nyx#readme"
+documentation = "https://github.com/elicpeter/nyx/tree/master/docs"
 keywords = ["security", "vulnerability", "scanner", "static-analysis", "cli"]
 categories = ["security", "command-line-utilities", "development-tools", "parser-implementations", "text-processing"]
 readme = "README.md"
@@ -56,7 +56,7 @@ num_cpus = "1.17.0"
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 r2d2_sqlite = { version = "0.32.0", features = ["bundled"] }
 ignore = "0.4.25"
-tree-sitter = "0.26.5"
+tree-sitter = "0.26.6"
 tree-sitter-rust = "0.24.0"
 tree-sitter-c = "0.24.1"
 tree-sitter-cpp = "0.23.4"
@@ -71,6 +71,7 @@ crossbeam-channel = "0.5.15"
 blake3 = "1.8.3"
 once_cell = "1.21.3"
 console = "0.16.2"
+terminal_size = "0.4"
 rayon = "1.11.0"
 r2d2 = "0.8.10"
 bytesize  = "2.3.1"
@@ -81,3 +82,4 @@ petgraph = "0.8.3"
 bitflags = "2.11.0"
 phf = { version = "0.13.1", features = ["macros"] }
 indicatif = "0.18.4"
+smallvec = "1.15"

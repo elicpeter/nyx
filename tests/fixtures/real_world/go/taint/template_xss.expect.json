@@ -1,0 +1,23 @@
+{
+  "description": "XSS via fmt.Fprintf of user input into HTTP response; safe version uses html/template auto-escaping",
+  "tags": [
+    "taint",
+    "xss"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "r.URL.Query().Get(\"name\") flows directly into fmt.Fprintf writing to http.ResponseWriter"
+    }
+  ]
+}

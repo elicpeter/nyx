@@ -1,0 +1,36 @@
+{
+  "description": "Unsafe deserialization of untrusted ObjectInputStream from HTTP request body",
+  "tags": [
+    "taint",
+    "deser",
+    "servlet"
+  ],
+  "modes": [
+    "full",
+    "ast"
+  ],
+  "expected": [
+    {
+      "rule_id": "java.deser.readobject",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects new ObjectInputStream() construction"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        5,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "request.getInputStream() flows into ObjectInputStream.readObject \u2014 taint may not track through constructor chain"
+    }
+  ]
+}

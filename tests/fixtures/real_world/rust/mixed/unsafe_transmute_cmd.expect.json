@@ -1,0 +1,69 @@
+{
+  "description": "Combined unsafe + taint: env var bytes transmuted to u32, then used in Command via format!",
+  "tags": [
+    "unsafe",
+    "taint",
+    "cmdi",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rs.memory.transmute",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "mem::transmute to convert bytes to u32"
+    },
+    {
+      "rule_id": "rs.quality.unsafe_block",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "unsafe block wrapping mem::transmute"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on env::var Result"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on Command output Result"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        4,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "env::var flows through transmute and format! to Command \u2014 aspirational, complex data flow through unsafe"
+    }
+  ]
+}

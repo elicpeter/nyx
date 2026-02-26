@@ -1,0 +1,37 @@
+{
+  "description": "Deserialized object from HTTP input stream used directly as command argument to Runtime.exec",
+  "tags": [
+    "taint",
+    "deser",
+    "cmdi",
+    "servlet",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "java.deser.readobject",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects new ObjectInputStream() construction"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "Deserialized command string from request input flows into Runtime.exec"
+    }
+  ]
+}

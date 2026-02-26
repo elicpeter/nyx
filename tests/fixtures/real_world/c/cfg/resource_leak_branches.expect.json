@@ -1,0 +1,23 @@
+{
+  "description": "File handle leak on early return in error branch vs safe version that closes before returning",
+  "tags": [
+    "cfg",
+    "resource-leak"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "fopen at line 5 not closed before return -2 at line 10 \u2014 aspirational CFG finding"
+    }
+  ]
+}

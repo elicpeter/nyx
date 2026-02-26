@@ -139,6 +139,22 @@ impl FuncSummary {
     }
 }
 
+// ── Callee resolution ────────────────────────────────────────────────────
+
+/// Result of resolving a bare callee name to a [`FuncKey`].
+///
+/// Three-valued: the call graph builder and taint engine need to distinguish
+/// "no candidates at all" from "multiple candidates, can't pick one".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CalleeResolution {
+    /// Exactly one candidate matched.
+    Resolved(FuncKey),
+    /// No candidates found at all.
+    NotFound,
+    /// Multiple candidates — ambiguous, cannot pick one.
+    Ambiguous(Vec<FuncKey>),
+}
+
 // ── Lookup map used by the taint engine ─────────────────────────────────
 
 /// A merged view of all function summaries keyed by qualified [`FuncKey`].
@@ -216,15 +232,65 @@ impl GlobalSummaries {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // used by tests and future call-graph consumers
     pub fn is_empty(&self) -> bool {
         self.by_key.is_empty()
     }
 
     /// Iterate over all (key, summary) pairs.
-    #[allow(dead_code)]
     pub fn iter(&self) -> impl Iterator<Item = (&FuncKey, &FuncSummary)> {
         self.by_key.iter()
+    }
+
+    /// Resolve a bare (already-normalized) callee name to a [`FuncKey`].
+    ///
+    /// Resolution order:
+    /// 1. Collect all same-language candidates matching the name.
+    /// 2. If `arity_hint` is `Some`, filter candidates by matching arity.
+    /// 3. If exactly one candidate → [`CalleeResolution::Resolved`].
+    /// 4. If multiple, filter by `caller_namespace`; if exactly one → `Resolved`.
+    /// 5. If still multiple → [`CalleeResolution::Ambiguous`].
+    /// 6. If zero candidates → [`CalleeResolution::NotFound`].
+    pub fn resolve_callee_key(
+        &self,
+        callee: &str,
+        caller_lang: Lang,
+        caller_namespace: &str,
+        arity_hint: Option<usize>,
+    ) -> CalleeResolution {
+        let candidates = self.lookup_same_lang(caller_lang, callee);
+        if candidates.is_empty() {
+            return CalleeResolution::NotFound;
+        }
+
+        // Apply arity filter if hint provided.
+        let filtered: Vec<&FuncKey> = if let Some(arity) = arity_hint {
+            candidates
+                .iter()
+                .filter(|(k, _)| k.arity == Some(arity))
+                .map(|(k, _)| *k)
+                .collect()
+        } else {
+            candidates.iter().map(|(k, _)| *k).collect()
+        };
+
+        match filtered.len() {
+            0 => CalleeResolution::NotFound,
+            1 => CalleeResolution::Resolved(filtered[0].clone()),
+            _ => {
+                // Namespace disambiguation: prefer same-namespace match.
+                let same_ns: Vec<&FuncKey> = filtered
+                    .iter()
+                    .filter(|k| k.namespace == caller_namespace)
+                    .copied()
+                    .collect();
+                match same_ns.len() {
+                    1 => CalleeResolution::Resolved(same_ns[0].clone()),
+                    0 => CalleeResolution::Ambiguous(filtered.into_iter().cloned().collect()),
+                    _ => CalleeResolution::Ambiguous(same_ns.into_iter().cloned().collect()),
+                }
+            }
+        }
     }
 }
 

@@ -1,0 +1,36 @@
+{
+  "description": "TypeScript Express handler with typed query params. req.query.host flows into child_process.exec.",
+  "tags": [
+    "taint",
+    "cmdi",
+    "express",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.host flows into child_process.exec via string concatenation"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        17,
+        23
+      ],
+      "evidence_contains": [],
+      "notes": "Safe version still fires because .replace is not a recognized SHELL_ESCAPE sanitizer"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "description": "Double-close risk in try-catch: fd closed in try block, then closed again in catch block. Safe version uses a flag to prevent double-close.",
+  "tags": [
+    "state",
+    "double-close",
+    "try-catch",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-double-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        2,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "fd closed at line 8 in try block, then again at line 10 in catch block if readSync throws after partial execution"
+    }
+  ]
+}

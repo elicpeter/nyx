@@ -1,0 +1,37 @@
+{
+  "description": "Validator raises exception on invalid input, acting as a guard before subprocess",
+  "tags": [
+    "cfg",
+    "validation",
+    "raise",
+    "flask",
+    "subprocess"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        14,
+        21
+      ],
+      "evidence_contains": [],
+      "notes": "Validator raise acts as guard - ideally no taint finding since invalid input is rejected"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        15,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "Subprocess call is guarded by validate_cmd raise - should not trigger"
+    }
+  ]
+}

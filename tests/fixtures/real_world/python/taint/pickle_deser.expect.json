@@ -1,0 +1,37 @@
+{
+  "description": "Pickle deserialization of user-supplied base64 data",
+  "tags": [
+    "taint",
+    "deser",
+    "pickle",
+    "flask"
+  ],
+  "modes": [
+    "full",
+    "ast"
+  ],
+  "expected": [
+    {
+      "rule_id": "py.deser.pickle_loads",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "pickle.loads on user-controlled data enables arbitrary code execution"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        7,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "User data flows through base64 decode into pickle.loads - aspirational taint finding"
+    }
+  ]
+}

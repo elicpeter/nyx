@@ -1,0 +1,48 @@
+{
+  "description": "Command injection with error fallthrough \u2014 error path does not return, output still written",
+  "tags": [
+    "taint",
+    "cfg",
+    "cmdi",
+    "error-handling",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "go.cmdi.exec_command",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects exec.Command call"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        7,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "r.URL.Query().Get(\"cmd\") flows directly into exec.Command(\"sh\", \"-c\", cmd)"
+    },
+    {
+      "rule_id": "cfg-error-fallthrough",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        9,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "Error check on line 11 does not return \u2014 execution continues to w.Write(out) on line 15"
+    }
+  ]
+}

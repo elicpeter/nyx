@@ -1,0 +1,26 @@
+{
+  "description": "File handle resource management with try/catch/finally vs early return leak",
+  "tags": [
+    "cfg",
+    "resource-leak",
+    "try-finally",
+    "file-io",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        12,
+        24
+      ],
+      "evidence_contains": [],
+      "notes": "leakyProcess returns null on empty data without closing file handle"
+    }
+  ]
+}

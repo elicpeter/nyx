@@ -1,10 +1,10 @@
 {
   "required_findings": [
     { "id_prefix": "taint-unsanitised-flow", "min_count": 6 },
-    { "id_prefix": "eval_call", "min_count": 1 },
-    { "id_prefix": "document_write", "min_count": 1 },
-    { "id_prefix": "settimeout_string", "min_count": 1 },
-    { "id_prefix": "cookie_assignment", "min_count": 1 }
+    { "id_prefix": "js.code_exec.eval", "min_count": 1 },
+    { "id_prefix": "js.xss.document_write", "min_count": 1 },
+    { "id_prefix": "js.code_exec.settimeout_string", "min_count": 1 },
+    { "id_prefix": "js.xss.cookie_write", "min_count": 1 }
   ],
   "forbidden_findings": [],
   "noise_budget": {

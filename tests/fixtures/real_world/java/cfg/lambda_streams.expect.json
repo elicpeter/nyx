@@ -1,0 +1,37 @@
+{
+  "description": "Stream operations with SQL concat in map and exec in forEach lambda",
+  "tags": [
+    "cfg",
+    "sqli",
+    "cmdi",
+    "lambda"
+  ],
+  "modes": [
+    "full",
+    "ast"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        10,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "cmd parameter inside lambda flows to Runtime.exec \u2014 scanner may not track taint through lambda bodies"
+    },
+    {
+      "rule_id": "java.sqli.execute_concat",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "SQL string concatenation inside stream map lambda \u2014 AST pattern may not match inside lambda context"
+    }
+  ]
+}

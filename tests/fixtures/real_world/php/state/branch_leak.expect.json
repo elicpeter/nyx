@@ -1,0 +1,26 @@
+{
+  "description": "File handle leaked in else branch of conditional",
+  "tags": [
+    "state",
+    "resource-leak",
+    "branch",
+    "file-io",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "File handle closed in if branch but leaked in else branch"
+    }
+  ]
+}

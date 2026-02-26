@@ -1,0 +1,35 @@
+{
+  "description": "Environment variable flows directly into shell exec \u2014 command injection via env",
+  "tags": [
+    "taint",
+    "cmdi",
+    "env"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "go.cmdi.exec_command",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects exec.Command call"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        7,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "os.Getenv(\"USER_CMD\") flows directly into exec.Command(\"sh\", \"-c\", cmd)"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "description": "HTTP handlers with command injection, path traversal, missing auth, and resource leak",
+  "tags": [
+    "taint",
+    "state",
+    "cfg",
+    "cmdi",
+    "path-traversal",
+    "auth-gap",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "go.cmdi.exec_command",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects exec.Command in adminHandler"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "r.URL.Query().Get(\"cmd\") flows directly into exec.Command(\"sh\", \"-c\", cmd)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        16,
+        21
+      ],
+      "evidence_contains": [],
+      "notes": "r.URL.Query().Get(\"path\") flows into os.Open \u2014 path traversal"
+    },
+    {
+      "rule_id": "cfg-auth-gap",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        8,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "adminHandler executes commands without any authentication or authorization check"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        17,
+        25
+      ],
+      "evidence_contains": [],
+      "notes": "os.Open on line 19 \u2014 f never closed in readHandler"
+    }
+  ]
+}

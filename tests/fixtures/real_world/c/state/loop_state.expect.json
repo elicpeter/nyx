@@ -1,0 +1,24 @@
+{
+  "description": "Resource leak in loop: file opened each iteration but never closed. Safe version closes each iteration.",
+  "tags": [
+    "state",
+    "resource-leak",
+    "loop"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        4,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "fopen inside loop body without fclose \u2014 leaked each iteration. Aspirational: loop-scoped leak detection."
+    }
+  ]
+}

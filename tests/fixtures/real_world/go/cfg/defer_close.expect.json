@@ -1,0 +1,23 @@
+{
+  "description": "Idiomatic Go defer close vs manual close with early-return leak path",
+  "tags": [
+    "cfg",
+    "resource-leak"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        21,
+        35
+      ],
+      "evidence_contains": [],
+      "notes": "readLeaky returns on line 32 error path without closing f \u2014 missing defer f.Close()"
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "description": "Rails controller with SQL injection, command injection, and missing auth check",
+  "tags": [
+    "taint",
+    "cfg",
+    "cmdi",
+    "sqli",
+    "auth-gap",
+    "rails",
+    "ruby",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rb.cmdi.system_interp",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "system() called with user-controlled params[:cmd]"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        7,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "params[:cmd] flows directly into system()"
+    },
+    {
+      "rule_id": "cfg-auth-gap",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        6,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "exec_cmd has no authorization check before system() call"
+    }
+  ]
+}

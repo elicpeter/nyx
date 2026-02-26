@@ -41,7 +41,6 @@ pub enum Kind {
     InfiniteLoop,
     While,
     For,
-    LoopBody,
     CallFn,
     CallMethod,
     CallMacro,
@@ -196,7 +195,7 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
 }
 
 /// The kind of taint source, used to refine finding severity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceKind {
     /// Direct user input (request params, argv, stdin, form data)
     UserInput,
@@ -375,6 +374,11 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     let head = text.split(['(', '<']).next().unwrap_or("");
     let trimmed = head.trim().as_bytes();
 
+    // For chained calls like `r.URL.Query().Get`, also strip internal
+    // `().` segments to produce a normalized form like `r.URL.Query.Get`.
+    let full_normalized = normalize_chained_call(text);
+    let full_norm_bytes = full_normalized.as_bytes();
+
     // ── Check runtime (config) rules first — they take priority ──────
     if let Some(extras) = extra {
         // Pass 1: exact / suffix
@@ -384,12 +388,8 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
                 if m.last() == Some(&b'_') {
                     continue;
                 }
-                if ends_with_ignore_case(trimmed, m) {
-                    let start = trimmed.len() - m.len();
-                    let ok = start == 0 || matches!(trimmed[start - 1], b'.' | b':');
-                    if ok {
-                        return Some(rule.label);
-                    }
+                if match_suffix(trimmed, m) || match_suffix(full_norm_bytes, m) {
+                    return Some(rule.label);
                 }
             }
         }
@@ -397,7 +397,10 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
         for rule in extras {
             for raw in &rule.matchers {
                 let m = raw.as_bytes();
-                if m.last() == Some(&b'_') && starts_with_ignore_case(trimmed, m) {
+                if m.last() == Some(&b'_')
+                    && (starts_with_ignore_case(trimmed, m)
+                        || starts_with_ignore_case(full_norm_bytes, m))
+                {
                     return Some(rule.label);
                 }
             }
@@ -417,12 +420,8 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
             if m.last() == Some(&b'_') {
                 continue;
             }
-            if ends_with_ignore_case(trimmed, m) {
-                let start = trimmed.len() - m.len();
-                let ok = start == 0 || matches!(trimmed[start - 1], b'.' | b':');
-                if ok {
-                    return Some(rule.label);
-                }
+            if match_suffix(trimmed, m) || match_suffix(full_norm_bytes, m) {
+                return Some(rule.label);
             }
         }
     }
@@ -431,13 +430,68 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     for rule in *rules {
         for raw in rule.matchers {
             let m = raw.as_bytes();
-            if m.last() == Some(&b'_') && starts_with_ignore_case(trimmed, m) {
+            if m.last() == Some(&b'_')
+                && (starts_with_ignore_case(trimmed, m)
+                    || starts_with_ignore_case(full_norm_bytes, m))
+            {
                 return Some(rule.label);
             }
         }
     }
 
     None
+}
+
+/// Check if `text` ends with `matcher` at a word boundary (`.` or `:`).
+#[inline]
+fn match_suffix(text: &[u8], matcher: &[u8]) -> bool {
+    if ends_with_ignore_case(text, matcher) {
+        let start = text.len() - matcher.len();
+        start == 0 || matches!(text[start - 1], b'.' | b':')
+    } else {
+        false
+    }
+}
+
+/// Normalize a chained method call: strip `()` between `.` segments.
+/// e.g. `r.URL.Query().Get` → `r.URL.Query.Get`
+/// e.g. `r.URL.Query().Get("host")` → `r.URL.Query.Get`
+fn normalize_chained_call(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => {
+                // Skip from `(` to matching `)`, but only if followed by `.`
+                // This handles `Query().Get` → `Query.Get`
+                let mut depth = 1u32;
+                let mut j = i + 1;
+                while j < bytes.len() && depth > 0 {
+                    if bytes[j] == b'(' {
+                        depth += 1;
+                    } else if bytes[j] == b')' {
+                        depth -= 1;
+                    }
+                    j += 1;
+                }
+                // If we're at end or next char is `.`, skip the parens
+                if j >= bytes.len() || bytes[j] == b'.' {
+                    i = j;
+                } else {
+                    // Keep the paren content (unusual case)
+                    result.push('(');
+                    i += 1;
+                }
+            }
+            b'<' => break, // Stop at generic args
+            _ => {
+                result.push(bytes[i] as char);
+                i += 1;
+            }
+        }
+    }
+    result
 }
 
 #[cfg(test)]

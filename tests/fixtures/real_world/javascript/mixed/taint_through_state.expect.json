@@ -1,0 +1,49 @@
+{
+  "description": "Combined taint and state: req.body.name used in file path, fd leaks on early return, and a separate command injection via req.query.cmd.",
+  "tags": [
+    "mixed",
+    "taint",
+    "state",
+    "resource-leak",
+    "cmdi",
+    "express"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        18,
+        23
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.cmd flows directly into child_process.exec"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        5,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "req.body.name flows into fs.openSync path but fs.openSync is not a recognized taint sink"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        7,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "fd from fs.openSync leaks when early return fires at line 13; scanner may not track JS fd lifecycle"
+    }
+  ]
+}

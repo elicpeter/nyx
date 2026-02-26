@@ -61,6 +61,10 @@ pub struct ScannerConfig {
     /// benchmarks, etc.) at their original severity.  When false (default),
     /// findings in these paths are downgraded by one severity tier.
     pub include_nonprod: bool,
+
+    /// Enable the state-model dataflow engine for resource lifecycle and
+    /// auth-state analysis.  Default: false (opt-in).
+    pub enable_state_analysis: bool,
 }
 impl Default for ScannerConfig {
     fn default() -> Self {
@@ -94,6 +98,7 @@ impl Default for ScannerConfig {
             follow_symlinks: false,
             scan_hidden_files: false,
             include_nonprod: false,
+            enable_state_analysis: false,
         }
     }
 }
@@ -135,6 +140,60 @@ pub struct OutputConfig {
 
     /// The maximum number of results to show.
     pub max_results: Option<u32>,
+
+    /// Enable attack-surface ranking to sort findings by exploitability.
+    pub attack_surface_ranking: bool,
+
+    /// Minimum attack-surface score to include in output.
+    /// Findings below this threshold are dropped after ranking.
+    /// `None` means no minimum (all findings shown).
+    pub min_score: Option<u32>,
+
+    /// Minimum confidence level to include in output.
+    /// `None` means no minimum (all findings shown).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_confidence_opt"
+    )]
+    pub min_confidence: Option<crate::evidence::Confidence>,
+
+    /// Include Quality-category findings (excluded by default).
+    #[serde(default)]
+    pub include_quality: bool,
+
+    /// Show all findings: disables category filtering, rollups, and LOW budgets.
+    #[serde(default)]
+    pub show_all: bool,
+
+    /// Maximum total LOW findings to show.
+    #[serde(default = "default_max_low")]
+    pub max_low: u32,
+
+    /// Maximum LOW findings per file.
+    #[serde(default = "default_max_low_per_file")]
+    pub max_low_per_file: u32,
+
+    /// Maximum LOW findings per rule.
+    #[serde(default = "default_max_low_per_rule")]
+    pub max_low_per_rule: u32,
+
+    /// Number of example locations to store in rollup findings.
+    #[serde(default = "default_rollup_examples")]
+    pub rollup_examples: u32,
+}
+
+fn default_max_low() -> u32 {
+    20
+}
+fn default_max_low_per_file() -> u32 {
+    1
+}
+fn default_max_low_per_rule() -> u32 {
+    10
+}
+fn default_rollup_examples() -> u32 {
+    5
 }
 
 impl Default for OutputConfig {
@@ -143,7 +202,33 @@ impl Default for OutputConfig {
             default_format: "console".into(),
             quiet: false,
             max_results: None,
+            attack_surface_ranking: true,
+            min_score: None,
+            min_confidence: None,
+            include_quality: false,
+            show_all: false,
+            max_low: 20,
+            max_low_per_file: 1,
+            max_low_per_rule: 10,
+            rollup_examples: 5,
         }
+    }
+}
+
+/// Deserialize an optional Confidence from a TOML string.
+fn deserialize_confidence_opt<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::evidence::Confidence>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(s) => s
+            .parse::<crate::evidence::Confidence>()
+            .map(Some)
+            .map_err(serde::de::Error::custom),
     }
 }
 
@@ -303,6 +388,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.scanner.follow_symlinks = user.scanner.follow_symlinks;
     default.scanner.scan_hidden_files = user.scanner.scan_hidden_files;
     default.scanner.include_nonprod = user.scanner.include_nonprod;
+    default.scanner.enable_state_analysis = user.scanner.enable_state_analysis;
 
     // Merge exclusion lists (default ⊔ user), then sort & dedupe
     default
@@ -328,6 +414,15 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.output.default_format = user.output.default_format;
     default.output.quiet = user.output.quiet;
     default.output.max_results = user.output.max_results;
+    default.output.attack_surface_ranking = user.output.attack_surface_ranking;
+    default.output.min_score = user.output.min_score;
+    default.output.min_confidence = user.output.min_confidence;
+    default.output.include_quality = user.output.include_quality;
+    default.output.show_all = user.output.show_all;
+    default.output.max_low = user.output.max_low;
+    default.output.max_low_per_file = user.output.max_low_per_file;
+    default.output.max_low_per_rule = user.output.max_low_per_rule;
+    default.output.rollup_examples = user.output.rollup_examples;
 
     // --- PerformanceConfig ---
     default.performance.max_depth = user.performance.max_depth;

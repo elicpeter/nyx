@@ -1,0 +1,25 @@
+{
+  "description": "mysqli connection resource leak - missing close vs properly closed",
+  "tags": [
+    "state",
+    "resource-leak",
+    "mysqli",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "queryUnsafe creates mysqli connection but never calls close()"
+    }
+  ]
+}

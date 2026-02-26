@@ -1,0 +1,45 @@
+{
+  "description": "Command injection via popen: user input interpolated into shell command via sprintf then passed to popen",
+  "tags": [
+    "taint",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "c.cmdi.popen",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "popen() executes shell command constructed from user input"
+    },
+    {
+      "rule_id": "c.memory.sprintf",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "sprintf used to build command string \u2014 buffer overflow risk"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "user_input flows through sprintf into popen \u2014 taint engine may not track through sprintf buffer"
+    }
+  ]
+}

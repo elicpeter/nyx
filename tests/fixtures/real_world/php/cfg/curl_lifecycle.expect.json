@@ -1,0 +1,25 @@
+{
+  "description": "cURL handle resource leak - missing curl_close vs properly closed",
+  "tags": [
+    "cfg",
+    "resource-leak",
+    "curl",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "fetchUrl opens cURL handle but never calls curl_close"
+    }
+  ]
+}

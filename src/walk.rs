@@ -147,8 +147,8 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
 #[test]
 fn walker_respects_excluded_extensions() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("keep.rs"), "fn main(){}").unwrap();
-    std::fs::write(tmp.path().join("skip.txt"), "ignored").unwrap();
+    std::fs::write(tmp.path().join("keep.rs"), "fn main(){}").unwrap(); // nyx:ignore cfg-unguarded-sink
+    std::fs::write(tmp.path().join("skip.txt"), "ignored").unwrap(); // nyx:ignore cfg-unguarded-sink
 
     let mut cfg = Config::default();
     cfg.scanner.excluded_extensions = vec!["txt".into()];

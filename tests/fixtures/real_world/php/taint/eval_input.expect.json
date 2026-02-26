@@ -1,0 +1,58 @@
+{
+  "description": "eval() called with user-controlled POST and GET input",
+  "tags": [
+    "taint",
+    "code-exec",
+    "eval",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "php.code_exec.eval",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        1,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "eval() with $_POST['code'] - AST pattern match"
+    },
+    {
+      "rule_id": "php.code_exec.eval",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "eval() with $_GET['expr'] concatenated - AST pattern match"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        1,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "$_POST['code'] flows directly into eval()"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "$_GET['expr'] concatenated and flows into eval()"
+    }
+  ]
+}

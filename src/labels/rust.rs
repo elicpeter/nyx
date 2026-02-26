@@ -8,7 +8,7 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
-        matchers: &["fs::read_to_string", "source_file"],
+        matchers: &["source_file"],
         label: DataLabel::Source(Cap::all()),
     },
     // ───────── Sanitizers ──────────
@@ -36,17 +36,29 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["sink_html"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
     },
+    LabelRule {
+        matchers: &[
+            "fs::read_to_string",
+            "fs::write",
+            "fs::read",
+            "File::open",
+            "File::create",
+        ],
+        label: DataLabel::Sink(Cap::FILE_IO),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // control-flow
     "if_expression"        => Kind::If,
     "loop_expression"      => Kind::InfiniteLoop,
-    "loop_statement"       => Kind::LoopBody,
     "while_statement"      => Kind::While,
+    "while_expression"     => Kind::While,
     "for_statement"        => Kind::For,
+    "for_expression"       => Kind::For,
 
     "return_statement"     => Kind::Return,
+    "return_expression"    => Kind::Return,
     "break_expression"     => Kind::Break,
     "break_statement"      => Kind::Break,
     "continue_expression"  => Kind::Continue,
@@ -55,7 +67,17 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // structure
     "source_file"          => Kind::SourceFile,
     "block"                => Kind::Block,
+    "else_clause"          => Kind::Block,
+    "match_expression"     => Kind::Block,
+    "match_block"          => Kind::Block,
+    "match_arm"            => Kind::Block,
+    "unsafe_block"         => Kind::Block,
     "function_item"        => Kind::Function,
+    "closure_expression"   => Kind::Block,
+    "async_block"          => Kind::Block,
+    "impl_item"            => Kind::Block,
+    "trait_item"           => Kind::Block,
+    "declaration_list"     => Kind::Block,
 
     // data-flow
     "call_expression"        => Kind::CallFn,

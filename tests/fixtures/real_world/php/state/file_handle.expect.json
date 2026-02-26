@@ -1,0 +1,37 @@
+{
+  "description": "PHP file handle lifecycle: leak, proper close, double close",
+  "tags": [
+    "state",
+    "resource-leak",
+    "double-close",
+    "file-io",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        1,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "readAndLeak opens file handle but never calls fclose"
+    },
+    {
+      "rule_id": "state-double-close",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        13,
+        21
+      ],
+      "evidence_contains": [],
+      "notes": "doubleClose calls fclose twice on same handle"
+    }
+  ]
+}

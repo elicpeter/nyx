@@ -1,0 +1,36 @@
+{
+  "description": "XSS via req.query flowing into innerHTML. DOMPurify.sanitize is a recognized HTML_ESCAPE sanitizer.",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "innerHTML"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.name flows into innerHTML via string concatenation"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        8,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "DOMPurify.sanitize strips HTML_ESCAPE cap so this should NOT fire; must_match=false means we expect absence"
+    }
+  ]
+}

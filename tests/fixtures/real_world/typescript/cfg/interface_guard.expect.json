@@ -1,0 +1,37 @@
+{
+  "description": "Interface-typed input with admin guard. runIfAdmin checks isAdmin before exec; runUnchecked does not.",
+  "tags": [
+    "cfg",
+    "auth-guard",
+    "interface",
+    "cmdi",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        14,
+        18
+      ],
+      "evidence_contains": [],
+      "notes": "child_process.exec in runUnchecked has no guard; input.command is a param not a recognized source"
+    },
+    {
+      "rule_id": "cfg-auth-gap",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        13,
+        18
+      ],
+      "evidence_contains": [],
+      "notes": "runUnchecked lacks the isAdmin check that runIfAdmin has"
+    }
+  ]
+}

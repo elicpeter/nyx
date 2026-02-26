@@ -4,9 +4,9 @@ pub mod index;
 pub mod list;
 pub mod scan;
 
-use crate::cli::Commands;
+use crate::cli::{Commands, IndexMode, ScanMode};
 use crate::errors::NyxResult;
-use crate::patterns::Severity;
+use crate::patterns::{Severity, SeverityFilter};
 use crate::utils::config::{AnalysisMode, Config};
 use std::path::Path;
 
@@ -19,36 +19,130 @@ pub fn handle_command(
     match command {
         Commands::Scan {
             path,
+            index,
+            format,
+            severity,
+            mode,
+            all_targets,
+            keep_nonprod_severity,
+            quiet,
+            fail_on,
+            no_rank,
+            show_suppressed,
+            show_all,
+            include_quality,
+            max_low,
+            max_low_per_file,
+            max_low_per_rule,
+            rollup_examples,
+            show_instances,
+            min_score,
+            min_confidence,
+            // Deprecated aliases
             no_index,
             rebuild_index,
-            format,
             high_only,
             ast_only,
             cfg_only,
-            all_targets,
-            include_nonprod,
         } => {
-            if high_only {
-                config.scanner.min_severity = Severity::High
+            // ── Resolve deprecated aliases ──────────────────────────────
+
+            // Index mode: explicit --index wins, then deprecated flags
+            let effective_index = if no_index {
+                IndexMode::Off
+            } else if rebuild_index {
+                IndexMode::Rebuild
+            } else {
+                index
             };
 
-            if ast_only {
-                config.scanner.mode = AnalysisMode::Ast
+            // Analysis mode: explicit --mode wins, then deprecated flags
+            let effective_mode = if ast_only {
+                ScanMode::Ast
+            } else if cfg_only {
+                ScanMode::Cfg
+            } else if all_targets {
+                ScanMode::Full
+            } else {
+                mode
             };
 
-            if cfg_only {
-                config.scanner.mode = AnalysisMode::Taint
+            // Severity filter: explicit --severity wins, then --high-only
+            let severity_filter = if let Some(ref expr) = severity {
+                Some(SeverityFilter::parse(expr).map_err(|e| {
+                    crate::errors::NyxError::Msg(format!("invalid --severity expression: {e}"))
+                })?)
+            } else if high_only {
+                Some(SeverityFilter::parse("HIGH").unwrap())
+            } else {
+                None
             };
 
-            if all_targets {
-                config.scanner.mode = AnalysisMode::Full
+            // Fail-on threshold
+            let fail_on_sev = if let Some(ref expr) = fail_on {
+                Some(expr.trim().parse::<Severity>().map_err(|e| {
+                    crate::errors::NyxError::Msg(format!("invalid --fail-on value: {e}"))
+                })?)
+            } else {
+                None
             };
 
-            if include_nonprod {
-                config.scanner.include_nonprod = true
-            };
+            // ── Apply to config ─────────────────────────────────────────
 
-            scan::handle(&path, no_index, rebuild_index, format, database_dir, config)?;
+            match effective_mode {
+                ScanMode::Full => config.scanner.mode = AnalysisMode::Full,
+                ScanMode::Ast => config.scanner.mode = AnalysisMode::Ast,
+                ScanMode::Cfg | ScanMode::Taint => config.scanner.mode = AnalysisMode::Taint,
+            }
+
+            if keep_nonprod_severity {
+                config.scanner.include_nonprod = true;
+            }
+
+            if quiet {
+                config.output.quiet = true;
+            }
+
+            if no_rank {
+                config.output.attack_surface_ranking = false;
+            }
+
+            // Min-score: CLI wins, then config
+            if let Some(s) = min_score {
+                config.output.min_score = Some(s);
+            }
+
+            // Min-confidence: CLI wins, then config
+            if let Some(ref expr) = min_confidence {
+                config.output.min_confidence =
+                    Some(expr.parse::<crate::evidence::Confidence>().map_err(|e| {
+                        crate::errors::NyxError::Msg(format!("invalid --min-confidence value: {e}"))
+                    })?);
+            }
+
+            if show_all {
+                config.output.show_all = true;
+            }
+            if include_quality {
+                config.output.include_quality = true;
+            }
+            // CLI values override config defaults (clap provides defaults)
+            config.output.max_low = max_low;
+            config.output.max_low_per_file = max_low_per_file;
+            config.output.max_low_per_rule = max_low_per_rule;
+            config.output.rollup_examples = rollup_examples;
+
+            scan::handle(
+                &path,
+                effective_index,
+                format,
+                severity_filter,
+                fail_on_sev,
+                show_suppressed,
+                show_instances.as_deref(),
+                database_dir,
+                config,
+            )?;
         }
         Commands::Index { action } => {
             index::handle(action, database_dir, config)?;

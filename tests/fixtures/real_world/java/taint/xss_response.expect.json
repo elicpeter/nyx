@@ -1,0 +1,24 @@
+{
+  "description": "XSS via reflected user input in doGet; doPost has manual HTML entity escaping",
+  "tags": [
+    "taint",
+    "xss",
+    "servlet"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "request.getParameter(\"name\") flows directly into out.println without escaping in doGet"
+    }
+  ]
+}

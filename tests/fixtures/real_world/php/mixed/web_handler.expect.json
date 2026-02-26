@@ -1,0 +1,61 @@
+{
+  "description": "Web handler dispatches to system, eval, and fopen based on user input",
+  "tags": [
+    "taint",
+    "state",
+    "cmdi",
+    "code-exec",
+    "resource-leak",
+    "php",
+    "mixed"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "system() called with $_POST data"
+    },
+    {
+      "rule_id": "php.code_exec.eval",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "eval() called with $_POST data"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        1,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "$_POST['data'] flows into system()"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        8,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "File handle opened in read branch but never closed"
+    }
+  ]
+}

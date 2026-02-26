@@ -1,0 +1,47 @@
+{
+  "description": "Error fallthrough in handleRequest allows exec with potentially zero-value command; safe version returns on error",
+  "tags": [
+    "cfg",
+    "cmdi",
+    "error-handling"
+  ],
+  "modes": [
+    "full",
+    "ast"
+  ],
+  "expected": [
+    {
+      "rule_id": "go.cmdi.exec_command",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        19,
+        23
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects exec.Command in handleRequest"
+    },
+    {
+      "rule_id": "go.cmdi.exec_command",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        34,
+        38
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects exec.Command in handleRequestSafe"
+    },
+    {
+      "rule_id": "cfg-error-fallthrough",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        14,
+        23
+      ],
+      "evidence_contains": [],
+      "notes": "Error from json.Decode not returned \u2014 execution falls through to exec.Command"
+    }
+  ]
+}

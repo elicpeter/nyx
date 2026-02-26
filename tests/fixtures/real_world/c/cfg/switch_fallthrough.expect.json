@@ -1,0 +1,34 @@
+{
+  "description": "system() calls in switch statement \u2014 case 3 falls through without break",
+  "tags": [
+    "cmdi",
+    "cfg"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "c.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "system(arg) in case 1"
+    },
+    {
+      "rule_id": "c.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "system(arg) in case 3 \u2014 falls through to case 4"
+    }
+  ]
+}

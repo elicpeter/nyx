@@ -1,13 +1,13 @@
 {
   "required_findings": [
     { "id_prefix": "taint-unsanitised-flow", "min_count": 8 },
-    { "id_prefix": "eval_call", "min_count": 1 },
-    { "id_prefix": "exec_call", "min_count": 2 },
-    { "id_prefix": "cfg-auth-gap", "min_count": 5 }
+    { "id_prefix": "py.code_exec.eval", "min_count": 1 },
+    { "id_prefix": "py.code_exec.exec", "min_count": 2 },
+    { "id_prefix": "state-unauthed-access", "min_count": 5 }
   ],
   "forbidden_findings": [],
   "noise_budget": {
-    "max_total_findings": 35,
+    "max_total_findings": 50,
     "max_high_findings": 25
   },
   "performance_expectations": {

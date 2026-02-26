@@ -1,11 +1,21 @@
-use crate::cfg::{Cfg, FuncSummaries, NodeInfo, StmtKind};
+pub mod domain;
+pub mod path_state;
+pub mod transfer;
+
+use crate::cfg::{Cfg, FuncSummaries};
 use crate::interop::InteropEdge;
-use crate::labels::{Cap, DataLabel, SourceKind};
+use crate::labels::SourceKind;
+use crate::state::engine::{self, MAX_TRACKED_VARS};
+use crate::state::lattice::Lattice;
+use crate::state::symbol::SymbolInterner;
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
+use domain::TaintState;
+use path_state::PredicateKind;
 use petgraph::graph::NodeIndex;
-use std::collections::HashMap;
-use tracing::debug;
+use petgraph::visit::IntoNodeReferences;
+use std::collections::HashSet;
+use transfer::{TaintEvent, TaintTransfer};
 
 /// A detected taint finding with both source and sink locations.
 #[derive(Debug, Clone)]
@@ -20,269 +30,23 @@ pub struct Finding {
     pub path: Vec<NodeIndex>,
     /// The kind of source that originated the taint.
     pub source_kind: SourceKind,
-}
-
-/// Order-independent hash of a taint map.
-///
-/// Uses XOR of per-entry hashes so the result is the same regardless of
-/// iteration order — no allocation or sorting required.
-fn taint_hash(taint: &HashMap<String, Cap>) -> u64 {
-    let mut h: u64 = 0;
-    for (k, bits) in taint {
-        // Per-entry hash: FNV-1a-style mixing of key bytes + cap bits.
-        let mut entry_h: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
-        for b in k.as_bytes() {
-            entry_h ^= *b as u64;
-            entry_h = entry_h.wrapping_mul(0x0100_0000_01b3); // FNV prime
-        }
-        entry_h ^= bits.bits() as u64;
-        entry_h = entry_h.wrapping_mul(0x0100_0000_01b3);
-        h ^= entry_h;
-    }
-    h
-}
-
-/// Resolved summary for a callee — a uniform view regardless of whether the
-/// summary came from a local (same‑file) or global (cross‑file) source.
-struct ResolvedSummary {
-    source_caps: Cap,
-    sanitizer_caps: Cap,
-    sink_caps: Cap,
-    propagates_taint: bool,
-}
-
-/// Try to resolve a callee name using conservative same-language resolution.
-///
-/// Resolution order:
-/// 1. Local (same-file): exact name + same lang + same namespace
-/// 2. Global same-language: via `lookup_same_lang`; must be unambiguous
-/// 3. Interop edges: explicit cross-language bridges
-/// 4. No cross-language fallback
-#[allow(clippy::too_many_arguments)]
-fn resolve_callee(
-    callee: &str,
-    caller_lang: Lang,
-    caller_namespace: &str,
-    caller_func: &str,
-    call_ordinal: u32,
-    local: &FuncSummaries,
-    global: Option<&GlobalSummaries>,
-    interop_edges: &[InteropEdge],
-) -> Option<ResolvedSummary> {
-    // 1) Local (same-file): scan local summaries for matching name + lang + namespace
-    let local_matches: Vec<_> = local
-        .iter()
-        .filter(|(k, _)| {
-            k.name == callee && k.lang == caller_lang && k.namespace == caller_namespace
-        })
-        .collect();
-
-    if local_matches.len() == 1 {
-        let (_, ls) = local_matches[0];
-        return Some(ResolvedSummary {
-            source_caps: ls.source_caps,
-            sanitizer_caps: ls.sanitizer_caps,
-            sink_caps: ls.sink_caps,
-            propagates_taint: ls.propagates_taint,
-        });
-    }
-
-    // Multiple local matches — try arity disambiguation (future), for now return None
-    if local_matches.len() > 1 {
-        return None;
-    }
-
-    // 2) Global same-language
-    if let Some(gs) = global {
-        let matches = gs.lookup_same_lang(caller_lang, callee);
-        if matches.len() == 1 {
-            let (_, fs) = matches[0];
-            return Some(ResolvedSummary {
-                source_caps: fs.source_caps(),
-                sanitizer_caps: fs.sanitizer_caps(),
-                sink_caps: fs.sink_caps(),
-                propagates_taint: fs.propagates_taint,
-            });
-        }
-        // Multiple matches — try namespace match first
-        if matches.len() > 1 {
-            let same_ns: Vec<_> = matches
-                .iter()
-                .filter(|(k, _)| k.namespace == caller_namespace)
-                .collect();
-            if same_ns.len() == 1 {
-                let (_, fs) = same_ns[0];
-                return Some(ResolvedSummary {
-                    source_caps: fs.source_caps(),
-                    sanitizer_caps: fs.sanitizer_caps(),
-                    sink_caps: fs.sink_caps(),
-                    propagates_taint: fs.propagates_taint,
-                });
-            }
-            // Still ambiguous — return None (conservative)
-            return None;
-        }
-    }
-
-    // 3) Interop edges: explicit cross-language bridges
-    for edge in interop_edges {
-        if edge.from.caller_lang == caller_lang
-            && edge.from.caller_namespace == caller_namespace
-            && edge.from.callee_symbol == callee
-            && (edge.from.caller_func.is_empty() || edge.from.caller_func == caller_func)
-            && (edge.from.ordinal == 0 || edge.from.ordinal == call_ordinal)
-        {
-            // Look up the target in global summaries by exact FuncKey
-            if let Some(gs) = global
-                && let Some(fs) = gs.get(&edge.to)
-            {
-                return Some(ResolvedSummary {
-                    source_caps: fs.source_caps(),
-                    sanitizer_caps: fs.sanitizer_caps(),
-                    sink_caps: fs.sink_caps(),
-                    propagates_taint: fs.propagates_taint,
-                });
-            }
-        }
-    }
-
-    // 4) No cross-language fallback
-    None
-}
-
-/// Apply taint transfer for a single node, mutating `out` in place.
-///
-/// Callers should clone the taint map before calling if they need
-/// the original state preserved.
-fn apply_taint(
-    node: &NodeInfo,
-    out: &mut HashMap<String, Cap>,
-    local_summaries: &FuncSummaries,
-    global_summaries: Option<&GlobalSummaries>,
-    caller_lang: Lang,
-    caller_namespace: &str,
-    interop_edges: &[InteropEdge],
-) {
-    debug!(target: "taint", "Applying taint to node: {:?}", node);
-    debug!(target: "taint", "Taint: {:?}", out);
-
-    let caller_func = node.enclosing_func.as_deref().unwrap_or("");
-
-    match node.label {
-        // A new untrusted value enters the program
-        Some(DataLabel::Source(bits)) => {
-            if let Some(v) = &node.defines {
-                out.insert(v.clone(), bits);
-            }
-        }
-        // Sanitizer: propagate input taint through the assignment FIRST,
-        // then strip the sanitizer's capability bits.  This ensures that
-        // `let y = sanitize_html(&x)` gives y the taint of x minus the
-        // HTML_ESCAPE bit — rather than leaving y completely clean (which
-        // would hide "wrong sanitiser for this sink" bugs).
-        Some(DataLabel::Sanitizer(bits)) => {
-            if let Some(v) = &node.defines {
-                // 1. Propagate: union taint from all read variables
-                let mut combined = Cap::empty();
-                for u in &node.uses {
-                    if let Some(b) = out.get(u) {
-                        combined |= *b;
-                    }
-                }
-                // 2. Strip the sanitiser's bits
-                let new = combined & !bits;
-                if new.is_empty() {
-                    out.remove(v);
-                } else {
-                    out.insert(v.clone(), new);
-                }
-            }
-        }
-
-        // A function call — resolve against local + global summaries
-        _ if node.kind == StmtKind::Call => {
-            if let Some(callee) = &node.callee
-                && let Some(resolved) = resolve_callee(
-                    callee,
-                    caller_lang,
-                    caller_namespace,
-                    caller_func,
-                    node.call_ordinal,
-                    local_summaries,
-                    global_summaries,
-                    interop_edges,
-                )
-            {
-                // Build the return value's taint bits in stages, then
-                // write once at the end.  Order matters:
-                //
-                //   1. Start with fresh source taint (if the callee is a source)
-                //   2. Union with propagated arg taint (if the callee propagates)
-                //   3. Strip sanitizer bits last (so sanitization always wins)
-
-                let mut return_bits = Cap::empty();
-
-                // ── 1. Source behaviour ──
-                return_bits |= resolved.source_caps;
-
-                // ── 2. Propagation ──
-                if resolved.propagates_taint {
-                    for u in &node.uses {
-                        if let Some(bits) = out.get(u) {
-                            return_bits |= *bits;
-                        }
-                    }
-                }
-
-                // ── 3. Sanitizer behaviour (applied last so it always wins) ──
-                return_bits &= !resolved.sanitizer_caps;
-
-                // ── Write the result ──
-                if let Some(v) = &node.defines {
-                    if return_bits.is_empty() {
-                        out.remove(v);
-                    } else {
-                        out.insert(v.clone(), return_bits);
-                    }
-                }
-
-                // ── Sink behaviour: handled in the main analysis loop
-                //    (checked via node.label or resolved summary) ──
-
-                return;
-            }
-
-            // Unresolved call — fall through to default gen/kill below
-        }
-
-        // All other statements: classic gen/kill for assignments
-        _ => {}
-    }
-
-    // Default gen/kill: propagate taint through variable assignments
-    if !matches!(
-        node.label,
-        Some(DataLabel::Source(_)) | Some(DataLabel::Sanitizer(_))
-    ) && let Some(d) = &node.defines
-    {
-        let mut combined = Cap::empty();
-        for u in &node.uses {
-            if let Some(bits) = out.get(u) {
-                combined |= *bits;
-            }
-        }
-        if combined.is_empty() {
-            out.remove(d);
-        } else {
-            out.insert(d.clone(), combined);
-        }
-    }
+    /// Whether all tainted sink variables are guarded by a validation
+    /// predicate on this path (metadata only — does not change severity).
+    #[allow(dead_code)] // surfaced in Diag output (task 4)
+    pub path_validated: bool,
+    /// The kind of validation guard protecting this path, if any.
+    #[allow(dead_code)] // surfaced in Diag output (task 4)
+    pub guard_kind: Option<PredicateKind>,
 }
 
 /// Run taint analysis on a single file's CFG.
 ///
-/// `global_summaries` is `None` for pass‑1 / single‑file mode and
-/// `Some(&map)` for pass‑2 cross‑file analysis.
+/// Uses a monotone forward dataflow analysis via `state::engine::run_forward`
+/// with the `TaintTransfer` function. Termination is guaranteed by lattice
+/// finiteness (bounded `Cap` bits × bounded variable count).
+///
+/// For JS/TS files: uses a two-level solve to prevent cross-function taint
+/// leakage while preserving global-to-function flows.
 pub fn analyse_file(
     cfg: &Cfg,
     entry: NodeIndex,
@@ -292,162 +56,155 @@ pub fn analyse_file(
     caller_namespace: &str,
     interop_edges: &[InteropEdge],
 ) -> Vec<Finding> {
-    use std::collections::{HashMap, HashSet, VecDeque};
+    let _span = tracing::debug_span!("taint_analyse_file").entered();
 
-    /// Queue item: current CFG node + taint map that holds here
-    #[derive(Clone)]
-    struct Item {
-        node: NodeIndex,
-        taint: HashMap<String, Cap>,
+    // 1. Build symbol interner from CFG
+    let interner = SymbolInterner::from_cfg(cfg);
+
+    if interner.len() > MAX_TRACKED_VARS {
+        tracing::warn!(
+            symbols = interner.len(),
+            max = MAX_TRACKED_VARS,
+            "taint analysis: too many variables, some will be ignored"
+        );
     }
 
-    // (node, taint_hash)  →  predecessor key   (for path rebuild)
-    type Key = (NodeIndex, u64);
-    let mut pred: HashMap<Key, Key> = HashMap::new();
+    // 2. Build base transfer function
+    let base_transfer = TaintTransfer {
+        lang: caller_lang,
+        namespace: caller_namespace,
+        interner: &interner, // also used for events_to_findings below
+        local_summaries,
+        global_summaries,
+        interop_edges,
+        global_seed: None,
+        scope_filter: None,
+    };
 
-    // Seen states so we do not revisit them infinitely
-    let mut seen: HashSet<Key> = HashSet::new();
+    // 3. Run analysis (two-level for JS/TS, single-pass otherwise)
+    let events = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
+        analyse_js_two_level(cfg, entry, &interner, &base_transfer)
+    } else {
+        let result = engine::run_forward(cfg, entry, &base_transfer, TaintState::initial());
+        result.events
+    };
 
-    // Resulting findings: (sink_node, source_node, full_path)
-    let mut findings: Vec<Finding> = Vec::new();
+    // 4. Convert events to findings
+    let mut findings = events_to_findings(&events, &interner);
 
-    let mut q = VecDeque::new();
-    q.push_back(Item {
-        node: entry,
-        taint: HashMap::new(),
-    });
-    seen.insert((entry, 0));
+    // 5. Deduplicate findings by (sink, source), prefer path_validated=true
+    findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
+    findings.dedup_by_key(|f| (f.sink, f.source));
 
-    while let Some(Item { node, taint }) = q.pop_front() {
-        let caller_func = cfg[node].enclosing_func.as_deref().unwrap_or("");
-        let mut out = taint.clone();
-        apply_taint(
-            &cfg[node],
-            &mut out,
-            local_summaries,
-            global_summaries,
-            caller_lang,
-            caller_namespace,
-            interop_edges,
-        );
+    findings
+}
 
-        // ── Sink check ──────────────────────────────────────────────────
-        // Two ways a node can be a sink:
-        //   1. Its AST label says Sink (existing inline labels)
-        //   2. Its callee resolves to a function with sink_caps (cross-file)
-        let sink_caps = match cfg[node].label {
-            Some(DataLabel::Sink(caps)) => caps,
-            _ => {
-                // check if callee resolves to a sink
-                cfg[node]
-                    .callee
-                    .as_ref()
-                    .and_then(|c| {
-                        resolve_callee(
-                            c,
-                            caller_lang,
-                            caller_namespace,
-                            caller_func,
-                            cfg[node].call_ordinal,
-                            local_summaries,
-                            global_summaries,
-                            interop_edges,
-                        )
-                    })
-                    .filter(|r| !r.sink_caps.is_empty())
-                    .map(|r| r.sink_caps)
-                    .unwrap_or(Cap::empty())
-            }
+/// JS/TS two-level solve to prevent cross-function taint leakage.
+///
+/// Level 1: Solve top-level code (nodes where `enclosing_func.is_none()`).
+/// Level 2: For each function, solve seeded with top-level taint.
+fn analyse_js_two_level(
+    cfg: &Cfg,
+    entry: NodeIndex,
+    _interner: &SymbolInterner,
+    base_transfer: &TaintTransfer,
+) -> Vec<TaintEvent> {
+    // Level 1: solve top-level only
+    let toplevel_transfer = TaintTransfer {
+        lang: base_transfer.lang,
+        namespace: base_transfer.namespace,
+        interner: base_transfer.interner,
+        local_summaries: base_transfer.local_summaries,
+        global_summaries: base_transfer.global_summaries,
+        interop_edges: base_transfer.interop_edges,
+        global_seed: None,
+        scope_filter: Some(None), // top-level only (enclosing_func == None)
+    };
+
+    let toplevel_result =
+        engine::run_forward(cfg, entry, &toplevel_transfer, TaintState::initial());
+
+    // Extract top-level taint state at the last converged point
+    let toplevel_state = extract_exit_state(&toplevel_result.states);
+
+    // Level 2: solve each function seeded with top-level state
+    let mut all_events = toplevel_result.events;
+
+    let func_entries = find_function_entries(cfg);
+    for (func_name, func_entry) in &func_entries {
+        let func_transfer = TaintTransfer {
+            lang: base_transfer.lang,
+            namespace: base_transfer.namespace,
+            interner: base_transfer.interner,
+            local_summaries: base_transfer.local_summaries,
+            global_summaries: base_transfer.global_summaries,
+            interop_edges: base_transfer.interop_edges,
+            global_seed: Some(&toplevel_state),
+            scope_filter: Some(Some(func_name.as_str())),
         };
 
-        if !sink_caps.is_empty() {
-            let bad = cfg[node]
-                .uses
-                .iter()
-                .any(|u| out.get(u).is_some_and(|b| (*b & sink_caps) != Cap::empty()));
-            if bad {
-                // Reconstruct path backwards from sink to source.
-                //
-                // A node is considered a "source" if:
-                //   1. It has an inline DataLabel::Source (same-file), OR
-                //   2. It is a Call whose callee resolves to a source via
-                //      local or global summaries (cross-file).
-                let sink_node = node;
-                let mut path = vec![node];
-                let mut source_node = node; // fallback: sink itself
-                let mut key = (node, taint_hash(&taint));
+        let func_result =
+            engine::run_forward(cfg, *func_entry, &func_transfer, TaintState::initial());
+        all_events.extend(func_result.events);
+    }
 
-                while let Some(&(prev, prev_hash)) = pred.get(&key) {
-                    path.push(prev);
+    all_events
+}
 
-                    // Check inline source label
-                    if matches!(cfg[prev].label, Some(DataLabel::Source(_))) {
-                        source_node = prev;
-                        break;
-                    }
+/// Extract the "best" taint state from converged states (join all exit/reachable states).
+fn extract_exit_state(states: &std::collections::HashMap<NodeIndex, TaintState>) -> TaintState {
+    let mut result = TaintState::initial();
+    for state in states.values() {
+        result = result.join(state);
+    }
+    result
+}
 
-                    // Check cross-file source via resolved callee summary
-                    let prev_caller_func = cfg[prev].enclosing_func.as_deref().unwrap_or("");
-                    if cfg[prev].kind == StmtKind::Call
-                        && let Some(callee) = &cfg[prev].callee
-                        && let Some(resolved) = resolve_callee(
-                            callee,
-                            caller_lang,
-                            caller_namespace,
-                            prev_caller_func,
-                            cfg[prev].call_ordinal,
-                            local_summaries,
-                            global_summaries,
-                            interop_edges,
-                        )
-                        && !resolved.source_caps.is_empty()
-                    {
-                        source_node = prev;
-                        break;
-                    }
+/// Find function entry nodes: (func_name, entry_node) pairs.
+///
+/// A function entry is the first node with a given `enclosing_func` value.
+fn find_function_entries(cfg: &Cfg) -> Vec<(String, NodeIndex)> {
+    let mut seen = HashSet::new();
+    let mut entries = Vec::new();
 
-                    key = (prev, prev_hash);
-                }
-
-                path.reverse();
-
-                // Infer the source kind from the source node's label and callee
-                let source_kind = match cfg[source_node].label {
-                    Some(DataLabel::Source(caps)) => {
-                        let callee = cfg[source_node].callee.as_deref().unwrap_or("");
-                        crate::labels::infer_source_kind(caps, callee)
-                    }
-                    _ => SourceKind::Unknown,
-                };
-
-                findings.push(Finding {
-                    sink: sink_node,
-                    source: source_node,
-                    path,
-                    source_kind,
-                });
-            }
+    for (idx, info) in cfg.node_references() {
+        if let Some(ref func_name) = info.enclosing_func
+            && seen.insert(func_name.clone())
+        {
+            entries.push((func_name.clone(), idx));
         }
+    }
 
-        // enqueue successors — cache hashes to avoid recomputation
-        let out_h = taint_hash(&out);
-        let in_h = taint_hash(&taint);
-        let succs: Vec<_> = cfg.neighbors(node).collect();
-        for (i, succ) in succs.iter().enumerate() {
-            let key = (*succ, out_h);
-            if !seen.contains(&key) {
-                seen.insert(key);
-                pred.insert(key, (node, in_h));
-                // Move the map into the last successor to avoid a clone
-                let taint_for_succ = if i + 1 == succs.len() {
-                    std::mem::take(&mut out)
-                } else {
-                    out.clone()
-                };
-                q.push_back(Item {
-                    node: *succ,
-                    taint: taint_for_succ,
-                });
+    entries
+}
+
+/// Convert TaintEvents into Findings.
+fn events_to_findings(events: &[TaintEvent], _interner: &SymbolInterner) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    for event in events {
+        let TaintEvent::SinkReached {
+            sink_node,
+            tainted_vars,
+            all_validated,
+            guard_kind,
+            ..
+        } = event;
+
+        // Collect unique origins across all tainted vars at this sink
+        let mut seen_origins: HashSet<(usize, usize)> = HashSet::new();
+        for (_sym, _caps, origins) in tainted_vars {
+            for origin in origins {
+                if seen_origins.insert((origin.node.index(), sink_node.index())) {
+                    findings.push(Finding {
+                        sink: *sink_node,
+                        source: origin.node,
+                        path: vec![origin.node, *sink_node],
+                        source_kind: origin.source_kind,
+                        path_validated: *all_validated,
+                        guard_kind: *guard_kind,
+                    });
+                }
             }
         }
     }

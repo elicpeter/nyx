@@ -33,7 +33,6 @@ pub struct CfgFinding {
     pub severity: Severity,
     pub confidence: Confidence,
     pub span: (usize, usize),
-    #[allow(dead_code)]
     pub message: String,
     pub evidence: Vec<NodeIndex>,
     pub score: Option<f64>,

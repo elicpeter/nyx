@@ -1,0 +1,35 @@
+{
+  "description": "Command execution inside closure passed as higher-order function argument",
+  "tags": [
+    "cmdi",
+    "cfg",
+    "closure"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on env::var Result in apply_command"
+    },
+    {
+      "rule_id": "rs.quality.unwrap",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": ".unwrap() on Command output Result in closure"
+    }
+  ]
+}

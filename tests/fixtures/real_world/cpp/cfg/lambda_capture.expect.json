@@ -1,0 +1,24 @@
+{
+  "description": "system() call inside lambda capturing user input by value",
+  "tags": [
+    "cmdi",
+    "cfg",
+    "lambda"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "system() called inside lambda with captured user-derived command string"
+    }
+  ]
+}

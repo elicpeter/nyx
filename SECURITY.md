@@ -4,9 +4,9 @@
 
 | Version | Supported | Notes                |
 |---------|-----------|----------------------|
-| 0.3.x   | ✅        | Latest stable line   |
-| 0.2.x   | ✅        | Critical fixes only  |
-| < 0.2   | ❌        | End-of-life          |
+| 0.4.x   | ✅        | Latest stable line   |
+| 0.3.x   | ✅        | Critical fixes only  |
+| < 0.3   | ❌        | End-of-life          |
 
 We follow [Semantic Versioning] as soon as we hit **1.0.0**.  
 Before that, breaking changes may land in any minor release.

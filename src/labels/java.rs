@@ -8,7 +8,19 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
-        matchers: &["getParameter", "getInputStream", "getHeader", "getCookies"],
+        matchers: &[
+            "getParameter",
+            "getInputStream",
+            "getHeader",
+            "getCookies",
+            "getReader",
+            "getQueryString",
+            "getPathInfo",
+        ],
+        label: DataLabel::Source(Cap::all()),
+    },
+    LabelRule {
+        matchers: &["readObject", "readLine"],
         label: DataLabel::Source(Cap::all()),
     },
     // ───────── Sanitizers ──────────
@@ -18,12 +30,20 @@ pub static RULES: &[LabelRule] = &[
     },
     // ─────────── Sinks ─────────────
     LabelRule {
-        matchers: &["Runtime.exec"],
+        matchers: &["Runtime.exec", "ProcessBuilder"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
     LabelRule {
         matchers: &["executeQuery", "executeUpdate", "prepareStatement"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["Class.forName"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+    },
+    LabelRule {
+        matchers: &["println", "print", "write"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
     },
 ];
 
@@ -33,8 +53,10 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "while_statement"              => Kind::While,
     "for_statement"                => Kind::For,
     "enhanced_for_statement"       => Kind::For,
+    "do_statement"                 => Kind::While,
 
     "return_statement"             => Kind::Return,
+    "throw_statement"              => Kind::Return,
     "break_statement"              => Kind::Break,
     "continue_statement"           => Kind::Continue,
 
@@ -46,6 +68,15 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "interface_body"               => Kind::Block,
     "method_declaration"           => Kind::Function,
     "constructor_declaration"      => Kind::Function,
+    "switch_expression"            => Kind::Block,
+    "switch_block"                 => Kind::Block,
+    "switch_block_statement_group" => Kind::Block,
+    "try_statement"                => Kind::Block,
+    "catch_clause"                 => Kind::Block,
+    "finally_clause"               => Kind::Block,
+    "lambda_expression"            => Kind::Block,
+    "constructor_body"             => Kind::Block,
+    "static_initializer"           => Kind::Block,
 
     // data-flow
     "method_invocation"            => Kind::CallMethod,

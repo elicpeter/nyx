@@ -1,0 +1,35 @@
+{
+  "description": "HttpServletRequest.getParameter flows directly to Runtime.exec \u2014 classic command injection",
+  "tags": [
+    "taint",
+    "cmdi",
+    "servlet"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "request.getParameter(\"cmd\") flows directly into Runtime.getRuntime().exec(cmd)"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        5,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "No validation or auth check before exec call"
+    }
+  ]
+}

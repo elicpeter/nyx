@@ -1,0 +1,23 @@
+{
+  "description": "Command injection via popen: user input concatenated into shell command string",
+  "tags": [
+    "taint",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.cmdi.popen",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "popen executes command string built from user input via string concatenation"
+    }
+  ]
+}

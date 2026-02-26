@@ -1,0 +1,35 @@
+{
+  "description": "Weak cryptographic hash usage: MD5 and SHA1 detected; SHA256 is safe",
+  "tags": [
+    "crypto",
+    "weak-hash"
+  ],
+  "modes": [
+    "full",
+    "ast"
+  ],
+  "expected": [
+    {
+      "rule_id": "go.crypto.md5",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects md5.New() call"
+    },
+    {
+      "rule_id": "go.crypto.sha1",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        15,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "AST pattern detects sha1.New() call"
+    }
+  ]
+}

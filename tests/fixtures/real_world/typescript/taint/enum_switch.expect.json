@@ -1,0 +1,37 @@
+{
+  "description": "Enum-based switch dispatching payload to child_process.exec. payload is a function param, not a recognized taint source.",
+  "tags": [
+    "taint",
+    "cmdi",
+    "enum",
+    "switch",
+    "typescript"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "payload flows to child_process.exec but is a function param, not a recognized source"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "child_process.exec called without input validation; enum switch only controls dispatch, not payload safety"
+    }
+  ]
+}

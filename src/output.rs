@@ -38,6 +38,11 @@ fn cfg_rule_description(id: &str) -> Option<&'static str> {
         }
         "cfg-resource-leak" => Some("Resource acquired but not released on all exit paths"),
         "cfg-lock-not-released" => Some("Lock acquired but not released on all exit paths"),
+        "state-use-after-close" => Some("Variable used after its resource handle was closed"),
+        "state-double-close" => Some("Resource handle closed more than once"),
+        "state-resource-leak" => Some("Resource acquired but never closed"),
+        "state-resource-leak-possible" => Some("Resource may not be closed on all paths"),
+        "state-unauthed-access" => Some("Sensitive operation reached without authentication"),
         _ => None,
     }
 }
@@ -116,11 +121,17 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| d.path.clone());
 
-            json!({
+            // Prefer the per-finding message (e.g. from state analysis) over the generic rule description.
+            let msg_text = d
+                .message
+                .as_deref()
+                .unwrap_or_else(|| rule_description(base));
+
+            let mut result = json!({
                 "ruleId": base,
                 "ruleIndex": rule_index,
                 "level": severity_to_level(d.severity),
-                "message": { "text": rule_description(base) },
+                "message": { "text": msg_text },
                 "locations": [{
                     "physicalLocation": {
                         "artifactLocation": { "uri": uri },
@@ -130,7 +141,50 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                         }
                     }
                 }]
-            })
+            });
+
+            // Build properties object
+            let mut props = serde_json::Map::new();
+            props.insert("category".into(), json!(d.category.to_string()));
+            if let Some(conf) = d.confidence {
+                props.insert("confidence".into(), json!(conf.to_string()));
+            }
+
+            // Add rollup data if present
+            if let Some(ref rollup) = d.rollup {
+                props.insert(
+                    "rollup".into(),
+                    json!({
+                        "count": rollup.count,
+                    }),
+                );
+
+                // Add rollup occurrences as relatedLocations
+                let related: Vec<Value> = rollup
+                    .occurrences
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, loc)| {
+                        json!({
+                            "id": idx,
+                            "physicalLocation": {
+                                "artifactLocation": { "uri": &uri },
+                                "region": {
+                                    "startLine": loc.line,
+                                    "startColumn": loc.col
+                                }
+                            }
+                        })
+                    })
+                    .collect();
+                if !related.is_empty() {
+                    result["relatedLocations"] = json!(related);
+                }
+            }
+
+            result["properties"] = Value::Object(props);
+
+            result
         })
         .collect();
 

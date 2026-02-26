@@ -2,8 +2,10 @@ use crate::cfg::{build_cfg, export_summaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
+use crate::evidence::{Evidence, SpanEvidence, StateEvidence};
 use crate::labels::{build_lang_rules, severity_for_source_kind};
-use crate::patterns::Severity;
+use crate::patterns::{FindingCategory, Severity};
+use crate::state;
 use crate::summary::{FuncSummary, GlobalSummaries};
 use crate::symbol::{Lang, normalize_namespace};
 use crate::taint::analyse_file;
@@ -90,6 +92,23 @@ fn is_nonprod_path(path: &Path) -> bool {
     }
 
     false
+}
+
+/// Normalize a callee description for display.
+fn sanitize_desc(s: &str) -> String {
+    crate::fmt::normalize_snippet(s)
+}
+
+/// Human-readable label for a `SourceKind`.
+fn source_kind_label(sk: crate::labels::SourceKind) -> &'static str {
+    use crate::labels::SourceKind;
+    match sk {
+        SourceKind::UserInput => "user input",
+        SourceKind::EnvironmentConfig => "environment config",
+        SourceKind::FileSystem => "file system data",
+        SourceKind::Database => "database result",
+        SourceKind::Unknown => "tainted data",
+    }
 }
 
 /// Downgrade severity by one tier: High→Medium, Medium→Low, Low→Low.
@@ -239,8 +258,45 @@ pub fn run_rules_on_bytes(
             let source_byte = cfg_graph[finding.source].span.0;
             let source_point = byte_offset_to_point(&_tree, source_byte);
 
+            let source_callee = cfg_graph[finding.source]
+                .callee
+                .as_deref()
+                .map(sanitize_desc)
+                .unwrap_or_else(|| "(unknown)".into());
+            let sink_callee = cfg_graph[finding.sink]
+                .callee
+                .as_deref()
+                .map(sanitize_desc)
+                .unwrap_or_else(|| "(unknown)".into());
+            let kind_label = source_kind_label(finding.source_kind);
+
+            let short_source = crate::fmt::shorten_callee(&source_callee);
+            let short_sink = crate::fmt::shorten_callee(&sink_callee);
+
+            let mut labels = vec![
+                (
+                    "Source".into(),
+                    format!(
+                        "{source_callee} ({}:{})",
+                        source_point.row + 1,
+                        source_point.column + 1
+                    ),
+                ),
+                ("Sink".into(), sink_callee.to_string()),
+            ];
+            if let Some(guard) = finding.guard_kind {
+                labels.push(("Path guard".into(), format!("{guard:?}")));
+            }
+
+            let file_path_owned = path.to_string_lossy().into_owned();
+            let mut evidence_notes = Vec::new();
+            if finding.path_validated {
+                evidence_notes.push("path_validated".into());
+            }
+            evidence_notes.push(format!("source_kind:{:?}", finding.source_kind));
+
             out.push(Diag {
-                path: path.to_string_lossy().into_owned(),
+                path: file_path_owned.clone(),
                 line: sink_point.row + 1,
                 col: sink_point.column + 1,
                 severity: severity_for_source_kind(finding.source_kind),
@@ -249,6 +305,50 @@ pub fn run_rules_on_bytes(
                     source_point.row + 1,
                     source_point.column + 1
                 ),
+                category: FindingCategory::Security,
+                path_validated: finding.path_validated,
+                guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
+                message: Some(format!(
+                    "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
+                )),
+                labels,
+                confidence: None,
+                evidence: Some(Evidence {
+                    source: Some(SpanEvidence {
+                        path: file_path_owned.clone(),
+                        line: (source_point.row + 1) as u32,
+                        col: (source_point.column + 1) as u32,
+                        kind: "source".into(),
+                        snippet: Some(short_source.clone()),
+                    }),
+                    sink: Some(SpanEvidence {
+                        path: file_path_owned,
+                        line: (sink_point.row + 1) as u32,
+                        col: (sink_point.column + 1) as u32,
+                        kind: "sink".into(),
+                        snippet: Some(short_sink.clone()),
+                    }),
+                    guards: finding
+                        .guard_kind
+                        .map(|g| {
+                            vec![SpanEvidence {
+                                path: path.to_string_lossy().into_owned(),
+                                line: (sink_point.row + 1) as u32,
+                                col: 0,
+                                kind: "guard".into(),
+                                snippet: Some(format!("{g:?}")),
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    sanitizers: vec![],
+                    state: None,
+                    notes: evidence_notes,
+                }),
+                rank_score: None,
+                rank_reason: None,
+                suppressed: false,
+                suppression: None,
+                rollup: None,
             });
         }
 
@@ -268,13 +368,110 @@ pub fn run_rules_on_bytes(
         };
         for cf in cfg_analysis::run_all(&cfg_ctx) {
             let point = byte_offset_to_point(&_tree, cf.span.0);
+            let cfg_confidence = Some(match cf.confidence {
+                cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
+                cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
+                cfg_analysis::Confidence::Low => crate::evidence::Confidence::Low,
+            });
             out.push(Diag {
                 path: path.to_string_lossy().into_owned(),
                 line: point.row + 1,
                 col: point.column + 1,
                 severity: cf.severity,
                 id: cf.rule_id,
+                category: FindingCategory::Security,
+                path_validated: false,
+                guard_kind: None,
+                message: Some(cf.message),
+                labels: vec![],
+                confidence: cfg_confidence,
+                evidence: Some(Evidence {
+                    source: None,
+                    sink: Some(SpanEvidence {
+                        path: path.to_string_lossy().into_owned(),
+                        line: (point.row + 1) as u32,
+                        col: (point.column + 1) as u32,
+                        kind: "sink".into(),
+                        snippet: None,
+                    }),
+                    guards: vec![],
+                    sanitizers: vec![],
+                    state: None,
+                    notes: vec![],
+                }),
+                rank_score: None,
+                rank_reason: None,
+                suppressed: false,
+                suppression: None,
+                rollup: None,
             });
+        }
+
+        // ── State-model dataflow analysis ────────────────────────────────
+        if cfg.scanner.enable_state_analysis {
+            let state_findings = state::run_state_analysis(
+                &cfg_graph,
+                entry,
+                caller_lang,
+                bytes,
+                &summaries,
+                global_summaries,
+            );
+            // Collect state finding lines to dedup overlapping CFG findings.
+            let state_lines: std::collections::HashSet<usize> = state_findings
+                .iter()
+                .map(|sf| byte_offset_to_point(&_tree, sf.span.0).row + 1)
+                .collect();
+
+            for sf in &state_findings {
+                let point = byte_offset_to_point(&_tree, sf.span.0);
+                out.push(Diag {
+                    path: path.to_string_lossy().into_owned(),
+                    line: point.row + 1,
+                    col: point.column + 1,
+                    severity: sf.severity,
+                    id: sf.rule_id.clone(),
+                    category: FindingCategory::Security,
+                    path_validated: false,
+                    guard_kind: None,
+                    message: Some(sf.message.clone()),
+                    labels: vec![],
+                    confidence: None,
+                    evidence: Some(Evidence {
+                        source: None,
+                        sink: Some(SpanEvidence {
+                            path: path.to_string_lossy().into_owned(),
+                            line: (point.row + 1) as u32,
+                            col: (point.column + 1) as u32,
+                            kind: "sink".into(),
+                            snippet: None,
+                        }),
+                        guards: vec![],
+                        sanitizers: vec![],
+                        state: Some(StateEvidence {
+                            machine: sf.machine.into(),
+                            subject: sf.subject.clone(),
+                            from_state: sf.from_state.into(),
+                            to_state: sf.to_state.into(),
+                        }),
+                        notes: vec![],
+                    }),
+                    rank_score: None,
+                    rank_reason: None,
+                    suppressed: false,
+                    suppression: None,
+                    rollup: None,
+                });
+            }
+
+            // Suppress cfg-resource-leak / cfg-auth-gap when state analysis
+            // already covers the same line (state analysis is more precise).
+            if !state_findings.is_empty() {
+                out.retain(|d| {
+                    !((d.id == "cfg-resource-leak" || d.id == "cfg-auth-gap")
+                        && state_lines.contains(&d.line))
+                });
+            }
         }
     }
 
@@ -285,7 +482,7 @@ pub fn run_rules_on_bytes(
         let mut cursor = QueryCursor::new();
 
         for cq in compiled.iter() {
-            if cfg.scanner.min_severity <= cq.meta.severity {
+            if cq.meta.severity > cfg.scanner.min_severity {
                 continue;
             }
             let mut matches = cursor.matches(&cq.query, root, bytes);
@@ -298,6 +495,31 @@ pub fn run_rules_on_bytes(
                         col: point.column + 1,
                         severity: cq.meta.severity,
                         id: cq.meta.id.to_owned(),
+                        category: cq.meta.category.finding_category(),
+                        path_validated: false,
+                        guard_kind: None,
+                        message: Some(cq.meta.description.to_owned()),
+                        labels: vec![],
+                        confidence: Some(cq.meta.confidence),
+                        evidence: Some(Evidence {
+                            source: None,
+                            sink: Some(SpanEvidence {
+                                path: path.to_string_lossy().into_owned(),
+                                line: (point.row + 1) as u32,
+                                col: (point.column + 1) as u32,
+                                kind: "sink".into(),
+                                snippet: None,
+                            }),
+                            guards: vec![],
+                            sanitizers: vec![],
+                            state: None,
+                            notes: vec![],
+                        }),
+                        rank_score: None,
+                        rank_reason: None,
+                        suppressed: false,
+                        suppression: None,
+                        rollup: None,
                     });
                 }
             }
@@ -427,8 +649,45 @@ pub fn analyse_file_fused(
             let source_byte = cfg_graph[finding.source].span.0;
             let source_point = byte_offset_to_point(&tree, source_byte);
 
+            let source_callee = cfg_graph[finding.source]
+                .callee
+                .as_deref()
+                .map(sanitize_desc)
+                .unwrap_or_else(|| "(unknown)".into());
+            let sink_callee = cfg_graph[finding.sink]
+                .callee
+                .as_deref()
+                .map(sanitize_desc)
+                .unwrap_or_else(|| "(unknown)".into());
+            let kind_label = source_kind_label(finding.source_kind);
+
+            let short_source = crate::fmt::shorten_callee(&source_callee);
+            let short_sink = crate::fmt::shorten_callee(&sink_callee);
+
+            let mut labels = vec![
+                (
+                    "Source".into(),
+                    format!(
+                        "{source_callee} ({}:{})",
+                        source_point.row + 1,
+                        source_point.column + 1
+                    ),
+                ),
+                ("Sink".into(), sink_callee.to_string()),
+            ];
+            if let Some(guard) = finding.guard_kind {
+                labels.push(("Path guard".into(), format!("{guard:?}")));
+            }
+
+            let fused_file_path = path.to_string_lossy().into_owned();
+            let mut fused_evidence_notes = Vec::new();
+            if finding.path_validated {
+                fused_evidence_notes.push("path_validated".into());
+            }
+            fused_evidence_notes.push(format!("source_kind:{:?}", finding.source_kind));
+
             out.push(Diag {
-                path: path.to_string_lossy().into_owned(),
+                path: fused_file_path.clone(),
                 line: sink_point.row + 1,
                 col: sink_point.column + 1,
                 severity: severity_for_source_kind(finding.source_kind),
@@ -437,6 +696,50 @@ pub fn analyse_file_fused(
                     source_point.row + 1,
                     source_point.column + 1
                 ),
+                category: FindingCategory::Security,
+                path_validated: finding.path_validated,
+                guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
+                message: Some(format!(
+                    "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
+                )),
+                labels,
+                confidence: None,
+                evidence: Some(Evidence {
+                    source: Some(SpanEvidence {
+                        path: fused_file_path.clone(),
+                        line: (source_point.row + 1) as u32,
+                        col: (source_point.column + 1) as u32,
+                        kind: "source".into(),
+                        snippet: Some(short_source.clone()),
+                    }),
+                    sink: Some(SpanEvidence {
+                        path: fused_file_path.clone(),
+                        line: (sink_point.row + 1) as u32,
+                        col: (sink_point.column + 1) as u32,
+                        kind: "sink".into(),
+                        snippet: Some(short_sink.clone()),
+                    }),
+                    guards: finding
+                        .guard_kind
+                        .map(|g| {
+                            vec![SpanEvidence {
+                                path: fused_file_path,
+                                line: (sink_point.row + 1) as u32,
+                                col: 0,
+                                kind: "guard".into(),
+                                snippet: Some(format!("{g:?}")),
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    sanitizers: vec![],
+                    state: None,
+                    notes: fused_evidence_notes,
+                }),
+                rank_score: None,
+                rank_reason: None,
+                suppressed: false,
+                suppression: None,
+                rollup: None,
             });
         }
 
@@ -455,13 +758,107 @@ pub fn analyse_file_fused(
         };
         for cf in cfg_analysis::run_all(&cfg_ctx) {
             let point = byte_offset_to_point(&tree, cf.span.0);
+            let fused_cfg_confidence = Some(match cf.confidence {
+                cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
+                cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
+                cfg_analysis::Confidence::Low => crate::evidence::Confidence::Low,
+            });
             out.push(Diag {
                 path: path.to_string_lossy().into_owned(),
                 line: point.row + 1,
                 col: point.column + 1,
                 severity: cf.severity,
                 id: cf.rule_id,
+                category: FindingCategory::Security,
+                path_validated: false,
+                guard_kind: None,
+                message: Some(cf.message),
+                labels: vec![],
+                confidence: fused_cfg_confidence,
+                evidence: Some(Evidence {
+                    source: None,
+                    sink: Some(SpanEvidence {
+                        path: path.to_string_lossy().into_owned(),
+                        line: (point.row + 1) as u32,
+                        col: (point.column + 1) as u32,
+                        kind: "sink".into(),
+                        snippet: None,
+                    }),
+                    guards: vec![],
+                    sanitizers: vec![],
+                    state: None,
+                    notes: vec![],
+                }),
+                rank_score: None,
+                rank_reason: None,
+                suppressed: false,
+                suppression: None,
+                rollup: None,
             });
+        }
+
+        // ── State-model dataflow analysis ────────────────────────────────
+        if cfg.scanner.enable_state_analysis {
+            let state_findings = state::run_state_analysis(
+                &cfg_graph,
+                entry,
+                caller_lang,
+                bytes,
+                &local_summaries,
+                global_summaries,
+            );
+            let state_lines: std::collections::HashSet<usize> = state_findings
+                .iter()
+                .map(|sf| byte_offset_to_point(&tree, sf.span.0).row + 1)
+                .collect();
+
+            for sf in &state_findings {
+                let point = byte_offset_to_point(&tree, sf.span.0);
+                out.push(Diag {
+                    path: path.to_string_lossy().into_owned(),
+                    line: point.row + 1,
+                    col: point.column + 1,
+                    severity: sf.severity,
+                    id: sf.rule_id.clone(),
+                    category: FindingCategory::Security,
+                    path_validated: false,
+                    guard_kind: None,
+                    message: Some(sf.message.clone()),
+                    labels: vec![],
+                    confidence: None,
+                    evidence: Some(Evidence {
+                        source: None,
+                        sink: Some(SpanEvidence {
+                            path: path.to_string_lossy().into_owned(),
+                            line: (point.row + 1) as u32,
+                            col: (point.column + 1) as u32,
+                            kind: "sink".into(),
+                            snippet: None,
+                        }),
+                        guards: vec![],
+                        sanitizers: vec![],
+                        state: Some(StateEvidence {
+                            machine: sf.machine.into(),
+                            subject: sf.subject.clone(),
+                            from_state: sf.from_state.into(),
+                            to_state: sf.to_state.into(),
+                        }),
+                        notes: vec![],
+                    }),
+                    rank_score: None,
+                    rank_reason: None,
+                    suppressed: false,
+                    suppression: None,
+                    rollup: None,
+                });
+            }
+
+            if !state_findings.is_empty() {
+                out.retain(|d| {
+                    !((d.id == "cfg-resource-leak" || d.id == "cfg-auth-gap")
+                        && state_lines.contains(&d.line))
+                });
+            }
         }
     }
 
@@ -472,7 +869,7 @@ pub fn analyse_file_fused(
         let mut cursor = QueryCursor::new();
 
         for cq in compiled.iter() {
-            if cfg.scanner.min_severity <= cq.meta.severity {
+            if cq.meta.severity > cfg.scanner.min_severity {
                 continue;
             }
             let mut matches = cursor.matches(&cq.query, root, bytes);
@@ -485,6 +882,31 @@ pub fn analyse_file_fused(
                         col: point.column + 1,
                         severity: cq.meta.severity,
                         id: cq.meta.id.to_owned(),
+                        category: cq.meta.category.finding_category(),
+                        path_validated: false,
+                        guard_kind: None,
+                        message: Some(cq.meta.description.to_owned()),
+                        labels: vec![],
+                        confidence: Some(cq.meta.confidence),
+                        evidence: Some(Evidence {
+                            source: None,
+                            sink: Some(SpanEvidence {
+                                path: path.to_string_lossy().into_owned(),
+                                line: (point.row + 1) as u32,
+                                col: (point.column + 1) as u32,
+                                kind: "sink".into(),
+                                snippet: None,
+                            }),
+                            guards: vec![],
+                            sanitizers: vec![],
+                            state: None,
+                            notes: vec![],
+                        }),
+                        rank_score: None,
+                        rank_reason: None,
+                        suppressed: false,
+                        suppression: None,
+                        rollup: None,
                     });
                 }
             }

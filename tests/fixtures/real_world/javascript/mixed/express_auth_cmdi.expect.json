@@ -1,0 +1,60 @@
+{
+  "description": "Express route with command injection: one without auth check, one with auth check. Taint flows in both cases since auth does not sanitize the input.",
+  "tags": [
+    "mixed",
+    "taint",
+    "cfg",
+    "cmdi",
+    "auth",
+    "express"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.branch flows into child_process.exec in unauthed /deploy route"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        21,
+        26
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.branch flows into child_process.exec in authed /deploy-safe route; auth check does not sanitize"
+    },
+    {
+      "rule_id": "cfg-auth-gap",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        8,
+        17
+      ],
+      "evidence_contains": [],
+      "notes": "No auth check before child_process.exec in /deploy handler"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        10,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "child_process.exec called without input validation guard"
+    }
+  ]
+}

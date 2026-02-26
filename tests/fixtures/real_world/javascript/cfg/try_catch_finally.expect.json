@@ -1,0 +1,25 @@
+{
+  "description": "Try-catch-finally resource handling. processFile properly closes fd in finally block. leakyProcess leaks fd when throw occurs before closeSync.",
+  "tags": [
+    "cfg",
+    "resource-leak",
+    "try-catch",
+    "fs"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        17,
+        25
+      ],
+      "evidence_contains": [],
+      "notes": "fd leaks when throw fires at line 22 before closeSync at line 24; scanner may not track fd lifecycle in JS"
+    }
+  ]
+}
