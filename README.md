@@ -111,20 +111,29 @@ $ nyx scan ./server --format json
 $ nyx scan --format sarif > results.sarif
 
 # Perform an ad-hoc scan without touching the index
-$ nyx scan --no-index
+$ nyx scan --index off
 
 # Restrict results to high-severity findings
-$ nyx scan --high-only
+$ nyx scan --severity HIGH
+
+# Filter by severity expression (high and medium)
+$ nyx scan --severity ">=MEDIUM"
 
 # AST pattern matching only (fastest, no CFG/taint)
-$ nyx scan --ast-only
+$ nyx scan --mode ast
 
 # CFG + taint analysis only (skip AST pattern rules)
-$ nyx scan --cfg-only
+$ nyx scan --mode cfg
+
+# CI gate: fail on medium+, SARIF output
+$ nyx scan --format sarif --fail-on MEDIUM > results.sarif
+
+# Suppress status messages (for CI/scripting)
+$ nyx scan --quiet --format json
 
 # Include test/vendor/benchmark paths at original severity
 # (by default these are downgraded one tier)
-$ nyx scan --include-nonprod
+$ nyx scan --keep-nonprod-severity
 ```
 
 ### Index Management
@@ -164,13 +173,14 @@ $ nyx config add-terminator --lang javascript --name process.exit
 
 ## Analysis Modes
 
-Nyx supports three analysis modes, selectable via the `scanner.mode` config option or CLI flags:
+Nyx supports four analysis modes, selectable via `--mode` or the `scanner.mode` config option:
 
 | Mode | CLI flag | What runs |
 |---|---|---|
-| **Full** (default) | — | AST pattern matching + CFG construction + taint analysis |
-| **AST-only** | `--ast-only` | AST pattern matching only; skips CFG and taint entirely |
-| **Taint-only** | `--cfg-only` | CFG + taint analysis only; filters out AST pattern findings |
+| **Full** (default) | `--mode full` | AST pattern matching + CFG construction + taint analysis |
+| **AST-only** | `--mode ast` | AST pattern matching only; skips CFG and taint entirely |
+| **CFG** | `--mode cfg` | CFG + taint analysis only; filters out AST pattern findings |
+| **Taint** | `--mode taint` | Alias for `cfg` (CFG + taint analysis) |
 
 ### What the CFG + taint engine detects
 
@@ -182,6 +192,11 @@ Nyx supports three analysis modes, selectable via the `scanner.mode` config opti
 | Unreachable security code | `cfg-unreachable-*` | Sanitizers, guards, or sinks in dead code branches |
 | Error fallthrough | `cfg-error-fallthrough` | Error-handling branches that don't terminate, allowing execution to fall through to dangerous operations |
 | Resource leak | `cfg-resource-leak` | Resources acquired but not released on all exit paths (malloc/free, fopen/fclose, Lock/Unlock) |
+| Use-after-close | `state-use-after-close` | Variable read/written after its resource handle was closed |
+| Double-close | `state-double-close` | Resource handle closed more than once |
+| Must-leak | `state-resource-leak` | Resource acquired but never closed on any exit path |
+| May-leak | `state-resource-leak-possible` | Resource open on some but not all exit paths |
+| Unauthenticated access | `state-unauthed-access` | Sensitive sink reached without a preceding auth/admin check |
 
 ### Attack Surface Ranking
 
@@ -306,15 +321,19 @@ With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged
 
 ## Roadmap
 
-### Phase 1 -- Deep Static Engine
+### Phase 1 -- Deep Static Engine (Complete)
 
 | Feature | Status | Description |
 |---|--------|---|
-| Interprocedural call graph | Done   | Precise symbol resolution via `FuncKey`, language-scoped namespaces, cross-module linking. Full call graph with SCC and topological analysis. |
-| Path-sensitive analysis | Done   | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Monotone predicate summaries with contradiction pruning. |
-| Dataflow & state modeling | Done   | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Generic `Transfer` trait over bounded lattices with guaranteed convergence. |
-| Monotone taint analysis | Done   | Replaced BFS taint engine with a forward worklist dataflow analysis over a finite `TaintState` lattice. Multi-origin tracking, dual validated-must/may sets, JS/TS two-level solve. Guaranteed termination via lattice finiteness. |
-| Attack surface ranking | Done   | Deterministic post-analysis scoring of findings by severity, analysis kind, evidence strength, source-kind exploitability, and validation state. Findings sorted by score before truncation so `max_results` keeps the most important results. |
+| Interprocedural call graph | Done | Precise symbol resolution via `FuncKey`, language-scoped namespaces, cross-module linking. Full call graph with SCC and topological analysis. |
+| Path-sensitive analysis | Done | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Monotone predicate summaries with contradiction pruning. |
+| Dataflow & state modeling | Done | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Generic `Transfer` trait over bounded lattices with guaranteed convergence. |
+| Monotone taint analysis | Done | Replaced BFS taint engine with a forward worklist dataflow analysis over a finite `TaintState` lattice. Multi-origin tracking, dual validated-must/may sets, JS/TS two-level solve. Guaranteed termination via lattice finiteness. |
+| Attack surface ranking | Done | Deterministic post-analysis scoring of findings by severity, analysis kind, evidence strength, source-kind exploitability, and validation state. Findings sorted by score before truncation so `max_results` keeps the most important results. |
+| Inline suppressions | Done | `nyx:ignore` and `nyx:ignore-next-line` comments with wildcard matching, all 10 languages supported. `--show-suppressed` flag for visibility. |
+| Low-noise prioritization | Done | Category filtering, rollup grouping for high-frequency rules, configurable LOW budgets. Quality-category findings hidden by default. |
+| Pattern-level confidence | Done | Explicit High/Medium/Low confidence on every AST pattern. Confidence flows into output alongside severity and rank score. |
+| AST pattern overhaul | Done | 30+ new patterns across all languages, 11 broken query fixes, namespaced IDs, severity recalibration. |
 
 ### Phase 2 -- Dynamic Capability
 

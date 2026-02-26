@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-02-25
+
 ### Added
 - **Low-noise prioritization system** — post-analysis pipeline that reduces noise from high-frequency LOW/Quality findings without hiding security signal. Three-stage process: category filtering, rollup grouping, and LOW budgets.
   - **`FindingCategory` enum** (`Security`, `Reliability`, `Quality`) — every `Diag` now carries a `category` field. AST pattern findings derive their category from `PatternCategory` metadata (`CodeQuality` → `Quality`, all others → `Security`). Taint, CFG, and state findings are always `Security`.

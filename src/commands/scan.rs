@@ -665,7 +665,10 @@ pub(crate) fn prioritize(
         let max = max as usize;
         if diags.len() > max {
             // Partition by severity priority: High first, then Medium, then Low
-            let high_count = diags.iter().filter(|d| d.severity == Severity::High).count();
+            let high_count = diags
+                .iter()
+                .filter(|d| d.severity == Severity::High)
+                .count();
             let med_count = diags
                 .iter()
                 .filter(|d| d.severity == Severity::Medium)
@@ -999,7 +1002,13 @@ mod prioritize_tests {
     use super::*;
     use crate::utils::config::OutputConfig;
 
-    fn make_diag(path: &str, line: usize, severity: Severity, id: &str, cat: FindingCategory) -> Diag {
+    fn make_diag(
+        path: &str,
+        line: usize,
+        severity: Severity,
+        id: &str,
+        cat: FindingCategory,
+    ) -> Diag {
         Diag {
             path: path.into(),
             line,
@@ -1028,8 +1037,20 @@ mod prioritize_tests {
     #[test]
     fn quality_dropped_by_default() {
         let mut diags = vec![
-            make_diag("a.rs", 1, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 2, Severity::High, "taint-flow", FindingCategory::Security),
+            make_diag(
+                "a.rs",
+                1,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                2,
+                Severity::High,
+                "taint-flow",
+                FindingCategory::Security,
+            ),
         ];
         let stats = prioritize(&mut diags, &default_config(), None);
         assert_eq!(diags.len(), 1);
@@ -1040,8 +1061,20 @@ mod prioritize_tests {
     #[test]
     fn quality_kept_with_include_quality() {
         let mut diags = vec![
-            make_diag("a.rs", 1, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 2, Severity::High, "taint-flow", FindingCategory::Security),
+            make_diag(
+                "a.rs",
+                1,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                2,
+                Severity::High,
+                "taint-flow",
+                FindingCategory::Security,
+            ),
         ];
         let mut cfg = default_config();
         cfg.include_quality = true;
@@ -1053,9 +1086,27 @@ mod prioritize_tests {
     #[test]
     fn show_all_disables_everything() {
         let mut diags = vec![
-            make_diag("a.rs", 1, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 2, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 3, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
+            make_diag(
+                "a.rs",
+                1,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                2,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                3,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
         ];
         let mut cfg = default_config();
         cfg.show_all = true;
@@ -1069,11 +1120,41 @@ mod prioritize_tests {
     #[test]
     fn rollup_groups_by_file_and_rule() {
         let mut diags = vec![
-            make_diag("a.rs", 10, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 20, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 30, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("b.rs", 5, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("b.rs", 15, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
+            make_diag(
+                "a.rs",
+                10,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                20,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                30,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "b.rs",
+                5,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "b.rs",
+                15,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
         ];
         let mut cfg = default_config();
         cfg.include_quality = true;
@@ -1093,7 +1174,15 @@ mod prioritize_tests {
     #[test]
     fn rollup_examples_limited() {
         let mut diags: Vec<Diag> = (1..=20)
-            .map(|i| make_diag("a.rs", i, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality))
+            .map(|i| {
+                make_diag(
+                    "a.rs",
+                    i,
+                    Severity::Low,
+                    "rs.quality.unwrap",
+                    FindingCategory::Quality,
+                )
+            })
             .collect();
         let mut cfg = default_config();
         cfg.include_quality = true;
@@ -1108,9 +1197,27 @@ mod prioritize_tests {
     #[test]
     fn rollup_canonical_is_first_sorted() {
         let mut diags = vec![
-            make_diag("a.rs", 50, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 10, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 30, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
+            make_diag(
+                "a.rs",
+                50,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                10,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                30,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
         ];
         let mut cfg = default_config();
         cfg.include_quality = true;
@@ -1123,9 +1230,27 @@ mod prioritize_tests {
     #[test]
     fn low_budget_per_file() {
         let mut diags = vec![
-            make_diag("a.rs", 1, Severity::Low, "some-rule", FindingCategory::Security),
-            make_diag("a.rs", 2, Severity::Low, "some-rule-2", FindingCategory::Security),
-            make_diag("b.rs", 1, Severity::Low, "some-rule", FindingCategory::Security),
+            make_diag(
+                "a.rs",
+                1,
+                Severity::Low,
+                "some-rule",
+                FindingCategory::Security,
+            ),
+            make_diag(
+                "a.rs",
+                2,
+                Severity::Low,
+                "some-rule-2",
+                FindingCategory::Security,
+            ),
+            make_diag(
+                "b.rs",
+                1,
+                Severity::Low,
+                "some-rule",
+                FindingCategory::Security,
+            ),
         ];
         let mut cfg = default_config();
         cfg.max_low_per_file = 1;
@@ -1140,9 +1265,27 @@ mod prioritize_tests {
     #[test]
     fn low_budget_per_rule() {
         let mut diags = vec![
-            make_diag("a.rs", 1, Severity::Low, "rule-x", FindingCategory::Security),
-            make_diag("b.rs", 1, Severity::Low, "rule-x", FindingCategory::Security),
-            make_diag("c.rs", 1, Severity::Low, "rule-x", FindingCategory::Security),
+            make_diag(
+                "a.rs",
+                1,
+                Severity::Low,
+                "rule-x",
+                FindingCategory::Security,
+            ),
+            make_diag(
+                "b.rs",
+                1,
+                Severity::Low,
+                "rule-x",
+                FindingCategory::Security,
+            ),
+            make_diag(
+                "c.rs",
+                1,
+                Severity::Low,
+                "rule-x",
+                FindingCategory::Security,
+            ),
         ];
         let mut cfg = default_config();
         cfg.max_low_per_file = 100;
@@ -1156,7 +1299,15 @@ mod prioritize_tests {
     #[test]
     fn low_budget_total() {
         let mut diags: Vec<Diag> = (1..=5)
-            .map(|i| make_diag(&format!("f{i}.rs"), 1, Severity::Low, &format!("rule-{i}"), FindingCategory::Security))
+            .map(|i| {
+                make_diag(
+                    &format!("f{i}.rs"),
+                    1,
+                    Severity::Low,
+                    &format!("rule-{i}"),
+                    FindingCategory::Security,
+                )
+            })
             .collect();
         let mut cfg = default_config();
         cfg.max_low_per_file = 100;
@@ -1170,9 +1321,27 @@ mod prioritize_tests {
     #[test]
     fn high_medium_never_dropped_by_low_budget() {
         let mut diags = vec![
-            make_diag("a.rs", 1, Severity::High, "vuln-1", FindingCategory::Security),
-            make_diag("a.rs", 2, Severity::Medium, "vuln-2", FindingCategory::Security),
-            make_diag("a.rs", 3, Severity::Low, "vuln-3", FindingCategory::Security),
+            make_diag(
+                "a.rs",
+                1,
+                Severity::High,
+                "vuln-1",
+                FindingCategory::Security,
+            ),
+            make_diag(
+                "a.rs",
+                2,
+                Severity::Medium,
+                "vuln-2",
+                FindingCategory::Security,
+            ),
+            make_diag(
+                "a.rs",
+                3,
+                Severity::Low,
+                "vuln-3",
+                FindingCategory::Security,
+            ),
         ];
         let mut cfg = default_config();
         cfg.max_low = 0;
@@ -1188,10 +1357,24 @@ mod prioritize_tests {
     fn rollup_counts_as_one_for_budget() {
         // 10 unwrap findings in same file → 1 rollup → counts as 1 LOW
         let mut diags: Vec<Diag> = (1..=10)
-            .map(|i| make_diag("a.rs", i, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality))
+            .map(|i| {
+                make_diag(
+                    "a.rs",
+                    i,
+                    Severity::Low,
+                    "rs.quality.unwrap",
+                    FindingCategory::Quality,
+                )
+            })
             .collect();
         // Add another LOW finding from a different rule
-        diags.push(make_diag("a.rs", 100, Severity::Low, "other-rule", FindingCategory::Security));
+        diags.push(make_diag(
+            "a.rs",
+            100,
+            Severity::Low,
+            "other-rule",
+            FindingCategory::Security,
+        ));
 
         let mut cfg = default_config();
         cfg.include_quality = true;
@@ -1207,10 +1390,34 @@ mod prioritize_tests {
     #[test]
     fn show_instances_bypasses_rollup_for_rule() {
         let mut diags = vec![
-            make_diag("a.rs", 1, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 2, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-            make_diag("a.rs", 3, Severity::Low, "rs.quality.expect", FindingCategory::Quality),
-            make_diag("a.rs", 4, Severity::Low, "rs.quality.expect", FindingCategory::Quality),
+            make_diag(
+                "a.rs",
+                1,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                2,
+                Severity::Low,
+                "rs.quality.unwrap",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                3,
+                Severity::Low,
+                "rs.quality.expect",
+                FindingCategory::Quality,
+            ),
+            make_diag(
+                "a.rs",
+                4,
+                Severity::Low,
+                "rs.quality.expect",
+                FindingCategory::Quality,
+            ),
         ];
         let mut cfg = default_config();
         cfg.include_quality = true;
@@ -1221,7 +1428,9 @@ mod prioritize_tests {
 
         // unwrap not rolled up (2 individual), expect rolled up (1 rollup)
         let unwrap_count = diags.iter().filter(|d| d.id == "rs.quality.unwrap").count();
-        let expect_rollup = diags.iter().find(|d| d.id == "rs.quality.expect" && d.rollup.is_some());
+        let expect_rollup = diags
+            .iter()
+            .find(|d| d.id == "rs.quality.expect" && d.rollup.is_some());
         assert_eq!(unwrap_count, 2);
         assert!(expect_rollup.is_some());
     }
@@ -1247,10 +1456,7 @@ mod prioritize_tests {
             suppression: None,
             rollup: Some(RollupData {
                 count: 38,
-                occurrences: vec![
-                    Location { line: 10, col: 1 },
-                    Location { line: 20, col: 5 },
-                ],
+                occurrences: vec![Location { line: 10, col: 1 }, Location { line: 20, col: 5 }],
             }),
         };
         let json = serde_json::to_string(&d).unwrap();
@@ -1263,10 +1469,34 @@ mod prioritize_tests {
     fn deterministic_output() {
         let make_diags = || {
             vec![
-                make_diag("b.rs", 5, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-                make_diag("a.rs", 10, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-                make_diag("a.rs", 3, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
-                make_diag("b.rs", 1, Severity::Low, "rs.quality.unwrap", FindingCategory::Quality),
+                make_diag(
+                    "b.rs",
+                    5,
+                    Severity::Low,
+                    "rs.quality.unwrap",
+                    FindingCategory::Quality,
+                ),
+                make_diag(
+                    "a.rs",
+                    10,
+                    Severity::Low,
+                    "rs.quality.unwrap",
+                    FindingCategory::Quality,
+                ),
+                make_diag(
+                    "a.rs",
+                    3,
+                    Severity::Low,
+                    "rs.quality.unwrap",
+                    FindingCategory::Quality,
+                ),
+                make_diag(
+                    "b.rs",
+                    1,
+                    Severity::Low,
+                    "rs.quality.unwrap",
+                    FindingCategory::Quality,
+                ),
             ]
         };
         let mut cfg = default_config();

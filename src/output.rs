@@ -145,19 +145,19 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
 
             // Build properties object
             let mut props = serde_json::Map::new();
-            props.insert(
-                "category".into(),
-                json!(d.category.to_string()),
-            );
+            props.insert("category".into(), json!(d.category.to_string()));
             if let Some(conf) = d.confidence {
                 props.insert("confidence".into(), json!(conf.to_string()));
             }
 
             // Add rollup data if present
             if let Some(ref rollup) = d.rollup {
-                props.insert("rollup".into(), json!({
-                    "count": rollup.count,
-                }));
+                props.insert(
+                    "rollup".into(),
+                    json!({
+                        "count": rollup.count,
+                    }),
+                );
 
                 // Add rollup occurrences as relatedLocations
                 let related: Vec<Value> = rollup

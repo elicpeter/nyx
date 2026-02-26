@@ -66,8 +66,7 @@ pub fn render_console(
         if total > 0 {
             out.push_str(&format!(
                 "{}\n",
-                style(format!("Suppressed {total} LOW/Quality findings."))
-                    .dim()
+                style(format!("Suppressed {total} LOW/Quality findings.")).dim()
             ));
             out.push_str(&format!("{}\n", style("Active filters:").dim()));
             if !stats.include_quality {
@@ -849,7 +848,9 @@ mod tests {
         // No standalone Confidence line
         let non_header_lines: Vec<&str> = stripped.lines().skip(1).collect();
         assert!(
-            !non_header_lines.iter().any(|l| l.trim().starts_with("Confidence:")),
+            !non_header_lines
+                .iter()
+                .any(|l| l.trim().starts_with("Confidence:")),
             "should not have standalone Confidence line"
         );
     }

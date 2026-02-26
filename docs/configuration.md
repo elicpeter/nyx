@@ -47,7 +47,7 @@ excluded_extensions = ["foo", "jpg"]
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mode` | `"full"` \| `"ast"` \| `"cfg"` | `"full"` | Analysis mode |
+| `mode` | `"full"` \| `"ast"` \| `"cfg"` \| `"taint"` | `"full"` | Analysis mode |
 | `min_severity` | `"Low"` \| `"Medium"` \| `"High"` | `"Low"` | Minimum severity to report |
 | `max_file_size_mb` | int \| null | null | Max file size in MiB; null = unlimited |
 | `excluded_extensions` | [string] | `["jpg", "png", "gif", "mp4", ...]` | File extensions to skip |

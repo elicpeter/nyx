@@ -7,16 +7,12 @@ Nyx supports three output formats, selected with `--format` or `output.default_f
 Human-readable, color-coded output to stdout. Status messages go to stderr.
 
 ```
-[HIGH]   taint-unsanitised-flow (source 5:11)  src/handler.rs:12:5
-         Source: env::var("CMD") at 5:11
-         Sink: Command::new("sh").arg("-c")
-         Score: 76
+[HIGH]   taint-unsanitised-flow (source 5:11)  src/handler.rs:12:5 (Score: 76, Confidence: High)
+         Source: env::var("CMD") → Command::new("sh").arg("-c")
 
-[MEDIUM] cfg-unguarded-sink                    src/handler.rs:12:5
-         Score: 35
+[MEDIUM] cfg-unguarded-sink                    src/handler.rs:12:5 (Score: 35, Confidence: Medium)
 
-[LOW]    rs.quality.unwrap                     src/lib.rs:88:5
-         Score: 10
+[LOW]    rs.quality.unwrap                     src/lib.rs:88:5 (Score: 10, Confidence: High)
 ```
 
 ### Severity indicators
@@ -25,7 +21,7 @@ Human-readable, color-coded output to stdout. Status messages go to stderr.
 |-----|-------|---------|
 | `[HIGH]` | Red, bold | Critical — likely exploitable |
 | `[MEDIUM]` | Orange, bold | Important — may be exploitable |
-| `[LOW]` | Dim green | Informational — code quality or weak signal |
+| `[LOW]` | Muted blue-gray | Informational — code quality or weak signal |
 
 ### Evidence fields
 
