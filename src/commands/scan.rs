@@ -60,15 +60,27 @@ pub struct Diag {
     /// Breakdown of how the ranking score was computed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rank_reason: Option<Vec<(String, String)>>,
+    /// Whether this finding was suppressed by an inline `nyx:ignore` directive.
+    #[serde(skip_serializing_if = "is_false")]
+    pub suppressed: bool,
+    /// Metadata about the suppression directive, if suppressed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppression: Option<crate::suppress::SuppressionMeta>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Entry point called by the CLI.
+#[allow(clippy::too_many_arguments)]
 pub fn handle(
     path: &str,
     index_mode: IndexMode,
     format: OutputFormat,
     severity_filter: Option<SeverityFilter>,
     fail_on: Option<Severity>,
+    show_suppressed: bool,
     database_dir: &Path,
     config: &Config,
 ) -> NyxResult<()> {
@@ -117,6 +129,18 @@ pub fn handle(
         diags.retain(|d| filter.matches(d.severity));
     }
 
+    // ── Apply minimum-score filter AFTER ranking ─────────────────────
+    if let Some(min) = config.output.min_score {
+        let threshold = f64::from(min);
+        diags.retain(|d| d.rank_score.unwrap_or(0.0) >= threshold);
+    }
+
+    // ── Apply inline suppressions ───────────────────────────────────
+    apply_suppressions(&mut diags);
+    if !show_suppressed {
+        diags.retain(|d| !d.suppressed);
+    }
+
     tracing::debug!("Emitting {:?} issues (post-filter).", diags.len());
 
     // ── Output ──────────────────────────────────────────────────────────
@@ -139,8 +163,9 @@ pub fn handle(
     }
 
     // ── --fail-on: exit non-zero if threshold breached ──────────────────
+    // Suppressed findings do not count toward the threshold.
     if let Some(threshold) = fail_on {
-        let breached = diags.iter().any(|d| d.severity <= threshold);
+        let breached = diags.iter().any(|d| !d.suppressed && d.severity <= threshold);
         if breached {
             std::process::exit(1);
         }
@@ -513,6 +538,42 @@ pub fn scan_with_index_parallel(
     Ok(diags)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Inline suppression application
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Apply inline `nyx:ignore` / `nyx:ignore-next-line` suppressions to `diags`.
+///
+/// For each unique file path in the diagnostics, the source file is read once,
+/// suppression directives are parsed, and matching findings are marked as
+/// suppressed.
+fn apply_suppressions(diags: &mut [Diag]) {
+    use std::collections::HashMap;
+
+    // Group diag indices by path (clone path strings to avoid borrowing diags).
+    let mut by_path: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, d) in diags.iter().enumerate() {
+        by_path.entry(d.path.clone()).or_default().push(i);
+    }
+
+    for (path, indices) in &by_path {
+        let Ok(source) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let file_path = Path::new(path.as_str());
+        let index = crate::suppress::parse_inline_suppressions(file_path, &source);
+        if index.is_empty() {
+            continue;
+        }
+        for &i in indices {
+            if let Some(meta) = index.check(diags[i].line, &diags[i].id) {
+                diags[i].suppressed = true;
+                diags[i].suppression = Some(meta);
+            }
+        }
+    }
+}
+
 #[test]
 fn scan_with_index_parallel_uses_existing_index_without_rescanning() {
     let mut cfg = Config::default();
@@ -563,6 +624,8 @@ fn severity_filter_applied_at_output_stage() {
             evidence: vec![],
             rank_score: None,
             rank_reason: None,
+            suppressed: false,
+            suppression: None,
         },
         Diag {
             path: "src/main.rs".into(),
@@ -576,6 +639,8 @@ fn severity_filter_applied_at_output_stage() {
             evidence: vec![],
             rank_score: None,
             rank_reason: None,
+            suppressed: false,
+            suppression: None,
         },
     ];
 

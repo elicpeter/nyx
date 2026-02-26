@@ -278,6 +278,8 @@ pub mod index {
                     evidence: vec![],
                     rank_score: None,
                     rank_reason: None,
+                    suppressed: false,
+                    suppression: None,
                 })
             })?;
 

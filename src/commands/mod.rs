@@ -28,6 +28,8 @@ pub fn handle_command(
             quiet,
             fail_on,
             no_rank,
+            show_suppressed,
+            min_score,
             // Deprecated aliases
             no_index,
             rebuild_index,
@@ -97,12 +99,18 @@ pub fn handle_command(
                 config.output.attack_surface_ranking = false;
             }
 
+            // Min-score: CLI wins, then config
+            if let Some(s) = min_score {
+                config.output.min_score = Some(s);
+            }
+
             scan::handle(
                 &path,
                 effective_index,
                 format,
                 severity_filter,
                 fail_on_sev,
+                show_suppressed,
                 database_dir,
                 config,
             )?;

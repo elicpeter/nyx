@@ -116,6 +116,18 @@ pub enum Commands {
         #[arg(long)]
         no_rank: bool,
 
+        /// Show inline-suppressed findings (dimmed, tagged [SUPPRESSED])
+        #[arg(long)]
+        show_suppressed: bool,
+
+        /// Minimum attack-surface score to include in output
+        ///
+        /// Findings with a rank score below this threshold are suppressed.
+        /// Requires ranking to be enabled (has no effect with --no-rank).
+        /// Example: --min-score 50
+        #[arg(long)]
+        min_score: Option<u32>,
+
         // ── Deprecated aliases (hidden) ─────────────────────────────────
         /// Deprecated: use --index off
         #[arg(long, hide = true)]

@@ -298,6 +298,8 @@ pub fn run_rules_on_bytes(
                 evidence,
                 rank_score: None,
                 rank_reason: None,
+                suppressed: false,
+                suppression: None,
             });
         }
 
@@ -329,6 +331,8 @@ pub fn run_rules_on_bytes(
                 evidence: vec![],
                 rank_score: None,
                 rank_reason: None,
+                suppressed: false,
+                suppression: None,
             });
         }
 
@@ -362,6 +366,8 @@ pub fn run_rules_on_bytes(
                     evidence: vec![],
                     rank_score: None,
                     rank_reason: None,
+                    suppressed: false,
+                    suppression: None,
                 });
             }
 
@@ -402,6 +408,8 @@ pub fn run_rules_on_bytes(
                         evidence: vec![],
                         rank_score: None,
                         rank_reason: None,
+                        suppressed: false,
+                        suppression: None,
                     });
                 }
             }
@@ -572,6 +580,8 @@ pub fn analyse_file_fused(
                 evidence,
                 rank_score: None,
                 rank_reason: None,
+                suppressed: false,
+                suppression: None,
             });
         }
 
@@ -602,6 +612,8 @@ pub fn analyse_file_fused(
                 evidence: vec![],
                 rank_score: None,
                 rank_reason: None,
+                suppressed: false,
+                suppression: None,
             });
         }
 
@@ -634,6 +646,8 @@ pub fn analyse_file_fused(
                     evidence: vec![],
                     rank_score: None,
                     rank_reason: None,
+                    suppressed: false,
+                    suppression: None,
                 });
             }
 
@@ -672,6 +686,8 @@ pub fn analyse_file_fused(
                         evidence: vec![],
                         rank_score: None,
                         rank_reason: None,
+                        suppressed: false,
+                        suppression: None,
                     });
                 }
             }

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Inline per-finding suppressions** — suppress specific findings directly in source code using `nyx:ignore` comments. Two directive forms: `nyx:ignore <RULE_ID>` (same line) and `nyx:ignore-next-line <RULE_ID>` (next line). Supports comma-separated IDs, wildcard suffixes (`rs.quality.*`), and automatic canonicalization of taint rule IDs (parenthetical suffixes stripped). Comment detection covers all 10 languages with string/raw-string/template-literal guards to avoid false positives.
+  - **`--show-suppressed` CLI flag** — reveal suppressed findings in output, dimmed with `[SUPPRESSED]` tag. Summary shows `"N issues (M suppressed)"`. In JSON/SARIF mode, suppressed findings include `"suppressed": true` and `"suppression": {...}` metadata fields.
+  - **`suppressed` and `suppression` fields on `Diag`** — conditionally serialized; JSON output is unchanged when no suppressions are active.
+  - Suppressed findings are excluded from `--fail-on` exit-code checks and severity counts.
+  - New module `src/suppress/mod.rs` with 22 unit tests covering all comment styles, string guards, wildcard matching, canonicalization, CRLF, and edge cases.
+- **`--min-score <N>` CLI flag and `output.min_score` config option** — filter out findings whose attack-surface rank score falls below the given threshold. Applied after ranking and severity filtering, before `max_results` truncation. Has no effect when `--no-rank` is used. CLI value overrides config.
 - **Attack surface ranking** — deterministic post-analysis scoring layer that prioritizes findings by exploitability. Each `Diag` receives an `f64` score computed from five components: severity base (High=60, Medium=30, Low=10), analysis kind bonus (taint +10 > state +8 > cfg +3/5 > ast 0), evidence strength (+1 per item, +2–6 for source-kind priority), state rule type bonus (+1–6), and a path-validation penalty (−5 for guarded paths). Findings are sorted by descending score before truncation so `max_results` keeps the most important results. Tie-breaking is deterministic by severity, rule ID, file path, line, column, and message hash.
   - **`rank_score` and `rank_reason` fields on `Diag`** — optional fields with `#[serde(skip_serializing_if = "Option::is_none")]`; JSON output is unchanged when ranking is disabled.
   - **`--no-rank` CLI flag** — disables attack-surface ranking (enabled by default).

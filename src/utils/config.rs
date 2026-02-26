@@ -143,6 +143,11 @@ pub struct OutputConfig {
 
     /// Enable attack-surface ranking to sort findings by exploitability.
     pub attack_surface_ranking: bool,
+
+    /// Minimum attack-surface score to include in output.
+    /// Findings below this threshold are dropped after ranking.
+    /// `None` means no minimum (all findings shown).
+    pub min_score: Option<u32>,
 }
 
 impl Default for OutputConfig {
@@ -152,6 +157,7 @@ impl Default for OutputConfig {
             quiet: false,
             max_results: None,
             attack_surface_ranking: true,
+            min_score: None,
         }
     }
 }
@@ -339,6 +345,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.output.quiet = user.output.quiet;
     default.output.max_results = user.output.max_results;
     default.output.attack_surface_ranking = user.output.attack_surface_ranking;
+    default.output.min_score = user.output.min_score;
 
     // --- PerformanceConfig ---
     default.performance.max_depth = user.performance.max_depth;

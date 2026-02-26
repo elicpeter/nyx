@@ -55,6 +55,7 @@ pub mod patterns;
 pub mod rank;
 pub mod state;
 pub mod summary;
+pub mod suppress;
 pub mod symbol;
 pub mod taint;
 pub mod utils;

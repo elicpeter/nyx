@@ -152,6 +152,64 @@ Use `--keep-nonprod-severity` to disable this behavior.
 
 ---
 
+## Inline Suppressions
+
+Suppress specific findings directly in source code using `nyx:ignore` comments. Suppressed findings are excluded from output, severity counts, and `--fail-on` checks by default.
+
+### Comment syntax
+
+| Language | Comment styles |
+|----------|---------------|
+| Rust, C, C++, Java, Go, JS, TS | `// nyx:ignore ...` or `/* nyx:ignore ... */` |
+| Python, Ruby | `# nyx:ignore ...` |
+| PHP | `// nyx:ignore ...`, `# nyx:ignore ...`, or `/* nyx:ignore ... */` |
+
+### Directive forms
+
+```python
+x = dangerous()  # nyx:ignore taint-unsanitised-flow     ← suppresses this line
+# nyx:ignore-next-line taint-unsanitised-flow
+x = dangerous()                                           ← suppresses this line
+```
+
+- `nyx:ignore <RULE_ID>` — suppresses findings on the **same line** as the comment.
+- `nyx:ignore-next-line <RULE_ID>` — suppresses findings on the **next line**.
+- For taint findings, the primary line is the **sink line** (the `line` field in output).
+
+### Rule ID matching
+
+- **Case-sensitive**, exact match after canonicalization.
+- Comma-separated: `nyx:ignore rule-a, rule-b`
+- Wildcard suffix: `nyx:ignore rs.quality.*` matches any ID starting with `rs.quality.`
+- Taint IDs are canonicalized: `nyx:ignore taint-unsanitised-flow` matches `taint-unsanitised-flow (source 5:1)` (parenthetical suffix stripped).
+
+### Console behavior
+
+- **Default**: suppressed findings are hidden entirely.
+- **`--show-suppressed`**: suppressed findings appear dimmed with `[SUPPRESSED]` tag. Summary shows `"N issues (M suppressed)"`.
+
+### JSON / SARIF behavior
+
+- **Default**: suppressed findings are excluded from JSON/SARIF output.
+- **`--show-suppressed`**: suppressed findings are included with additional fields:
+
+```json
+{
+  "suppressed": true,
+  "suppression": {
+    "kind": "SameLine",
+    "matched_pattern": "taint-unsanitised-flow",
+    "directive_line": 42
+  }
+}
+```
+
+### Exit code
+
+Suppressed findings do **not** trigger `--fail-on`. A scan with only suppressed findings exits `0`.
+
+---
+
 ## Rule ID Format
 
 | Prefix | Detector | Example |

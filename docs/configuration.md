@@ -76,6 +76,7 @@ excluded_extensions = ["foo", "jpg"]
 | `quiet` | bool | `false` | Suppress status messages |
 | `max_results` | int \| null | null | Cap number of findings; null = unlimited |
 | `attack_surface_ranking` | bool | `true` | Enable attack-surface ranking |
+| `min_score` | int \| null | null | Minimum rank score to include; null = no minimum |
 
 ### `[performance]`
 

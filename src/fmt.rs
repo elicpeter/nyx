@@ -34,13 +34,27 @@ pub fn render_console(diags: &[Diag], project_name: &str) -> String {
         }
     }
 
-    out.push_str(&format!(
-        "{} '{}' generated {} {}.\n\n",
-        style("warning").yellow().bold(),
-        style(project_name).white().bold(),
-        style(diags.len()).bold(),
-        if diags.len() == 1 { "issue" } else { "issues" },
-    ));
+    let suppressed_count = diags.iter().filter(|d| d.suppressed).count();
+    let active_count = diags.len() - suppressed_count;
+
+    if suppressed_count > 0 {
+        out.push_str(&format!(
+            "{} '{}' generated {} {} ({} suppressed).\n\n",
+            style("warning").yellow().bold(),
+            style(project_name).white().bold(),
+            style(active_count).bold(),
+            if active_count == 1 { "issue" } else { "issues" },
+            suppressed_count,
+        ));
+    } else {
+        out.push_str(&format!(
+            "{} '{}' generated {} {}.\n\n",
+            style("warning").yellow().bold(),
+            style(project_name).white().bold(),
+            style(diags.len()).bold(),
+            if diags.len() == 1 { "issue" } else { "issues" },
+        ));
+    }
 
     out
 }
@@ -118,7 +132,15 @@ fn render_diag(d: &Diag, width: usize) -> String {
     // ── Header line ──────────────────────────────────────────────────────
     // Format: `  98:5  ⚠ [MEDIUM] taint-unsanitised-flow (source 41:5)  Score: 87`
     let loc = format!("{}:{}", d.line, d.col);
-    let sev = severity_tag(d.severity);
+    let sev = if d.suppressed {
+        format!(
+            "{} {}",
+            style("○").dim(),
+            style("[SUPPRESSED]").dim(),
+        )
+    } else {
+        severity_tag(d.severity)
+    };
     let score_suffix = match d.rank_score {
         Some(s) => format!("  {}", style(format!("Score: {}", s as u32)).dim()),
         None => String::new(),
@@ -483,6 +505,8 @@ mod tests {
                 evidence: vec![],
                 rank_score: None,
                 rank_reason: None,
+                suppressed: false,
+                suppression: None,
             },
             Diag {
                 path: "src/b.rs".into(),
@@ -496,6 +520,8 @@ mod tests {
                 evidence: vec![],
                 rank_score: None,
                 rank_reason: None,
+                suppressed: false,
+                suppression: None,
             },
         ];
         let output = render_console(&diags, "test-project");
@@ -523,6 +549,8 @@ mod tests {
             ],
             rank_score: None,
             rank_reason: None,
+            suppressed: false,
+            suppression: None,
         }];
         let output = render_console(&diags, "proj");
         let stripped = strip_ansi(&output);
@@ -547,6 +575,8 @@ mod tests {
                 evidence: vec![],
                 rank_score: None,
                 rank_reason: None,
+                suppressed: false,
+                suppression: None,
             },
             Diag {
                 path: "src/a.rs".into(),
@@ -560,6 +590,8 @@ mod tests {
                 evidence: vec![],
                 rank_score: None,
                 rank_reason: None,
+                suppressed: false,
+                suppression: None,
             },
         ];
         let output = render_console(&diags, "proj");
@@ -582,6 +614,8 @@ mod tests {
             evidence: vec![],
             rank_score: None,
             rank_reason: None,
+            suppressed: false,
+            suppression: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -604,6 +638,8 @@ mod tests {
             evidence: vec![],
             rank_score: None,
             rank_reason: None,
+            suppressed: false,
+            suppression: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(!json.contains("rank_score"), "rank_score should be omitted when None");
@@ -624,6 +660,8 @@ mod tests {
             evidence: vec![],
             rank_score: Some(120.0),
             rank_reason: None,
+            suppressed: false,
+            suppression: None,
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("rank_score"), "rank_score should be present when set");

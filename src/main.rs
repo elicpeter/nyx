@@ -14,6 +14,7 @@ mod patterns;
 mod rank;
 mod state;
 mod summary;
+mod suppress;
 mod symbol;
 mod taint;
 mod utils;
