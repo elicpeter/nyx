@@ -28,12 +28,18 @@ static RESOURCE_USE_PATTERNS: &[&str] = &[
     "fflush", "fseek", "ftell", "rewind", "feof", "ferror", "fgetc", "fputc", "getc", "putc",
     "ungetc", "query", "execute", "fetch", "sendto", "recvfrom", "ioctl", "fcntl",
     // Memory access functions (for malloc/free use-after-free detection)
-    "strcpy", "strncpy", "strcat", "strncat", "memcpy", "memmove", "memset", "memcmp",
-    "strcmp", "strncmp", "strlen", "sprintf", "snprintf",
+    "strcpy", "strncpy", "strcat", "strncat", "memcpy", "memmove", "memset", "memcmp", "strcmp",
+    "strncmp", "strlen", "sprintf", "snprintf",
 ];
 
 /// Auth-call matchers for admin-level privilege.
-static ADMIN_PATTERNS: &[&str] = &["is_admin", "hasrole", "has_role", "check_admin", "require_admin"];
+static ADMIN_PATTERNS: &[&str] = &[
+    "is_admin",
+    "hasrole",
+    "has_role",
+    "check_admin",
+    "require_admin",
+];
 
 pub struct DefaultTransfer<'a> {
     pub lang: Lang,
@@ -156,9 +162,7 @@ impl DefaultTransfer<'_> {
                 .any(|m| callee_matches(&callee, &m.to_ascii_lowercase()))
         });
         if is_auth {
-            let is_admin = ADMIN_PATTERNS
-                .iter()
-                .any(|p| callee_matches(&callee, p));
+            let is_admin = ADMIN_PATTERNS.iter().any(|p| callee_matches(&callee, p));
             let new_level = if is_admin {
                 AuthLevel::Admin
             } else {
@@ -179,12 +183,7 @@ impl DefaultTransfer<'_> {
         }
     }
 
-    fn apply_if(
-        &self,
-        info: &NodeInfo,
-        edge: Option<EdgeKind>,
-        state: &mut ProductState,
-    ) {
+    fn apply_if(&self, info: &NodeInfo, edge: Option<EdgeKind>, state: &mut ProductState) {
         // On the True edge of an If node whose condition is an auth check,
         // refine auth level.
         let is_true_edge = matches!(edge, Some(EdgeKind::True));
@@ -225,12 +224,7 @@ impl DefaultTransfer<'_> {
         }
     }
 
-    fn apply_assignment(
-        &self,
-        _node_idx: NodeIndex,
-        info: &NodeInfo,
-        state: &mut ProductState,
-    ) {
+    fn apply_assignment(&self, _node_idx: NodeIndex, info: &NodeInfo, state: &mut ProductState) {
         // Ownership transfer: if `defines` reassigns a tracked resource
         // variable from a `uses` variable, transfer the lifecycle.
         if let Some(ref def) = info.defines

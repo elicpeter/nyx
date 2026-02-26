@@ -6,6 +6,7 @@
 //! exploitable / important results.
 
 use crate::commands::scan::Diag;
+use crate::evidence::Evidence;
 use crate::patterns::Severity;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -41,7 +42,7 @@ pub fn compute_attack_rank(diag: &Diag) -> AttackRank {
     // (resource lifecycle / auth) are next.  CFG-structural findings
     // without taint evidence rank lower.  AST-only pattern matches are
     // the weakest.
-    let kind_bonus = analysis_kind_bonus(&diag.id, &diag.evidence);
+    let kind_bonus = analysis_kind_bonus(&diag.id, diag.evidence.as_ref());
     score += kind_bonus;
     if kind_bonus != 0.0 {
         components.push(("analysis_kind".into(), format!("{kind_bonus}")));
@@ -68,7 +69,10 @@ pub fn compute_attack_rank(diag: &Diag) -> AttackRank {
     // guard may prevent the vulnerability from being triggered.  Apply a
     // small penalty (–5) to push validated paths below otherwise-equal
     // unvalidated ones without changing the overall ranking tier.
-    if diag.path_validated {
+    let path_validated = diag.evidence.as_ref().map_or(diag.path_validated, |ev| {
+        ev.notes.iter().any(|n| n == "path_validated")
+    });
+    if path_validated {
         score -= 5.0;
         components.push(("path_validated_penalty".into(), "-5".into()));
     }
@@ -94,7 +98,14 @@ pub fn sort_key(diag: &Diag) -> impl Ord {
         diag.message.hash(&mut h);
         h.finish()
     };
-    (sev_ord, diag.id.clone(), diag.path.clone(), diag.line, diag.col, msg_hash)
+    (
+        sev_ord,
+        diag.id.clone(),
+        diag.path.clone(),
+        diag.line,
+        diag.col,
+        msg_hash,
+    )
 }
 
 /// Sort diagnostics in-place by descending attack-surface score, then by
@@ -124,7 +135,7 @@ pub fn rank_diags(diags: &mut [Diag]) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Bonus based on analysis kind inferred from rule ID + evidence.
-fn analysis_kind_bonus(rule_id: &str, evidence: &[(String, String)]) -> f64 {
+fn analysis_kind_bonus(rule_id: &str, evidence: Option<&Evidence>) -> f64 {
     if rule_id.starts_with("taint-") {
         // Taint-confirmed flow is the strongest signal
         10.0
@@ -133,7 +144,7 @@ fn analysis_kind_bonus(rule_id: &str, evidence: &[(String, String)]) -> f64 {
         8.0
     } else if rule_id.starts_with("cfg-") {
         // CFG-structural findings: boost if evidence exists
-        if !evidence.is_empty() {
+        if evidence.is_some_and(|e| !e.is_empty()) {
             5.0
         } else {
             3.0
@@ -149,13 +160,27 @@ fn analysis_kind_bonus(rule_id: &str, evidence: &[(String, String)]) -> f64 {
 fn evidence_strength(diag: &Diag) -> f64 {
     let mut bonus = 0.0;
 
-    // More evidence items → slightly higher confidence
-    bonus += (diag.evidence.len() as f64).min(4.0) * 1.0;
+    if let Some(ev) = &diag.evidence {
+        // Count structured evidence items (capped at 4)
+        let item_count = ev.source.is_some() as usize
+            + ev.sink.is_some() as usize
+            + (ev.guards.len() + ev.sanitizers.len()).min(2);
+        bonus += item_count.min(4) as f64;
 
-    // Source-kind priority (parsed from evidence labels)
-    for (label, value) in &diag.evidence {
-        if label == "Source" {
-            bonus += source_kind_priority(value);
+        // Source-kind priority from evidence notes
+        for note in &ev.notes {
+            if let Some(kind) = note.strip_prefix("source_kind:") {
+                bonus += source_kind_priority(kind);
+                break;
+            }
+        }
+    } else {
+        // Fallback for DB-cached diags without structured evidence
+        bonus += (diag.labels.len() as f64).min(4.0);
+        for (label, value) in &diag.labels {
+            if label == "Source" {
+                bonus += source_kind_priority(value);
+            }
         }
     }
 
@@ -168,6 +193,17 @@ fn evidence_strength(diag: &Diag) -> f64 {
 /// FileSystem / Database are lower because the attacker needs a more
 /// indirect vector.
 fn source_kind_priority(source_value: &str) -> f64 {
+    // Structured SourceKind enum values (from evidence.notes "source_kind:X")
+    match source_value {
+        "UserInput" => return 6.0,
+        "EnvironmentConfig" => return 5.0,
+        "FileSystem" => return 3.0,
+        "Database" => return 2.0,
+        "Unknown" => return 4.0,
+        _ => {}
+    }
+
+    // Fallback: substring matching for legacy labels
     let lower = source_value.to_ascii_lowercase();
     if lower.contains("stdin")
         || lower.contains("argv")
@@ -202,8 +238,8 @@ fn state_finding_bonus(rule_id: &str) -> f64 {
         "state-use-after-close" => 6.0,
         "state-unauthed-access" => 6.0,
         "state-double-close" => 3.0,
-        "state-resource-leak" => 2.0,           // must-leak
-        "state-resource-leak-possible" => 1.0,  // may-leak
+        "state-resource-leak" => 2.0,          // must-leak
+        "state-resource-leak-possible" => 1.0, // may-leak
         _ => 0.0,
     }
 }
@@ -221,7 +257,7 @@ mod tests {
         id: &str,
         path: &str,
         line: usize,
-        evidence: Vec<(String, String)>,
+        labels: Vec<(String, String)>,
         path_validated: bool,
     ) -> Diag {
         Diag {
@@ -233,7 +269,9 @@ mod tests {
             path_validated,
             guard_kind: None,
             message: None,
-            evidence,
+            labels,
+            confidence: None,
+            evidence: None,
             rank_score: None,
             rank_reason: None,
             suppressed: false,
@@ -335,9 +373,22 @@ mod tests {
 
     #[test]
     fn determinism_input_order_independent() {
-        let d1 = make_diag(Severity::High, "taint-unsanitised-flow (source 1:1)", "a.rs", 1,
-            vec![("Source".into(), "stdin at 1:1".into())], false);
-        let d2 = make_diag(Severity::Medium, "cfg-unguarded-sink", "b.rs", 2, vec![], false);
+        let d1 = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "a.rs",
+            1,
+            vec![("Source".into(), "stdin at 1:1".into())],
+            false,
+        );
+        let d2 = make_diag(
+            Severity::Medium,
+            "cfg-unguarded-sink",
+            "b.rs",
+            2,
+            vec![],
+            false,
+        );
         let d3 = make_diag(Severity::Low, "rs.code_exec.eval", "c.rs", 3, vec![], false);
 
         let mut order_a = vec![d1.clone(), d2.clone(), d3.clone()];
@@ -348,7 +399,10 @@ mod tests {
 
         let ids_a: Vec<_> = order_a.iter().map(|d| (&d.id, d.line)).collect();
         let ids_b: Vec<_> = order_b.iter().map(|d| (&d.id, d.line)).collect();
-        assert_eq!(ids_a, ids_b, "ranking must be deterministic regardless of input order");
+        assert_eq!(
+            ids_a, ids_b,
+            "ranking must be deterministic regardless of input order"
+        );
     }
 
     #[test]
@@ -380,8 +434,22 @@ mod tests {
 
     #[test]
     fn state_use_after_close_ranks_above_may_leak() {
-        let uac = make_diag(Severity::High, "state-use-after-close", "x.rs", 1, vec![], false);
-        let may = make_diag(Severity::Low, "state-resource-leak-possible", "x.rs", 2, vec![], false);
+        let uac = make_diag(
+            Severity::High,
+            "state-use-after-close",
+            "x.rs",
+            1,
+            vec![],
+            false,
+        );
+        let may = make_diag(
+            Severity::Low,
+            "state-resource-leak-possible",
+            "x.rs",
+            2,
+            vec![],
+            false,
+        );
 
         let score_uac = compute_attack_rank(&uac).score;
         let score_may = compute_attack_rank(&may).score;
@@ -390,8 +458,22 @@ mod tests {
 
     #[test]
     fn unauthed_access_ranks_above_resource_leak() {
-        let unauth = make_diag(Severity::High, "state-unauthed-access", "x.rs", 1, vec![], false);
-        let leak = make_diag(Severity::Medium, "state-resource-leak", "x.rs", 2, vec![], false);
+        let unauth = make_diag(
+            Severity::High,
+            "state-unauthed-access",
+            "x.rs",
+            1,
+            vec![],
+            false,
+        );
+        let leak = make_diag(
+            Severity::Medium,
+            "state-resource-leak",
+            "x.rs",
+            2,
+            vec![],
+            false,
+        );
 
         let score_ua = compute_attack_rank(&unauth).score;
         let score_lk = compute_attack_rank(&leak).score;
@@ -400,11 +482,38 @@ mod tests {
 
     #[test]
     fn ast_only_ranks_below_all_others_at_same_severity() {
-        let ast = make_diag(Severity::High, "rs.code_exec.eval", "x.rs", 1, vec![], false);
-        let cfg = make_diag(Severity::High, "cfg-unguarded-sink", "x.rs", 2, vec![], false);
-        let taint = make_diag(Severity::High, "taint-unsanitised-flow (source 1:1)", "x.rs", 3,
-            vec![("Source".into(), "env::var(\"X\") at 1:1".into())], false);
-        let state = make_diag(Severity::High, "state-use-after-close", "x.rs", 4, vec![], false);
+        let ast = make_diag(
+            Severity::High,
+            "rs.code_exec.eval",
+            "x.rs",
+            1,
+            vec![],
+            false,
+        );
+        let cfg = make_diag(
+            Severity::High,
+            "cfg-unguarded-sink",
+            "x.rs",
+            2,
+            vec![],
+            false,
+        );
+        let taint = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "x.rs",
+            3,
+            vec![("Source".into(), "env::var(\"X\") at 1:1".into())],
+            false,
+        );
+        let state = make_diag(
+            Severity::High,
+            "state-use-after-close",
+            "x.rs",
+            4,
+            vec![],
+            false,
+        );
 
         let s_ast = compute_attack_rank(&ast).score;
         let s_cfg = compute_attack_rank(&cfg).score;
@@ -414,5 +523,122 @@ mod tests {
         assert!(s_ast < s_cfg, "AST ({s_ast}) < CFG ({s_cfg})");
         assert!(s_ast < s_taint, "AST ({s_ast}) < taint ({s_taint})");
         assert!(s_ast < s_state, "AST ({s_ast}) < state ({s_state})");
+    }
+
+    #[test]
+    fn structured_evidence_source_kind_matches_legacy() {
+        // Structured evidence with source_kind:UserInput note should give
+        // the same source-kind bonus as a legacy "Source" label with user input.
+        let mut structured = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "src/main.rs",
+            10,
+            vec![],
+            false,
+        );
+        structured.evidence = Some(crate::evidence::Evidence {
+            source: Some(crate::evidence::SpanEvidence {
+                path: "src/main.rs".into(),
+                line: 1,
+                col: 1,
+                kind: "source".into(),
+                snippet: Some("read_line()".into()),
+            }),
+            sink: Some(crate::evidence::SpanEvidence {
+                path: "src/main.rs".into(),
+                line: 10,
+                col: 5,
+                kind: "sink".into(),
+                snippet: Some("exec()".into()),
+            }),
+            guards: vec![],
+            sanitizers: vec![],
+            state: None,
+            notes: vec!["source_kind:UserInput".into()],
+        });
+
+        let legacy = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "src/main.rs",
+            10,
+            vec![
+                ("Source".into(), "read_line() at 1:1".into()),
+                ("Sink".into(), "exec()".into()),
+            ],
+            false,
+        );
+
+        let score_structured = compute_attack_rank(&structured).score;
+        let score_legacy = compute_attack_rank(&legacy).score;
+        assert_eq!(
+            score_structured, score_legacy,
+            "structured ({score_structured}) should equal legacy ({score_legacy})"
+        );
+    }
+
+    #[test]
+    fn evidence_item_count_capped_at_4() {
+        let mut d = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "src/main.rs",
+            10,
+            vec![],
+            false,
+        );
+        let span = || crate::evidence::SpanEvidence {
+            path: "x.rs".into(),
+            line: 1,
+            col: 1,
+            kind: "guard".into(),
+            snippet: None,
+        };
+        d.evidence = Some(crate::evidence::Evidence {
+            source: Some(span()),
+            sink: Some(span()),
+            guards: vec![span(), span(), span()], // 3 guards
+            sanitizers: vec![span()],             // 1 sanitizer
+            state: None,
+            notes: vec![],
+        });
+
+        // item_count = 1 (source) + 1 (sink) + min(2, 3+1) = 4
+        // evidence bonus should be exactly 4.0 (from items) + 4.0 (unknown source kind) = 8.0
+        // ... but no source_kind note, so no source priority bonus
+        let score = evidence_strength(&d);
+        assert!(
+            (score - 4.0).abs() < f64::EPSILON,
+            "evidence item count should be capped at 4, got {score}"
+        );
+    }
+
+    #[test]
+    fn path_validated_from_evidence_notes() {
+        let mut d = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "src/main.rs",
+            10,
+            vec![],
+            false, // path_validated is false on Diag
+        );
+        d.evidence = Some(crate::evidence::Evidence {
+            source: None,
+            sink: None,
+            guards: vec![],
+            sanitizers: vec![],
+            state: None,
+            notes: vec!["path_validated".into()],
+        });
+
+        let rank = compute_attack_rank(&d);
+        assert!(
+            rank.components
+                .iter()
+                .any(|(k, _)| k == "path_validated_penalty"),
+            "path_validated note in evidence should trigger penalty"
+        );
     }
 }

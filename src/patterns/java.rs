@@ -1,3 +1,4 @@
+use crate::evidence::Confidence;
 use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
 /// Java AST patterns.
@@ -18,6 +19,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
@@ -31,6 +33,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Reflection ─────────────────────────────────────────────
     Pattern {
@@ -43,6 +46,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Reflection,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "java.reflection.method_invoke",
@@ -53,6 +57,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Reflection,
+        confidence: Confidence::High,
     },
     // ── Tier B: SQL injection (concatenation heuristic) ────────────────
     Pattern {
@@ -66,6 +71,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::B,
         category: PatternCategory::SqlInjection,
+        confidence: Confidence::Medium,
     },
     // ── Tier A: Weak crypto ────────────────────────────────────────────
     Pattern {
@@ -77,6 +83,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
     Pattern {
         id: "java.crypto.weak_digest",
@@ -90,6 +97,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
     // ── Tier A: XSS (servlet) ──────────────────────────────────────────
     Pattern {
@@ -103,5 +111,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Xss,
+        confidence: Confidence::High,
     },
 ];

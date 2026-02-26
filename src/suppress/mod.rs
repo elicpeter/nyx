@@ -53,7 +53,6 @@ impl RuleMatcher {
             }
         }
     }
-
 }
 
 /// A parsed directive from a single comment.
@@ -141,9 +140,7 @@ fn comment_style_for_ext(ext: &str) -> Option<CommentStyle> {
 
 /// Map a file path to its comment style by inspecting the extension.
 fn comment_style_for_path(path: &std::path::Path) -> Option<CommentStyle> {
-    let ext = path
-        .extension()
-        .and_then(|s| s.to_str())?;
+    let ext = path.extension().and_then(|s| s.to_str())?;
     // Normalise common variant extensions
     let norm = match ext {
         "RS" => "rs",
@@ -419,7 +416,11 @@ fn extract_from_line_rest(
 fn try_parse_directive(text: &str, line_num: usize) -> Option<LineDirective> {
     let trimmed = text.trim();
     // Strip leading `*` or `* ` common in block comments (e.g. ` * nyx:ignore ...`).
-    let trimmed = trimmed.strip_prefix("* ").or(trimmed.strip_prefix('*')).unwrap_or(trimmed).trim();
+    let trimmed = trimmed
+        .strip_prefix("* ")
+        .or(trimmed.strip_prefix('*'))
+        .unwrap_or(trimmed)
+        .trim();
 
     // Check for `nyx:ignore-next-line` first (longer prefix wins).
     if let Some(rest) = strip_directive_prefix(trimmed, "nyx:ignore-next-line") {
@@ -600,7 +601,10 @@ mod tests {
     fn taint_rule_id_canonicalization() {
         let src = "let x = 1; // nyx:ignore taint-unsanitised-flow\n";
         let idx = parse_inline_suppressions(rust_path(), src);
-        assert!(idx.check(1, "taint-unsanitised-flow (source 5:1)").is_some());
+        assert!(
+            idx.check(1, "taint-unsanitised-flow (source 5:1)")
+                .is_some()
+        );
         assert!(idx.check(1, "taint-unsanitised-flow").is_some());
     }
 

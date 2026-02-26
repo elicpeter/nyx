@@ -56,10 +56,28 @@ Machine-readable JSON array. Each finding is an object:
     "severity": "High",
     "id": "taint-unsanitised-flow (source 5:11)",
     "path_validated": false,
-    "evidence": [
+    "labels": [
       ["Source", "env::var(\"CMD\") at 5:11"],
       ["Sink", "Command::new(\"sh\").arg(\"-c\")"]
     ],
+    "confidence": "High",
+    "evidence": {
+      "source": {
+        "path": "src/handler.rs",
+        "line": 5,
+        "col": 11,
+        "kind": "source",
+        "snippet": "env::var(\"CMD\")"
+      },
+      "sink": {
+        "path": "src/handler.rs",
+        "line": 12,
+        "col": 5,
+        "kind": "sink",
+        "snippet": "Command::new(\"sh\")"
+      },
+      "notes": ["source_kind:EnvironmentConfig"]
+    },
     "rank_score": 76.0,
     "rank_reason": [
       ["severity_base", "60"],
@@ -83,11 +101,36 @@ Machine-readable JSON array. Each finding is an object:
 | `path_validated` | bool | no | True if guarded by validation predicate |
 | `guard_kind` | string | no | Predicate type (e.g. `"NullCheck"`, `"ValidationCall"`) |
 | `message` | string | no | Human-readable context (state analysis findings) |
-| `evidence` | array | no | Array of `[label, value]` pairs |
+| `labels` | array | no | Array of `[label, value]` pairs for console display |
+| `confidence` | string | no | Confidence level: `"Low"`, `"Medium"`, or `"High"` |
+| `evidence` | object | no | Structured evidence (source/sink spans, state, notes) |
 | `rank_score` | float | no | Attack-surface score (omitted when ranking disabled) |
 | `rank_reason` | array | no | Score breakdown (omitted when ranking disabled) |
 
 Fields marked "no" are omitted when empty/null/false to keep output compact.
+
+### Confidence levels
+
+| Level | Meaning |
+|-------|---------|
+| `High` | Strong signal — taint-confirmed flow, definite state violation |
+| `Medium` | Moderate signal — resource leak, path-validated taint, CFG structural |
+| `Low` | Weak signal — AST pattern match, possible resource leak, degraded analysis |
+
+### Evidence object
+
+The `evidence` field provides structured provenance data:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `source` | object | Source span (path, line, col, kind, snippet) |
+| `sink` | object | Sink span (path, line, col, kind, snippet) |
+| `guards` | array | Validation guard spans |
+| `sanitizers` | array | Sanitizer spans |
+| `state` | object | State-machine evidence (machine, subject, from_state, to_state) |
+| `notes` | array | Free-form notes (e.g. `"source_kind:UserInput"`, `"path_validated"`) |
+
+All fields are omitted when empty/null.
 
 ---
 

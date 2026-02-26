@@ -8,9 +8,17 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
-        matchers: &["http.Request", "r.FormValue", "r.URL", "r.Body", "r.Header",
-                     "r.URL.Query", "r.URL.Query.Get", "Request.FormValue",
-                     "Request.URL"],
+        matchers: &[
+            "http.Request",
+            "r.FormValue",
+            "r.URL",
+            "r.Body",
+            "r.Header",
+            "r.URL.Query",
+            "r.URL.Query.Get",
+            "Request.FormValue",
+            "Request.URL",
+        ],
         label: DataLabel::Source(Cap::all()),
     },
     // ───────── Sanitizers ──────────
@@ -40,7 +48,13 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::FMT_STRING),
     },
     LabelRule {
-        matchers: &["os.Open", "os.OpenFile", "os.Create", "ioutil.ReadFile", "os.ReadFile"],
+        matchers: &[
+            "os.Open",
+            "os.OpenFile",
+            "os.Create",
+            "ioutil.ReadFile",
+            "os.ReadFile",
+        ],
         label: DataLabel::Sink(Cap::FILE_IO),
     },
     LabelRule {

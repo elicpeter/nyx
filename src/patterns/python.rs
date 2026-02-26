@@ -1,3 +1,4 @@
+use crate::evidence::Confidence;
 use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
 /// Python AST patterns.
@@ -15,6 +16,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "py.code_exec.exec",
@@ -23,6 +25,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "py.code_exec.compile",
@@ -31,6 +34,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
@@ -44,6 +48,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "py.cmdi.os_popen",
@@ -56,6 +61,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     // ── Tier B: subprocess with shell=True ─────────────────────────────
     Pattern {
@@ -72,6 +78,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::B,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::Medium,
     },
     // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
@@ -85,6 +92,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "py.deser.yaml_load",
@@ -97,6 +105,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "py.deser.shelve_open",
@@ -109,6 +118,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
     // ── Tier B: SQL injection (format/concat heuristic) ────────────────
     Pattern {
@@ -123,6 +133,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::B,
         category: PatternCategory::SqlInjection,
+        confidence: Confidence::Medium,
     },
     // ── Tier A: Weak crypto ────────────────────────────────────────────
     Pattern {
@@ -136,6 +147,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
     Pattern {
         id: "py.crypto.sha1",
@@ -148,6 +160,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
     // ── Tier A: Template injection ─────────────────────────────────────
     Pattern {
@@ -160,5 +173,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Xss,
+        confidence: Confidence::High,
     },
 ];

@@ -148,6 +148,15 @@ pub struct OutputConfig {
     /// Findings below this threshold are dropped after ranking.
     /// `None` means no minimum (all findings shown).
     pub min_score: Option<u32>,
+
+    /// Minimum confidence level to include in output.
+    /// `None` means no minimum (all findings shown).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_confidence_opt"
+    )]
+    pub min_confidence: Option<crate::evidence::Confidence>,
 }
 
 impl Default for OutputConfig {
@@ -158,7 +167,25 @@ impl Default for OutputConfig {
             max_results: None,
             attack_surface_ranking: true,
             min_score: None,
+            min_confidence: None,
         }
+    }
+}
+
+/// Deserialize an optional Confidence from a TOML string.
+fn deserialize_confidence_opt<'de, D>(
+    deserializer: D,
+) -> Result<Option<crate::evidence::Confidence>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(s) => s
+            .parse::<crate::evidence::Confidence>()
+            .map(Some)
+            .map_err(serde::de::Error::custom),
     }
 }
 
@@ -346,6 +373,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.output.max_results = user.output.max_results;
     default.output.attack_surface_ranking = user.output.attack_surface_ranking;
     default.output.min_score = user.output.min_score;
+    default.output.min_confidence = user.output.min_confidence;
 
     // --- PerformanceConfig ---
     default.performance.max_depth = user.performance.max_depth;

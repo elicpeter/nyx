@@ -130,27 +130,28 @@ fn render_diag(d: &Diag, width: usize) -> String {
     let mut out = String::new();
 
     // ── Header line ──────────────────────────────────────────────────────
-    // Format: `  98:5  ⚠ [MEDIUM] taint-unsanitised-flow (source 41:5)  Score: 87`
+    // Format: `  98:5  ⚠ [MEDIUM] taint-unsanitised-flow  (Score: 87, Confidence: Medium)`
     let loc = format!("{}:{}", d.line, d.col);
     let sev = if d.suppressed {
-        format!(
-            "{} {}",
-            style("○").dim(),
-            style("[SUPPRESSED]").dim(),
-        )
+        format!("{} {}", style("○").dim(), style("[SUPPRESSED]").dim(),)
     } else {
         severity_tag(d.severity)
     };
-    let score_suffix = match d.rank_score {
-        Some(s) => format!("  {}", style(format!("Score: {}", s as u32)).dim()),
-        None => String::new(),
+    let meta_suffix = match (d.rank_score, d.confidence) {
+        (Some(s), Some(c)) => format!(
+            "  {}",
+            style(format!("(Score: {}, Confidence: {c})", s as u32)).dim()
+        ),
+        (Some(s), None) => format!("  {}", style(format!("(Score: {})", s as u32)).dim()),
+        (None, Some(c)) => format!("  {}", style(format!("(Confidence: {c})")).dim()),
+        (None, None) => String::new(),
     };
     out.push_str(&format!(
         "  {}  {} {}{}\n",
         style(&loc).dim(),
         sev,
         style(&d.id).dim(),
-        score_suffix,
+        meta_suffix,
     ));
 
     // ── Message body ─────────────────────────────────────────────────────
@@ -161,12 +162,12 @@ fn render_diag(d: &Diag, width: usize) -> String {
         out.push_str(&format!("{indent_str}{wrapped}\n"));
     }
 
-    // ── Evidence (Source, Sink, Path guard) ───────────────────────────────
-    if !d.evidence.is_empty() {
+    // ── Evidence labels (Source, Sink, Path guard) ───────────────────────
+    if !d.labels.is_empty() {
         out.push('\n');
-        let max_label = d.evidence.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+        let max_label = d.labels.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
         let key_width = max_label + 1; // +1 for ':'
-        for (label, value) in &d.evidence {
+        for (label, value) in &d.labels {
             let key_str = format!("{label}:");
             let value_indent = BODY_INDENT + key_width + 1; // key + space
             let wrapped_val = wrap_text(value, width, value_indent);
@@ -402,10 +403,7 @@ mod tests {
 
     #[test]
     fn collapse_chain_preserves_non_chain_spacing() {
-        assert_eq!(
-            collapse_chain_spacing("foo() + bar()"),
-            "foo() + bar()"
-        );
+        assert_eq!(collapse_chain_spacing("foo() + bar()"), "foo() + bar()");
     }
 
     #[test]
@@ -433,10 +431,7 @@ mod tests {
 
     #[test]
     fn shorten_callee_nested_parens() {
-        assert_eq!(
-            shorten_callee("foo(bar(1, 2)).baz()"),
-            "foo(bar(1, 2))…"
-        );
+        assert_eq!(shorten_callee("foo(bar(1, 2)).baz()"), "foo(bar(1, 2))…");
     }
 
     #[test]
@@ -502,7 +497,9 @@ mod tests {
                 path_validated: false,
                 guard_kind: None,
                 message: Some("test message".into()),
-                evidence: vec![],
+                labels: vec![],
+                confidence: None,
+                evidence: None,
                 rank_score: None,
                 rank_reason: None,
                 suppressed: false,
@@ -517,7 +514,9 @@ mod tests {
                 path_validated: false,
                 guard_kind: None,
                 message: None,
-                evidence: vec![],
+                labels: vec![],
+                confidence: None,
+                evidence: None,
                 rank_score: None,
                 rank_reason: None,
                 suppressed: false,
@@ -543,10 +542,12 @@ mod tests {
             path_validated: false,
             guard_kind: None,
             message: Some("unsanitised input".into()),
-            evidence: vec![
+            labels: vec![
                 ("Source".into(), "env::var(\"HOME\") at 12:3".into()),
                 ("Sink".into(), "Command::new(\"sh\")".into()),
             ],
+            confidence: None,
+            evidence: None,
             rank_score: None,
             rank_reason: None,
             suppressed: false,
@@ -557,7 +558,10 @@ mod tests {
         assert!(stripped.contains("Source:"), "should contain Source label");
         assert!(stripped.contains("Sink:"), "should contain Sink label");
         // No backticks in output
-        assert!(!stripped.contains('`'), "should not contain backticks in evidence");
+        assert!(
+            !stripped.contains('`'),
+            "should not contain backticks in evidence"
+        );
     }
 
     #[test]
@@ -572,7 +576,9 @@ mod tests {
                 path_validated: false,
                 guard_kind: None,
                 message: Some("first".into()),
-                evidence: vec![],
+                labels: vec![],
+                confidence: None,
+                evidence: None,
                 rank_score: None,
                 rank_reason: None,
                 suppressed: false,
@@ -587,7 +593,9 @@ mod tests {
                 path_validated: false,
                 guard_kind: None,
                 message: Some("second".into()),
-                evidence: vec![],
+                labels: vec![],
+                confidence: None,
+                evidence: None,
                 rank_score: None,
                 rank_reason: None,
                 suppressed: false,
@@ -597,11 +605,14 @@ mod tests {
         let output = render_console(&diags, "proj");
         let stripped = strip_ansi(&output);
         // There should be a blank line between the two findings
-        assert!(stripped.contains("First\n\n"), "blank line between findings: {stripped}");
+        assert!(
+            stripped.contains("First\n\n"),
+            "blank line between findings: {stripped}"
+        );
     }
 
     #[test]
-    fn json_omits_empty_evidence() {
+    fn json_omits_empty_labels() {
         let d = Diag {
             path: "x.rs".into(),
             line: 1,
@@ -611,7 +622,9 @@ mod tests {
             path_validated: false,
             guard_kind: None,
             message: None,
-            evidence: vec![],
+            labels: vec![],
+            confidence: None,
+            evidence: None,
             rank_score: None,
             rank_reason: None,
             suppressed: false,
@@ -619,8 +632,8 @@ mod tests {
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
-            !json.contains("evidence"),
-            "empty evidence should be omitted from JSON"
+            !json.contains("labels"),
+            "empty labels should be omitted from JSON"
         );
     }
 
@@ -635,15 +648,23 @@ mod tests {
             path_validated: false,
             guard_kind: None,
             message: None,
-            evidence: vec![],
+            labels: vec![],
+            confidence: None,
+            evidence: None,
             rank_score: None,
             rank_reason: None,
             suppressed: false,
             suppression: None,
         };
         let json = serde_json::to_string(&d).unwrap();
-        assert!(!json.contains("rank_score"), "rank_score should be omitted when None");
-        assert!(!json.contains("rank_reason"), "rank_reason should be omitted when None");
+        assert!(
+            !json.contains("rank_score"),
+            "rank_score should be omitted when None"
+        );
+        assert!(
+            !json.contains("rank_reason"),
+            "rank_reason should be omitted when None"
+        );
     }
 
     #[test]
@@ -657,14 +678,19 @@ mod tests {
             path_validated: false,
             guard_kind: None,
             message: None,
-            evidence: vec![],
+            labels: vec![],
+            confidence: None,
+            evidence: None,
             rank_score: Some(120.0),
             rank_reason: None,
             suppressed: false,
             suppression: None,
         };
         let json = serde_json::to_string(&d).unwrap();
-        assert!(json.contains("rank_score"), "rank_score should be present when set");
+        assert!(
+            json.contains("rank_score"),
+            "rank_score should be present when set"
+        );
         assert!(json.contains("120"), "rank_score value should appear");
     }
 
@@ -689,10 +715,7 @@ mod tests {
             !normalised.contains(") ."),
             "chain spacing should be collapsed: {normalised}"
         );
-        assert!(
-            !normalised.contains("  "),
-            "no double-spaces: {normalised}"
-        );
+        assert!(!normalised.contains("  "), "no double-spaces: {normalised}");
         // Should not contain backticks
         assert!(!normalised.contains('`'), "no backticks: {normalised}");
     }
@@ -704,6 +727,162 @@ mod tests {
         assert_eq!(
             normalised,
             "Command::new(\"tar\").arg(\"-czf\").arg(\"/backups/nightly.tar.gz\").arg(\"/var/data\").output()"
+        );
+    }
+
+    // ── confidence display ──────────────────────────────────────────────
+
+    #[test]
+    fn confidence_after_score_on_header_line() {
+        let d = Diag {
+            path: "src/a.rs".into(),
+            line: 510,
+            col: 5,
+            severity: Severity::Medium,
+            id: "cfg-unguarded-sink".into(),
+            path_validated: false,
+            guard_kind: None,
+            message: Some("dangerous sink".into()),
+            labels: vec![],
+            confidence: Some(crate::evidence::Confidence::Medium),
+            evidence: None,
+            rank_score: Some(36.0),
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+        };
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        // Header line should contain score and confidence together
+        let header = stripped.lines().next().unwrap();
+        assert!(
+            header.contains("(Score: 36, Confidence: Medium)"),
+            "header should contain '(Score: 36, Confidence: Medium)': {header}"
+        );
+        // No standalone Confidence line
+        let non_header_lines: Vec<&str> = stripped.lines().skip(1).collect();
+        assert!(
+            !non_header_lines.iter().any(|l| l.trim().starts_with("Confidence:")),
+            "should not have standalone Confidence line"
+        );
+    }
+
+    #[test]
+    fn confidence_title_case() {
+        for (conf, expected) in [
+            (crate::evidence::Confidence::Low, "Confidence: Low"),
+            (crate::evidence::Confidence::Medium, "Confidence: Medium"),
+            (crate::evidence::Confidence::High, "Confidence: High"),
+        ] {
+            let d = Diag {
+                path: "x.rs".into(),
+                line: 1,
+                col: 1,
+                severity: Severity::Low,
+                id: "test".into(),
+                path_validated: false,
+                guard_kind: None,
+                message: None,
+                labels: vec![],
+                confidence: Some(conf),
+                evidence: None,
+                rank_score: None,
+                rank_reason: None,
+                suppressed: false,
+                suppression: None,
+            };
+            let output = render_diag(&d, 100);
+            let stripped = strip_ansi(&output);
+            assert!(
+                stripped.contains(expected),
+                "expected '{expected}' in: {stripped}"
+            );
+        }
+    }
+
+    #[test]
+    fn confidence_none_only_score() {
+        let d = Diag {
+            path: "src/a.rs".into(),
+            line: 10,
+            col: 5,
+            severity: Severity::High,
+            id: "test-rule".into(),
+            path_validated: false,
+            guard_kind: None,
+            message: Some("test message".into()),
+            labels: vec![],
+            confidence: None,
+            evidence: None,
+            rank_score: Some(42.0),
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+        };
+        let output = render_diag(&d, 100);
+        let stripped = strip_ansi(&output);
+        let header = stripped.lines().next().unwrap();
+        assert!(
+            header.contains("(Score: 42)"),
+            "should show score without confidence: {header}"
+        );
+        assert!(
+            !header.contains("Confidence"),
+            "should not mention confidence when None: {header}"
+        );
+    }
+
+    #[test]
+    fn confidence_only_no_score() {
+        let d = Diag {
+            path: "src/a.rs".into(),
+            line: 10,
+            col: 5,
+            severity: Severity::High,
+            id: "test-rule".into(),
+            path_validated: false,
+            guard_kind: None,
+            message: None,
+            labels: vec![],
+            confidence: Some(crate::evidence::Confidence::High),
+            evidence: None,
+            rank_score: None,
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+        };
+        let output = render_diag(&d, 100);
+        let stripped = strip_ansi(&output);
+        let header = stripped.lines().next().unwrap();
+        assert!(
+            header.contains("(Confidence: High)"),
+            "should show confidence without score: {header}"
+        );
+    }
+
+    #[test]
+    fn json_omits_confidence_when_none() {
+        let d = Diag {
+            path: "x.rs".into(),
+            line: 1,
+            col: 1,
+            severity: Severity::Low,
+            id: "test".into(),
+            path_validated: false,
+            guard_kind: None,
+            message: None,
+            labels: vec![],
+            confidence: None,
+            evidence: None,
+            rank_score: None,
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(
+            !json.contains("confidence"),
+            "confidence should be omitted when None: {json}"
         );
     }
 }

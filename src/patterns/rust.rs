@@ -1,3 +1,4 @@
+use crate::evidence::Confidence;
 use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
 /// Rust AST patterns.
@@ -19,6 +20,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rs.memory.copy_nonoverlapping",
@@ -31,6 +33,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rs.memory.get_unchecked",
@@ -43,6 +46,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rs.memory.mem_zeroed",
@@ -55,6 +59,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rs.memory.ptr_read",
@@ -67,6 +72,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     // ── Tier A: Code quality / robustness ──────────────────────────────
     Pattern {
@@ -76,6 +82,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rs.quality.unsafe_fn",
@@ -87,6 +94,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rs.quality.unwrap",
@@ -98,6 +106,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::CodeQuality,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rs.quality.expect",
@@ -109,6 +118,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::CodeQuality,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rs.quality.panic_macro",
@@ -117,6 +127,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::CodeQuality,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rs.quality.todo",
@@ -128,6 +139,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::CodeQuality,
+        confidence: Confidence::High,
     },
     // ── Tier A: Narrowing cast ─────────────────────────────────────────
     Pattern {
@@ -140,6 +152,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::Medium,
     },
     Pattern {
         id: "rs.memory.mem_forget",
@@ -152,5 +165,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
 ];

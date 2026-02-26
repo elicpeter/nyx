@@ -1,3 +1,4 @@
+use crate::evidence::Confidence;
 use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
 /// Go AST patterns.
@@ -17,6 +18,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Unsafe pointer ─────────────────────────────────────────
     Pattern {
@@ -30,6 +32,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     // ── Tier A: TLS misconfiguration ───────────────────────────────────
     Pattern {
@@ -43,6 +46,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::InsecureTransport,
+        confidence: Confidence::High,
     },
     // ── Tier A: Weak crypto ────────────────────────────────────────────
     Pattern {
@@ -55,6 +59,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
     Pattern {
         id: "go.crypto.sha1",
@@ -66,6 +71,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
     // ── Tier B: SQL injection (concatenation heuristic) ────────────────
     Pattern {
@@ -80,6 +86,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::B,
         category: PatternCategory::SqlInjection,
+        confidence: Confidence::Medium,
     },
     // ── Tier A: Hardcoded secrets ──────────────────────────────────────
     Pattern {
@@ -94,6 +101,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Secrets,
+        confidence: Confidence::High,
     },
     // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
@@ -107,5 +115,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
 ];

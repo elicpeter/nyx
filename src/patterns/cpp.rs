@@ -1,3 +1,4 @@
+use crate::evidence::Confidence;
 use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
 /// C++ AST patterns.
@@ -14,6 +15,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "cpp.memory.strcpy",
@@ -22,6 +24,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "cpp.memory.strcat",
@@ -30,6 +33,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "cpp.memory.sprintf",
@@ -38,6 +42,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
@@ -47,6 +52,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "cpp.cmdi.popen",
@@ -55,6 +61,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Dangerous casts ────────────────────────────────────────
     // C++ casts are parsed as call_expression with template_function
@@ -68,6 +75,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "cpp.memory.const_cast",
@@ -79,6 +87,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     // ── Tier B: Format-string (variable first arg) ─────────────────────
     Pattern {
@@ -92,5 +101,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::B,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::Medium,
     },
 ];

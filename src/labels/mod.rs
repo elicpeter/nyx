@@ -398,7 +398,8 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
             for raw in &rule.matchers {
                 let m = raw.as_bytes();
                 if m.last() == Some(&b'_')
-                    && (starts_with_ignore_case(trimmed, m) || starts_with_ignore_case(full_norm_bytes, m))
+                    && (starts_with_ignore_case(trimmed, m)
+                        || starts_with_ignore_case(full_norm_bytes, m))
                 {
                     return Some(rule.label);
                 }
@@ -430,7 +431,8 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
         for raw in rule.matchers {
             let m = raw.as_bytes();
             if m.last() == Some(&b'_')
-                && (starts_with_ignore_case(trimmed, m) || starts_with_ignore_case(full_norm_bytes, m))
+                && (starts_with_ignore_case(trimmed, m)
+                    || starts_with_ignore_case(full_norm_bytes, m))
             {
                 return Some(rule.label);
             }

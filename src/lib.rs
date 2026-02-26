@@ -47,6 +47,7 @@ pub(crate) mod cli;
 pub mod commands;
 pub mod database;
 pub mod errors;
+pub mod evidence;
 pub mod fmt;
 pub mod interop;
 pub mod labels;

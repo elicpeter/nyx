@@ -73,7 +73,7 @@ pub fn analyse_file(
     let base_transfer = TaintTransfer {
         lang: caller_lang,
         namespace: caller_namespace,
-        interner: &interner,  // also used for events_to_findings below
+        interner: &interner, // also used for events_to_findings below
         local_summaries,
         global_summaries,
         interop_edges,
@@ -152,9 +152,7 @@ fn analyse_js_two_level(
 }
 
 /// Extract the "best" taint state from converged states (join all exit/reachable states).
-fn extract_exit_state(
-    states: &std::collections::HashMap<NodeIndex, TaintState>,
-) -> TaintState {
+fn extract_exit_state(states: &std::collections::HashMap<NodeIndex, TaintState>) -> TaintState {
     let mut result = TaintState::initial();
     for state in states.values() {
         result = result.join(state);

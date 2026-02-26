@@ -138,8 +138,8 @@ fn discover_fixtures() -> Vec<Fixture> {
                 let expect_content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
                     panic!("Failed to read {}: {e}", path.display());
                 });
-                let expectations: RealWorldExpectations =
-                    serde_json::from_str(&expect_content).unwrap_or_else(|e| {
+                let expectations: RealWorldExpectations = serde_json::from_str(&expect_content)
+                    .unwrap_or_else(|e| {
                         panic!("Failed to parse {}: {e}", path.display());
                     });
 
@@ -167,8 +167,7 @@ fn discover_fixtures() -> Vec<Fixture> {
 
 fn find_source_file(dir: &Path, stem: &str) -> Option<PathBuf> {
     let extensions = [
-        "rs", "c", "cpp", "cc", "cxx", "java", "go", "php", "py", "rb", "ts", "tsx", "js",
-        "jsx",
+        "rs", "c", "cpp", "cc", "cxx", "java", "go", "php", "py", "rb", "ts", "tsx", "js", "jsx",
     ];
     for ext in &extensions {
         let candidate = dir.join(format!("{stem}.{ext}"));
@@ -185,9 +184,7 @@ fn scan_fixture(fixture: &Fixture, mode: AnalysisMode) -> Vec<Diag> {
     // We scan the parent directory containing just this fixture file.
     // To isolate, we copy the fixture to a temp dir.
     let tmp = tempfile::TempDir::with_prefix("nyx_rw_test_").expect("tempdir");
-    let dest = tmp
-        .path()
-        .join(fixture.source_path.file_name().unwrap());
+    let dest = tmp.path().join(fixture.source_path.file_name().unwrap());
     std::fs::copy(&fixture.source_path, &dest).expect("copy fixture");
 
     let cfg = test_config(mode);
@@ -223,7 +220,11 @@ struct MatchResult {
     matched: usize,
 }
 
-fn match_expectations(diags: &[Diag], expectations: &[ExpectedFinding], fixture_file: &str) -> MatchResult {
+fn match_expectations(
+    diags: &[Diag],
+    expectations: &[ExpectedFinding],
+    fixture_file: &str,
+) -> MatchResult {
     let mut hard_misses = Vec::new();
     let mut soft_misses = Vec::new();
     let mut matched_indices: Vec<bool> = vec![false; diags.len()];
@@ -403,7 +404,10 @@ fn real_world_fixture_suite() {
     let active: Vec<&Fixture> = fixtures.iter().filter(|f| should_run(f)).collect();
 
     if active.is_empty() {
-        eprintln!("No fixtures matched filters. Total available: {}", fixtures.len());
+        eprintln!(
+            "No fixtures matched filters. Total available: {}",
+            fixtures.len()
+        );
         print_coverage_matrix(fixtures);
         return;
     }
@@ -456,18 +460,20 @@ fn real_world_fixture_suite() {
             if !result.soft_misses.is_empty() {
                 let mut msg = format!("SOFT  {fixture_label} [{mode_str}]:");
                 for (exp, reason) in &result.soft_misses {
-                    msg.push_str(&format!(
-                        "\n       soft miss: {} — {}",
-                        reason, exp.notes
-                    ));
+                    msg.push_str(&format!("\n       soft miss: {} — {}", reason, exp.notes));
                 }
                 soft_miss_details.push(msg);
                 total_soft_misses += result.soft_misses.len();
             }
 
             if verbose {
-                eprintln!("  {fixture_label} [{mode_str}]: {} matched, {} hard misses, {} soft misses, {} unexpected",
-                    result.matched, result.hard_misses.len(), result.soft_misses.len(), result.unexpected.len());
+                eprintln!(
+                    "  {fixture_label} [{mode_str}]: {} matched, {} hard misses, {} soft misses, {} unexpected",
+                    result.matched,
+                    result.hard_misses.len(),
+                    result.soft_misses.len(),
+                    result.unexpected.len()
+                );
                 if !result.unexpected.is_empty() {
                     for d in &result.unexpected {
                         eprintln!(
@@ -488,8 +494,10 @@ fn real_world_fixture_suite() {
 
     // Print summary.
     eprintln!("\n────────────────────────────────────────────────────");
-    eprintln!("RESULTS: {} matched, {} hard failures, {} soft misses, {} unexpected",
-        total_matched, total_hard_fails, total_soft_misses, total_unexpected);
+    eprintln!(
+        "RESULTS: {} matched, {} hard failures, {} soft misses, {} unexpected",
+        total_matched, total_hard_fails, total_soft_misses, total_unexpected
+    );
     eprintln!("────────────────────────────────────────────────────");
 
     if !failure_details.is_empty() {

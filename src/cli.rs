@@ -26,7 +26,6 @@ pub enum OutputFormat {
     Sarif,
 }
 
-
 impl std::fmt::Display for OutputFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -127,6 +126,13 @@ pub enum Commands {
         /// Example: --min-score 50
         #[arg(long)]
         min_score: Option<u32>,
+
+        /// Minimum confidence level to include in output
+        ///
+        /// Values: low, medium, high. Findings below this level are dropped.
+        /// JSON/SARIF include all unless filtered.
+        #[arg(long)]
+        min_confidence: Option<String>,
 
         // ── Deprecated aliases (hidden) ─────────────────────────────────
         /// Deprecated: use --index off

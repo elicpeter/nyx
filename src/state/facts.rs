@@ -20,6 +20,14 @@ pub struct StateFinding {
     pub severity: Severity,
     pub span: (usize, usize),
     pub message: String,
+    /// State machine that produced this finding: `"resource"` or `"auth"`.
+    pub machine: &'static str,
+    /// Variable name involved, if available.
+    pub subject: Option<String>,
+    /// State before the event (e.g. `"closed"`, `"open"`, `"unauthed"`).
+    pub from_state: &'static str,
+    /// State after the event (e.g. `"used"`, `"closed"`, `"leaked"`, `"access"`).
+    pub to_state: &'static str,
 }
 
 /// Extract findings from converged dataflow state + transfer events.
@@ -42,9 +50,11 @@ pub fn extract_findings(
                     rule_id: "state-use-after-close".into(),
                     severity: Severity::High,
                     span: info.span,
-                    message: format!(
-                        "variable `{var_name}` used after close"
-                    ),
+                    message: format!("variable `{var_name}` used after close"),
+                    machine: "resource",
+                    subject: Some(var_name.to_string()),
+                    from_state: "closed",
+                    to_state: "used",
                 });
             }
             TransferEventKind::DoubleClose => {
@@ -52,9 +62,11 @@ pub fn extract_findings(
                     rule_id: "state-double-close".into(),
                     severity: Severity::Medium,
                     span: info.span,
-                    message: format!(
-                        "variable `{var_name}` closed twice"
-                    ),
+                    message: format!("variable `{var_name}` closed twice"),
+                    machine: "resource",
+                    subject: Some(var_name.to_string()),
+                    from_state: "closed",
+                    to_state: "closed",
                 });
             }
         }
@@ -78,8 +90,7 @@ pub fn extract_findings(
                 .neighbors_directed(idx, Direction::Outgoing)
                 .any(|succ| {
                     let s = &cfg[succ];
-                    s.kind == StmtKind::Return
-                        && s.enclosing_func == info.enclosing_func
+                    s.kind == StmtKind::Return && s.enclosing_func == info.enclosing_func
                 });
             if is_early_return {
                 continue;
@@ -105,9 +116,11 @@ pub fn extract_findings(
                     rule_id: "state-resource-leak".into(),
                     severity: Severity::Medium,
                     span: acquire_span.unwrap_or(info.span),
-                    message: format!(
-                        "resource `{var_name}` is never closed"
-                    ),
+                    message: format!("resource `{var_name}` is never closed"),
+                    machine: "resource",
+                    subject: Some(var_name.to_string()),
+                    from_state: "open",
+                    to_state: "leaked",
                 });
             } else if lifecycle.contains(ResourceLifecycle::CLOSED) {
                 // May-leak: open on some paths, closed on others
@@ -116,9 +129,11 @@ pub fn extract_findings(
                     rule_id: "state-resource-leak-possible".into(),
                     severity: Severity::Low,
                     span: acquire_span.unwrap_or(info.span),
-                    message: format!(
-                        "resource `{var_name}` may not be closed on all paths"
-                    ),
+                    message: format!("resource `{var_name}` may not be closed on all paths"),
+                    machine: "resource",
+                    subject: Some(var_name.to_string()),
+                    from_state: "open",
+                    to_state: "possibly_leaked",
                 });
             }
         }
@@ -143,9 +158,7 @@ pub fn extract_findings(
                 continue;
             };
             if state.auth.auth_level == AuthLevel::Unauthed {
-                let callee_desc = sanitize_desc(
-                    info.callee.as_deref().unwrap_or("(sensitive op)"),
-                );
+                let callee_desc = sanitize_desc(info.callee.as_deref().unwrap_or("(sensitive op)"));
                 findings.push(StateFinding {
                     rule_id: "state-unauthed-access".into(),
                     severity: Severity::High,
@@ -153,17 +166,17 @@ pub fn extract_findings(
                     message: format!(
                         "sensitive operation `{callee_desc}` reached without authentication"
                     ),
+                    machine: "auth",
+                    subject: None,
+                    from_state: "unauthed",
+                    to_state: "access",
                 });
             }
         }
     }
 
     // Dedup
-    findings.sort_by(|a, b| {
-        a.span
-            .cmp(&b.span)
-            .then_with(|| a.rule_id.cmp(&b.rule_id))
-    });
+    findings.sort_by(|a, b| a.span.cmp(&b.span).then_with(|| a.rule_id.cmp(&b.rule_id)));
     findings.dedup_by(|a, b| a.span == b.span && a.rule_id == b.rule_id);
 
     findings
@@ -248,11 +261,11 @@ fn is_web_entrypoint_simple(
 mod tests {
     use super::*;
     use crate::cfg::{EdgeKind, NodeInfo};
+    use crate::cfg_analysis::rules;
     use crate::state::domain::ProductState;
     use crate::state::engine;
     use crate::state::symbol::SymbolInterner;
     use crate::state::transfer::DefaultTransfer;
-    use crate::cfg_analysis::rules;
     use petgraph::Graph;
     use std::collections::HashMap;
 

@@ -134,7 +134,10 @@ fn state_analysis_off_by_default() {
     cfg.scanner.enable_state_analysis = false;
     let diags =
         nyx_scanner::scan_no_index(&state_fixture_dir(), &cfg).expect("scan should succeed");
-    let state: Vec<_> = diags.iter().filter(|d| d.id.starts_with("state-")).collect();
+    let state: Vec<_> = diags
+        .iter()
+        .filter(|d| d.id.starts_with("state-"))
+        .collect();
     assert!(
         state.is_empty(),
         "State findings should not appear when enable_state_analysis is false.\n  Got: {:?}",
@@ -216,8 +219,7 @@ fn multiple_handles_leaks_only_unclosed() {
     let f1_findings: Vec<_> = state_diags_for("multiple_handles.c")
         .into_iter()
         .filter(|d| {
-            d.id == "state-resource-leak"
-                && d.message.as_deref().unwrap_or("").contains("f1")
+            d.id == "state-resource-leak" && d.message.as_deref().unwrap_or("").contains("f1")
         })
         .collect();
     assert!(

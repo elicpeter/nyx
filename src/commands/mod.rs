@@ -30,6 +30,7 @@ pub fn handle_command(
             no_rank,
             show_suppressed,
             min_score,
+            min_confidence,
             // Deprecated aliases
             no_index,
             rebuild_index,
@@ -102,6 +103,14 @@ pub fn handle_command(
             // Min-score: CLI wins, then config
             if let Some(s) = min_score {
                 config.output.min_score = Some(s);
+            }
+
+            // Min-confidence: CLI wins, then config
+            if let Some(ref expr) = min_confidence {
+                config.output.min_confidence =
+                    Some(expr.parse::<crate::evidence::Confidence>().map_err(|e| {
+                        crate::errors::NyxError::Msg(format!("invalid --min-confidence value: {e}"))
+                    })?);
             }
 
             scan::handle(

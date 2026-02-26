@@ -53,7 +53,13 @@ pub struct Diag {
     pub message: Option<String>,
     /// Structured evidence labels (e.g. Source, Sink) for console display.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<(String, String)>,
+    pub labels: Vec<(String, String)>,
+    /// Confidence level (Low / Medium / High).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<crate::evidence::Confidence>,
+    /// Structured evidence (source/sink spans, state transitions, notes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<crate::evidence::Evidence>,
     /// Attack-surface ranking score (higher = more exploitable / important).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rank_score: Option<f64>,
@@ -135,6 +141,11 @@ pub fn handle(
         diags.retain(|d| d.rank_score.unwrap_or(0.0) >= threshold);
     }
 
+    // ── Apply minimum-confidence filter AFTER confidence assignment ──
+    if let Some(min_conf) = config.output.min_confidence {
+        diags.retain(|d| d.confidence.is_none_or(|c| c >= min_conf));
+    }
+
     // ── Apply inline suppressions ───────────────────────────────────
     apply_suppressions(&mut diags);
     if !show_suppressed {
@@ -165,7 +176,9 @@ pub fn handle(
     // ── --fail-on: exit non-zero if threshold breached ──────────────────
     // Suppressed findings do not count toward the threshold.
     if let Some(threshold) = fail_on {
-        let breached = diags.iter().any(|d| !d.suppressed && d.severity <= threshold);
+        let breached = diags
+            .iter()
+            .any(|d| !d.suppressed && d.severity <= threshold);
         if breached {
             std::process::exit(1);
         }
@@ -237,6 +250,11 @@ pub(crate) fn scan_filesystem(
 
         if cfg.output.attack_surface_ranking {
             crate::rank::rank_diags(&mut diags);
+        }
+        for d in &mut diags {
+            if d.confidence.is_none() {
+                d.confidence = Some(crate::evidence::compute_confidence(d));
+            }
         }
         if let Some(max) = cfg.output.max_results {
             diags.truncate(max as usize);
@@ -347,6 +365,11 @@ pub(crate) fn scan_filesystem(
 
     if cfg.output.attack_surface_ranking {
         crate::rank::rank_diags(&mut diags);
+    }
+    for d in &mut diags {
+        if d.confidence.is_none() {
+            d.confidence = Some(crate::evidence::compute_confidence(d));
+        }
     }
     if let Some(max) = cfg.output.max_results {
         diags.truncate(max as usize);
@@ -531,6 +554,11 @@ pub fn scan_with_index_parallel(
     if cfg.output.attack_surface_ranking {
         crate::rank::rank_diags(&mut diags);
     }
+    for d in &mut diags {
+        if d.confidence.is_none() {
+            d.confidence = Some(crate::evidence::compute_confidence(d));
+        }
+    }
     if let Some(max) = cfg.output.max_results {
         diags.truncate(max as usize);
     }
@@ -621,7 +649,9 @@ fn severity_filter_applied_at_output_stage() {
             path_validated: false,
             guard_kind: None,
             message: None,
-            evidence: vec![],
+            labels: vec![],
+            confidence: None,
+            evidence: None,
             rank_score: None,
             rank_reason: None,
             suppressed: false,
@@ -636,7 +666,9 @@ fn severity_filter_applied_at_output_stage() {
             path_validated: false,
             guard_kind: None,
             message: None,
-            evidence: vec![],
+            labels: vec![],
+            confidence: None,
+            evidence: None,
             rank_score: None,
             rank_reason: None,
             suppressed: false,
@@ -645,7 +677,10 @@ fn severity_filter_applied_at_output_stage() {
     ];
 
     let filter = SeverityFilter::parse("HIGH").unwrap();
-    let filtered: Vec<_> = diags.into_iter().filter(|d| filter.matches(d.severity)).collect();
+    let filtered: Vec<_> = diags
+        .into_iter()
+        .filter(|d| filter.matches(d.severity))
+        .collect();
 
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].severity, Severity::High);

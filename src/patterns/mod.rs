@@ -49,6 +49,7 @@ mod ruby;
 pub mod rust;
 pub mod typescript;
 
+use crate::evidence::Confidence;
 use console::style;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -223,6 +224,8 @@ pub struct Pattern {
     pub tier: PatternTier,
     /// Vulnerability class.
     pub category: PatternCategory,
+    /// Confidence level for findings produced by this pattern.
+    pub confidence: Confidence,
 }
 
 /// Global, lazily-initialised registry: lang-name → pattern slice

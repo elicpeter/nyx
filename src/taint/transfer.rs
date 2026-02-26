@@ -159,22 +159,13 @@ impl Transfer<TaintState> for TaintTransfer<'_> {
 
 impl TaintTransfer<'_> {
     /// Apply a Source label: insert taint for the defined variable.
-    fn apply_source(
-        &self,
-        node: NodeIndex,
-        info: &NodeInfo,
-        bits: Cap,
-        state: &mut TaintState,
-    ) {
+    fn apply_source(&self, node: NodeIndex, info: &NodeInfo, bits: Cap, state: &mut TaintState) {
         if let Some(ref v) = info.defines
             && let Some(sym) = self.interner.get(v)
         {
             let callee = info.callee.as_deref().unwrap_or("");
             let source_kind = crate::labels::infer_source_kind(bits, callee);
-            let origin = TaintOrigin {
-                node,
-                source_kind,
-            };
+            let origin = TaintOrigin { node, source_kind };
 
             match state.get(sym) {
                 Some(existing) => {
@@ -210,10 +201,13 @@ impl TaintTransfer<'_> {
             if new_caps.is_empty() {
                 state.remove(sym);
             } else {
-                state.set(sym, VarTaint {
-                    caps: new_caps,
-                    origins: combined_origins,
-                });
+                state.set(
+                    sym,
+                    VarTaint {
+                        caps: new_caps,
+                        origins: combined_origins,
+                    },
+                );
             }
         }
     }
@@ -227,11 +221,7 @@ impl TaintTransfer<'_> {
         state: &mut TaintState,
     ) {
         if let Some(ref callee) = info.callee
-            && let Some(resolved) = self.resolve_callee(
-                callee,
-                caller_func,
-                info.call_ordinal,
-            )
+            && let Some(resolved) = self.resolve_callee(callee, caller_func, info.call_ordinal)
         {
             let mut return_bits = Cap::empty();
             let mut return_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
@@ -242,10 +232,7 @@ impl TaintTransfer<'_> {
                 let callee_str = info.callee.as_deref().unwrap_or("");
                 let source_kind =
                     crate::labels::infer_source_kind(resolved.source_caps, callee_str);
-                let origin = TaintOrigin {
-                    node,
-                    source_kind,
-                };
+                let origin = TaintOrigin { node, source_kind };
                 if !return_origins.iter().any(|o| o.node == node) {
                     return_origins.push(origin);
                 }
@@ -274,10 +261,13 @@ impl TaintTransfer<'_> {
                 if return_bits.is_empty() {
                     state.remove(sym);
                 } else {
-                    state.set(sym, VarTaint {
-                        caps: return_bits,
-                        origins: return_origins,
-                    });
+                    state.set(
+                        sym,
+                        VarTaint {
+                            caps: return_bits,
+                            origins: return_origins,
+                        },
+                    );
                 }
             }
 
@@ -304,10 +294,13 @@ impl TaintTransfer<'_> {
             if combined_caps.is_empty() {
                 state.remove(sym);
             } else {
-                state.set(sym, VarTaint {
-                    caps: combined_caps,
-                    origins: combined_origins,
-                });
+                state.set(
+                    sym,
+                    VarTaint {
+                        caps: combined_caps,
+                        origins: combined_origins,
+                    },
+                );
             }
         }
     }
@@ -359,9 +352,7 @@ impl TaintTransfer<'_> {
             _ => info
                 .callee
                 .as_ref()
-                .and_then(|c| {
-                    self.resolve_callee(c, caller_func, info.call_ordinal)
-                })
+                .and_then(|c| self.resolve_callee(c, caller_func, info.call_ordinal))
                 .filter(|r| !r.sink_caps.is_empty())
                 .map(|r| r.sink_caps)
                 .unwrap_or(Cap::empty()),

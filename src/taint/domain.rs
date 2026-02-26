@@ -179,10 +179,7 @@ impl TaintState {
 
     /// Set a predicate summary for a variable.
     pub fn set_predicate(&mut self, sym: SymbolId, summary: PredicateSummary) {
-        match self
-            .predicates
-            .binary_search_by_key(&sym, |(id, _)| *id)
-        {
+        match self.predicates.binary_search_by_key(&sym, |(id, _)| *id) {
             Ok(idx) => self.predicates[idx].1 = summary,
             Err(idx) => self.predicates.insert(idx, (sym, summary)),
         }
@@ -377,10 +374,7 @@ fn merge_join_predicates(
 /// More precise (more known_true bits) = lower in the lattice.
 /// So a ⊑ b means a.known_true ⊇ b.known_true for each key.
 #[allow(dead_code)] // called by Lattice::leq
-fn predicates_leq(
-    a: &[(SymbolId, PredicateSummary)],
-    b: &[(SymbolId, PredicateSummary)],
-) -> bool {
+fn predicates_leq(a: &[(SymbolId, PredicateSummary)], b: &[(SymbolId, PredicateSummary)]) -> bool {
     let (mut i, mut j) = (0, 0);
 
     // For each key in b, a must have at least as many bits
@@ -428,11 +422,7 @@ mod tests {
         )
     }
 
-    fn make_taint_with_origin(
-        sym: u32,
-        caps: Cap,
-        node: usize,
-    ) -> (SymbolId, VarTaint) {
+    fn make_taint_with_origin(sym: u32, caps: Cap, node: usize) -> (SymbolId, VarTaint) {
         (
             SymbolId(sym),
             VarTaint {
@@ -490,9 +480,7 @@ mod tests {
     #[test]
     fn leq_consistent_with_join() {
         let a = state_with_vars(vec![make_taint(0, Cap::ENV_VAR)]);
-        let b = state_with_vars(vec![
-            make_taint(0, Cap::ENV_VAR | Cap::SHELL_ESCAPE),
-        ]);
+        let b = state_with_vars(vec![make_taint(0, Cap::ENV_VAR | Cap::SHELL_ESCAPE)]);
         assert!(a.leq(&b));
         assert_eq!(a.join(&b), b);
     }

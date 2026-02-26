@@ -145,13 +145,16 @@ impl Lattice for AuthDomainState {
         Self {
             auth_level: self.auth_level.join(&other.auth_level),
             // Only validated on ALL paths counts
-            validated: self.validated.intersection(&other.validated).copied().collect(),
+            validated: self
+                .validated
+                .intersection(&other.validated)
+                .copied()
+                .collect(),
         }
     }
 
     fn leq(&self, other: &Self) -> bool {
-        self.auth_level.leq(&other.auth_level)
-            && self.validated.is_superset(&other.validated)
+        self.auth_level.leq(&other.auth_level) && self.validated.is_superset(&other.validated)
     }
 }
 
@@ -201,7 +204,10 @@ mod tests {
     fn resource_lifecycle_join_is_or() {
         let a = ResourceLifecycle::OPEN;
         let b = ResourceLifecycle::CLOSED;
-        assert_eq!(a.join(&b), ResourceLifecycle::OPEN | ResourceLifecycle::CLOSED);
+        assert_eq!(
+            a.join(&b),
+            ResourceLifecycle::OPEN | ResourceLifecycle::CLOSED
+        );
     }
 
     #[test]
@@ -239,9 +245,15 @@ mod tests {
 
     #[test]
     fn auth_level_join_is_min() {
-        assert_eq!(AuthLevel::Admin.join(&AuthLevel::Unauthed), AuthLevel::Unauthed);
+        assert_eq!(
+            AuthLevel::Admin.join(&AuthLevel::Unauthed),
+            AuthLevel::Unauthed
+        );
         assert_eq!(AuthLevel::Authed.join(&AuthLevel::Admin), AuthLevel::Authed);
-        assert_eq!(AuthLevel::Authed.join(&AuthLevel::Authed), AuthLevel::Authed);
+        assert_eq!(
+            AuthLevel::Authed.join(&AuthLevel::Authed),
+            AuthLevel::Authed
+        );
     }
 
     #[test]

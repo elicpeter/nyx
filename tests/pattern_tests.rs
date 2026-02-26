@@ -376,11 +376,7 @@ fn positive_go() {
     assert_positive_match(
         "go",
         "positive.go",
-        &[
-            "go.cmdi.exec_command",
-            "go.crypto.md5",
-            "go.crypto.sha1",
-        ],
+        &["go.cmdi.exec_command", "go.crypto.md5", "go.crypto.sha1"],
     );
 }
 

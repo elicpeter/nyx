@@ -1,3 +1,4 @@
+use crate::evidence::Confidence;
 use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
 /// PHP AST patterns.
@@ -18,6 +19,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "php.code_exec.create_function",
@@ -28,6 +30,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "php.code_exec.preg_replace_e",
@@ -41,6 +44,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "php.code_exec.assert_string",
@@ -53,6 +57,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
@@ -64,6 +69,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
@@ -75,6 +81,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
     // ── Tier B: SQL injection (concatenation heuristic) ────────────────
     Pattern {
@@ -88,6 +95,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::B,
         category: PatternCategory::SqlInjection,
+        confidence: Confidence::Medium,
     },
     // ── Tier B: Path traversal (include with variable) ─────────────────
     Pattern {
@@ -97,6 +105,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::B,
         category: PatternCategory::PathTraversal,
+        confidence: Confidence::Medium,
     },
     // ── Tier A: Crypto ─────────────────────────────────────────────────
     Pattern {
@@ -108,6 +117,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
     Pattern {
         id: "php.crypto.sha1",
@@ -118,6 +128,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
     Pattern {
         id: "php.crypto.rand",
@@ -128,5 +139,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
 ];

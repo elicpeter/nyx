@@ -127,7 +127,7 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                 .as_deref()
                 .unwrap_or_else(|| rule_description(base));
 
-            json!({
+            let mut result = json!({
                 "ruleId": base,
                 "ruleIndex": rule_index,
                 "level": severity_to_level(d.severity),
@@ -141,7 +141,16 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                         }
                     }
                 }]
-            })
+            });
+
+            // Add confidence to properties if set
+            if let Some(conf) = d.confidence {
+                result["properties"] = json!({
+                    "confidence": conf.to_string(),
+                });
+            }
+
+            result
         })
         .collect();
 

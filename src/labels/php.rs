@@ -5,9 +5,22 @@ pub static RULES: &[LabelRule] = &[
     // ─────────── Sources ───────────
     // Note: PHP `$` prefix is stripped by collect_idents, so match without `$`.
     LabelRule {
-        matchers: &["$_GET", "_GET", "$_POST", "_POST", "$_REQUEST", "_REQUEST",
-                     "$_COOKIE", "_COOKIE", "$_FILES", "_FILES", "$_SERVER", "_SERVER",
-                     "$_ENV", "_ENV"],
+        matchers: &[
+            "$_GET",
+            "_GET",
+            "$_POST",
+            "_POST",
+            "$_REQUEST",
+            "_REQUEST",
+            "$_COOKIE",
+            "_COOKIE",
+            "$_FILES",
+            "_FILES",
+            "$_SERVER",
+            "_SERVER",
+            "$_ENV",
+            "_ENV",
+        ],
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
@@ -29,7 +42,14 @@ pub static RULES: &[LabelRule] = &[
     },
     // ─────────── Sinks ─────────────
     LabelRule {
-        matchers: &["system", "exec", "passthru", "shell_exec", "proc_open", "popen"],
+        matchers: &[
+            "system",
+            "exec",
+            "passthru",
+            "shell_exec",
+            "proc_open",
+            "popen",
+        ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
     LabelRule {

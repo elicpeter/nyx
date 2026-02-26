@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Pattern-level confidence for AST rules** — each AST pattern in `src/patterns/` now carries an explicit `confidence: Confidence` field (High, Medium, or Low). Confidence is set at the pattern definition site and flows directly into emitted `Diag`s, replacing the old heuristic that inferred AST confidence from severity alone. `compute_confidence()` is retained as a fallback for detectors that don't set confidence (taint, state, legacy).
+  - Tier A patterns with High/Medium severity → `Confidence::High` (deterministic structural match).
+  - Tier A patterns with Low severity → `Confidence::Medium` (quality/crypto signals).
+  - Tier B patterns (heuristic-guarded) → `Confidence::Medium`.
+  - Example: `rs.quality.expect` now produces `Confidence: High` regardless of its Low severity.
+
+### Changed
+- **Console header line now includes confidence** — the finding header shows score and confidence together as a parenthesized suffix: `(Score: 36, Confidence: Medium)`. The previous standalone `Confidence: ...` body line is removed. All four combinations are handled (both, score-only, confidence-only, neither).
+- **Confidence display uses Title Case** — `Confidence::Display` now renders as `Low`, `Medium`, `High` (previously lowercase).
+
 - **Inline per-finding suppressions** — suppress specific findings directly in source code using `nyx:ignore` comments. Two directive forms: `nyx:ignore <RULE_ID>` (same line) and `nyx:ignore-next-line <RULE_ID>` (next line). Supports comma-separated IDs, wildcard suffixes (`rs.quality.*`), and automatic canonicalization of taint rule IDs (parenthetical suffixes stripped). Comment detection covers all 10 languages with string/raw-string/template-literal guards to avoid false positives.
   - **`--show-suppressed` CLI flag** — reveal suppressed findings in output, dimmed with `[SUPPRESSED]` tag. Summary shows `"N issues (M suppressed)"`. In JSON/SARIF mode, suppressed findings include `"suppressed": true` and `"suppression": {...}` metadata fields.
   - **`suppressed` and `suppression` fields on `Diag`** — conditionally serialized; JSON output is unchanged when no suppressions are active.

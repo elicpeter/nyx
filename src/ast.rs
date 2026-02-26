@@ -2,6 +2,7 @@ use crate::cfg::{build_cfg, export_summaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
+use crate::evidence::{Evidence, SpanEvidence, StateEvidence};
 use crate::labels::{build_lang_rules, severity_for_source_kind};
 use crate::patterns::Severity;
 use crate::state;
@@ -272,16 +273,30 @@ pub fn run_rules_on_bytes(
             let short_source = crate::fmt::shorten_callee(&source_callee);
             let short_sink = crate::fmt::shorten_callee(&sink_callee);
 
-            let mut evidence = vec![
-                ("Source".into(), format!("{source_callee} ({}:{})", source_point.row + 1, source_point.column + 1)),
+            let mut labels = vec![
+                (
+                    "Source".into(),
+                    format!(
+                        "{source_callee} ({}:{})",
+                        source_point.row + 1,
+                        source_point.column + 1
+                    ),
+                ),
                 ("Sink".into(), sink_callee.to_string()),
             ];
             if let Some(guard) = finding.guard_kind {
-                evidence.push(("Path guard".into(), format!("{guard:?}")));
+                labels.push(("Path guard".into(), format!("{guard:?}")));
             }
 
+            let file_path_owned = path.to_string_lossy().into_owned();
+            let mut evidence_notes = Vec::new();
+            if finding.path_validated {
+                evidence_notes.push("path_validated".into());
+            }
+            evidence_notes.push(format!("source_kind:{:?}", finding.source_kind));
+
             out.push(Diag {
-                path: path.to_string_lossy().into_owned(),
+                path: file_path_owned.clone(),
                 line: sink_point.row + 1,
                 col: sink_point.column + 1,
                 severity: severity_for_source_kind(finding.source_kind),
@@ -295,7 +310,39 @@ pub fn run_rules_on_bytes(
                 message: Some(format!(
                     "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
                 )),
-                evidence,
+                labels,
+                confidence: None,
+                evidence: Some(Evidence {
+                    source: Some(SpanEvidence {
+                        path: file_path_owned.clone(),
+                        line: (source_point.row + 1) as u32,
+                        col: (source_point.column + 1) as u32,
+                        kind: "source".into(),
+                        snippet: Some(short_source.clone()),
+                    }),
+                    sink: Some(SpanEvidence {
+                        path: file_path_owned,
+                        line: (sink_point.row + 1) as u32,
+                        col: (sink_point.column + 1) as u32,
+                        kind: "sink".into(),
+                        snippet: Some(short_sink.clone()),
+                    }),
+                    guards: finding
+                        .guard_kind
+                        .map(|g| {
+                            vec![SpanEvidence {
+                                path: path.to_string_lossy().into_owned(),
+                                line: (sink_point.row + 1) as u32,
+                                col: 0,
+                                kind: "guard".into(),
+                                snippet: Some(format!("{g:?}")),
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    sanitizers: vec![],
+                    state: None,
+                    notes: evidence_notes,
+                }),
                 rank_score: None,
                 rank_reason: None,
                 suppressed: false,
@@ -319,6 +366,11 @@ pub fn run_rules_on_bytes(
         };
         for cf in cfg_analysis::run_all(&cfg_ctx) {
             let point = byte_offset_to_point(&_tree, cf.span.0);
+            let cfg_confidence = Some(match cf.confidence {
+                cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
+                cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
+                cfg_analysis::Confidence::Low => crate::evidence::Confidence::Low,
+            });
             out.push(Diag {
                 path: path.to_string_lossy().into_owned(),
                 line: point.row + 1,
@@ -328,7 +380,22 @@ pub fn run_rules_on_bytes(
                 path_validated: false,
                 guard_kind: None,
                 message: Some(cf.message),
-                evidence: vec![],
+                labels: vec![],
+                confidence: cfg_confidence,
+                evidence: Some(Evidence {
+                    source: None,
+                    sink: Some(SpanEvidence {
+                        path: path.to_string_lossy().into_owned(),
+                        line: (point.row + 1) as u32,
+                        col: (point.column + 1) as u32,
+                        kind: "sink".into(),
+                        snippet: None,
+                    }),
+                    guards: vec![],
+                    sanitizers: vec![],
+                    state: None,
+                    notes: vec![],
+                }),
                 rank_score: None,
                 rank_reason: None,
                 suppressed: false,
@@ -363,7 +430,27 @@ pub fn run_rules_on_bytes(
                     path_validated: false,
                     guard_kind: None,
                     message: Some(sf.message.clone()),
-                    evidence: vec![],
+                    labels: vec![],
+                    confidence: None,
+                    evidence: Some(Evidence {
+                        source: None,
+                        sink: Some(SpanEvidence {
+                            path: path.to_string_lossy().into_owned(),
+                            line: (point.row + 1) as u32,
+                            col: (point.column + 1) as u32,
+                            kind: "sink".into(),
+                            snippet: None,
+                        }),
+                        guards: vec![],
+                        sanitizers: vec![],
+                        state: Some(StateEvidence {
+                            machine: sf.machine.into(),
+                            subject: sf.subject.clone(),
+                            from_state: sf.from_state.into(),
+                            to_state: sf.to_state.into(),
+                        }),
+                        notes: vec![],
+                    }),
                     rank_score: None,
                     rank_reason: None,
                     suppressed: false,
@@ -405,7 +492,22 @@ pub fn run_rules_on_bytes(
                         path_validated: false,
                         guard_kind: None,
                         message: Some(cq.meta.description.to_owned()),
-                        evidence: vec![],
+                        labels: vec![],
+                        confidence: Some(cq.meta.confidence),
+                        evidence: Some(Evidence {
+                            source: None,
+                            sink: Some(SpanEvidence {
+                                path: path.to_string_lossy().into_owned(),
+                                line: (point.row + 1) as u32,
+                                col: (point.column + 1) as u32,
+                                kind: "sink".into(),
+                                snippet: None,
+                            }),
+                            guards: vec![],
+                            sanitizers: vec![],
+                            state: None,
+                            notes: vec![],
+                        }),
                         rank_score: None,
                         rank_reason: None,
                         suppressed: false,
@@ -554,16 +656,30 @@ pub fn analyse_file_fused(
             let short_source = crate::fmt::shorten_callee(&source_callee);
             let short_sink = crate::fmt::shorten_callee(&sink_callee);
 
-            let mut evidence = vec![
-                ("Source".into(), format!("{source_callee} ({}:{})", source_point.row + 1, source_point.column + 1)),
+            let mut labels = vec![
+                (
+                    "Source".into(),
+                    format!(
+                        "{source_callee} ({}:{})",
+                        source_point.row + 1,
+                        source_point.column + 1
+                    ),
+                ),
                 ("Sink".into(), sink_callee.to_string()),
             ];
             if let Some(guard) = finding.guard_kind {
-                evidence.push(("Path guard".into(), format!("{guard:?}")));
+                labels.push(("Path guard".into(), format!("{guard:?}")));
             }
 
+            let fused_file_path = path.to_string_lossy().into_owned();
+            let mut fused_evidence_notes = Vec::new();
+            if finding.path_validated {
+                fused_evidence_notes.push("path_validated".into());
+            }
+            fused_evidence_notes.push(format!("source_kind:{:?}", finding.source_kind));
+
             out.push(Diag {
-                path: path.to_string_lossy().into_owned(),
+                path: fused_file_path.clone(),
                 line: sink_point.row + 1,
                 col: sink_point.column + 1,
                 severity: severity_for_source_kind(finding.source_kind),
@@ -577,7 +693,39 @@ pub fn analyse_file_fused(
                 message: Some(format!(
                     "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
                 )),
-                evidence,
+                labels,
+                confidence: None,
+                evidence: Some(Evidence {
+                    source: Some(SpanEvidence {
+                        path: fused_file_path.clone(),
+                        line: (source_point.row + 1) as u32,
+                        col: (source_point.column + 1) as u32,
+                        kind: "source".into(),
+                        snippet: Some(short_source.clone()),
+                    }),
+                    sink: Some(SpanEvidence {
+                        path: fused_file_path.clone(),
+                        line: (sink_point.row + 1) as u32,
+                        col: (sink_point.column + 1) as u32,
+                        kind: "sink".into(),
+                        snippet: Some(short_sink.clone()),
+                    }),
+                    guards: finding
+                        .guard_kind
+                        .map(|g| {
+                            vec![SpanEvidence {
+                                path: fused_file_path,
+                                line: (sink_point.row + 1) as u32,
+                                col: 0,
+                                kind: "guard".into(),
+                                snippet: Some(format!("{g:?}")),
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    sanitizers: vec![],
+                    state: None,
+                    notes: fused_evidence_notes,
+                }),
                 rank_score: None,
                 rank_reason: None,
                 suppressed: false,
@@ -600,6 +748,11 @@ pub fn analyse_file_fused(
         };
         for cf in cfg_analysis::run_all(&cfg_ctx) {
             let point = byte_offset_to_point(&tree, cf.span.0);
+            let fused_cfg_confidence = Some(match cf.confidence {
+                cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
+                cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
+                cfg_analysis::Confidence::Low => crate::evidence::Confidence::Low,
+            });
             out.push(Diag {
                 path: path.to_string_lossy().into_owned(),
                 line: point.row + 1,
@@ -609,7 +762,22 @@ pub fn analyse_file_fused(
                 path_validated: false,
                 guard_kind: None,
                 message: Some(cf.message),
-                evidence: vec![],
+                labels: vec![],
+                confidence: fused_cfg_confidence,
+                evidence: Some(Evidence {
+                    source: None,
+                    sink: Some(SpanEvidence {
+                        path: path.to_string_lossy().into_owned(),
+                        line: (point.row + 1) as u32,
+                        col: (point.column + 1) as u32,
+                        kind: "sink".into(),
+                        snippet: None,
+                    }),
+                    guards: vec![],
+                    sanitizers: vec![],
+                    state: None,
+                    notes: vec![],
+                }),
                 rank_score: None,
                 rank_reason: None,
                 suppressed: false,
@@ -643,7 +811,27 @@ pub fn analyse_file_fused(
                     path_validated: false,
                     guard_kind: None,
                     message: Some(sf.message.clone()),
-                    evidence: vec![],
+                    labels: vec![],
+                    confidence: None,
+                    evidence: Some(Evidence {
+                        source: None,
+                        sink: Some(SpanEvidence {
+                            path: path.to_string_lossy().into_owned(),
+                            line: (point.row + 1) as u32,
+                            col: (point.column + 1) as u32,
+                            kind: "sink".into(),
+                            snippet: None,
+                        }),
+                        guards: vec![],
+                        sanitizers: vec![],
+                        state: Some(StateEvidence {
+                            machine: sf.machine.into(),
+                            subject: sf.subject.clone(),
+                            from_state: sf.from_state.into(),
+                            to_state: sf.to_state.into(),
+                        }),
+                        notes: vec![],
+                    }),
                     rank_score: None,
                     rank_reason: None,
                     suppressed: false,
@@ -683,7 +871,22 @@ pub fn analyse_file_fused(
                         path_validated: false,
                         guard_kind: None,
                         message: Some(cq.meta.description.to_owned()),
-                        evidence: vec![],
+                        labels: vec![],
+                        confidence: Some(cq.meta.confidence),
+                        evidence: Some(Evidence {
+                            source: None,
+                            sink: Some(SpanEvidence {
+                                path: path.to_string_lossy().into_owned(),
+                                line: (point.row + 1) as u32,
+                                col: (point.column + 1) as u32,
+                                kind: "sink".into(),
+                                snippet: None,
+                            }),
+                            guards: vec![],
+                            sanitizers: vec![],
+                            state: None,
+                            notes: vec![],
+                        }),
                         rank_score: None,
                         rank_reason: None,
                         suppressed: false,

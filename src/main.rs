@@ -6,6 +6,7 @@ mod cli;
 mod commands;
 mod database;
 mod errors;
+mod evidence;
 mod fmt;
 mod interop;
 mod labels;
@@ -61,8 +62,8 @@ fn main() -> NyxResult<()> {
     tracing::debug!("CLI starting up");
     let cli = Cli::parse();
 
-    let proj_dirs = ProjectDirs::from("", "", "nyx")
-        .ok_or("Unable to determine project directories")?;
+    let proj_dirs =
+        ProjectDirs::from("", "", "nyx").ok_or("Unable to determine project directories")?;
 
     // todo: check if we want to actually build a config file, maybe some environments will not want to have anything written
     let config_dir = proj_dirs.config_dir();

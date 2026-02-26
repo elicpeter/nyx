@@ -281,7 +281,8 @@ fn first_member_label(
         // PHP/Python/Ruby subscript access: `$_GET['cmd']`, `os.environ['KEY']`, `params[:cmd]`
         // Try to classify the object (before the `[`) as a source.
         "subscript_expression" | "subscript" | "element_reference" => {
-            if let Some(obj) = n.child_by_field_name("object")
+            if let Some(obj) = n
+                .child_by_field_name("object")
                 .or_else(|| n.child_by_field_name("value"))
                 .or_else(|| n.child(0))
             {
@@ -311,12 +312,11 @@ fn first_member_label(
 fn first_member_text(n: Node, code: &[u8]) -> Option<String> {
     match n.kind() {
         "member_expression" | "attribute" | "selector_expression" => member_expr_text(n, code),
-        "subscript_expression" | "subscript" | "element_reference" => {
-            n.child_by_field_name("object")
-                .or_else(|| n.child_by_field_name("value"))
-                .or_else(|| n.child(0))
-                .and_then(|obj| text_of(obj, code))
-        }
+        "subscript_expression" | "subscript" | "element_reference" => n
+            .child_by_field_name("object")
+            .or_else(|| n.child_by_field_name("value"))
+            .or_else(|| n.child(0))
+            .and_then(|obj| text_of(obj, code)),
         _ => {
             let mut cursor = n.walk();
             for child in n.children(&mut cursor) {
@@ -707,7 +707,8 @@ fn push_node<'a>(
             lookup(lang, ast.kind()),
             Kind::CallWrapper | Kind::Assignment | Kind::Return
         )
-        && let Some((inner_text, inner_label)) = find_classifiable_inner_call(ast, lang, code, extra)
+        && let Some((inner_text, inner_label)) =
+            find_classifiable_inner_call(ast, lang, code, extra)
     {
         label = Some(inner_label);
         text = inner_text;
@@ -1339,12 +1340,7 @@ fn build_sub<'a>(
                 // don't have a named "body" field — find the first block child.
                 let mut c = ast.walk();
                 ast.children(&mut c)
-                    .find(|n| {
-                        matches!(
-                            lookup(lang, n.kind()),
-                            Kind::Block | Kind::SourceFile
-                        )
-                    })
+                    .find(|n| matches!(lookup(lang, n.kind()), Kind::Block | Kind::SourceFile))
                     .unwrap_or_else(|| {
                         panic!(
                             "fn w/o body: kind={} text='{}'",

@@ -8,8 +8,15 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {
-        matchers: &["getParameter", "getInputStream", "getHeader", "getCookies",
-                     "getReader", "getQueryString", "getPathInfo"],
+        matchers: &[
+            "getParameter",
+            "getInputStream",
+            "getHeader",
+            "getCookies",
+            "getReader",
+            "getQueryString",
+            "getPathInfo",
+        ],
         label: DataLabel::Source(Cap::all()),
     },
     LabelRule {

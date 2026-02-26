@@ -1,3 +1,4 @@
+use crate::evidence::Confidence;
 use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
 /// Ruby AST patterns.
@@ -15,6 +16,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rb.code_exec.instance_eval",
@@ -25,6 +27,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rb.code_exec.class_eval",
@@ -35,6 +38,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
@@ -44,6 +48,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Shell execution ─────────────────────────────────────────
     Pattern {
@@ -55,6 +60,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Deserialization ────────────────────────────────────────
     Pattern {
@@ -67,6 +73,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "rb.deser.marshal_load",
@@ -78,6 +85,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::Deserialization,
+        confidence: Confidence::High,
     },
     // ── Tier A: Reflection ─────────────────────────────────────────────
     Pattern {
@@ -91,6 +99,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::B,
         category: PatternCategory::Reflection,
+        confidence: Confidence::Medium,
     },
     Pattern {
         id: "rb.reflection.constantize",
@@ -101,6 +110,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Reflection,
+        confidence: Confidence::High,
     },
     // ── Tier A: SSRF ───────────────────────────────────────────────────
     Pattern {
@@ -114,6 +124,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::InsecureTransport,
+        confidence: Confidence::High,
     },
     // ── Tier A: Crypto ─────────────────────────────────────────────────
     Pattern {
@@ -125,5 +136,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
 ];

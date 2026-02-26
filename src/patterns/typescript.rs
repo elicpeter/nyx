@@ -1,3 +1,4 @@
+use crate::evidence::Confidence;
 use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
 /// TypeScript AST patterns.
@@ -16,6 +17,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "ts.code_exec.new_function",
@@ -26,6 +28,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "ts.code_exec.settimeout_string",
@@ -37,6 +40,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::CodeExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: XSS sinks ──────────────────────────────────────────────
     Pattern {
@@ -50,6 +54,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Xss,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "ts.xss.outer_html",
@@ -61,6 +66,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Xss,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "ts.xss.insert_adjacent_html",
@@ -72,6 +78,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Xss,
+        confidence: Confidence::High,
     },
     // ── Tier A: Weak crypto ────────────────────────────────────────────
     Pattern {
@@ -85,6 +92,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
     },
     // ── Tier A: TypeScript-specific type-safety escapes ────────────────
     Pattern {
@@ -94,6 +102,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::CodeQuality,
+        confidence: Confidence::Medium,
     },
     Pattern {
         id: "ts.quality.as_any",
@@ -102,6 +111,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::CodeQuality,
+        confidence: Confidence::Medium,
     },
     // ── Tier A: Prototype pollution ────────────────────────────────────
     Pattern {
@@ -114,6 +124,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Prototype,
+        confidence: Confidence::High,
     },
     // ── Tier A: Open redirect ──────────────────────────────────────────
     Pattern {
@@ -127,6 +138,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::Xss,
+        confidence: Confidence::High,
     },
     // ── Tier A: Cookie manipulation ────────────────────────────────────
     Pattern {
@@ -140,5 +152,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Xss,
+        confidence: Confidence::Medium,
     },
 ];

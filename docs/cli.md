@@ -62,6 +62,7 @@ nyx scan [PATH] [OPTIONS]
 |------|---------|-------------|
 | `--severity <EXPR>` | *(none)* | Filter findings by severity |
 | `--min-score <N>` | *(none)* | Drop findings with rank score below N |
+| `--min-confidence <LEVEL>` | *(none)* | Drop findings below this confidence level (`low`, `medium`, `high`) |
 | `--fail-on <SEV>` | *(none)* | Exit code 1 if any finding >= this severity |
 | `--show-suppressed` | off | Show inline-suppressed findings (dimmed, tagged `[SUPPRESSED]`) |
 | `--keep-nonprod-severity` | off | Don't downgrade severity for test/vendor paths |
@@ -97,6 +98,9 @@ nyx scan . --severity HIGH --quiet
 
 # Only findings scoring 50 or above
 nyx scan . --min-score 50
+
+# Only medium+ confidence findings
+nyx scan . --min-confidence medium
 ```
 
 ---

@@ -1,3 +1,4 @@
+use crate::evidence::Confidence;
 use crate::patterns::{Pattern, PatternCategory, PatternTier, Severity};
 
 /// C AST patterns.
@@ -16,6 +17,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "c.memory.strcpy",
@@ -24,6 +26,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "c.memory.strcat",
@@ -32,6 +35,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "c.memory.sprintf",
@@ -40,6 +44,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "c.memory.scanf_percent_s",
@@ -52,6 +57,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::High,
     },
     // ── Tier A: Command execution ──────────────────────────────────────
     Pattern {
@@ -61,6 +67,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     Pattern {
         id: "c.cmdi.popen",
@@ -69,6 +76,7 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Medium,
         tier: PatternTier::A,
         category: PatternCategory::CommandExec,
+        confidence: Confidence::High,
     },
     // ── Tier A: Format-string ──────────────────────────────────────────
     Pattern {
@@ -82,5 +90,6 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::High,
         tier: PatternTier::B,
         category: PatternCategory::MemorySafety,
+        confidence: Confidence::Medium,
     },
 ];
