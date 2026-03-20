@@ -66,7 +66,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "block"                 => Kind::Function,
 
     // data-flow
-    "call"                  => Kind::CallFn,
+    "call"                  => Kind::CallMethod,
     "assignment"            => Kind::Assignment,
     "method"                => Kind::Function,
     "singleton_method"      => Kind::Function,

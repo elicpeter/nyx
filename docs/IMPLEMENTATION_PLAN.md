@@ -7,7 +7,7 @@
 > **Based on**: Full repository audit (March 2026) covering correctness, validation,
 > rule quality, architecture, and product credibility.
 >
-> **Usage**: Tell Claude Code: *"/"*
+> **Usage**: Tell Claude Code: *"Implement Phase N from `docs/IMPLEMENTATION_PLAN.md`"*
 
 ---
 
