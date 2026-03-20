@@ -1414,6 +1414,123 @@ evidence.
 
 ---
 
+### Phase 22.5 — Multi-label classification for taint labels
+
+**Category**: core correctness
+
+**Why**: Nyx’s current label classification model returns only the **first matching
+label** for a callee. This is too restrictive for real APIs, because some functions
+legitimately behave as more than one thing at once. For example:
+
+- `file_get_contents` in PHP can act as a **Source** (its return value contains data)
+  and also as an **SSRF Sink** (its URL argument can trigger an outbound request)
+- `readObject` in Java can act as a **Source-like producer of attacker-controlled data**
+  and also as a **DESERIALIZE Sink**
+- future framework wrappers may need to behave as **Sink + Sanitizer** or
+  **Source + Sink** depending on usage
+
+As long as classification is single-label, the rule base is forced into awkward
+tradeoffs, and later vulnerability modeling (especially SSRF and deserialization)
+remains artificially shallow.
+
+This phase upgrades the core classification interface so a single API can carry
+multiple labels safely and deterministically.
+
+**Goals**:
+- Replace single-label classification with **multi-label classification**
+- Allow a callee to return multiple matching labels in stable order
+- Update taint analysis to consume multiple labels without changing existing semantics
+  for single-label rules
+- Add regression coverage for dual-label APIs like PHP `file_get_contents` and
+  Java `readObject`
+- Keep the implementation narrow: classification + taint consumption only
+
+**Files to touch**:
+- `src/labels/mod.rs` — classification API and helpers
+- `src/taint/transfer.rs` — consume multiple labels at call sites
+- `src/labels/php.rs` — verify dual-label rules like `file_get_contents`
+- `src/labels/java.rs` — verify dual-label rules like `readObject`
+- `tests/` — new unit tests and/or fixture updates for multi-label behaviour
+- `tests/fixtures/real_world/{lang}/taint/*.expect.json` — update expectations if
+  previously-shadowed findings now correctly appear
+
+**Implementation tasks**:
+
+1. **Replace first-match classification with all-match classification**
+    - Introduce a new classification helper that returns **all matching labels** for a
+      callee rather than a single `Option<DataLabel>`.
+    - Preserve rule order from the label file so results remain deterministic.
+    - Keep the old single-label helper only if needed for compatibility, but migrate
+      taint analysis to the new multi-label path.
+
+2. **Update taint transfer to consume multiple labels**
+    - At call handling sites in `src/taint/transfer.rs`, process all matching labels:
+        - apply `Source(...)` behaviour
+        - apply `Sink(...)` behaviour
+        - apply `Sanitizer(...)` behaviour
+    - Ensure the behaviours compose safely for the same callee:
+        - a call may generate taint on its return value
+        - also check its arguments as a sink
+        - also strip caps if it is a sanitizer
+    - Preserve existing behaviour for APIs that only have one label.
+
+3. **Add dual-label regression cases**
+    - PHP:
+        - `file_get_contents(url)` with tainted URL should be able to act as an SSRF sink
+        - `x = file_get_contents(url)` should still act as a source for returned data
+    - Java:
+        - `readObject` should remain compatible with existing patterns while also being
+          available as `Sink(Cap::DESERIALIZE)`
+    - Add targeted unit tests or real-world fixture assertions for both cases.
+
+4. **Audit label files for existing shadowed cases**
+    - Search for functions that currently have multiple intended semantics but are
+      blocked by first-match behaviour.
+    - At minimum verify:
+        - PHP `file_get_contents`
+        - Java `readObject`
+    - If additional shadowed cases exist and are clearly correct, leave the rules in
+      place and let this phase unlock them. Do not broaden rule coverage here.
+
+5. **Update expectations where correct new findings appear**
+    - Some fixtures may now produce `taint-unsanitised-flow` findings that were
+      previously impossible due to label shadowing.
+    - If the new finding is correct, promote it into the relevant `.expect.json`.
+    - Do not suppress newly-correct findings just to keep counts unchanged.
+
+**Test tasks**:
+- Add unit test: single-label API still behaves exactly as before
+- Add unit test: dual-label API can act as both Source and Sink in one call path
+- Add regression test: PHP `file_get_contents` no longer loses SSRF sink behaviour
+- Add regression test: Java `readObject` dual-label case is handled deterministically
+- `cargo test` must pass
+- Run relevant targeted fixture suites (`php`, `java`, `ssrf`, `deser`) and update
+  expect files where correct findings now appear
+
+**Definition of done**:
+- Classification API returns all matching labels in stable order
+- Taint transfer correctly applies multiple labels at a call site
+- PHP `file_get_contents` no longer loses SSRF sink behaviour because of first-match shadowing
+- Java `readObject` can coexist as both source-like and sink-like semantics
+- Existing single-label rules behave unchanged
+- All tests pass
+
+**Risks / gotchas**:
+- This touches a core engine interface. Keep the change minimal and tightly tested.
+- Order must remain deterministic even when multiple labels match.
+- Do not silently change non-taint consumers of classification unless required.
+- A multi-label call can both create and consume taint; apply behaviours carefully so
+  one does not accidentally erase another.
+- This phase is about classification semantics only. Do NOT bundle in validator
+  recognition, framework expansion, or broader SSRF work.
+
+**Dependencies**:
+- Phase 7 / 8 benefit from this change, but this phase can be implemented after they
+  land and before later semantic-completion work
+- Best placed before deep SSRF semantic completion and before final Phase 2 readiness assessment
+
+--- 
+
 ### Phase 23 — Expand Go rule depth
 
 **Category**: rule depth
@@ -1789,71 +1906,54 @@ point to measure incremental progress)
 
 ---
 
-### Phase 31 — SSRF semantic completion
+### Phase 30 — SSRF semantic completion
 
 **Category**: rule depth
 
-**Why**: Phases 7 and 7B established initial SSRF coverage and hardened the first
-major modeling gap (libcurl handle indirection), but SSRF support is still not
-semantically complete. Several important limitations remain:
+**Why**: Initial SSRF support (Phase 7) and SSRF modeling hardening (Phase 7B)
+established credible baseline coverage, and Phase 23 enables APIs to carry multiple
+labels where needed. However, SSRF support is still not semantically complete.
 
-- APIs that are both **sources and sinks** (for example `file_get_contents` in PHP)
-  cannot currently carry multiple labels because `classify()` returns only the first
-  matching label.
-- Common **SSRF validation patterns** (allowlists, hostname checks, scheme checks,
-  localhost/internal-IP blocking) are not recognised as sanitisation, so safe code
-  may still produce conservative false positives.
-- Framework and wrapper coverage remains uneven: core HTTP client sinks exist, but
-  framework-specific SSRF wrappers and request-builder flows are still shallow.
-- Multi-step request construction is only modeled for a narrow libcurl special case,
-  not as a broader “validated URL → request object → execute” semantic pattern.
+Remaining limitations include:
+- common **SSRF validation patterns** (allowlists, hostname checks, scheme checks,
+  localhost/internal-IP blocking) are not recognised as sanitisation
+- framework and wrapper coverage is still uneven across JS/TS, Python, Java, Go,
+  Ruby, and PHP
+- request-builder and helper-function flows remain shallower than direct one-hop sinks
+- SSRF precision and recall have improved, but are not yet measured as a dedicated
+  vulnerability class with benchmark-quality fixtures
 
-This phase completes SSRF as a mature vulnerability class by improving semantic
-precision, multi-label support, validator recognition, and framework-level depth.
+This phase completes SSRF as a mature vulnerability class by focusing on validator
+recognition, wrapper depth, benchmark-quality testing, and honest documentation of
+remaining static-analysis limits.
 
 **Goals**:
-- Add support for **multiple labels per callee** so APIs can act as both sources and sinks
 - Recognise a small, explicit set of **SSRF validation / sanitisation patterns**
 - Deepen SSRF coverage in high-value frameworks and wrappers
 - Add benchmark-quality positive and negative SSRF fixtures
-- Re-measure SSRF quality specifically so readiness can be judged on evidence
+- Measure SSRF precision/recall independently from overall taint
+- Document the remaining boundaries of static SSRF detection honestly
 
 **Files to touch**:
-- `src/labels/mod.rs` — classification API (single-label → multi-label support)
-- `src/labels/php.rs` — dual-label PHP rules (`file_get_contents`, related wrappers)
-- `src/labels/javascript.rs` — SSRF validator/sanitizer and wrapper additions
+- `src/labels/javascript.rs` — SSRF wrapper/sanitizer additions
 - `src/labels/typescript.rs` — mirror JS additions
-- `src/labels/python.rs` — SSRF validator/sanitizer and framework additions
-- `src/labels/java.rs` — SSRF validator/sanitizer and Spring/HTTP builder additions
-- `src/labels/go.rs` — SSRF validator/sanitizer and request-builder additions
-- `src/labels/ruby.rs` — SSRF validator/sanitizer and Rails/network wrapper additions
-- `src/taint/transfer.rs` — apply multiple labels, SSRF sanitizer semantics
+- `src/labels/python.rs` — SSRF wrapper/sanitizer additions
+- `src/labels/java.rs` — SSRF wrapper/sanitizer additions
+- `src/labels/go.rs` — SSRF wrapper/sanitizer additions
+- `src/labels/ruby.rs` — SSRF wrapper/sanitizer additions
+- `src/labels/php.rs` — SSRF wrapper/sanitizer additions
+- `src/taint/transfer.rs` — SSRF sanitizer / validation semantics
 - `tests/fixtures/real_world/{lang}/taint/` — new SSRF precision fixtures
 - `tests/benchmark/corpus/{lang}/ssrf/` — SSRF benchmark cases
 - `tests/benchmark/ground_truth.json` — SSRF benchmark expectations
-- `tests/benchmark/RESULTS.md` — SSRF subsection with before/after measurement
+- `tests/benchmark/RESULTS.md` — SSRF subsection with measured results
+- `docs/` or `README.md` — brief note on SSRF scope and known limits if appropriate
 
 **Implementation tasks**:
 
-1. **Add multi-label classification support**
-    - Replace the current “first matching label wins” classification behaviour with a
-      classification API that returns **all matching labels** for a callee.
-    - Update taint handling so a single API can behave as:
-        - `Source(...)`
-        - `Sink(...)`
-        - `Sanitizer(...)`
-          simultaneously when appropriate.
-    - Keep behaviour deterministic: preserve rule order, but do not discard later
-      matches.
-    - Migrate existing call sites to consume multiple labels safely.
-    - Use PHP `file_get_contents` as the canonical regression case:
-        - it should retain Source behaviour when its return value is used
-        - it should also trigger Sink(SSRF) behaviour when tainted input flows into
-          its URL argument
-
-2. **Add SSRF-specific validator recognition**
+1. **Add SSRF-specific validator recognition**
    Add a small, explicit, conservative set of SSRF validators/sanitizers. Do NOT try
-   to model arbitrary user-defined validation logic.
+   to infer arbitrary user-defined validation logic.
 
    Recognise patterns such as:
     - **Allowlist / membership checks**
@@ -1864,18 +1964,21 @@ precision, multi-label support, validator recognition, and framework-level depth
         - `parsed.scheme == "https"`
         - explicit rejection of non-http/https schemes
     - **Localhost / internal-network blocking**
-        - string-level rejections for `localhost`, `127.0.0.1`, `::1`
-        - simple private-range checks where already expressed in source
+        - rejections for `localhost`, `127.0.0.1`, `::1`
+        - obvious private-range checks when already expressed in source
     - **Structured URL parse + host validation**
         - `urlparse(url).hostname`
         - `new URL(url).hostname`
         - `URI.parse(url).host`
 
-   Model these as **SSRF sanitisation only when the check dominates the request path**
-   and only for the validated variable. Be conservative: if dominance or variable
-   identity is unclear, do not suppress the finding.
+   Apply sanitizer semantics only when:
+    - the validation dominates the request path
+    - the validated variable is the same destination that reaches the sink
+    - the logic is explicit and narrow enough to be trusted
 
-3. **Deepen framework and wrapper SSRF coverage**
+   If dominance or variable identity is unclear, do not suppress the finding.
+
+2. **Deepen framework and wrapper SSRF coverage**
    Extend SSRF beyond raw client calls for the highest-value ecosystems.
 
    Add or verify coverage for:
@@ -1887,11 +1990,11 @@ precision, multi-label support, validator recognition, and framework-level depth
     - **Python**
         - `requests.request(...)`
         - `httpx.post(...)`, `httpx.request(...)`
-        - Flask/Django proxy helper patterns where the URL flows to a request call
+        - framework proxy/helper patterns where the URL flows to a request call
     - **Java**
         - `HttpClient.sendAsync(...)`
         - additional `RestTemplate` execution forms
-        - builder/execution flows where the URL is created before `.send()` / `.exchange()`
+        - request-builder flows where URL creation happens before execution
     - **Go**
         - `http.NewRequestWithContext(...)`
         - `client.Do(req)`
@@ -1901,11 +2004,11 @@ precision, multi-label support, validator recognition, and framework-level depth
         - Rails redirect/proxy wrapper patterns where appropriate
     - **PHP**
         - `curl_init(url)` execution paths in addition to `curl_exec`
-        - retain `file_get_contents` once multi-label support is implemented
+        - retain dual-label APIs now unlocked by Phase 23
 
    Prefer execution-point sinks and clearly URL-bearing APIs over broad ambiguous names.
 
-4. **Add benchmark-quality SSRF fixtures**
+3. **Add benchmark-quality SSRF fixtures**
    Create a focused SSRF corpus covering both recall and precision.
 
    Add at least:
@@ -1915,18 +2018,18 @@ precision, multi-label support, validator recognition, and framework-level depth
         - parsed URL host forwarded after unsafe validation
         - request-builder / object-construction flow
         - wrapper/helper function flow
-        - dual-label API case (PHP)
+        - dual-label API case
     - **6 negative fixtures**
         - hardcoded URL
         - safe allowlist host check
         - safe scheme enforcement
         - localhost/private-IP rejection before request
-        - non-network ambiguous API usage that should not count as SSRF
+        - ambiguous non-network API usage that should not count as SSRF
         - safe wrapper/helper with validated destination
 
    Spread these across at least JS/TS, Python, Java, Go, PHP, and one of Ruby/Rust.
 
-5. **Add SSRF benchmark measurement**
+4. **Add SSRF benchmark measurement**
    Extend the benchmark corpus with an SSRF-specific subsection:
     - `tests/benchmark/corpus/{lang}/ssrf/*.ext`
     - vulnerable and non-vulnerable cases with ground truth
@@ -1939,27 +2042,24 @@ precision, multi-label support, validator recognition, and framework-level depth
     - SSRF precision / recall / F1
       in `tests/benchmark/RESULTS.md`.
 
-6. **Document remaining SSRF boundaries**
+5. **Document remaining SSRF boundaries**
    After implementation, explicitly document what still remains out of scope, such as:
     - arbitrary custom validator inference
     - deep alias/heap-sensitive request-object propagation
     - DNS-resolution-aware internal IP blocking
+    - network reachability or runtime-only safety properties
     - async/network semantics beyond static taint flow
 
 **Test tasks**:
-- Add unit tests for multi-label classification:
-    - a callee with both Source and Sink labels should exhibit both behaviours
 - Add unit tests for SSRF sanitizer recognition:
     - allowlist-validated host should suppress SSRF where dominance is clear
     - unvalidated or partially validated host should still produce a finding
 - `NYX_TEST_FIXTURE=ssrf NYX_TEST_VERBOSE=1 cargo test real_world_fixture_suite -- --nocapture`
   should pass with improved SSRF precision and recall
-- `cargo test benchmark -- --ignored --nocapture` should include SSRF metrics
+- `cargo test benchmark -- --ignored --nocapture` should include SSRF-specific metrics
 - `cargo test` must pass for the full suite
 
 **Definition of done**:
-- Multi-label classification exists and is used by taint analysis
-- PHP `file_get_contents` no longer loses SSRF sink behaviour due to first-match classification
 - At least a small explicit set of SSRF validators is recognised
 - Framework/wrapper SSRF coverage is deeper in the top ecosystems
 - New SSRF positive and negative fixtures are committed and passing
@@ -1968,12 +2068,10 @@ precision, multi-label support, validator recognition, and framework-level depth
 - Remaining SSRF limitations are documented honestly
 
 **Risks / gotchas**:
-- Multi-label classification touches a core engine interface. Keep the change narrow
-  and well-tested so it does not destabilise non-SSRF behaviour.
 - Validator recognition can easily become unsound if it tries to infer too much.
   Restrict it to a small explicit set of patterns with clear dominance.
-- Framework wrappers may look like ordinary function calls. Prefer precise high-value
-  wrappers over broad generic matching.
+- Wrapper functions may look like ordinary calls. Prefer precise, high-value wrappers
+  over broad generic matching.
 - Do not suppress SSRF findings unless the validation logic is clearly tied to the
   same destination variable that reaches the sink.
 - This phase improves SSRF maturity substantially, but it is still static analysis;
@@ -1981,11 +2079,11 @@ precision, multi-label support, validator recognition, and framework-level depth
 
 **Dependencies**:
 - Phase 7
+- Phase 22.5 — multi-label classification should be complete before dual-label SSRF cases are relied on
 - Phase 20 / 21 / 29 — benchmark infrastructure and baseline measurements should exist
-
 ---
 
-### Phase 30 — Phase 2 readiness assessment
+### Phase 31 — Phase 2 readiness assessment
 
 **Category**: evaluation
 

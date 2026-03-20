@@ -51,6 +51,10 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["openConnection", "HttpClient.send", "HttpClient.sendAsync", "getForObject", "RestTemplate.exchange"],
         label: DataLabel::Sink(Cap::SSRF),
     },
+    LabelRule {
+        matchers: &["readObject", "readUnshared", "XMLDecoder.readObject"],
+        label: DataLabel::Sink(Cap::DESERIALIZE),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

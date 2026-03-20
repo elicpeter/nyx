@@ -39,6 +39,10 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["Net::HTTP.get", "URI.open", "HTTParty.get"],
         label: DataLabel::Sink(Cap::SSRF),
     },
+    LabelRule {
+        matchers: &["Marshal.load", "Marshal.restore", "YAML.load"],
+        label: DataLabel::Sink(Cap::DESERIALIZE),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

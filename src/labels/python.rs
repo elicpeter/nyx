@@ -77,6 +77,17 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["urllib.request.urlopen", "requests.get", "requests.post", "requests.request", "httpx.get", "httpx.request"],
         label: DataLabel::Sink(Cap::SSRF),
     },
+    LabelRule {
+        matchers: &[
+            "pickle.loads",
+            "pickle.load",
+            "yaml.load", // unsafe unless SafeLoader
+            "yaml.unsafe_load",
+            "yaml.full_load",
+            "shelve.open",
+        ],
+        label: DataLabel::Sink(Cap::DESERIALIZE),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {
