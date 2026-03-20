@@ -35,11 +35,11 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &["executeQuery", "executeUpdate", "prepareStatement"],
-        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        label: DataLabel::Sink(Cap::all()),
     },
     LabelRule {
         matchers: &["Class.forName"],
-        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        label: DataLabel::Sink(Cap::all()),
     },
     LabelRule {
         matchers: &["println", "print", "write"],

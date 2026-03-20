@@ -47,7 +47,7 @@ pub static RULES: &[LabelRule] = &[
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["eval", "exec"],
-        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        label: DataLabel::Sink(Cap::all()),
     },
     LabelRule {
         matchers: &[
@@ -63,7 +63,7 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &["cursor.execute", "cursor.executemany"],
-        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        label: DataLabel::Sink(Cap::all()),
     },
     LabelRule {
         matchers: &["send_file", "send_from_directory"],

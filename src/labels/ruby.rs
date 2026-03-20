@@ -27,7 +27,7 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &["eval"],
-        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        label: DataLabel::Sink(Cap::all()),
     },
     LabelRule {
         matchers: &["puts", "print"],

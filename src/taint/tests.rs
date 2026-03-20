@@ -1416,9 +1416,12 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
         "main.js",
         &edges,
     );
+    // eval uses Cap::all(), so a SHELL_ESCAPE sanitizer alone does NOT
+    // neutralise taint — shell-escape is semantically wrong for code injection.
+    // The finding should still be reported.
     assert!(
-        findings.is_empty(),
-        "Rust SHELL_ESCAPE sanitizer should neutralise taint via interop"
+        !findings.is_empty(),
+        "SHELL_ESCAPE sanitizer should NOT neutralise eval (code injection) taint"
     );
 }
 

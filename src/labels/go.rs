@@ -41,7 +41,7 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &["db.Query", "db.Exec", "db.QueryRow", "db.Prepare"],
-        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        label: DataLabel::Sink(Cap::all()),
     },
     LabelRule {
         matchers: &["fmt.Fprintf", "fmt.Sprintf", "fmt.Printf"],

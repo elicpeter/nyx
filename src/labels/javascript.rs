@@ -32,7 +32,7 @@ pub static RULES: &[LabelRule] = &[
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["eval"],
-        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        label: DataLabel::Sink(Cap::all()),
     },
     LabelRule {
         matchers: &["innerHTML"],
