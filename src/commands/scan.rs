@@ -366,7 +366,7 @@ pub(crate) fn scan_filesystem(
     };
 
     // ── Build call graph ────────────────────────────────────────────────
-    {
+    let (call_graph, cg_analysis) = {
         let _span = tracing::info_span!("build_call_graph").entered();
         // TODO: wire interop_edges from config/index when InteropEdge sources are implemented
         let call_graph = crate::callgraph::build_call_graph(&global_summaries, &[]);
@@ -379,7 +379,8 @@ pub(crate) fn scan_filesystem(
             sccs = cg_analysis.sccs.len(),
             "call graph built"
         );
-    }
+        (call_graph, cg_analysis)
+    };
 
     // ── Pass 2: re-run with cross-file global summaries ──────────────────
     let mut diags: Vec<Diag> = {
@@ -390,21 +391,46 @@ pub(crate) fn scan_filesystem(
             show_progress,
         );
 
-        let result: Vec<Diag> = all_paths
-            .par_iter()
-            .flat_map_iter(|path| {
-                let result = match run_rules_on_file(path, cfg, Some(&global_summaries), Some(root))
-                {
-                    Ok(d) => d,
-                    Err(e) => {
-                        tracing::warn!("pass 2: {}: {e}", path.display());
-                        vec![]
-                    }
-                };
-                pb.inc(1);
-                result
-            })
-            .collect();
+        let analyse_file = |path: &PathBuf| -> Vec<Diag> {
+            let result = match run_rules_on_file(path, cfg, Some(&global_summaries), Some(root)) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!("pass 2: {}: {e}", path.display());
+                    vec![]
+                }
+            };
+            pb.inc(1);
+            result
+        };
+
+        let (batches, orphans) =
+            crate::callgraph::scc_file_batches(&call_graph, &cg_analysis, &all_paths, root);
+        tracing::info!(
+            batches = batches.len(),
+            orphan_files = orphans.len(),
+            "topo-ordered file batches computed"
+        );
+
+        let mut result: Vec<Diag> = Vec::new();
+
+        // SCC batches in callee-first order
+        for batch in &batches {
+            result.extend(
+                batch
+                    .par_iter()
+                    .flat_map_iter(|path| analyse_file(path))
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        // Orphan files (no functions in call graph) — process last
+        result.extend(
+            orphans
+                .par_iter()
+                .flat_map_iter(|path| analyse_file(path))
+                .collect::<Vec<_>>(),
+        );
+
         pb.finish_and_clear();
         result
     };

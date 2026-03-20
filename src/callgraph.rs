@@ -3,7 +3,8 @@ use crate::summary::{CalleeResolution, GlobalSummaries};
 use crate::symbol::FuncKey;
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Types
@@ -61,7 +62,6 @@ pub struct CallGraphAnalysis {
     ///
     /// Functions with no callees appear first; callers appear later.
     /// Suitable for bottom-up taint propagation.
-    #[allow(dead_code)] // used for future topo-ordered taint propagation
     pub topo_scc_callee_first: Vec<usize>,
 }
 
@@ -224,6 +224,64 @@ pub fn analyse(cg: &CallGraph) -> CallGraphAnalysis {
         node_to_scc,
         topo_scc_callee_first,
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  File-level batch ordering
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Map SCC topological order to an ordered sequence of file-path batches.
+///
+/// Uses **min** topo index: a file is placed in the earliest batch where any
+/// of its functions appear. This ensures leaf callees are available as early
+/// as possible for files that depend on them. Caller functions in the same
+/// file that happen to be in a later SCC are no worse off than the current
+/// fully-parallel approach — they simply don't yet benefit from ordering,
+/// but nothing is lost.
+///
+/// Returns `(ordered_batches, orphan_files)` where orphan_files are paths
+/// from `all_files` that have no functions in the call graph.
+pub fn scc_file_batches<'a>(
+    cg: &CallGraph,
+    analysis: &CallGraphAnalysis,
+    all_files: &'a [PathBuf],
+    root: &Path,
+) -> (Vec<Vec<&'a PathBuf>>, Vec<&'a PathBuf>) {
+    let root_str = root.to_string_lossy();
+
+    // 1. Map relative-path → &PathBuf for each file in all_files.
+    let mut rel_to_path: HashMap<String, &'a PathBuf> = HashMap::with_capacity(all_files.len());
+    for p in all_files {
+        let abs = p.to_string_lossy();
+        let rel = crate::symbol::normalize_namespace(&abs, Some(&root_str));
+        rel_to_path.insert(rel, p);
+    }
+
+    // 2. Build file relative-path → min topo index.
+    let mut file_min_topo: HashMap<&str, usize> = HashMap::new();
+    for (topo_pos, &scc_idx) in analysis.topo_scc_callee_first.iter().enumerate() {
+        for &node in &analysis.sccs[scc_idx] {
+            let ns = &cg.graph[node].namespace;
+            file_min_topo.entry(ns.as_str()).or_insert(topo_pos);
+        }
+    }
+
+    // 3. Group files by min topo index, preserving order via BTreeMap.
+    let mut topo_groups: BTreeMap<usize, Vec<&'a PathBuf>> = BTreeMap::new();
+    let mut orphans: Vec<&'a PathBuf> = Vec::new();
+
+    for p in all_files {
+        let abs = p.to_string_lossy();
+        let rel = crate::symbol::normalize_namespace(&abs, Some(&root_str));
+        if let Some(&topo_pos) = file_min_topo.get(rel.as_str()) {
+            topo_groups.entry(topo_pos).or_default().push(p);
+        } else {
+            orphans.push(p);
+        }
+    }
+
+    let batches: Vec<Vec<&'a PathBuf>> = topo_groups.into_values().collect();
+    (batches, orphans)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -597,5 +655,136 @@ mod tests {
         assert_eq!(edges.len(), 1);
         // Raw call_site preserved, not the normalized "var"
         assert_eq!(edges[0].weight().call_site, "env::var");
+    }
+
+    // ── scc_file_batches ────────────────────────────────────────────────
+
+    /// Helper: build summaries, call graph, analysis, and file batches in one go.
+    fn build_batches<'a>(
+        summaries: Vec<FuncSummary>,
+        all_files: &'a [PathBuf],
+        root: &Path,
+    ) -> (Vec<Vec<&'a PathBuf>>, Vec<&'a PathBuf>) {
+        let gs = merge_summaries(summaries, Some(&root.to_string_lossy()));
+        let cg = build_call_graph(&gs, &[]);
+        let analysis = analyse(&cg);
+        scc_file_batches(&cg, &analysis, all_files, root)
+    }
+
+    #[test]
+    fn scc_file_batches_linear_chain() {
+        // A (a.rs) → B (b.rs) → C (c.rs)
+        let root = Path::new("/proj");
+        let c = make_summary("c_fn", "/proj/c.rs", "rust", 0, vec![]);
+        let b = make_summary("b_fn", "/proj/b.rs", "rust", 0, vec!["c_fn"]);
+        let a = make_summary("a_fn", "/proj/a.rs", "rust", 0, vec!["b_fn"]);
+
+        let files: Vec<PathBuf> = vec![
+            PathBuf::from("/proj/a.rs"),
+            PathBuf::from("/proj/b.rs"),
+            PathBuf::from("/proj/c.rs"),
+        ];
+
+        let (batches, orphans) = build_batches(vec![a, b, c], &files, root);
+
+        assert!(orphans.is_empty());
+        assert_eq!(batches.len(), 3, "3 files in a linear chain → 3 batches");
+
+        // C's file in first batch, B's in second, A's in third
+        let batch_of = |name: &str| {
+            batches
+                .iter()
+                .position(|batch: &Vec<&PathBuf>| batch.iter().any(|p| p.to_str().unwrap().ends_with(name)))
+                .unwrap()
+        };
+        assert!(batch_of("c.rs") < batch_of("b.rs"));
+        assert!(batch_of("b.rs") < batch_of("a.rs"));
+    }
+
+    #[test]
+    fn scc_file_batches_orphan_files() {
+        let root = Path::new("/proj");
+        let a = make_summary("a_fn", "/proj/a.rs", "rust", 0, vec![]);
+
+        let files: Vec<PathBuf> = vec![
+            PathBuf::from("/proj/a.rs"),
+            PathBuf::from("/proj/orphan.rs"),
+        ];
+
+        let (batches, orphans) = build_batches(vec![a], &files, root);
+
+        // a.rs is in the graph, orphan.rs is not
+        assert_eq!(orphans.len(), 1);
+        assert!(orphans[0].to_str().unwrap().ends_with("orphan.rs"));
+        // a.rs should be in exactly one batch
+        let total_in_batches: usize = batches.iter().map(|b: &Vec<&PathBuf>| b.len()).sum();
+        assert_eq!(total_in_batches, 1);
+    }
+
+    #[test]
+    fn scc_file_batches_multi_scc_same_file() {
+        // File has a leaf fn (SCC 0) and a caller fn (SCC 2) that calls
+        // through a middle function in another file.
+        // leaf (a.rs) ← mid (b.rs) ← caller (a.rs)
+        // With min-topo, a.rs placed at earliest SCC (leaf's position).
+        let root = Path::new("/proj");
+        let leaf = make_summary("leaf", "/proj/a.rs", "rust", 0, vec![]);
+        let mid = make_summary("mid", "/proj/b.rs", "rust", 0, vec!["leaf"]);
+        let caller = make_summary("caller", "/proj/a.rs", "rust", 0, vec!["mid"]);
+
+        let files: Vec<PathBuf> = vec![
+            PathBuf::from("/proj/a.rs"),
+            PathBuf::from("/proj/b.rs"),
+        ];
+
+        let (batches, orphans) = build_batches(vec![leaf, mid, caller], &files, root);
+
+        assert!(orphans.is_empty());
+        let batch_of = |name: &str| {
+            batches
+                .iter()
+                .position(|batch: &Vec<&PathBuf>| batch.iter().any(|p| p.to_str().unwrap().ends_with(name)))
+                .unwrap()
+        };
+        // a.rs should be in the earliest batch (min topo from leaf)
+        assert!(batch_of("a.rs") < batch_of("b.rs"),
+            "a.rs has leaf fn so should be in earlier batch than b.rs");
+    }
+
+    #[test]
+    fn scc_file_batches_mutual_recursion() {
+        // Two mutually-recursive functions across two files → same SCC → same batch.
+        let root = Path::new("/proj");
+        let a = make_summary("ping", "/proj/a.rs", "rust", 0, vec!["pong"]);
+        let b = make_summary("pong", "/proj/b.rs", "rust", 0, vec!["ping"]);
+
+        let files: Vec<PathBuf> = vec![
+            PathBuf::from("/proj/a.rs"),
+            PathBuf::from("/proj/b.rs"),
+        ];
+
+        let (batches, orphans) = build_batches(vec![a, b], &files, root);
+
+        assert!(orphans.is_empty());
+        // Both files should be in the same batch (same SCC)
+        assert_eq!(batches.len(), 1, "mutual recursion → single SCC → single batch");
+        assert_eq!(batches[0].len(), 2);
+    }
+
+    #[test]
+    fn scc_file_batches_empty_graph() {
+        let root = Path::new("/proj");
+        let files: Vec<PathBuf> = vec![
+            PathBuf::from("/proj/a.rs"),
+            PathBuf::from("/proj/b.rs"),
+        ];
+
+        let gs = merge_summaries(vec![], None);
+        let cg = build_call_graph(&gs, &[]);
+        let analysis = analyse(&cg);
+        let (batches, orphans) = scc_file_batches(&cg, &analysis, &files, root);
+
+        assert!(batches.is_empty(), "empty graph → no batches");
+        assert_eq!(orphans.len(), 2, "all files are orphans");
     }
 }

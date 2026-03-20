@@ -63,6 +63,13 @@ fn mixed_project() {
     validate_expectations(&diags, &dir);
 }
 
+#[test]
+fn cross_file_taint() {
+    let dir = fixture_path("cross_file_taint");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── Cross-cutting tests ───────────────────────────────────────────────────
 
 #[test]
