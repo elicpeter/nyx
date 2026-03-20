@@ -282,6 +282,7 @@ mod tests {
             condition_text: None,
             condition_vars: vec![],
             condition_negated: false,
+            arg_uses: vec![],
         }
     }
 

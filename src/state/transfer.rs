@@ -308,6 +308,7 @@ mod tests {
             condition_text: None,
             condition_vars: vec![],
             condition_negated: false,
+            arg_uses: vec![],
         };
 
         let (state, events) =
@@ -342,6 +343,7 @@ mod tests {
             condition_text: None,
             condition_vars: vec![],
             condition_negated: false,
+            arg_uses: vec![],
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -375,6 +377,7 @@ mod tests {
             condition_text: None,
             condition_vars: vec![],
             condition_negated: false,
+            arg_uses: vec![],
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -409,6 +412,7 @@ mod tests {
             condition_text: None,
             condition_vars: vec![],
             condition_negated: false,
+            arg_uses: vec![],
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);

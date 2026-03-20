@@ -2588,3 +2588,295 @@ fn c_curl_handle_no_taint() {
         "C: hardcoded URL in curl_easy_setopt should not produce finding"
     );
 }
+
+// ── Per-argument propagation tests (Phase 10) ────────────────────────────
+
+#[test]
+fn per_arg_propagation_tainted_param_propagates() {
+    use crate::summary::FuncSummary;
+
+    // transform(a, b) only propagates param 0. Tainted value at param 0 → finding.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "transform".into(),
+            arity: Some(2),
+        },
+        FuncSummary {
+            name: "transform".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![0],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let tainted = env::var("X").unwrap();
+            let safe = String::from("ok");
+            let y = transform(&tainted, &safe);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let (cfg, entry, local) = parse_rust(src);
+    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    assert_eq!(
+        findings.len(),
+        1,
+        "tainted arg at propagating position should produce finding"
+    );
+}
+
+#[test]
+fn per_arg_propagation_safe_at_propagating_position() {
+    use crate::summary::FuncSummary;
+
+    // transform(a, b) only propagates param 0. Tainted value at param 1 (non-propagating) → no finding.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "transform".into(),
+            arity: Some(2),
+        },
+        FuncSummary {
+            name: "transform".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![0],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let safe = String::from("ok");
+            let tainted = env::var("X").unwrap();
+            let y = transform(&safe, &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let (cfg, entry, local) = parse_rust(src);
+    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    assert_eq!(
+        findings.len(),
+        0,
+        "tainted arg at non-propagating position should not produce finding"
+    );
+}
+
+#[test]
+fn per_arg_propagation_legacy_backward_compat() {
+    use crate::summary::FuncSummary;
+
+    // legacy_pass has propagates_taint=true but empty propagating_params (legacy).
+    // Should fall back to all-uses propagation.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "legacy_pass".into(),
+            arity: Some(2),
+        },
+        FuncSummary {
+            name: "legacy_pass".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![],
+            propagates_taint: true,
+            tainted_sink_params: vec![],
+            callees: vec![],
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let safe = String::from("ok");
+            let tainted = env::var("X").unwrap();
+            let y = legacy_pass(&safe, &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let (cfg, entry, local) = parse_rust(src);
+    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    assert_eq!(
+        findings.len(),
+        1,
+        "legacy propagates_taint=true with empty propagating_params should propagate all args"
+    );
+}
+
+#[test]
+fn per_arg_propagation_both_params_propagate() {
+    use crate::summary::FuncSummary;
+
+    // concat(a, b) propagates both params 0 and 1. Tainted at param 1 → finding.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "concat".into(),
+            arity: Some(2),
+        },
+        FuncSummary {
+            name: "concat".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![0, 1],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let safe = String::from("ok");
+            let tainted = env::var("X").unwrap();
+            let y = concat(&safe, &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let (cfg, entry, local) = parse_rust(src);
+    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    assert_eq!(
+        findings.len(),
+        1,
+        "both params propagate — tainted arg at position 1 should produce finding"
+    );
+}
+
+#[test]
+fn per_arg_propagation_literal_first_arg() {
+    use crate::summary::FuncSummary;
+
+    // transform("literal", tainted) with only param 1 propagating → finding.
+    // The literal arg at position 0 has no identifiers, but positional mapping is still correct.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "transform".into(),
+            arity: Some(2),
+        },
+        FuncSummary {
+            name: "transform".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![1],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let tainted = env::var("X").unwrap();
+            let y = transform("prefix", &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let (cfg, entry, local) = parse_rust(src);
+    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    assert_eq!(
+        findings.len(),
+        1,
+        "literal first arg should not shift positional mapping — tainted at param 1 propagates"
+    );
+}
+
+#[test]
+fn per_arg_propagation_nested_expr_arg() {
+    use crate::summary::FuncSummary;
+
+    // transform(inner(x), tainted) with only param 1 propagating → finding.
+    // Nested call in arg 0 doesn't affect arg 1 position.
+    let mut global = GlobalSummaries::new();
+    global.insert(
+        FuncKey {
+            lang: Lang::Rust,
+            namespace: "lib.rs".into(),
+            name: "transform".into(),
+            arity: Some(2),
+        },
+        FuncSummary {
+            name: "transform".into(),
+            file_path: "lib.rs".into(),
+            lang: "rust".into(),
+            param_count: 2,
+            param_names: vec!["a".into(), "b".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![1],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: vec![],
+        },
+    );
+
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = String::from("safe");
+            let tainted = env::var("X").unwrap();
+            let y = transform(inner(&x), &tainted);
+            Command::new("sh").arg(y).status().unwrap();
+        }
+    "#;
+
+    let (cfg, entry, local) = parse_rust(src);
+    let findings = analyse_file(&cfg, entry, &local, Some(&global), Lang::Rust, "test.rs", &[]);
+    assert_eq!(
+        findings.len(),
+        1,
+        "nested call in arg 0 should not affect arg 1 positional mapping"
+    );
+}

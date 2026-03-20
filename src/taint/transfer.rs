@@ -240,7 +240,13 @@ impl TaintTransfer<'_> {
 
             // 2. Propagation
             if resolved.propagates_taint {
-                let (use_caps, use_origins) = self.collect_uses_taint(info, state);
+                let (use_caps, use_origins) = if !resolved.propagating_params.is_empty() {
+                    self.collect_propagating_uses_taint(info, state, &resolved.propagating_params)
+                } else {
+                    // Backward compat: legacy summary with propagates_taint=true
+                    // but empty propagating_params — collect from all uses
+                    self.collect_uses_taint(info, state)
+                };
                 return_bits |= use_caps;
                 for orig in &use_origins {
                     if return_origins.len() < 4
@@ -328,6 +334,48 @@ impl TaintTransfer<'_> {
                         && !combined_origins.iter().any(|o| o.node == orig.node)
                     {
                         combined_origins.push(*orig);
+                    }
+                }
+            }
+        }
+
+        (combined_caps, combined_origins)
+    }
+
+    /// Collect taint only from arguments at propagating parameter positions.
+    ///
+    /// Uses `info.arg_uses` (per-argument identifier boundaries extracted from
+    /// the AST) when available. Falls back to `collect_uses_taint()` (all args)
+    /// when argument boundaries are absent (non-call nodes, spread/keyword args,
+    /// or argument list not parseable).
+    fn collect_propagating_uses_taint(
+        &self,
+        info: &NodeInfo,
+        state: &TaintState,
+        propagating_params: &[usize],
+    ) -> (Cap, SmallVec<[TaintOrigin; 2]>) {
+        // Require arg_uses for reliable positional mapping.
+        // If empty, fall back to all-uses (safe over-approximation).
+        if info.arg_uses.is_empty() {
+            return self.collect_uses_taint(info, state);
+        }
+
+        let mut combined_caps = Cap::empty();
+        let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+
+        for &param_idx in propagating_params {
+            let Some(arg_idents) = info.arg_uses.get(param_idx) else {
+                continue; // param index out of range (fewer args than params)
+            };
+            for ident in arg_idents {
+                if let Some(t) = self.lookup_var(ident, state) {
+                    combined_caps |= t.caps;
+                    for orig in &t.origins {
+                        if combined_origins.len() < 4
+                            && !combined_origins.iter().any(|o| o.node == orig.node)
+                        {
+                            combined_origins.push(*orig);
+                        }
                     }
                 }
             }
@@ -540,6 +588,5 @@ struct ResolvedSummary {
     sanitizer_caps: Cap,
     sink_caps: Cap,
     propagates_taint: bool,
-    #[allow(dead_code)] // Phase 10 will use for per-arg filtering
     propagating_params: Vec<usize>,
 }

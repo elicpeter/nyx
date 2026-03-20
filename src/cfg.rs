@@ -53,6 +53,10 @@ pub struct NodeInfo {
     pub condition_vars: Vec<String>,
     /// For If nodes: whether the condition has a leading negation (`!` / `not`).
     pub condition_negated: bool,
+    /// Per-argument identifiers for Call nodes. Each inner Vec holds the
+    /// identifiers from one argument expression, in parameter-position order.
+    /// Empty for non-call nodes or when argument boundaries can't be determined.
+    pub arg_uses: Vec<Vec<String>>,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -404,6 +408,68 @@ fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// Find the inner CallFn/CallMethod/CallMacro node within an AST node.
+/// For direct call nodes, returns the node itself. For wrappers, searches
+/// up to two levels of children.
+fn find_call_node<'a>(n: Node<'a>, lang: &str) -> Option<Node<'a>> {
+    match lookup(lang, n.kind()) {
+        Kind::CallFn | Kind::CallMethod | Kind::CallMacro => Some(n),
+        _ => {
+            let mut cursor = n.walk();
+            for c in n.children(&mut cursor) {
+                match lookup(lang, c.kind()) {
+                    Kind::CallFn | Kind::CallMethod | Kind::CallMacro => return Some(c),
+                    _ => {}
+                }
+            }
+            // Recurse one more level (handles `expression_statement > variable_declarator > call`)
+            let mut cursor2 = n.walk();
+            for c in n.children(&mut cursor2) {
+                let mut cursor3 = c.walk();
+                for gc in c.children(&mut cursor3) {
+                    if matches!(
+                        lookup(lang, gc.kind()),
+                        Kind::CallFn | Kind::CallMethod | Kind::CallMacro
+                    ) {
+                        return Some(gc);
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Extract per-argument identifiers from a call node's argument list.
+/// Returns one `Vec<String>` per argument (in parameter-position order).
+/// Returns empty if argument list can't be found or contains spread/keyword args.
+fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>> {
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        // If we encounter a spread/splat/keyword arg, positional mapping is
+        // unreliable — bail out and return empty (caller falls back to flat uses).
+        let kind = child.kind();
+        if kind == "spread_element"
+            || kind == "dictionary_splat"
+            || kind == "list_splat"
+            || kind == "keyword_argument"
+            || kind == "splat_argument"
+            || kind == "hash_splat_argument"
+            || kind == "named_argument"
+        {
+            return Vec::new();
+        }
+        let mut idents = Vec::new();
+        collect_idents(child, code, &mut idents);
+        result.push(idents);
+    }
+    result
 }
 
 /// Return `(defines, uses)` for the AST fragment `ast`.
@@ -812,6 +878,15 @@ fn push_node<'a>(
         (None, Vec::new(), false)
     };
 
+    // Extract per-argument identifiers for Call nodes.
+    let arg_uses = if kind == StmtKind::Call {
+        find_call_node(ast, lang)
+            .map(|cn| extract_arg_uses(cn, code))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     let idx = g.add_node(NodeInfo {
         kind,
         span,
@@ -824,6 +899,7 @@ fn push_node<'a>(
         condition_text,
         condition_vars,
         condition_negated,
+        arg_uses,
     });
 
     debug!(
@@ -1045,6 +1121,7 @@ fn build_sub<'a>(
                     condition_text: None,
                     condition_vars: Vec::new(),
                     condition_negated: false,
+                    arg_uses: Vec::new(),
                 });
                 connect_all(g, &[cond], pass, EdgeKind::False);
                 vec![pass]
@@ -1530,6 +1607,7 @@ fn build_sub<'a>(
                 condition_text: None,
                 condition_vars: Vec::new(),
                 condition_negated: false,
+                arg_uses: Vec::new(),
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -1796,6 +1874,7 @@ pub(crate) fn build_cfg<'a>(
         condition_text: None,
         condition_vars: Vec::new(),
         condition_negated: false,
+        arg_uses: Vec::new(),
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -1809,6 +1888,7 @@ pub(crate) fn build_cfg<'a>(
         condition_text: None,
         condition_vars: Vec::new(),
         condition_negated: false,
+        arg_uses: Vec::new(),
     });
 
     // Build the body below the synthetic ENTRY.
