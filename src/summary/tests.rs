@@ -1,6 +1,6 @@
 use super::*;
 
-fn make(name: &str, src: u8, san: u8, sink: u8) -> FuncSummary {
+fn make(name: &str, src: u16, san: u16, sink: u16) -> FuncSummary {
     FuncSummary {
         name: name.into(),
         file_path: "test.rs".into(),
@@ -255,4 +255,52 @@ fn lookup_same_lang_returns_all_matches() {
     // No cross-language matches
     let py_matches = global.lookup_same_lang(Lang::Python, "helper");
     assert!(py_matches.is_empty());
+}
+
+#[test]
+fn u16_caps_round_trip_serde() {
+    let summary = FuncSummary {
+        name: "dangerous".into(),
+        file_path: "test.rs".into(),
+        lang: "rust".into(),
+        param_count: 1,
+        param_names: vec!["input".into()],
+        source_caps: (Cap::SQL_QUERY | Cap::CODE_EXEC).bits(),
+        sanitizer_caps: Cap::CRYPTO.bits(),
+        sink_caps: (Cap::SSRF | Cap::DESERIALIZE).bits(),
+        propagates_taint: true,
+        tainted_sink_params: vec![0],
+        callees: vec!["query".into()],
+    };
+
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: FuncSummary = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(back.source_caps, (Cap::SQL_QUERY | Cap::CODE_EXEC).bits());
+    assert_eq!(back.sanitizer_caps, Cap::CRYPTO.bits());
+    assert_eq!(back.sink_caps, (Cap::SSRF | Cap::DESERIALIZE).bits());
+    assert!(back.propagates_taint);
+}
+
+#[test]
+fn backward_compat_u8_json_deserializes() {
+    // Old u8-range values still deserialize correctly into u16 fields
+    let json = r#"{
+        "name": "old_func",
+        "file_path": "legacy.py",
+        "lang": "python",
+        "param_count": 0,
+        "param_names": [],
+        "source_caps": 127,
+        "sanitizer_caps": 2,
+        "sink_caps": 4,
+        "propagates_taint": false,
+        "tainted_sink_params": [],
+        "callees": []
+    }"#;
+
+    let summary: FuncSummary = serde_json::from_str(json).unwrap();
+    assert_eq!(summary.source_caps, 127);
+    assert_eq!(summary.sanitizer_caps, 2);
+    assert_eq!(summary.sink_caps, 4);
 }

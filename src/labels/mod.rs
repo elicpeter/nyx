@@ -24,14 +24,19 @@ pub struct LabelRule {
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct Cap: u8 {
-        const ENV_VAR      = 0b0000_0001;
-        const HTML_ESCAPE  = 0b0000_0010;
-        const SHELL_ESCAPE = 0b0000_0100;
-        const URL_ENCODE   = 0b0000_1000;
-        const JSON_PARSE   = 0b0001_0000;
-        const FILE_IO      = 0b0010_0000;
-        const FMT_STRING   = 0b0100_0000;
+    pub struct Cap: u16 {
+        const ENV_VAR      = 0b0000_0000_0000_0001;  // bit 0
+        const HTML_ESCAPE  = 0b0000_0000_0000_0010;  // bit 1
+        const SHELL_ESCAPE = 0b0000_0000_0000_0100;  // bit 2
+        const URL_ENCODE   = 0b0000_0000_0000_1000;  // bit 3
+        const JSON_PARSE   = 0b0000_0000_0001_0000;  // bit 4
+        const FILE_IO      = 0b0000_0000_0010_0000;  // bit 5
+        const FMT_STRING   = 0b0000_0000_0100_0000;  // bit 6
+        const SQL_QUERY    = 0b0000_0000_1000_0000;  // bit 7
+        const DESERIALIZE  = 0b0000_0001_0000_0000;  // bit 8
+        const SSRF         = 0b0000_0010_0000_0000;  // bit 9
+        const CODE_EXEC    = 0b0000_0100_0000_0000;  // bit 10
+        const CRYPTO       = 0b0000_1000_0000_0000;  // bit 11
     }
 }
 
@@ -287,6 +292,11 @@ pub fn parse_cap(s: &str) -> Option<Cap> {
         "json_parse" => Some(Cap::JSON_PARSE),
         "file_io" => Some(Cap::FILE_IO),
         "fmt_string" => Some(Cap::FMT_STRING),
+        "sql_query" => Some(Cap::SQL_QUERY),
+        "deserialize" => Some(Cap::DESERIALIZE),
+        "ssrf" => Some(Cap::SSRF),
+        "code_exec" => Some(Cap::CODE_EXEC),
+        "crypto" => Some(Cap::CRYPTO),
         "all" => Some(Cap::all()),
         _ => None,
     }
@@ -559,6 +569,11 @@ mod tests {
         assert_eq!(parse_cap("file_io"), Some(Cap::FILE_IO));
         assert_eq!(parse_cap("all"), Some(Cap::all()));
         assert_eq!(parse_cap("ALL"), Some(Cap::all()));
+        assert_eq!(parse_cap("sql_query"), Some(Cap::SQL_QUERY));
+        assert_eq!(parse_cap("deserialize"), Some(Cap::DESERIALIZE));
+        assert_eq!(parse_cap("ssrf"), Some(Cap::SSRF));
+        assert_eq!(parse_cap("code_exec"), Some(Cap::CODE_EXEC));
+        assert_eq!(parse_cap("crypto"), Some(Cap::CRYPTO));
         assert_eq!(parse_cap("invalid"), None);
     }
 }

@@ -54,7 +54,7 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &["eval", "assert"],
-        label: DataLabel::Sink(Cap::all()),
+        label: DataLabel::Sink(Cap::CODE_EXEC),
     },
     LabelRule {
         matchers: &["include", "include_once", "require", "require_once"],
@@ -62,7 +62,7 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &["unserialize"],
-        label: DataLabel::Sink(Cap::all()),
+        label: DataLabel::Sink(Cap::DESERIALIZE),
     },
     LabelRule {
         matchers: &["move_uploaded_file", "copy", "file_put_contents", "fwrite"],
@@ -74,7 +74,7 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &["mysqli_query", "pg_query", "query"],
-        label: DataLabel::Sink(Cap::all()),
+        label: DataLabel::Sink(Cap::SQL_QUERY),
     },
 ];
 

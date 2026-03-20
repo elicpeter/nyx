@@ -48,18 +48,18 @@ pub struct FuncSummary {
     pub param_names: Vec<String>,
 
     // ── Taint behaviour ──────────────────────────────────────────────────
-    // Stored as raw `u8` so serde doesn't need to know about `bitflags`.
+    // Stored as raw `u16` so serde doesn't need to know about `bitflags`.
     /// Caps this function **introduces** — i.e. the return value carries
     /// freshly‑tainted data even if no argument was tainted.
-    pub source_caps: u8,
+    pub source_caps: u16,
 
     /// Caps this function **cleans** — passing tainted data through this
     /// function strips the corresponding bits.
-    pub sanitizer_caps: u8,
+    pub sanitizer_caps: u16,
 
     /// Caps this function **consumes unsafely** — calling it with tainted
     /// arguments that still carry these bits is a finding.
-    pub sink_caps: u8,
+    pub sink_caps: u16,
 
     /// `true` when taint on *any* input parameter can flow through to the
     /// return value.  Conservative: set to `true` if *any* code path
