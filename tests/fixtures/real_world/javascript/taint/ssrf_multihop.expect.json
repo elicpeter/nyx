@@ -1,0 +1,23 @@
+{
+  "description": "SSRF positive: multi-hop taint flow req.query.target -> input -> baseUrl -> endpoint -> fetch()",
+  "tags": ["taint", "ssrf", "multihop"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 13],
+      "evidence_contains": [],
+      "notes": "Multi-hop: req.query.target -> input -> baseUrl -> endpoint -> fetch()"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [1, 13],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink near fetch call"
+    }
+  ]
+}

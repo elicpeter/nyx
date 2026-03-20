@@ -1,0 +1,15 @@
+{
+  "description": "SSRF: user-controlled URL from params flows to Net::HTTP.get()",
+  "tags": ["taint", "ssrf", "net-http"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 8],
+      "evidence_contains": [],
+      "notes": "params[:url] flows to Net::HTTP.get(uri) without URL validation"
+    }
+  ]
+}

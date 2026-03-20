@@ -1,0 +1,23 @@
+{
+  "description": "SSRF negative: URL validated against allowlist before fetch — taint may or may not fire",
+  "tags": ["taint", "ssrf", "negative"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [5, 17],
+      "evidence_contains": [],
+      "notes": "Allowlist check guards the fetch; scanner may still flag because it does not model indexOf as validation"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [5, 17],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink near fetch call"
+    }
+  ]
+}

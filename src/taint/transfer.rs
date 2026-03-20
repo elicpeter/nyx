@@ -274,6 +274,11 @@ impl TaintTransfer<'_> {
             return;
         }
 
+        // Scoped libcurl special case: propagate URL taint to handle
+        if self.try_curl_url_propagation(info, state) {
+            return;
+        }
+
         // Unresolved call — fall through to default gen/kill
         self.apply_assignment(info, state);
     }
@@ -376,6 +381,83 @@ impl TaintTransfer<'_> {
             }
         }
         result
+    }
+
+    /// Scoped libcurl special case: when `curl_easy_setopt(handle, CURLOPT_URL, value)`
+    /// is called and `value` is tainted, propagate that taint to `handle`.
+    ///
+    /// Only fires when CURLOPT_URL is present in the arguments — other curl options
+    /// (CURLOPT_TIMEOUT, CURLOPT_RETURNTRANSFER, etc.) do not taint the handle.
+    ///
+    /// Does NOT re-collect the handle's own taint — only the URL value's taint is
+    /// propagated to avoid self-amplification.
+    fn try_curl_url_propagation(&self, info: &NodeInfo, state: &mut TaintState) -> bool {
+        if info.defines.is_some() {
+            return false;
+        }
+        let callee = match info.callee.as_deref() {
+            Some(c) if c.ends_with("curl_easy_setopt") => c,
+            _ => return false,
+        };
+        // Require CURLOPT_URL in the arguments
+        if !info.uses.iter().any(|u| u == "CURLOPT_URL") {
+            return false;
+        }
+        // Handle = first uses entry that isn't the callee name
+        let handle_name = match info.uses.iter().find(|u| u.as_str() != callee) {
+            Some(h) => h.clone(),
+            None => return false,
+        };
+        let handle_sym = match self.interner.get(&handle_name) {
+            Some(s) => s,
+            None => return false,
+        };
+        // Collect taint ONLY from the URL value — skip callee, handle, and CURLOPT_URL
+        let mut url_caps = Cap::empty();
+        let mut url_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+        for u in &info.uses {
+            if u == callee || u == &handle_name || u == "CURLOPT_URL" {
+                continue;
+            }
+            if let Some(taint) = self.lookup_var(u, state) {
+                url_caps |= taint.caps;
+                for orig in &taint.origins {
+                    if url_origins.len() < 4
+                        && !url_origins.iter().any(|o| o.node == orig.node)
+                    {
+                        url_origins.push(*orig);
+                    }
+                }
+            }
+        }
+        if url_caps.is_empty() {
+            return false;
+        }
+        // Merge URL taint into handle (monotone: caps OR, origins union)
+        match state.get(handle_sym) {
+            Some(existing) => {
+                let mut merged = existing.clone();
+                merged.caps |= url_caps;
+                for orig in &url_origins {
+                    if merged.origins.len() < 4
+                        && !merged.origins.iter().any(|o| o.node == orig.node)
+                    {
+                        merged.origins.push(*orig);
+                    }
+                }
+                state.set(handle_sym, merged);
+            }
+            None => {
+                state.set(
+                    handle_sym,
+                    VarTaint {
+                        caps: url_caps,
+                        origins: url_origins,
+                    },
+                );
+            }
+        }
+        true
     }
 
     /// Resolve a callee name to its summary (local → global → interop).

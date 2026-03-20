@@ -61,6 +61,10 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["template.HTML"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
     },
+    LabelRule {
+        matchers: &["http.Get", "http.Post", "http.NewRequest"],
+        label: DataLabel::Sink(Cap::SSRF),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

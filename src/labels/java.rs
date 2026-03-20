@@ -45,6 +45,12 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["println", "print", "write"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
     },
+    // openConnection() is the standard java.net.URL API for initiating a connection.
+    // It is the correct interception point — the URL is already set on the object.
+    LabelRule {
+        matchers: &["openConnection", "HttpClient.send", "HttpClient.sendAsync", "getForObject", "RestTemplate.exchange"],
+        label: DataLabel::Sink(Cap::SSRF),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

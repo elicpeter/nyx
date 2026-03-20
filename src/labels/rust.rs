@@ -46,6 +46,10 @@ pub static RULES: &[LabelRule] = &[
         ],
         label: DataLabel::Sink(Cap::FILE_IO),
     },
+    LabelRule {
+        matchers: &["reqwest::get", "reqwest::Client.execute"],
+        label: DataLabel::Sink(Cap::SSRF),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

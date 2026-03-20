@@ -42,6 +42,10 @@ pub static RULES: &[LabelRule] = &[
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
     },
+    LabelRule {
+        matchers: &["fetch", "axios.get", "axios.post", "axios.request", "http.request", "https.request"],
+        label: DataLabel::Sink(Cap::SSRF),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

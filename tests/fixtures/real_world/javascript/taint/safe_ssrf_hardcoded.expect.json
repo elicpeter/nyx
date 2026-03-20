@@ -1,0 +1,15 @@
+{
+  "description": "SSRF negative: hardcoded URL in fetch — no taint source, no finding expected",
+  "tags": ["taint", "ssrf", "negative"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [1, 5],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink near fetch call"
+    }
+  ]
+}

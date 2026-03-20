@@ -73,6 +73,10 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["os.path.realpath"],
         label: DataLabel::Sanitizer(Cap::FILE_IO),
     },
+    LabelRule {
+        matchers: &["urllib.request.urlopen", "requests.get", "requests.post", "requests.request", "httpx.get", "httpx.request"],
+        label: DataLabel::Sink(Cap::SSRF),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

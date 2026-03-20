@@ -2539,3 +2539,34 @@ fn multi_var_predicate_not_pruned() {
         "multi-var predicate should not be pruned; flow should be detected"
     );
 }
+
+#[test]
+fn c_curl_handle_ssrf() {
+    let src = b"#include <stdlib.h>\n#include <curl/curl.h>\n\
+        void fetch() {\n  char *url = getenv(\"TARGET\");\n  \
+        CURL *curl = curl_easy_init();\n  \
+        curl_easy_setopt(curl, CURLOPT_URL, url);\n  \
+        curl_easy_perform(curl);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[]);
+    assert!(
+        !findings.is_empty(),
+        "C: getenv -> curl_easy_setopt -> curl_easy_perform should produce SSRF finding"
+    );
+}
+
+#[test]
+fn c_curl_handle_no_taint() {
+    let src = b"#include <curl/curl.h>\n\
+        void fetch() {\n  CURL *curl = curl_easy_init();\n  \
+        curl_easy_setopt(curl, CURLOPT_URL, \"https://example.com\");\n  \
+        curl_easy_perform(curl);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[]);
+    assert!(
+        findings.is_empty(),
+        "C: hardcoded URL in curl_easy_setopt should not produce finding"
+    );
+}

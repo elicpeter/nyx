@@ -33,6 +33,12 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["puts", "print"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
     },
+    // URI.open is the network-capable Kernel#open wrapper — more specific than
+    // plain `open` (excluded to avoid file I/O false positives).
+    LabelRule {
+        matchers: &["Net::HTTP.get", "URI.open", "HTTParty.get"],
+        label: DataLabel::Sink(Cap::SSRF),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {

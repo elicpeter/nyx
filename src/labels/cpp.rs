@@ -33,6 +33,10 @@ pub static RULES: &[LabelRule] = &[
         matchers: &["fopen", "open"],
         label: DataLabel::Sink(Cap::FILE_IO),
     },
+    LabelRule {
+        matchers: &["curl_easy_perform"],
+        label: DataLabel::Sink(Cap::SSRF),
+    },
 ];
 
 pub static KINDS: Map<&'static str, Kind> = phf_map! {
