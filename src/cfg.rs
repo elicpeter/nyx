@@ -3,7 +3,7 @@ use petgraph::prelude::*;
 use tracing::debug;
 use tree_sitter::{Node, Tree};
 
-use crate::labels::{Cap, DataLabel, Kind, LangAnalysisRules, classify, lookup, param_config};
+use crate::labels::{Cap, DataLabel, Kind, LangAnalysisRules, classify, classify_gated_sink, lookup, param_config};
 use crate::summary::FuncSummary;
 use crate::symbol::{FuncKey, Lang};
 use std::collections::{HashMap, HashSet};
@@ -442,6 +442,38 @@ fn find_call_node<'a>(n: Node<'a>, lang: &str) -> Option<Node<'a>> {
     }
 }
 
+/// Extract the string-literal content at argument position `index` (0-based).
+/// Returns `None` if the argument is not a string literal or the index is out of range.
+fn extract_const_string_arg(call_node: Node, index: usize, code: &[u8]) -> Option<String> {
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let arg = args.named_children(&mut cursor).nth(index)?;
+    match arg.kind() {
+        "string" | "string_literal" => {
+            let raw = text_of(arg, code)?;
+            if raw.len() >= 2 {
+                Some(raw[1..raw.len() - 1].to_string())
+            } else {
+                None
+            }
+        }
+        "template_string" => {
+            // Only treat as constant if no interpolation (no template_substitution children)
+            let mut c = arg.walk();
+            if arg.named_children(&mut c).any(|ch| ch.kind() == "template_substitution") {
+                return None; // dynamic
+            }
+            let raw = text_of(arg, code)?;
+            if raw.len() >= 2 {
+                Some(raw[1..raw.len() - 1].to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Extract per-argument identifiers from a call node's argument list.
 /// Returns one `Vec<String>` per argument (in parameter-position order).
 /// Returns empty if argument list can't be found or contains spread/keyword args.
@@ -864,6 +896,19 @@ fn push_node<'a>(
         }
     }
 
+    // Hoist call-node lookup: reused for gated sinks and arg_uses.
+    let call_ast = find_call_node(ast, lang);
+
+    // Gated sinks: argument-sensitive classification (e.g., setAttribute).
+    // Runs for any node containing a classifiable call, regardless of StmtKind.
+    if label.is_none() {
+        if let Some(cn) = call_ast {
+            label = classify_gated_sink(lang, &text, |idx| {
+                extract_const_string_arg(cn, idx, code)
+            });
+        }
+    }
+
     let span = (ast.start_byte(), ast.end_byte());
 
     /* ── 3.  GRAPH INSERTION + DEBUG ──────────────────────────────────── */
@@ -885,7 +930,7 @@ fn push_node<'a>(
 
     // Extract per-argument identifiers for Call nodes.
     let arg_uses = if kind == StmtKind::Call {
-        find_call_node(ast, lang)
+        call_ast
             .map(|cn| extract_arg_uses(cn, code))
             .unwrap_or_default()
     } else {

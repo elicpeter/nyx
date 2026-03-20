@@ -23,6 +23,19 @@ pub struct LabelRule {
     pub case_sensitive: bool,
 }
 
+/// Argument-sensitive sink activation.  A call only becomes a sink when the
+/// constant value at `arg_index` matches `dangerous_values` or `dangerous_prefixes`.
+/// Unknown / dynamic arguments use the conservative policy (treat as dangerous).
+#[derive(Debug, Clone, Copy)]
+pub struct SinkGate {
+    pub callee_matcher: &'static str,
+    pub arg_index: usize,
+    pub dangerous_values: &'static [&'static str],
+    pub dangerous_prefixes: &'static [&'static str],
+    pub label: DataLabel,
+    pub case_sensitive: bool,
+}
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Cap: u16 {
@@ -117,6 +130,15 @@ static REGISTRY: Lazy<HashMap<&'static str, &'static [LabelRule]>> = Lazy::new(|
     m.insert("ruby", ruby::RULES);
     m.insert("rb", ruby::RULES);
 
+    m
+});
+
+static GATED_REGISTRY: Lazy<HashMap<&'static str, &'static [SinkGate]>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("javascript", javascript::GATED_SINKS);
+    m.insert("js", javascript::GATED_SINKS);
+    m.insert("typescript", typescript::GATED_SINKS);
+    m.insert("ts", typescript::GATED_SINKS);
     m
 });
 
@@ -478,6 +500,50 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     None
 }
 
+/// Classify a call against gated sink rules. Returns `Some(DataLabel::Sink(..))` if
+/// the callee matches a gated rule AND the argument is dangerous (or unknown).
+/// Returns `None` if callee doesn't match any gated rule, or matches but argument
+/// is a known-safe constant.
+pub fn classify_gated_sink(
+    lang: &str,
+    callee_text: &str,
+    const_arg_at: impl Fn(usize) -> Option<String>,
+) -> Option<DataLabel> {
+    let gates = GATED_REGISTRY.get(lang).or_else(|| {
+        let key = lang.to_ascii_lowercase();
+        GATED_REGISTRY.get(key.as_str())
+    })?;
+
+    let callee_bytes = callee_text.as_bytes();
+
+    for gate in *gates {
+        let matcher = gate.callee_matcher.as_bytes();
+        if !match_suffix_cs(callee_bytes, matcher, gate.case_sensitive) {
+            continue;
+        }
+        // Matched a gated callee — inspect the argument
+        match const_arg_at(gate.arg_index) {
+            Some(value) => {
+                let lower = value.to_ascii_lowercase();
+                let is_dangerous = gate
+                    .dangerous_values
+                    .iter()
+                    .any(|v| lower == v.to_ascii_lowercase())
+                    || gate
+                        .dangerous_prefixes
+                        .iter()
+                        .any(|p| lower.starts_with(&p.to_ascii_lowercase()));
+                if is_dangerous {
+                    return Some(gate.label);
+                }
+                return None; // safe constant → suppress
+            }
+            None => return Some(gate.label), // unknown → conservative
+        }
+    }
+    None
+}
+
 /// Normalize a chained method call: strip `()` between `.` segments.
 /// e.g. `r.URL.Query().Get` → `r.URL.Query.Get`
 /// e.g. `r.URL.Query().Get("host")` → `r.URL.Query.Get`
@@ -649,5 +715,43 @@ mod tests {
         assert_eq!(parse_cap("code_exec"), Some(Cap::CODE_EXEC));
         assert_eq!(parse_cap("crypto"), Some(Cap::CRYPTO));
         assert_eq!(parse_cap("invalid"), None);
+    }
+
+    #[test]
+    fn gated_sink_dangerous_exact() {
+        let result = classify_gated_sink("javascript", "setAttribute", |_| {
+            Some("href".to_string())
+        });
+        assert_eq!(result, Some(DataLabel::Sink(Cap::HTML_ESCAPE)));
+    }
+
+    #[test]
+    fn gated_sink_dangerous_prefix() {
+        let result = classify_gated_sink("javascript", "setAttribute", |_| {
+            Some("onclick".to_string())
+        });
+        assert_eq!(result, Some(DataLabel::Sink(Cap::HTML_ESCAPE)));
+    }
+
+    #[test]
+    fn gated_sink_safe_suppressed() {
+        let result = classify_gated_sink("javascript", "setAttribute", |_| {
+            Some("class".to_string())
+        });
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn gated_sink_dynamic_conservative() {
+        let result = classify_gated_sink("javascript", "setAttribute", |_| None);
+        assert_eq!(result, Some(DataLabel::Sink(Cap::HTML_ESCAPE)));
+    }
+
+    #[test]
+    fn gated_sink_no_match() {
+        let result = classify_gated_sink("rust", "setAttribute", |_| {
+            Some("href".to_string())
+        });
+        assert_eq!(result, None);
     }
 }

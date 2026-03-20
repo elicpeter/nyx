@@ -1,4 +1,4 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, SinkGate};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -124,6 +124,17 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["net.createConnection"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+];
+
+pub static GATED_SINKS: &[SinkGate] = &[
+    SinkGate {
+        callee_matcher: "setAttribute",
+        arg_index: 0,
+        dangerous_values: &["href", "src", "action", "formaction", "srcdoc"],
+        dangerous_prefixes: &["on"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
 ];
