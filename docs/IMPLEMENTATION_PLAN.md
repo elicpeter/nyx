@@ -1055,6 +1055,114 @@ sinks or ORM-aware patterns.
 
 ---
 
+### Phase 16.5 — Argument-sensitive sink modeling
+
+**Category**: precision
+
+**Why**: Some APIs are only dangerous when a specific argument value selects a risky
+mode, attribute, or behavior. Nyx currently models sinks at the callee level only, so
+APIs like `setAttribute(name, value)` would be treated as sinks for *all* calls if
+added naively. That would create noisy findings such as flagging
+`setAttribute("class", user_input)` the same way as `setAttribute("href", user_input)`.
+
+This phase adds **argument-sensitive sink activation** so a call is only treated as a
+sink when specific constant argument values indicate danger.
+
+**Goals**:
+- Add support for sink activation gated by constant argument values
+- Model `setAttribute(name, value)` precisely enough to avoid broad false positives
+- Keep the implementation narrow and explicit — no general symbolic reasoning
+- Add regression tests for both dangerous and harmless attribute names
+
+**Files to touch**:
+- `src/labels/mod.rs` — extend rule metadata to support optional argument gating
+- `src/taint/transfer.rs` and/or classification path — activate sink behavior only when
+  the gating condition matches
+- `src/cfg.rs` — ensure call nodes expose enough constant-argument information to
+  inspect specific argument positions
+- `src/labels/javascript.rs` — add `setAttribute` using the new gated sink model
+- `src/labels/typescript.rs` — mirror JS
+- `src/taint/tests.rs` and/or `tests/fixtures/real_world/javascript/taint/` —
+  dangerous vs harmless `setAttribute` cases
+
+**Implementation tasks**:
+
+1. **Add explicit sink-gating metadata**
+   Extend label rules with a small optional structure for argument-sensitive activation,
+   for example:
+    - argument index to inspect
+    - list of dangerous constant string values
+    - optional prefix matching for patterns like `on*`
+
+   Keep this narrowly scoped to constant string argument checks only.
+
+2. **Capture constant argument values**
+   In CFG call-node construction, preserve enough information to inspect whether a
+   given argument is a constant string literal and what its normalized value is.
+   Do not attempt interprocedural constant propagation in this phase.
+
+3. **Gate sink activation in taint transfer**
+   When a callee matches a gated sink rule:
+    - if the specified argument is a matching dangerous constant, apply sink behavior
+    - if the specified argument is a non-dangerous constant, do not apply sink behavior
+    - if the specified argument is unknown / non-constant, choose a conservative policy:
+      either still treat it as a sink, or defer that branch with a documented note
+
+   Prefer a documented conservative policy over silent under-reporting.
+
+4. **Add `setAttribute` with explicit dangerous attribute names**
+   Add `setAttribute` as a gated sink for cases such as:
+    - `href`
+    - `src`
+    - `action`
+    - `formaction`
+    - `srcdoc`
+    - any `on*` event handler attribute
+
+   Do **not** treat harmless attributes such as `class`, `id`, `title`, `aria-*`,
+   or `data-*` as sinks.
+
+5. **Add regression tests**
+   Add positive cases:
+    - `el.setAttribute("href", user_input)` → finding
+    - `el.setAttribute("src", user_input)` → finding
+    - `el.setAttribute("onclick", user_input)` → finding
+
+   Add negative cases:
+    - `el.setAttribute("class", user_input)` → no finding
+    - `el.setAttribute("id", user_input)` → no finding
+    - `el.setAttribute("data-name", user_input)` → no finding
+
+   Add one unknown case and document the intended conservative behavior:
+    - `el.setAttribute(attr_name, user_input)`
+
+**Test tasks**:
+- New unit / fixture tests prove dangerous attribute names trigger findings
+- Harmless attribute names do not trigger findings
+- Existing JS/TS tests continue to pass
+- `cargo test` passes
+
+**Definition of done**:
+- Nyx can model sinks whose dangerousness depends on constant argument values
+- `setAttribute` is supported without broad false positives
+- Dangerous DOM attribute names are covered explicitly
+- All tests pass
+
+**Risks / gotchas**:
+- This is a precision feature, so be careful not to silently suppress true positives
+  for unknown dynamic attribute names. Prefer conservative behavior and document it.
+- Keep this phase narrowly scoped to constant string argument gating. Do not expand it
+  into full symbolic execution or general path reasoning.
+- Other APIs may benefit later (`postMessage`, template/render mode arguments, etc.),
+  but this phase should focus on `setAttribute` and the reusable mechanism.
+
+**Dependencies**:
+- Phase 16 — broad DOM/browser sink expansion lands first
+- Phase 10 — per-argument taint propagation is already in place, which reduces
+  ambiguity around call argument positions
+
+---
+
 ### Phase 17 — Model try/catch in CFG: Java and JavaScript
 
 **Category**: core correctness

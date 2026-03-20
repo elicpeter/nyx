@@ -1,0 +1,23 @@
+{
+  "description": "DOM XSS via location.search flowing into document.write. DOMPurify.sanitize strips HTML_ESCAPE cap.",
+  "tags": ["taint", "xss", "dom", "document.write"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 4],
+      "evidence_contains": [],
+      "notes": "location.search flows into document.write via string concatenation — DOM XSS"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [6, 7],
+      "evidence_contains": [],
+      "notes": "DOMPurify.sanitize strips HTML_ESCAPE cap so document.write should NOT fire"
+    }
+  ]
+}

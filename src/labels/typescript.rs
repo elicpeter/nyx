@@ -20,6 +20,8 @@ pub static RULES: &[LabelRule] = &[
             "req.get",
             "req.header",
             "process.env",
+            "location.search",
+            "location.hash",
         ],
         label: DataLabel::Source(Cap::all()),
         case_sensitive: false,
@@ -98,6 +100,30 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["res.set", "res.header"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    // DOM XSS sinks
+    LabelRule {
+        matchers: &["document.write", "document.writeln", "outerHTML", "insertAdjacentHTML"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    // Navigation / open-redirect sinks
+    LabelRule {
+        matchers: &["location.assign", "location.replace", "window.open"],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    // Node.js file-system write sinks
+    LabelRule {
+        matchers: &["fs.writeFile", "fs.writeFileSync"],
+        label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
+    },
+    // Node.js network sinks
+    LabelRule {
+        matchers: &["net.createConnection"],
+        label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
 ];
