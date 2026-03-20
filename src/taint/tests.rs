@@ -2880,3 +2880,43 @@ fn per_arg_propagation_nested_expr_arg() {
         "nested call in arg 0 should not affect arg 1 positional mapping"
     );
 }
+
+#[test]
+fn js_cross_function_global_taint() {
+    let src = b"let x = \"safe\";\nfunction leak() { x = document.location(); }\nfunction use_it() { eval(x); }\nleak();\nuse_it();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+    );
+    assert!(
+        !findings.is_empty(),
+        "cross-function global taint (leak -> use_it) should be detected"
+    );
+}
+
+#[test]
+fn js_two_level_converges_no_mutation() {
+    let src = b"let x = document.location();\nfunction f() { eval(x); }\nf();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+    );
+    assert!(
+        !findings.is_empty(),
+        "top-level source to function sink should be detected"
+    );
+}

@@ -7,10 +7,10 @@ use crate::interop::InteropEdge;
 use crate::labels::SourceKind;
 use crate::state::engine::{self, MAX_TRACKED_VARS};
 use crate::state::lattice::Lattice;
-use crate::state::symbol::SymbolInterner;
+use crate::state::symbol::{SymbolId, SymbolInterner};
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
-use domain::TaintState;
+use domain::{SmallBitSet, TaintState};
 use path_state::PredicateKind;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::IntoNodeReferences;
@@ -99,16 +99,67 @@ pub fn analyse_file(
     findings
 }
 
+/// Collect SymbolIds of variables defined or used at top-level scope.
+/// These are the "global" variables eligible to flow between functions.
+fn collect_toplevel_symbols(cfg: &Cfg, interner: &SymbolInterner) -> HashSet<SymbolId> {
+    let mut ids = HashSet::new();
+    for (_idx, info) in cfg.node_references() {
+        if info.enclosing_func.is_none() {
+            if let Some(ref d) = info.defines {
+                if let Some(sym) = interner.get(d) {
+                    ids.insert(sym);
+                }
+            }
+            for u in &info.uses {
+                if let Some(sym) = interner.get(u) {
+                    ids.insert(sym);
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// Filter a TaintState to only include variables in the top-level symbol set.
+/// Prevents function-local variable taint from leaking into the global seed.
+fn filter_to_toplevel(state: &TaintState, toplevel_syms: &HashSet<SymbolId>) -> TaintState {
+    let mut mask = SmallBitSet::empty();
+    for &sym in toplevel_syms {
+        mask.insert(sym);
+    }
+
+    TaintState {
+        vars: state
+            .vars
+            .iter()
+            .filter(|(sym, _)| toplevel_syms.contains(sym))
+            .cloned()
+            .collect(),
+        validated_must: state.validated_must.intersection(mask),
+        validated_may: state.validated_may.intersection(mask),
+        predicates: state
+            .predicates
+            .iter()
+            .filter(|(sym, _)| toplevel_syms.contains(sym))
+            .cloned()
+            .collect(),
+    }
+}
+
 /// JS/TS two-level solve to prevent cross-function taint leakage.
 ///
 /// Level 1: Solve top-level code (nodes where `enclosing_func.is_none()`).
-/// Level 2: For each function, solve seeded with top-level taint.
+/// Level 2: For each function, solve seeded with top-level taint. After all
+/// functions, join their exit states (filtered to globals) back into the seed.
+/// If the seed changed, re-run. Cap at 3 rounds.
 fn analyse_js_two_level(
     cfg: &Cfg,
     entry: NodeIndex,
     _interner: &SymbolInterner,
     base_transfer: &TaintTransfer,
 ) -> Vec<TaintEvent> {
+    const MAX_ITERATIONS: usize = 3;
+
     // Level 1: solve top-level only
     let toplevel_transfer = TaintTransfer {
         lang: base_transfer.lang,
@@ -123,29 +174,55 @@ fn analyse_js_two_level(
 
     let toplevel_result =
         engine::run_forward(cfg, entry, &toplevel_transfer, TaintState::initial());
-
-    // Extract top-level taint state at the last converged point
     let toplevel_state = extract_exit_state(&toplevel_result.states);
 
-    // Level 2: solve each function seeded with top-level state
+    // Top-level events emitted once
     let mut all_events = toplevel_result.events;
 
     let func_entries = find_function_entries(cfg);
-    for (func_name, func_entry) in &func_entries {
-        let func_transfer = TaintTransfer {
-            lang: base_transfer.lang,
-            namespace: base_transfer.namespace,
-            interner: base_transfer.interner,
-            local_summaries: base_transfer.local_summaries,
-            global_summaries: base_transfer.global_summaries,
-            interop_edges: base_transfer.interop_edges,
-            global_seed: Some(&toplevel_state),
-            scope_filter: Some(Some(func_name.as_str())),
-        };
 
-        let func_result =
-            engine::run_forward(cfg, *func_entry, &func_transfer, TaintState::initial());
-        all_events.extend(func_result.events);
+    // Compute which variables are top-level (globally visible)
+    let toplevel_syms = collect_toplevel_symbols(cfg, base_transfer.interner);
+
+    // Iterative Level 2: re-run functions until seed stabilises
+    let mut current_seed = toplevel_state.clone();
+
+    for _round in 0..MAX_ITERATIONS {
+        let mut round_events: Vec<TaintEvent> = Vec::new();
+        let mut combined_exit = toplevel_state.clone();
+
+        for (func_name, func_entry) in &func_entries {
+            let func_transfer = TaintTransfer {
+                lang: base_transfer.lang,
+                namespace: base_transfer.namespace,
+                interner: base_transfer.interner,
+                local_summaries: base_transfer.local_summaries,
+                global_summaries: base_transfer.global_summaries,
+                interop_edges: base_transfer.interop_edges,
+                global_seed: Some(&current_seed),
+                scope_filter: Some(Some(func_name.as_str())),
+            };
+
+            let func_result =
+                engine::run_forward(cfg, *func_entry, &func_transfer, TaintState::initial());
+            round_events.extend(func_result.events);
+
+            // Filter exit state to global variables only, then join into combined
+            let func_exit = extract_exit_state(&func_result.states);
+            let filtered = filter_to_toplevel(&func_exit, &toplevel_syms);
+            combined_exit = combined_exit.join(&filtered);
+        }
+
+        // Accumulate events from every round (state monotonicity does not
+        // guarantee event monotonicity — earlier rounds may emit events
+        // that later rounds miss due to e.g. contradiction pruning)
+        all_events.extend(round_events);
+
+        // Converged: seed didn't change
+        if combined_exit == current_seed {
+            break;
+        }
+        current_seed = combined_exit;
     }
 
     all_events
