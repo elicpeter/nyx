@@ -28,6 +28,113 @@ fn byte_offset_to_point(tree: &tree_sitter::Tree, byte: usize) -> tree_sitter::P
         .unwrap_or_else(|| tree_sitter::Point { row: 0, column: 0 })
 }
 
+/// Build a [`Diag`] from a taint [`Finding`], the CFG that produced it,
+/// the parsed tree (for byte→line/col conversion) and the file path.
+fn build_taint_diag(
+    finding: &crate::taint::Finding,
+    cfg_graph: &crate::cfg::Cfg,
+    tree: &tree_sitter::Tree,
+    path: &Path,
+) -> Diag {
+    let sink_byte = cfg_graph[finding.sink].span.0;
+    let sink_point = byte_offset_to_point(tree, sink_byte);
+    let source_byte = cfg_graph[finding.source].span.0;
+    let source_point = byte_offset_to_point(tree, source_byte);
+
+    let source_callee = cfg_graph[finding.source]
+        .callee
+        .as_deref()
+        .map(sanitize_desc)
+        .unwrap_or_else(|| "(unknown)".into());
+    let sink_callee = cfg_graph[finding.sink]
+        .callee
+        .as_deref()
+        .map(sanitize_desc)
+        .unwrap_or_else(|| "(unknown)".into());
+    let kind_label = source_kind_label(finding.source_kind);
+
+    let short_source = crate::fmt::shorten_callee(&source_callee);
+    let short_sink = crate::fmt::shorten_callee(&sink_callee);
+
+    let mut labels = vec![
+        (
+            "Source".into(),
+            format!(
+                "{source_callee} ({}:{})",
+                source_point.row + 1,
+                source_point.column + 1
+            ),
+        ),
+        ("Sink".into(), sink_callee.to_string()),
+    ];
+    if let Some(guard) = finding.guard_kind {
+        labels.push(("Path guard".into(), format!("{guard:?}")));
+    }
+
+    let file_path_owned = path.to_string_lossy().into_owned();
+    let mut evidence_notes = Vec::new();
+    if finding.path_validated {
+        evidence_notes.push("path_validated".into());
+    }
+    evidence_notes.push(format!("source_kind:{:?}", finding.source_kind));
+
+    Diag {
+        path: file_path_owned.clone(),
+        line: sink_point.row + 1,
+        col: sink_point.column + 1,
+        severity: severity_for_source_kind(finding.source_kind),
+        id: format!(
+            "taint-unsanitised-flow (source {}:{})",
+            source_point.row + 1,
+            source_point.column + 1
+        ),
+        category: FindingCategory::Security,
+        path_validated: finding.path_validated,
+        guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
+        message: Some(format!(
+            "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
+        )),
+        labels,
+        confidence: None,
+        evidence: Some(Evidence {
+            source: Some(SpanEvidence {
+                path: file_path_owned.clone(),
+                line: (source_point.row + 1) as u32,
+                col: (source_point.column + 1) as u32,
+                kind: "source".into(),
+                snippet: Some(short_source.clone()),
+            }),
+            sink: Some(SpanEvidence {
+                path: file_path_owned.clone(),
+                line: (sink_point.row + 1) as u32,
+                col: (sink_point.column + 1) as u32,
+                kind: "sink".into(),
+                snippet: Some(short_sink.clone()),
+            }),
+            guards: finding
+                .guard_kind
+                .map(|g| {
+                    vec![SpanEvidence {
+                        path: file_path_owned,
+                        line: (sink_point.row + 1) as u32,
+                        col: 0,
+                        kind: "guard".into(),
+                        snippet: Some(format!("{g:?}")),
+                    }]
+                })
+                .unwrap_or_default(),
+            sanitizers: vec![],
+            state: None,
+            notes: evidence_notes,
+        }),
+        rank_score: None,
+        rank_reason: None,
+        suppressed: false,
+        suppression: None,
+        rollup: None,
+    }
+}
+
 /// Resolve a file extension to a (tree‑sitter Language, slug) pair.
 fn lang_for_path(path: &Path) -> Option<(Language, &'static str)> {
     match lowercase_ext(path) {
@@ -203,7 +310,7 @@ pub fn run_rules_on_bytes(
         return Ok(vec![]);
     };
 
-    let _tree = PARSER.with(|cell| {
+    let tree = PARSER.with(|cell| {
         let mut parser = cell.borrow_mut();
         parser.set_language(&ts_lang)?;
         parser
@@ -230,7 +337,7 @@ pub fn run_rules_on_bytes(
             Some(&lang_rules)
         };
         let (cfg_graph, entry, summaries) =
-            build_cfg(&_tree, bytes, lang_slug, &file_path_str, rules_ref);
+            build_cfg(&tree, bytes, lang_slug, &file_path_str, rules_ref);
         let caller_lang = Lang::from_slug(lang_slug).unwrap_or(Lang::Rust);
 
         // ── Taint analysis ──────────────────────────────────────────────
@@ -248,108 +355,7 @@ pub fn run_rules_on_bytes(
             &[],
         );
         for finding in &taint_results {
-            // Report the SINK location — where the vulnerability manifests.
-            let sink_byte = cfg_graph[finding.sink].span.0;
-            let sink_point = byte_offset_to_point(&_tree, sink_byte);
-
-            // Include source location in the ID so distinct flows through
-            // the same sink (or different sinks at the same line) don't
-            // get collapsed by dedup.
-            let source_byte = cfg_graph[finding.source].span.0;
-            let source_point = byte_offset_to_point(&_tree, source_byte);
-
-            let source_callee = cfg_graph[finding.source]
-                .callee
-                .as_deref()
-                .map(sanitize_desc)
-                .unwrap_or_else(|| "(unknown)".into());
-            let sink_callee = cfg_graph[finding.sink]
-                .callee
-                .as_deref()
-                .map(sanitize_desc)
-                .unwrap_or_else(|| "(unknown)".into());
-            let kind_label = source_kind_label(finding.source_kind);
-
-            let short_source = crate::fmt::shorten_callee(&source_callee);
-            let short_sink = crate::fmt::shorten_callee(&sink_callee);
-
-            let mut labels = vec![
-                (
-                    "Source".into(),
-                    format!(
-                        "{source_callee} ({}:{})",
-                        source_point.row + 1,
-                        source_point.column + 1
-                    ),
-                ),
-                ("Sink".into(), sink_callee.to_string()),
-            ];
-            if let Some(guard) = finding.guard_kind {
-                labels.push(("Path guard".into(), format!("{guard:?}")));
-            }
-
-            let file_path_owned = path.to_string_lossy().into_owned();
-            let mut evidence_notes = Vec::new();
-            if finding.path_validated {
-                evidence_notes.push("path_validated".into());
-            }
-            evidence_notes.push(format!("source_kind:{:?}", finding.source_kind));
-
-            out.push(Diag {
-                path: file_path_owned.clone(),
-                line: sink_point.row + 1,
-                col: sink_point.column + 1,
-                severity: severity_for_source_kind(finding.source_kind),
-                id: format!(
-                    "taint-unsanitised-flow (source {}:{})",
-                    source_point.row + 1,
-                    source_point.column + 1
-                ),
-                category: FindingCategory::Security,
-                path_validated: finding.path_validated,
-                guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
-                message: Some(format!(
-                    "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
-                )),
-                labels,
-                confidence: None,
-                evidence: Some(Evidence {
-                    source: Some(SpanEvidence {
-                        path: file_path_owned.clone(),
-                        line: (source_point.row + 1) as u32,
-                        col: (source_point.column + 1) as u32,
-                        kind: "source".into(),
-                        snippet: Some(short_source.clone()),
-                    }),
-                    sink: Some(SpanEvidence {
-                        path: file_path_owned,
-                        line: (sink_point.row + 1) as u32,
-                        col: (sink_point.column + 1) as u32,
-                        kind: "sink".into(),
-                        snippet: Some(short_sink.clone()),
-                    }),
-                    guards: finding
-                        .guard_kind
-                        .map(|g| {
-                            vec![SpanEvidence {
-                                path: path.to_string_lossy().into_owned(),
-                                line: (sink_point.row + 1) as u32,
-                                col: 0,
-                                kind: "guard".into(),
-                                snippet: Some(format!("{g:?}")),
-                            }]
-                        })
-                        .unwrap_or_default(),
-                    sanitizers: vec![],
-                    state: None,
-                    notes: evidence_notes,
-                }),
-                rank_score: None,
-                rank_reason: None,
-                suppressed: false,
-                suppression: None,
-                rollup: None,
-            });
+            out.push(build_taint_diag(finding, &cfg_graph, &tree, path));
         }
 
         // ── CFG structural analyses ─────────────────────────────────────
@@ -367,7 +373,7 @@ pub fn run_rules_on_bytes(
             taint_active,
         };
         for cf in cfg_analysis::run_all(&cfg_ctx) {
-            let point = byte_offset_to_point(&_tree, cf.span.0);
+            let point = byte_offset_to_point(&tree, cf.span.0);
             let cfg_confidence = Some(match cf.confidence {
                 cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
                 cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
@@ -420,11 +426,11 @@ pub fn run_rules_on_bytes(
             // Collect state finding lines to dedup overlapping CFG findings.
             let state_lines: std::collections::HashSet<usize> = state_findings
                 .iter()
-                .map(|sf| byte_offset_to_point(&_tree, sf.span.0).row + 1)
+                .map(|sf| byte_offset_to_point(&tree, sf.span.0).row + 1)
                 .collect();
 
             for sf in &state_findings {
-                let point = byte_offset_to_point(&_tree, sf.span.0);
+                let point = byte_offset_to_point(&tree, sf.span.0);
                 out.push(Diag {
                     path: path.to_string_lossy().into_owned(),
                     line: point.row + 1,
@@ -476,7 +482,7 @@ pub fn run_rules_on_bytes(
     }
 
     if cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Ast {
-        let root = _tree.root_node();
+        let root = tree.root_node();
 
         let compiled = query_cache::for_lang(lang_slug, ts_lang);
         let mut cursor = QueryCursor::new();
@@ -644,103 +650,7 @@ pub fn analyse_file_fused(
             &[],
         );
         for finding in &taint_results {
-            let sink_byte = cfg_graph[finding.sink].span.0;
-            let sink_point = byte_offset_to_point(&tree, sink_byte);
-            let source_byte = cfg_graph[finding.source].span.0;
-            let source_point = byte_offset_to_point(&tree, source_byte);
-
-            let source_callee = cfg_graph[finding.source]
-                .callee
-                .as_deref()
-                .map(sanitize_desc)
-                .unwrap_or_else(|| "(unknown)".into());
-            let sink_callee = cfg_graph[finding.sink]
-                .callee
-                .as_deref()
-                .map(sanitize_desc)
-                .unwrap_or_else(|| "(unknown)".into());
-            let kind_label = source_kind_label(finding.source_kind);
-
-            let short_source = crate::fmt::shorten_callee(&source_callee);
-            let short_sink = crate::fmt::shorten_callee(&sink_callee);
-
-            let mut labels = vec![
-                (
-                    "Source".into(),
-                    format!(
-                        "{source_callee} ({}:{})",
-                        source_point.row + 1,
-                        source_point.column + 1
-                    ),
-                ),
-                ("Sink".into(), sink_callee.to_string()),
-            ];
-            if let Some(guard) = finding.guard_kind {
-                labels.push(("Path guard".into(), format!("{guard:?}")));
-            }
-
-            let fused_file_path = path.to_string_lossy().into_owned();
-            let mut fused_evidence_notes = Vec::new();
-            if finding.path_validated {
-                fused_evidence_notes.push("path_validated".into());
-            }
-            fused_evidence_notes.push(format!("source_kind:{:?}", finding.source_kind));
-
-            out.push(Diag {
-                path: fused_file_path.clone(),
-                line: sink_point.row + 1,
-                col: sink_point.column + 1,
-                severity: severity_for_source_kind(finding.source_kind),
-                id: format!(
-                    "taint-unsanitised-flow (source {}:{})",
-                    source_point.row + 1,
-                    source_point.column + 1
-                ),
-                category: FindingCategory::Security,
-                path_validated: finding.path_validated,
-                guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
-                message: Some(format!(
-                    "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
-                )),
-                labels,
-                confidence: None,
-                evidence: Some(Evidence {
-                    source: Some(SpanEvidence {
-                        path: fused_file_path.clone(),
-                        line: (source_point.row + 1) as u32,
-                        col: (source_point.column + 1) as u32,
-                        kind: "source".into(),
-                        snippet: Some(short_source.clone()),
-                    }),
-                    sink: Some(SpanEvidence {
-                        path: fused_file_path.clone(),
-                        line: (sink_point.row + 1) as u32,
-                        col: (sink_point.column + 1) as u32,
-                        kind: "sink".into(),
-                        snippet: Some(short_sink.clone()),
-                    }),
-                    guards: finding
-                        .guard_kind
-                        .map(|g| {
-                            vec![SpanEvidence {
-                                path: fused_file_path,
-                                line: (sink_point.row + 1) as u32,
-                                col: 0,
-                                kind: "guard".into(),
-                                snippet: Some(format!("{g:?}")),
-                            }]
-                        })
-                        .unwrap_or_default(),
-                    sanitizers: vec![],
-                    state: None,
-                    notes: fused_evidence_notes,
-                }),
-                rank_score: None,
-                rank_reason: None,
-                suppressed: false,
-                suppression: None,
-                rollup: None,
-            });
+            out.push(build_taint_diag(finding, &cfg_graph, &tree, path));
         }
 
         let taint_active = global_summaries.is_some() || !taint_results.is_empty();
