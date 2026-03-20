@@ -136,6 +136,16 @@ pub static GATED_SINKS: &[SinkGate] = &[
         dangerous_prefixes: &["on"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
+        payload_args: &[1],
+    },
+    SinkGate {
+        callee_matcher: "parseFromString",
+        arg_index: 1,
+        dangerous_values: &["text/html", "application/xhtml+xml"],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+        payload_args: &[0],
     },
 ];
 

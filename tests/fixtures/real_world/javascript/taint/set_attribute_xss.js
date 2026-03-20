@@ -20,3 +20,7 @@ p.setAttribute("data-name", userInput);
 var el = document.createElement('div');
 var attrName = "href";
 el.setAttribute(attrName, userInput);
+
+// Payload-arg filtering: dangerous attr + safe (constant) payload — should NOT fire
+var el2 = document.createElement('a');
+el2.setAttribute("href", "https://example.com");

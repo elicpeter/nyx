@@ -184,6 +184,7 @@ mod tests {
             condition_vars: vec![],
             condition_negated: false,
             arg_uses: vec![],
+            sink_payload_args: None,
         }
     }
 

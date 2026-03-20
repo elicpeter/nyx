@@ -57,6 +57,10 @@ pub struct NodeInfo {
     /// identifiers from one argument expression, in parameter-position order.
     /// Empty for non-call nodes or when argument boundaries can't be determined.
     pub arg_uses: Vec<Vec<String>>,
+    /// For gated sinks: which argument positions carry the tainted payload.
+    /// When `Some`, only variables from these `arg_uses` positions are checked
+    /// for taint.  `None` = all arguments are payload (default).
+    pub sink_payload_args: Option<Vec<usize>>,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -901,11 +905,17 @@ fn push_node<'a>(
 
     // Gated sinks: argument-sensitive classification (e.g., setAttribute).
     // Runs for any node containing a classifiable call, regardless of StmtKind.
+    let mut sink_payload_args: Option<Vec<usize>> = None;
     if label.is_none() {
         if let Some(cn) = call_ast {
-            label = classify_gated_sink(lang, &text, |idx| {
+            if let Some((gated_label, payload)) = classify_gated_sink(lang, &text, |idx| {
                 extract_const_string_arg(cn, idx, code)
-            });
+            }) {
+                label = Some(gated_label);
+                if !payload.is_empty() {
+                    sink_payload_args = Some(payload.to_vec());
+                }
+            }
         }
     }
 
@@ -929,7 +939,8 @@ fn push_node<'a>(
     };
 
     // Extract per-argument identifiers for Call nodes.
-    let arg_uses = if kind == StmtKind::Call {
+    // Also extract for gated-sink nodes so payload-arg filtering works.
+    let arg_uses = if kind == StmtKind::Call || sink_payload_args.is_some() {
         call_ast
             .map(|cn| extract_arg_uses(cn, code))
             .unwrap_or_default()
@@ -950,6 +961,7 @@ fn push_node<'a>(
         condition_vars,
         condition_negated,
         arg_uses,
+        sink_payload_args,
     });
 
     debug!(
@@ -1172,6 +1184,7 @@ fn build_sub<'a>(
                     condition_vars: Vec::new(),
                     condition_negated: false,
                     arg_uses: Vec::new(),
+                    sink_payload_args: None,
                 });
                 connect_all(g, &[cond], pass, EdgeKind::False);
                 vec![pass]
@@ -1658,6 +1671,7 @@ fn build_sub<'a>(
                 condition_vars: Vec::new(),
                 condition_negated: false,
                 arg_uses: Vec::new(),
+                sink_payload_args: None,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -1925,6 +1939,7 @@ pub(crate) fn build_cfg<'a>(
         condition_vars: Vec::new(),
         condition_negated: false,
         arg_uses: Vec::new(),
+        sink_payload_args: None,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -1939,6 +1954,7 @@ pub(crate) fn build_cfg<'a>(
         condition_vars: Vec::new(),
         condition_negated: false,
         arg_uses: Vec::new(),
+        sink_payload_args: None,
     });
 
     // Build the body below the synthetic ENTRY.

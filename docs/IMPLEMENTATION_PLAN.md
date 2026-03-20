@@ -1163,6 +1163,124 @@ sink when specific constant argument values indicate danger.
 
 ---
 
+### Phase 16.6 — Argument-role-aware sink modeling
+
+**Category**: precision
+
+**Why**: Phase 16.5 added argument-sensitive sink activation: a call can become a sink
+only when a specific argument value indicates danger. That solved the first half of
+APIs like `setAttribute(name, value)`.
+
+But some APIs need a second layer of precision: one argument selects whether the call
+is dangerous, while a different argument is the actual tainted payload. Without this,
+Nyx still treats all call arguments as equally sink-relevant once the sink activates.
+
+This phase adds **argument-role-aware sink modeling** so sink activation and payload
+selection can be modeled independently.
+
+**Goals**:
+- Add a reusable mechanism for APIs where:
+    - one argument controls sink activation
+    - a different argument carries the tainted payload
+- Keep the implementation narrow and explicit
+- Refine `setAttribute(name, value)` so only the value argument is treated as payload
+- Add `DOMParser.parseFromString(input, mimeType)` using the same mechanism
+- Preserve conservative behavior for dynamic / unknown activation arguments
+
+**Files to touch**:
+- `src/labels/mod.rs` — extend `SinkGate` to include payload argument positions
+- `src/cfg.rs` — store per-node payload-argument metadata for gated sinks
+- `src/taint/transfer.rs` — restrict sink taint checks to payload args when configured
+- `src/labels/javascript.rs` — refine `setAttribute`, add `parseFromString`
+- `src/labels/typescript.rs` — mirror JS
+- `tests/fixtures/real_world/javascript/taint/` — add/update gated sink fixtures
+- `src/labels/mod.rs` tests — extend gated-sink unit coverage
+
+**Implementation tasks**:
+
+1. **Extend gated sink metadata with payload arguments**
+   Add a `payload_args` field to `SinkGate`:
+    - specifies which argument positions carry the tainted payload
+    - empty slice means all arguments are payloads (backward-compatible default)
+
+2. **Thread payload argument info through classification**
+   Update `classify_gated_sink()` to return both:
+    - the sink label
+    - the configured payload argument positions
+
+3. **Store payload argument info on CFG nodes**
+   Extend `NodeInfo` with optional sink-payload metadata so later taint transfer can
+   restrict sink checking to the intended argument positions.
+
+4. **Restrict sink taint checks to payload args**
+   In taint transfer:
+    - if a node has `sink_payload_args` and positional `arg_uses` are available,
+      only those argument positions should be checked for taint
+    - if positional argument data is unavailable, fall back to all arguments
+      conservatively
+
+5. **Refine `setAttribute(name, value)`**
+   Keep the activation logic from Phase 16.5:
+    - activation argument: arg 0
+    - dangerous values: `href`, `src`, `action`, `formaction`, `srcdoc`
+    - dangerous prefixes: `on`
+
+   Add payload-role logic:
+    - payload argument: arg 1 only
+
+   This ensures:
+    - `setAttribute("href", user_input)` → finding
+    - `setAttribute("href", "https://example.com")` → no finding
+    - `setAttribute("class", user_input)` → no finding
+
+6. **Add `parseFromString(input, mimeType)`**
+   Add as a gated sink:
+    - callee matcher: `parseFromString`
+    - activation argument: arg 1 (MIME type)
+    - dangerous values: `text/html`, `application/xhtml+xml`
+    - payload argument: arg 0
+
+   This ensures:
+    - `parseFromString(user_input, "text/html")` → finding
+    - `parseFromString(user_input, "text/xml")` → no finding
+    - `parseFromString("<p>safe</p>", "text/html")` → no finding
+
+7. **Add regression tests**
+   Extend unit and fixture coverage for:
+    - dangerous selector + tainted payload → finding
+    - safe selector + tainted payload → no finding
+    - dangerous selector + constant payload → no finding
+    - dynamic selector / MIME type → conservative finding
+    - payload argument positions are returned correctly by gated classification
+
+**Test tasks**:
+- `setAttribute` dangerous attributes fire only when arg 1 is tainted
+- harmless `setAttribute` attributes do not fire
+- `parseFromString` fires for dangerous MIME types only
+- constant payloads do not create findings even when activation arg is dangerous
+- existing JS/TS tests continue to pass
+- `cargo test` passes
+
+**Definition of done**:
+- Nyx can model APIs where sink activation and sink payload are different arguments
+- `setAttribute(name, value)` is modeled precisely
+- `parseFromString(input, mimeType)` is supported with MIME-type gating
+- All tests pass
+
+**Risks / gotchas**:
+- This is still a conservative static model. Dynamic selector arguments should prefer
+  documented conservative behavior over silent suppression.
+- Keep this phase narrowly scoped to explicit constant-argument role modeling.
+  Do not expand into full symbolic execution, type inference, or general API semantics.
+- `application/xhtml+xml` is intentionally treated as dangerous under the chosen
+  browser/DOM threat model; document that choice in fixture or changelog notes.
+
+**Dependencies**:
+- Phase 16.5 — argument-sensitive sink activation exists already
+- Phase 10 — per-argument taint propagation is already in place
+
+---
+
 ### Phase 17 — Model try/catch in CFG: Java and JavaScript
 
 **Category**: core correctness

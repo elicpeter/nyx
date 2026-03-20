@@ -1,5 +1,5 @@
 {
-  "description": "setAttribute gated sink: dangerous attrs fire, safe attrs suppressed, dynamic is conservative",
+  "description": "setAttribute gated sink: dangerous attrs fire, safe attrs suppressed, dynamic is conservative, payload-arg filtering",
   "tags": ["taint", "xss", "dom", "setAttribute", "gated-sink"],
   "modes": ["full"],
   "expected": [
@@ -42,6 +42,14 @@
       "line_range": [20, 23],
       "evidence_contains": [],
       "notes": "setAttribute(attrName, ...) with dynamic arg — conservative policy fires sink"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [25, 27],
+      "evidence_contains": [],
+      "notes": "setAttribute('href', constant) — dangerous attr but safe payload, no finding"
     }
   ]
 }

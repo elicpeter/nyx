@@ -309,6 +309,7 @@ mod tests {
             condition_vars: vec![],
             condition_negated: false,
             arg_uses: vec![],
+            sink_payload_args: None,
         };
 
         let (state, events) =
@@ -344,6 +345,7 @@ mod tests {
             condition_vars: vec![],
             condition_negated: false,
             arg_uses: vec![],
+            sink_payload_args: None,
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -378,6 +380,7 @@ mod tests {
             condition_vars: vec![],
             condition_negated: false,
             arg_uses: vec![],
+            sink_payload_args: None,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -413,6 +416,7 @@ mod tests {
             condition_vars: vec![],
             condition_negated: false,
             arg_uses: vec![],
+            sink_payload_args: None,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);

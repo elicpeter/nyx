@@ -420,6 +420,28 @@ impl TaintTransfer<'_> {
         sink_caps: Cap,
     ) -> Vec<(SymbolId, Cap, SmallVec<[TaintOrigin; 2]>)> {
         let mut result = Vec::new();
+
+        // If payload-arg filtering is active and positional arg data is available,
+        // only check variables from the designated payload argument positions.
+        if let Some(ref positions) = info.sink_payload_args {
+            if !info.arg_uses.is_empty() {
+                for &pos in positions {
+                    if let Some(arg_idents) = info.arg_uses.get(pos) {
+                        for u in arg_idents {
+                            if let Some(taint) = self.lookup_var(u, state)
+                                && (taint.caps & sink_caps) != Cap::empty()
+                                && let Some(sym) = self.interner.get(u)
+                            {
+                                result.push((sym, taint.caps, taint.origins.clone()));
+                            }
+                        }
+                    }
+                }
+                return result;
+            }
+            // arg_uses unavailable — fall through to all-uses (conservative)
+        }
+
         for u in &info.uses {
             if let Some(taint) = self.lookup_var(u, state)
                 && (taint.caps & sink_caps) != Cap::empty()
