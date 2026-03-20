@@ -71,9 +71,8 @@ pub struct LocalFuncSummary {
     pub sink_caps: Cap,
     pub param_count: usize,
     pub param_names: Vec<String>,
-    /// Conservative: `true` if *any* parameter variable reaches the return
-    /// value on *any* code path.
-    pub propagates_taint: bool,
+    /// Which parameter indices (0‑based) flow through to the return value.
+    pub propagating_params: Vec<usize>,
     /// Which parameter indices flow to internal sinks.
     pub tainted_sink_params: Vec<usize>,
     /// Callee identifiers found inside this function body.
@@ -1383,8 +1382,6 @@ fn build_sub<'a>(
             let mut callees = Vec::<String>::new();
             let mut tainted_sink_params: Vec<usize> = Vec::new();
 
-            let param_set: HashSet<&str> = param_names.iter().map(|s| s.as_str()).collect();
-
             // Iterate only over nodes created within this function scope
             // (entry_idx .. current end) instead of the entire graph.
             let fn_node_range = entry_idx.index()..g.node_count();
@@ -1464,50 +1461,57 @@ fn build_sub<'a>(
                 }
             }
 
-            // ───── propagates_taint ──────────────────────────────────────────────
+            // ───── propagating_params ────────────────────────────────────────────
             //
-            // A function propagates taint when a parameter variable reaches a
-            // return value (explicit or implicit) while still carrying taint bits.
-            //
-            // We approximate this: if any param name still appears in `var_taint`
-            // at any return/exit node, we conservatively say yes.
-            let propagates = {
-                let mut prop = false;
+            // Per-parameter propagation: for each parameter, check whether it
+            // reaches a return value (explicit or implicit) while still carrying
+            // taint bits.  Records the 0-based index of each propagating param.
+            let propagating_params = {
+                let mut params = Vec::new();
 
-                // check explicit returns
-                for &idx in node_bits.keys() {
-                    if g[idx].kind == StmtKind::Return {
-                        for u in &g[idx].uses {
-                            if param_set.contains(u.as_str()) {
-                                prop = true;
+                for (i, pname) in param_names.iter().enumerate() {
+                    let mut flows = false;
+
+                    // check explicit returns
+                    for &idx in node_bits.keys() {
+                        if g[idx].kind == StmtKind::Return {
+                            for u in &g[idx].uses {
+                                if u == pname {
+                                    flows = true;
+                                }
+                                // check if the var was derived from this param
+                                if let Some(bits) = var_taint.get(u)
+                                    && !bits.is_empty()
+                                    && var_taint.contains_key(pname)
+                                {
+                                    flows = true;
+                                }
                             }
-                            // also check if the var was derived from a param
-                            if let Some(bits) = var_taint.get(u)
-                                && !bits.is_empty()
-                                && param_names.iter().any(|p| var_taint.contains_key(p))
+                        }
+                    }
+
+                    // check implicit returns (fall-through body exits)
+                    if !flows {
+                        for &exit_pred in &body_exits {
+                            let info = &g[exit_pred];
+                            for u in &info.uses {
+                                if u == pname {
+                                    flows = true;
+                                }
+                            }
+                            if let Some(def) = &info.defines
+                                && def == pname
                             {
-                                prop = true;
+                                flows = true;
                             }
                         }
                     }
-                }
 
-                // check implicit returns (fall-through body exits)
-                for &exit_pred in &body_exits {
-                    let info = &g[exit_pred];
-                    for u in &info.uses {
-                        if param_set.contains(u.as_str()) {
-                            prop = true;
-                        }
-                    }
-                    if let Some(def) = &info.defines
-                        && param_set.contains(def.as_str())
-                    {
-                        prop = true;
+                    if flows {
+                        params.push(i);
                     }
                 }
-
-                prop
+                params
             };
 
             tainted_sink_params.sort_unstable();
@@ -1567,7 +1571,7 @@ fn build_sub<'a>(
                     sink_caps: fn_sink_bits,
                     param_count,
                     param_names,
-                    propagates_taint: propagates,
+                    propagating_params,
                     tainted_sink_params,
                     callees,
                 },
@@ -1895,7 +1899,8 @@ pub(crate) fn export_summaries(
             source_caps: local.source_caps.bits(),
             sanitizer_caps: local.sanitizer_caps.bits(),
             sink_caps: local.sink_caps.bits(),
-            propagates_taint: local.propagates_taint,
+            propagating_params: local.propagating_params.clone(),
+            propagates_taint: false,
             tainted_sink_params: local.tainted_sink_params.clone(),
             callees: local.callees.clone(),
         })

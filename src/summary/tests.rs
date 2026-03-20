@@ -10,6 +10,7 @@ fn make(name: &str, src: u16, san: u16, sink: u16) -> FuncSummary {
         source_caps: src,
         sanitizer_caps: san,
         sink_caps: sink,
+        propagating_params: vec![],
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
@@ -40,7 +41,7 @@ fn merge_unions_conservatively() {
     let a = make("foo", 0x01, 0x00, 0x00);
     let b = FuncSummary {
         sink_caps: 0x04,
-        propagates_taint: true,
+        propagating_params: vec![0],
         tainted_sink_params: vec![0],
         callees: vec!["bar".into()],
         ..make("foo", 0x00, 0x02, 0x00)
@@ -58,7 +59,8 @@ fn merge_unions_conservatively() {
     assert_eq!(foo.source_caps, 0x01);
     assert_eq!(foo.sanitizer_caps, 0x02);
     assert_eq!(foo.sink_caps, 0x04);
-    assert!(foo.propagates_taint);
+    assert!(foo.propagates_any());
+    assert_eq!(foo.propagating_params, vec![0]);
     assert_eq!(foo.tainted_sink_params, vec![0]);
     assert_eq!(foo.callees, vec!["bar".to_string()]);
 }
@@ -71,7 +73,7 @@ fn is_interesting_detects_all_cases() {
     assert!(make("f", 0, 0, 1).is_interesting());
 
     let mut p = make("f", 0, 0, 0);
-    p.propagates_taint = true;
+    p.propagating_params = vec![0];
     assert!(p.is_interesting());
 }
 
@@ -86,6 +88,7 @@ fn same_lang_different_namespace_no_merge() {
         source_caps: Cap::all().bits(),
         sanitizer_caps: 0,
         sink_caps: 0,
+        propagating_params: vec![],
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
@@ -99,6 +102,7 @@ fn same_lang_different_namespace_no_merge() {
         source_caps: 0,
         sanitizer_caps: 0,
         sink_caps: Cap::SHELL_ESCAPE.bits(),
+        propagating_params: vec![],
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
@@ -137,6 +141,7 @@ fn same_lang_same_namespace_merges() {
         source_caps: 0x01,
         sanitizer_caps: 0,
         sink_caps: 0,
+        propagating_params: vec![],
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
@@ -150,7 +155,8 @@ fn same_lang_same_namespace_merges() {
         source_caps: 0,
         sanitizer_caps: 0x02,
         sink_caps: 0,
-        propagates_taint: true,
+        propagating_params: vec![0],
+        propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
     };
@@ -165,7 +171,8 @@ fn same_lang_same_namespace_merges() {
     let merged = global.get(&key).unwrap();
     assert_eq!(merged.source_caps, 0x01);
     assert_eq!(merged.sanitizer_caps, 0x02);
-    assert!(merged.propagates_taint);
+    assert!(merged.propagates_any());
+    assert_eq!(merged.propagating_params, vec![0]);
 }
 
 #[test]
@@ -179,6 +186,7 @@ fn cross_lang_name_collision_stays_separate() {
         source_caps: Cap::all().bits(),
         sanitizer_caps: 0,
         sink_caps: 0,
+        propagating_params: vec![],
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
@@ -192,7 +200,8 @@ fn cross_lang_name_collision_stays_separate() {
         source_caps: 0,
         sanitizer_caps: 0,
         sink_caps: 0,
-        propagates_taint: true,
+        propagating_params: vec![0],
+        propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
     };
@@ -230,6 +239,7 @@ fn lookup_same_lang_returns_all_matches() {
         source_caps: 1,
         sanitizer_caps: 0,
         sink_caps: 0,
+        propagating_params: vec![],
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
@@ -243,6 +253,7 @@ fn lookup_same_lang_returns_all_matches() {
         source_caps: 2,
         sanitizer_caps: 0,
         sink_caps: 0,
+        propagating_params: vec![],
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
@@ -268,7 +279,8 @@ fn u16_caps_round_trip_serde() {
         source_caps: (Cap::SQL_QUERY | Cap::CODE_EXEC).bits(),
         sanitizer_caps: Cap::CRYPTO.bits(),
         sink_caps: (Cap::SSRF | Cap::DESERIALIZE).bits(),
-        propagates_taint: true,
+        propagating_params: vec![0],
+        propagates_taint: false,
         tainted_sink_params: vec![0],
         callees: vec!["query".into()],
     };
@@ -279,7 +291,10 @@ fn u16_caps_round_trip_serde() {
     assert_eq!(back.source_caps, (Cap::SQL_QUERY | Cap::CODE_EXEC).bits());
     assert_eq!(back.sanitizer_caps, Cap::CRYPTO.bits());
     assert_eq!(back.sink_caps, (Cap::SSRF | Cap::DESERIALIZE).bits());
-    assert!(back.propagates_taint);
+    assert!(back.propagates_any());
+    assert_eq!(back.propagating_params, vec![0]);
+    // propagates_taint should NOT appear in serialized output
+    assert!(!json.contains("propagates_taint"));
 }
 
 #[test]
@@ -303,4 +318,67 @@ fn backward_compat_u8_json_deserializes() {
     assert_eq!(summary.source_caps, 127);
     assert_eq!(summary.sanitizer_caps, 2);
     assert_eq!(summary.sink_caps, 4);
+}
+
+#[test]
+fn merge_propagating_params_union() {
+    let a = FuncSummary {
+        propagating_params: vec![0],
+        ..make("foo", 0, 0, 0)
+    };
+    let b = FuncSummary {
+        propagating_params: vec![1],
+        ..make("foo", 0, 0, 0)
+    };
+
+    let merged = merge_summaries(vec![a, b], None);
+    let key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "test.rs".into(),
+        name: "foo".into(),
+        arity: Some(0),
+    };
+    let foo = merged.get(&key).unwrap();
+    assert_eq!(foo.propagating_params, vec![0, 1]);
+    assert!(foo.propagates_any());
+}
+
+#[test]
+fn backward_compat_legacy_propagates_taint_json() {
+    // Old JSON with propagates_taint: true but no propagating_params
+    let json = r#"{
+        "name": "old_func",
+        "file_path": "legacy.py",
+        "lang": "python",
+        "param_count": 1,
+        "param_names": ["x"],
+        "source_caps": 0,
+        "sanitizer_caps": 0,
+        "sink_caps": 0,
+        "propagates_taint": true,
+        "tainted_sink_params": [],
+        "callees": []
+    }"#;
+
+    let summary: FuncSummary = serde_json::from_str(json).unwrap();
+    assert!(summary.propagates_taint);
+    assert!(summary.propagating_params.is_empty());
+    assert!(summary.propagates_any());
+    assert!(summary.is_interesting());
+}
+
+#[test]
+fn propagating_params_round_trip_serde() {
+    let summary = FuncSummary {
+        propagating_params: vec![0, 2],
+        ..make("foo", 0, 0, 0)
+    };
+
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: FuncSummary = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(back.propagating_params, vec![0, 2]);
+    assert!(back.propagates_any());
+    // propagates_taint must NOT appear in serialized output
+    assert!(!json.contains("propagates_taint"));
 }

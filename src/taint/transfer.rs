@@ -484,7 +484,8 @@ impl TaintTransfer<'_> {
                 source_caps: ls.source_caps,
                 sanitizer_caps: ls.sanitizer_caps,
                 sink_caps: ls.sink_caps,
-                propagates_taint: ls.propagates_taint,
+                propagates_taint: !ls.propagating_params.is_empty(),
+                propagating_params: ls.propagating_params.clone(),
             });
         }
         if local_matches.len() > 1 {
@@ -500,7 +501,8 @@ impl TaintTransfer<'_> {
                             source_caps: fs.source_caps(),
                             sanitizer_caps: fs.sanitizer_caps(),
                             sink_caps: fs.sink_caps(),
-                            propagates_taint: fs.propagates_taint,
+                            propagates_taint: fs.propagates_any(),
+                            propagating_params: fs.propagating_params.clone(),
                         });
                     }
                 }
@@ -522,7 +524,8 @@ impl TaintTransfer<'_> {
                     source_caps: fs.source_caps(),
                     sanitizer_caps: fs.sanitizer_caps(),
                     sink_caps: fs.sink_caps(),
-                    propagates_taint: fs.propagates_taint,
+                    propagates_taint: fs.propagates_any(),
+                    propagating_params: fs.propagating_params.clone(),
                 });
             }
         }
@@ -537,4 +540,6 @@ struct ResolvedSummary {
     sanitizer_caps: Cap,
     sink_caps: Cap,
     propagates_taint: bool,
+    #[allow(dead_code)] // Phase 10 will use for per-arg filtering
+    propagating_params: Vec<usize>,
 }

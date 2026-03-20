@@ -17,9 +17,10 @@ use std::collections::HashMap;
 ///   bits), and a sink (passes tainted data to a dangerous operation).
 ///   The old code picked a single `DataLabel` which lost information.
 ///
-/// * **`propagates_taint`** captures pass‑through behaviour: if an input
-///   parameter is tainted, does the return value carry that taint?  This is
-///   essential for chains like `let y = transform(tainted_x); sink(y);`.
+/// * **`propagating_params`** captures per‑argument pass‑through behaviour:
+///   which parameter indices (0‑based) flow through to the return value.
+///   This is essential for chains like `let y = transform(tainted_x); sink(y);`.
+///   The legacy boolean `propagates_taint` is kept for deserialising old JSON.
 ///
 /// * **`callees`** are recorded for future call‑graph construction
 ///   (topological analysis, approach 2) but are not used in pass‑1/pass‑2
@@ -61,9 +62,13 @@ pub struct FuncSummary {
     /// arguments that still carry these bits is a finding.
     pub sink_caps: u16,
 
-    /// `true` when taint on *any* input parameter can flow through to the
-    /// return value.  Conservative: set to `true` if *any* code path
-    /// propagates an argument to the return expression.
+    /// Which parameter indices (0‑based) flow through to the return value.
+    #[serde(default)]
+    pub propagating_params: Vec<usize>,
+
+    /// Legacy field — kept only for deserialising old JSON from SQLite.
+    /// New code should use `propagating_params` instead.
+    #[serde(default, skip_serializing)]
     pub propagates_taint: bool,
 
     /// Indices of parameters that flow to internal sinks (0‑based).
@@ -117,6 +122,13 @@ impl FuncSummary {
         }
     }
 
+    /// Returns `true` when any parameter flows to the return value.
+    /// Also returns `true` for legacy summaries with `propagates_taint: true`
+    /// but empty `propagating_params` (backward compat).
+    pub fn propagates_any(&self) -> bool {
+        !self.propagating_params.is_empty() || self.propagates_taint
+    }
+
     /// Returns `true` when this function has **any** observable taint
     /// effect — it is a source, sanitizer, sink, or propagates taint.
     #[allow(dead_code)]
@@ -124,7 +136,7 @@ impl FuncSummary {
         self.source_caps != 0
             || self.sanitizer_caps != 0
             || self.sink_caps != 0
-            || self.propagates_taint
+            || self.propagates_any()
     }
 
     /// Build a [`FuncKey`] from this summary, normalizing the namespace
@@ -189,6 +201,11 @@ impl GlobalSummaries {
                 existing.sanitizer_caps |= summary.sanitizer_caps;
                 existing.sink_caps |= summary.sink_caps;
                 existing.propagates_taint |= summary.propagates_taint;
+                for &idx in &summary.propagating_params {
+                    if !existing.propagating_params.contains(&idx) {
+                        existing.propagating_params.push(idx);
+                    }
+                }
                 for &idx in &summary.tainted_sink_params {
                     if !existing.tainted_sink_params.contains(&idx) {
                         existing.tainted_sink_params.push(idx);
