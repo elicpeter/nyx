@@ -1,0 +1,6 @@
+{
+  "description": "env::var source flows through sanitize_shell (SHELL_ESCAPE sanitizer) before reaching Command::new sink — taint should be cleared.",
+  "tags": ["taint", "negative", "cmdi", "sanitizer"],
+  "modes": ["full"],
+  "expected": []
+}

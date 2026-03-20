@@ -1,0 +1,6 @@
+{
+  "description": "$_GET source flows through escapeshellarg (SHELL_ESCAPE sanitizer) before reaching system sink — taint should be cleared.",
+  "tags": ["taint", "negative", "cmdi", "sanitizer"],
+  "modes": ["full"],
+  "expected": []
+}

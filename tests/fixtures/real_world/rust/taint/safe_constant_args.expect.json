@@ -1,0 +1,6 @@
+{
+  "description": "Command::new called with only hardcoded string literals — no taint source, so no taint flow.",
+  "tags": ["taint", "negative", "cmdi"],
+  "modes": ["full"],
+  "expected": []
+}

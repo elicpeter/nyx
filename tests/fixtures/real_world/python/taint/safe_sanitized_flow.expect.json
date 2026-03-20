@@ -1,0 +1,6 @@
+{
+  "description": "request.args source flows through shlex.quote (SHELL_ESCAPE sanitizer) before reaching subprocess.run sink — taint should be cleared.",
+  "tags": ["taint", "negative", "cmdi", "sanitizer"],
+  "modes": ["full"],
+  "expected": []
+}

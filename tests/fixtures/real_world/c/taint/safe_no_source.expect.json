@@ -1,0 +1,6 @@
+{
+  "description": "sprintf/strcpy/strcat fed by locally-constructed strings — no taint source involved.",
+  "tags": ["taint", "negative", "buffer"],
+  "modes": ["full"],
+  "expected": []
+}

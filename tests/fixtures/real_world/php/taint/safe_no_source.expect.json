@@ -1,0 +1,6 @@
+{
+  "description": "system/echo fed by locally-constructed strings — no taint source involved.",
+  "tags": ["taint", "negative", "cmdi"],
+  "modes": ["full"],
+  "expected": []
+}

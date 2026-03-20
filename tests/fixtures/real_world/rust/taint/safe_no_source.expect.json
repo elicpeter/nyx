@@ -1,0 +1,6 @@
+{
+  "description": "Command::new fed by locally-constructed string array — no taint source involved.",
+  "tags": ["taint", "negative", "cmdi"],
+  "modes": ["full"],
+  "expected": []
+}

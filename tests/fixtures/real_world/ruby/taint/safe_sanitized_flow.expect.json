@@ -1,0 +1,15 @@
+{
+  "description": "ENV source flows through Shellwords.escape (SHELL_ESCAPE sanitizer) before reaching system sink — taint should be cleared.",
+  "tags": ["taint", "negative", "cmdi", "sanitizer"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [3, 5],
+      "evidence_contains": [],
+      "notes": "FP: Shellwords.escape should strip SHELL_ESCAPE cap but taint engine still reports flow from ENV to system. Sanitizer may not be recognized due to string interpolation in system call."
+    }
+  ]
+}

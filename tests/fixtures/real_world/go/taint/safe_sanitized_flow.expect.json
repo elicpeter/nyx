@@ -1,0 +1,6 @@
+{
+  "description": "os.Getenv source flows through filepath.Clean (FILE_IO sanitizer) before reaching os.Open sink — taint should be cleared.",
+  "tags": ["taint", "negative", "file-io", "sanitizer"],
+  "modes": ["full"],
+  "expected": []
+}

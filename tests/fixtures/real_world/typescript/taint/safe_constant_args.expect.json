@@ -1,0 +1,6 @@
+{
+  "description": "innerHTML assigned a hardcoded string literal — no taint source.",
+  "tags": ["taint", "negative", "xss"],
+  "modes": ["full"],
+  "expected": []
+}

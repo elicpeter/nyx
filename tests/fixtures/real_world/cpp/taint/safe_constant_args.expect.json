@@ -1,0 +1,6 @@
+{
+  "description": "strcpy/strcat/sprintf called with only hardcoded string literals — no taint source.",
+  "tags": ["taint", "negative", "buffer"],
+  "modes": ["full"],
+  "expected": []
+}

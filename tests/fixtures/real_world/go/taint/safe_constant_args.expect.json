@@ -1,0 +1,6 @@
+{
+  "description": "os.Open called with a hardcoded path literal — no taint source.",
+  "tags": ["taint", "negative", "file-io"],
+  "modes": ["full"],
+  "expected": []
+}

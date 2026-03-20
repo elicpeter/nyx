@@ -1,0 +1,6 @@
+{
+  "description": "system/exec/echo called with only hardcoded string literals — no taint source.",
+  "tags": ["taint", "negative", "cmdi"],
+  "modes": ["full"],
+  "expected": []
+}

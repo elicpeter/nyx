@@ -1,0 +1,6 @@
+{
+  "description": "getenv source flows through sanitize_input (HTML_ESCAPE sanitizer) before reaching sprintf sink — taint should be cleared.",
+  "tags": ["taint", "negative", "buffer", "sanitizer"],
+  "modes": ["full"],
+  "expected": []
+}

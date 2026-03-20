@@ -1,0 +1,6 @@
+{
+  "description": "req.query source flows through DOMPurify.sanitize (HTML_ESCAPE sanitizer) before reaching innerHTML sink — taint should be cleared.",
+  "tags": ["taint", "negative", "xss", "sanitizer"],
+  "modes": ["full"],
+  "expected": []
+}

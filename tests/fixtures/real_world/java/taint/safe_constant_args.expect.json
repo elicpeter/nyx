@@ -1,0 +1,6 @@
+{
+  "description": "println/print called with only hardcoded string literals — no taint source.",
+  "tags": ["taint", "negative", "xss"],
+  "modes": ["full"],
+  "expected": []
+}

@@ -1,0 +1,6 @@
+{
+  "description": "subprocess.run fed by locally-constructed command list — no taint source involved.",
+  "tags": ["taint", "negative", "cmdi"],
+  "modes": ["full"],
+  "expected": []
+}

@@ -1,0 +1,6 @@
+{
+  "description": "os.Open fed by locally-constructed path via filepath.Join — no taint source involved.",
+  "tags": ["taint", "negative", "file-io"],
+  "modes": ["full"],
+  "expected": []
+}
