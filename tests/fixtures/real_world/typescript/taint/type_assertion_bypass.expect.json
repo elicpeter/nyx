@@ -1,25 +1,31 @@
 {
   "description": "Type assertion (as SafeInput) does not sanitize tainted data. req.body flows into SQL string despite type cast.",
-  "tags": [
-    "taint",
-    "sqli",
-    "type-assertion",
-    "typescript"
-  ],
-  "modes": [
-    "full"
-  ],
+  "tags": ["taint", "sqli", "type-assertion", "typescript"],
+  "modes": ["full"],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
       "must_match": false,
-      "line_range": [
-        10,
-        15
-      ],
+      "line_range": [10, 15],
       "evidence_contains": [],
       "notes": "req.body flows through type assertion into SQL string concat; depends on scanner tracking taint through as-expressions and no SQL sink is defined"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [10, 10],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on req parameter in /update route handler"
+    },
+    {
+      "rule_id": "ts.quality.any_annotation",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [10, 10],
+      "evidence_contains": [],
+      "notes": "TP: 'any' type annotation on res parameter in /update route handler"
     }
   ]
 }

@@ -20,6 +20,28 @@
       ],
       "evidence_contains": [],
       "notes": "fd closed at line 8 in try block, then again at line 10 in catch block if readSync throws after partial execution"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "noise: fs.openSync is an ordinary file operation, not a dangerous sink"
+    },
+    {
+      "rule_id": "state-double-close",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        24,
+        24
+      ],
+      "evidence_contains": [],
+      "notes": "noise: state-double-close — flag-guarded pattern prevents actual double close"
     }
   ]
 }

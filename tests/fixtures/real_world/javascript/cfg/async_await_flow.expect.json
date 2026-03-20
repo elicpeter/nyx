@@ -42,6 +42,17 @@
       ],
       "evidence_contains": [],
       "notes": "child_process.exec called without validation of data.command"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        3,
+        3
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

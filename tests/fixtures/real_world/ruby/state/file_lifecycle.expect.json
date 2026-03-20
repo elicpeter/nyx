@@ -44,6 +44,39 @@
       ],
       "evidence_contains": [],
       "notes": "use_after_close reads from file handle after closing it"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        15,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        21,
+        21
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        8,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
     }
   ]
 }

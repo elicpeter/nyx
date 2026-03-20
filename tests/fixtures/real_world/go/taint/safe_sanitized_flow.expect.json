@@ -1,6 +1,29 @@
 {
-  "description": "os.Getenv source flows through filepath.Clean (FILE_IO sanitizer) before reaching os.Open sink — taint should be cleared.",
+  "description": "os.Getenv source flows through filepath.Clean (FILE_IO sanitizer) before reaching os.Open sink \u2014 taint should be cleared.",
   "tags": ["taint", "negative", "file-io", "sanitizer"],
   "modes": ["full"],
-  "expected": []
+  "expected": [
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        9,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "noise: flagging os.Getenv on line 10 \u2014 this is a taint source not a sink, and the fixture tests sanitizer flow"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        15,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "noise: os.Open on line 15 in safe fixture \u2014 f.Close() is properly deferred on line 20"
+    }
+  ]
 }

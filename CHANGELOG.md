@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Negative taint test suite** (Phase 1) — 30 negative taint test fixtures (3 per language) containing safe code patterns that resemble vulnerable code but must not trigger taint findings. Covers constant-argument sinks, sanitized flows, and no-source-present scenarios across all 10 languages. Establishes a false-positive measurement baseline for subsequent engine changes.
+- **Categorised unexpected real-world findings** (Phase 2) — reviewed and classified all unexpected findings from the real-world test suite. Each finding categorised as true positive, false positive, or noise and recorded in `.expect.json` files with explanatory notes. Provides a quantified precision/recall baseline for the scanner.
+
+### Changed
+- **Extracted shared taint→Diag construction** (Phase 3) — deduplicated ~100 lines of taint `Finding`→`Diag` construction that was duplicated between `run_rules_on_bytes()` and `analyse_file_fused()` in `src/ast.rs`. Both call sites now delegate to a single private `build_taint_diag()` helper. Zero behaviour change.
+
 ## [0.4.0] - 2025-02-25
 
 ### Added

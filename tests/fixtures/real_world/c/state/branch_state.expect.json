@@ -19,6 +19,28 @@
       ],
       "evidence_contains": [],
       "notes": "fopen at line 4 only closed in if-branch, leaked in else-branch"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        15,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

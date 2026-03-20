@@ -40,6 +40,28 @@
       ],
       "evidence_contains": [],
       "notes": ".unwrap() on File::open Result in explicit_drop"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        13,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

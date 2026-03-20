@@ -17,7 +17,7 @@
         12
       ],
       "evidence_contains": [],
-      "notes": "reinterpret_cast<Header*> \u2014 type punning raw bytes to struct pointer"
+      "notes": "reinterpret_cast<Header*> — type punning raw bytes to struct pointer"
     },
     {
       "rule_id": "cpp.memory.const_cast",
@@ -29,6 +29,17 @@
       ],
       "evidence_contains": [],
       "notes": "const_cast<char*> removes const qualifier from data pointer"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        11,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

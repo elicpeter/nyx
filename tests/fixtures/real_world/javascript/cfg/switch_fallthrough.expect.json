@@ -53,6 +53,28 @@
       ],
       "evidence_contains": [],
       "notes": "Missing break after exec case causes fallthrough to safe case"
+    },
+    {
+      "rule_id": "cfg-unreachable-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        12,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unreachable-sink on child_process.execSync in exec case; the code is reachable when action === 'exec', low-value CFG finding"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

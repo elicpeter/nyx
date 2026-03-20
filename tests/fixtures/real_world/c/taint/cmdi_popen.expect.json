@@ -28,7 +28,7 @@
         9
       ],
       "evidence_contains": [],
-      "notes": "sprintf used to build command string \u2014 buffer overflow risk"
+      "notes": "sprintf used to build command string — buffer overflow risk"
     },
     {
       "rule_id": "taint-unsanitised-flow",
@@ -39,7 +39,40 @@
         10
       ],
       "evidence_contains": [],
-      "notes": "user_input flows through sprintf into popen \u2014 taint engine may not track through sprintf buffer"
+      "notes": "user_input flows through sprintf into popen — taint engine may not track through sprintf buffer"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        11,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        8,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

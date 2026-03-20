@@ -19,6 +19,28 @@
       ],
       "evidence_contains": [],
       "notes": "Conditional double free \u2014 if flag is true, buf freed at line 6 and again at line 8. Aspirational state analysis finding."
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        3,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "FP: malloc at line 4 is unconditionally freed at line 8, so there is no leak path."
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        11,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "FP: conditional_free_safe properly nullifies pointer after free and checks before second free \u2014 no leak."
     }
   ]
 }

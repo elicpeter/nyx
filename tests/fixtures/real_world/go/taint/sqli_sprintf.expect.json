@@ -28,7 +28,51 @@
         27
       ],
       "evidence_contains": [],
-      "notes": "getUserSafe uses parameterized query \u2014 should NOT produce a taint finding"
+      "notes": "getUserSafe uses parameterized query — should NOT produce a taint finding"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "TP: r.URL.Query().Get(\"id\") (source line 12) flows through fmt.Sprintf query into db.Query — SQL injection at the precise sink"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        19,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        25,
+        25
+      ],
+      "evidence_contains": [],
+      "notes": "noise: taint-unsanitised-flow — secondary flow or cross-function leakage"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        30,
+        30
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

@@ -20,6 +20,28 @@
       ],
       "evidence_contains": [],
       "notes": "fd leaks when throw fires at line 22 before closeSync at line 24; scanner may not track fd lifecycle in JS"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "noise: state-resource-leak on fs.openSync in processFile; the fd IS properly closed in the finally block at line 13, so this is a false positive"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "noise: state-resource-leak-possible on fs.openSync in processFile; the fd IS properly closed in the finally block at line 13, so this is a false positive"
     }
   ]
 }

@@ -20,6 +20,61 @@
       ],
       "evidence_contains": [],
       "notes": "Streams created without error handlers may leak on pipe failure; scanner likely cannot track stream lifecycle"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "TP: createReadStream at line 4 in processStream has no error handler and may leak on pipe failure"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "TP: createWriteStream at line 5 in processStream has no error handler and leaks on pipe failure"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "TP: createWriteStream at line 5 has a possible leak path when errors occur before pipe completes"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        11,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        12,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
     }
   ]
 }

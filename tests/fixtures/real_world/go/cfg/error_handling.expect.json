@@ -41,7 +41,29 @@
         23
       ],
       "evidence_contains": [],
-      "notes": "Error from json.Decode not returned \u2014 execution falls through to exec.Command"
+      "notes": "Error from json.Decode not returned — execution falls through to exec.Command"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        21,
+        21
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        36,
+        36
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

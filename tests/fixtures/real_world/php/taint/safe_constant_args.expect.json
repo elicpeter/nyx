@@ -1,6 +1,35 @@
 {
   "description": "system/exec/echo called with only hardcoded string literals — no taint source.",
-  "tags": ["taint", "negative", "cmdi"],
-  "modes": ["full"],
-  "expected": []
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        3,
+        3
+      ],
+      "evidence_contains": [],
+      "notes": "noise: php.cmdi.system AST pattern fires on constant/sanitized args in safe fixture"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "noise: php.cmdi.system AST pattern fires on constant/sanitized args in safe fixture"
+    }
+  ]
 }

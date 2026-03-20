@@ -20,6 +20,14 @@
       ],
       "evidence_contains": [],
       "notes": "input.cmd flows to child_process.exec but input is a function param, not a recognized source; requires interprocedural analysis"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [4, 4],
+      "evidence_contains": [],
+      "notes": "noise: child_process.exec with function param; already covered by taint rules"
     }
   ]
 }

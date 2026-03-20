@@ -19,6 +19,39 @@
       ],
       "evidence_contains": [],
       "notes": "connect_and_leak creates socket but never closes it"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        11,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        12,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
     }
   ]
 }

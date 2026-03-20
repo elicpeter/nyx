@@ -29,6 +29,17 @@
       ],
       "evidence_contains": [],
       "notes": "gets() always unsafe \u2014 no bounds checking"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        5,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink on strcpy(buf, input) \u2014 already covered by cpp.memory.strcpy rule"
     }
   ]
 }

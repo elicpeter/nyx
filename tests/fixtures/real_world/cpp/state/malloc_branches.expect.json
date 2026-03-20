@@ -18,7 +18,29 @@
         12
       ],
       "evidence_contains": [],
-      "notes": "malloc at line 5 only freed when flag is true \u2014 aspirational branch-aware state analysis"
+      "notes": "malloc at line 5 only freed when flag is true — aspirational branch-aware state analysis"
+    },
+    {
+      "rule_id": "cpp.memory.strcpy",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy(buf, \"hello\") is a dangerous unbounded copy — AST pattern correctly flags it."
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

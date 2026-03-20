@@ -43,6 +43,28 @@
       ],
       "evidence_contains": [],
       "notes": "Error check on line 11 does not return \u2014 execution continues to w.Write(out) on line 15"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        16,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "noise: flagging near w.Write(out) on line 15 \u2014 the real issue (cmdi + error fallthrough) is already captured by existing entries"
+    },
+    {
+      "rule_id": "state-unauthed-access",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        10,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "TP: handler executes user-supplied command via exec.Command without any authentication check \u2014 secondary to the cmdi finding but a real auth gap"
     }
   ]
 }

@@ -17,7 +17,7 @@
         9
       ],
       "evidence_contains": [],
-      "notes": "strcpy in duplicate_string \u2014 AST pattern match"
+      "notes": "strcpy in duplicate_string — AST pattern match"
     },
     {
       "rule_id": "c.memory.strcpy",
@@ -28,7 +28,7 @@
         16
       ],
       "evidence_contains": [],
-      "notes": "strcpy in process_data \u2014 AST pattern match"
+      "notes": "strcpy in process_data — AST pattern match"
     },
     {
       "rule_id": "cfg-resource-leak",
@@ -39,7 +39,51 @@
         19
       ],
       "evidence_contains": [],
-      "notes": "malloc at line 12 not freed before return at line 17 \u2014 aspirational CFG finding"
+      "notes": "malloc at line 12 not freed before return at line 17 — aspirational CFG finding"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        4,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "malloc at line 5 — buf is returned on success but caller may not free it. Scanner flags the allocation."
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        11,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "malloc at line 12 leaks if early return at line 17 (strlen > 100 branch)."
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

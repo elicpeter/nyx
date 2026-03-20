@@ -29,6 +29,28 @@
       ],
       "evidence_contains": [],
       "notes": "delete[] called twice \u2014 aspirational, requires new/delete tracking"
+    },
+    {
+      "rule_id": "cpp.memory.strcpy",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy(buf, \"hello\") in leak() \u2014 dangerous unbounded copy, AST pattern correctly flags it."
+    },
+    {
+      "rule_id": "cpp.memory.strcpy",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        10,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "strcpy(buf, \"hello\") in clean() \u2014 dangerous unbounded copy, AST pattern correctly flags it."
     }
   ]
 }

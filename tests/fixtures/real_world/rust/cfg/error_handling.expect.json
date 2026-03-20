@@ -17,7 +17,7 @@
         12
       ],
       "evidence_contains": [],
-      "notes": ".unwrap() in read_config_panicky \u2014 will panic on IO error"
+      "notes": ".unwrap() in read_config_panicky — will panic on IO error"
     },
     {
       "rule_id": "rs.quality.expect",
@@ -28,7 +28,40 @@
         16
       ],
       "evidence_contains": [],
-      "notes": ".expect() in read_config_expect \u2014 will panic with message on IO error"
+      "notes": ".expect() in read_config_expect — will panic with message on IO error"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        10,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

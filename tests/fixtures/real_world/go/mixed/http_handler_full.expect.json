@@ -67,6 +67,28 @@
       ],
       "evidence_contains": [],
       "notes": "os.Open on line 19 \u2014 f never closed in readHandler"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        13,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "noise: fmt.Fprintf on line 14 writing response output \u2014 not a security-relevant unguarded sink"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "Tainted cmd (source line 11) flows through exec.Command output into fmt.Fprintf response \u2014 command output written to HTTP client"
     }
   ]
 }

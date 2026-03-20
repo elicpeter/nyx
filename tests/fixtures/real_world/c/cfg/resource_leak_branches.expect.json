@@ -17,7 +17,51 @@
         12
       ],
       "evidence_contains": [],
-      "notes": "fopen at line 5 not closed before return -2 at line 10 \u2014 aspirational CFG finding"
+      "notes": "fopen at line 5 not closed before return -2 at line 10 — aspirational CFG finding"
+    },
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [
+        4,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "fopen at line 5 leaks if early return at line 10 (fgets failure branch)."
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        18,
+        18
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        18,
+        18
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

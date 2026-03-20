@@ -20,6 +20,28 @@
       ],
       "evidence_contains": [],
       "notes": "$_GET['cmd'] flows directly into shell_exec without sanitization"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        3,
+        3
+      ],
+      "evidence_contains": [],
+      "notes": "TP: AST pattern match on shell_exec($cmd) at line 3; $_GET['cmd'] flows unsanitized into shell_exec"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        8,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "noise: AST pattern match on shell_exec at line 8; the input is sanitized via escapeshellarg at line 7, making this a false positive from a taint perspective although the pattern match is technically correct"
     }
   ]
 }

@@ -32,6 +32,39 @@
       ],
       "evidence_contains": [],
       "notes": "Deserialized command string from request input flows into Runtime.exec"
+    },
+    {
+      "rule_id": "java.cmdi.runtime_exec",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        9,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "Runtime.getRuntime().exec(command) with deserialized input; AST pattern correctly matches"
+    },
+    {
+      "rule_id": "java.xss.getwriter_print",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        11,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "response.getWriter().println(\"Done\") matched by AST pattern; constant string so low security value but pattern match is correct"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        11,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

@@ -30,6 +30,25 @@
       ],
       "evidence_contains": [],
       "notes": ".unwrap() on Command output Result in closure"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        3,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink on env::var call — ordinary Rust call, not a meaningful unguarded sink"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [10, 10],
+      "evidence_contains": [],
+      "notes": "TP: env::var(\"CMD\") at line 5 flows through closure parameter into Command::new at line 11 — command injection via higher-order function"
     }
   ]
 }

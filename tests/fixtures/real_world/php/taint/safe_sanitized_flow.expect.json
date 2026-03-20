@@ -2,5 +2,28 @@
   "description": "$_GET source flows through escapeshellarg (SHELL_ESCAPE sanitizer) before reaching system sink — taint should be cleared.",
   "tags": ["taint", "negative", "cmdi", "sanitizer"],
   "modes": ["full"],
-  "expected": []
+  "expected": [
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        4,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "noise: safe_sanitized_flow fixture; system() input is sanitized via escapeshellarg; cfg-unguarded-sink ignores sanitization context"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "noise: AST pattern match on system(\"ls \" . $safe) where $safe is sanitized via escapeshellarg at line 4; the input is properly sanitized, so this is not a real vulnerability"
+    }
+  ]
 }

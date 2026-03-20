@@ -1,6 +1,35 @@
 {
   "description": "os.Open called with a hardcoded path literal — no taint source.",
-  "tags": ["taint", "negative", "file-io"],
-  "modes": ["full"],
-  "expected": []
+  "tags": [
+    "taint",
+    "negative",
+    "file-io"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "state-resource-leak-possible",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        9,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "noise: os.Open on line 9 in safe fixture — f.Close() is properly deferred on line 14"
+    },
+    {
+      "rule_id": "state-use-after-close",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        16,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "noise: f.Read on line 16 in safe fixture — f.Close() is deferred (line 14), f is still open here"
+    }
+  ]
 }

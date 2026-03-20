@@ -17,18 +17,29 @@
         7
       ],
       "evidence_contains": [],
-      "notes": "scanf(\"%s\", name) \u2014 unbounded read into stack buffer"
+      "notes": "scanf(\"%s\", name) — unbounded read into stack buffer"
     },
     {
-      "rule_id": "c.memory.scanf_percent_s",
-      "severity": null,
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
       "must_match": false,
       "line_range": [
-        9,
-        13
+        12,
+        12
       ],
       "evidence_contains": [],
-      "notes": "scanf(\"%31s\", name) \u2014 bounded read, ideally no finding but AST pattern may still fire"
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

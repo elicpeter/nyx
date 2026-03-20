@@ -40,6 +40,25 @@
       ],
       "evidence_contains": [],
       "notes": "AST pattern still matches system() in safe version"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "std::getenv at line 10 flows to system(cmd) at line 14 in execute_safe — allowlist check uses string copy but original cmd pointer still reaches sink. Scanner correctly identifies the unsanitised flow."
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [14, 14],
+      "evidence_contains": [],
+      "notes": "noise: second taint flow to same sink at line 14 from source at line 5 — cross-function leakage from execute_user_cmd"
     }
   ]
 }

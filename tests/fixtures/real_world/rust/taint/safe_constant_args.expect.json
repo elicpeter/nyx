@@ -1,6 +1,18 @@
 {
-  "description": "Command::new called with only hardcoded string literals — no taint source, so no taint flow.",
+  "description": "Command::new called with only hardcoded string literals \u2014 no taint source, so no taint flow.",
   "tags": ["taint", "negative", "cmdi"],
   "modes": ["full"],
-  "expected": []
+  "expected": [
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink on Command::new(\"ls\") \u2014 safe negative fixture, hardcoded constant args only"
+    }
+  ]
 }

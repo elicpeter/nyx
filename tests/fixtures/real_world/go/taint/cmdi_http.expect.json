@@ -1,5 +1,5 @@
 {
-  "description": "HTTP query parameter flows into exec.Command \u2014 both direct args and shell concatenation variants",
+  "description": "HTTP query parameter flows into exec.Command — both direct args and shell concatenation variants",
   "tags": [
     "taint",
     "cmdi"
@@ -40,6 +40,58 @@
       ],
       "evidence_contains": [],
       "notes": "r.URL.Query().Get(\"host\") concatenated into shell command string in unsafePing"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        11,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "TP: r.URL.Query().Get(\"host\") (source line 10) flows to exec.Command as argument in pingHandler"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        13,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "TP: tainted command output (source line 10) flows to fmt.Fprintf HTTP response in pingHandler"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        18,
+        18
+      ],
+      "evidence_contains": [],
+      "notes": "TP: r.URL.Query().Get(\"host\") (source line 17) concatenated into shell command in unsafePing — shell injection"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        20,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "TP: tainted command output (source line 17) flows to fmt.Fprintf HTTP response in unsafePing"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [20, 20],
+      "evidence_contains": [],
+      "notes": "noise: second taint flow to fmt.Fprintf at line 20 from source 10:2 — cross-function taint leakage from pingHandler"
     }
   ]
 }

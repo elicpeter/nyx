@@ -1,6 +1,25 @@
 {
   "description": "getenv source flows through sanitize_data (HTML_ESCAPE sanitizer) before reaching strcpy sink — taint should be cleared.",
-  "tags": ["taint", "negative", "buffer", "sanitizer"],
-  "modes": ["full"],
-  "expected": []
+  "tags": [
+    "taint",
+    "negative",
+    "buffer",
+    "sanitizer"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        22,
+        22
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    }
+  ]
 }

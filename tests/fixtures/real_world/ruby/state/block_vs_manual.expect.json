@@ -21,6 +21,39 @@
       ],
       "evidence_contains": [],
       "notes": "forgot_close opens file without block form and never closes it"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        13,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "TP: File.open in forgot_close (line 13) is never closed — genuine resource leak"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        2,
+        2
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "noise: resource leak finding — secondary to primary fixture purpose"
     }
   ]
 }

@@ -18,6 +18,14 @@
       ],
       "evidence_contains": [],
       "notes": "processLeaky throws on line 26 without closing fis \u2014 resource leaked on exception path"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [9, 12],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink on catch clause line 10; System.err.println is not a security-relevant sink"
     }
   ]
 }

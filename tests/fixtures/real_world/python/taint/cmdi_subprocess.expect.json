@@ -20,6 +20,36 @@
       ],
       "evidence_contains": [],
       "notes": "request.args.get('cmd') flows directly into subprocess.run with shell=True"
+    },
+    {
+      "rule_id": "py.cmdi.subprocess_shell",
+      "severity": "HIGH",
+      "must_match": true,
+      "line_range": [
+        9,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "subprocess.run(cmd, shell=True) — AST pattern match for subprocess with shell=True"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [
+        18,
+        18
+      ],
+      "evidence_contains": [],
+      "notes": "noise: taint-unsanitised-flow — secondary flow or cross-function leakage"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "HIGH",
+      "must_match": false,
+      "line_range": [18, 18],
+      "evidence_contains": [],
+      "notes": "noise: second taint flow to same sink at line 18 from source 8:5 — cross-function taint leakage"
     }
   ]
 }

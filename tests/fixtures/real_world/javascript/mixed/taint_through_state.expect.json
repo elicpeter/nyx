@@ -44,6 +44,17 @@
       ],
       "evidence_contains": [],
       "notes": "fd from fs.openSync leaks when early return fires at line 13; scanner may not track JS fd lifecycle"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        19,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

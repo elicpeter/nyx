@@ -17,7 +17,7 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "strcpy without bounds check \u2014 potential buffer overflow"
+      "notes": "strcpy without bounds check — potential buffer overflow"
     },
     {
       "rule_id": "c.memory.gets",
@@ -28,7 +28,7 @@
         21
       ],
       "evidence_contains": [],
-      "notes": "gets() is always unsafe \u2014 no way to limit input length"
+      "notes": "gets() is always unsafe — no way to limit input length"
     },
     {
       "rule_id": "c.memory.strcpy",
@@ -39,7 +39,7 @@
         27
       ],
       "evidence_contains": [],
-      "notes": "strcpy in concat_vuln \u2014 first unbounded copy"
+      "notes": "strcpy in concat_vuln — first unbounded copy"
     },
     {
       "rule_id": "c.memory.strcat",
@@ -50,7 +50,73 @@
         28
       ],
       "evidence_contains": [],
-      "notes": "strcat without bounds check \u2014 appends without size limit"
+      "notes": "strcat without bounds check — appends without size limit"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        20,
+        20
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        25,
+        25
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        26,
+        26
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        27,
+        27
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

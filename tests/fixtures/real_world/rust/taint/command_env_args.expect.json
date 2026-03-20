@@ -29,6 +29,17 @@
       ],
       "evidence_contains": [],
       "notes": ".expect() on Command output Result"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        6,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "noise: cfg-unguarded-sink on Command::new \u2014 ordinary Rust call, guarded by if args.len() > 1"
     }
   ]
 }
