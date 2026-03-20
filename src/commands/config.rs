@@ -59,6 +59,7 @@ pub fn add_rule(
         matchers: vec![matcher.to_string()],
         kind: kind.to_string(),
         cap: cap.to_string(),
+        case_sensitive: false,
     };
 
     // Dedup

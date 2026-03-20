@@ -6,6 +6,7 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["System.getenv"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -18,42 +19,51 @@ pub static RULES: &[LabelRule] = &[
             "getPathInfo",
         ],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["readObject", "readLine"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["HtmlUtils.htmlEscape", "StringEscapeUtils.escapeHtml4"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["Runtime.exec", "ProcessBuilder"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["executeQuery", "executeUpdate", "prepareStatement"],
         label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["Class.forName"],
         label: DataLabel::Sink(Cap::CODE_EXEC),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["println", "print", "write"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     // openConnection() is the standard java.net.URL API for initiating a connection.
     // It is the correct interception point — the URL is already set on the object.
     LabelRule {
         matchers: &["openConnection", "HttpClient.send", "HttpClient.sendAsync", "getForObject", "RestTemplate.exchange"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["readObject", "readUnshared", "XMLDecoder.readObject"],
         label: DataLabel::Sink(Cap::DESERIALIZE),
+        case_sensitive: false,
     },
 ];
 

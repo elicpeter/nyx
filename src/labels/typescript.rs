@@ -12,27 +12,49 @@ pub static RULES: &[LabelRule] = &[
             "req.params",
             "req.headers",
             "req.cookies",
+            "req.hostname",
+            "req.ip",
+            "req.path",
+            "req.protocol",
+            "req.url",
+            "req.get",
+            "req.header",
             "process.env",
         ],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["encodeURIComponent", "encodeURI"],
         label: DataLabel::Sanitizer(Cap::URL_ENCODE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["DOMPurify.sanitize"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["xss"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["sanitizeHtml"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["eval"],
         label: DataLabel::Sink(Cap::CODE_EXEC),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["innerHTML"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -41,10 +63,42 @@ pub static RULES: &[LabelRule] = &[
             "child_process.spawn",
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["fetch", "axios.get", "axios.post", "axios.request", "http.request", "https.request"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &[
+            "location.href",
+            "window.location.href",
+            "document.location.href",
+        ],
+        label: DataLabel::Sink(Cap::URL_ENCODE),
+        case_sensitive: false,
+    },
+    // Express response sinks
+    LabelRule {
+        matchers: &["res.send", "res.json", "res.render"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["res.redirect"],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["res.sendFile"],
+        label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["res.set", "res.header"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
 ];
 

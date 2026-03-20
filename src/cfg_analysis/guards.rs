@@ -44,20 +44,33 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
 
 /// Check if a callee matches any of the runtime label rules that are sanitizers.
 fn match_config_sanitizer(callee: &str, extra: &[RuntimeLabelRule]) -> Option<Cap> {
-    let callee_lower = callee.to_ascii_lowercase();
+    // Lazily compute lowercased callee only when a case-insensitive rule is hit.
+    let mut callee_lower: Option<String> = None;
+
     for rule in extra {
         let cap = match rule.label {
             DataLabel::Sanitizer(c) => c,
             _ => continue,
         };
         for m in &rule.matchers {
-            let ml = m.to_ascii_lowercase();
-            if ml.ends_with('_') {
-                if callee_lower.starts_with(&ml) {
+            if rule.case_sensitive {
+                if m.ends_with('_') {
+                    if callee.starts_with(m.as_str()) {
+                        return Some(cap);
+                    }
+                } else if callee.ends_with(m.as_str()) {
                     return Some(cap);
                 }
-            } else if callee_lower.ends_with(&ml) {
-                return Some(cap);
+            } else {
+                let cl = callee_lower.get_or_insert_with(|| callee.to_ascii_lowercase());
+                let ml = m.to_ascii_lowercase();
+                if ml.ends_with('_') {
+                    if cl.starts_with(&ml) {
+                        return Some(cap);
+                    }
+                } else if cl.ends_with(&ml) {
+                    return Some(cap);
+                }
             }
         }
     }

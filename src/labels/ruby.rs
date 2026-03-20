@@ -6,42 +6,51 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["ENV", "gets"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["params"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["CGI.escapeHTML", "ERB::Util.html_escape"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["Shellwords.escape", "Shellwords.shellescape"],
         label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["system", "exec"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["eval"],
         label: DataLabel::Sink(Cap::CODE_EXEC),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["puts", "print"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     // URI.open is the network-capable Kernel#open wrapper — more specific than
     // plain `open` (excluded to avoid file I/O false positives).
     LabelRule {
         matchers: &["Net::HTTP.get", "URI.open", "HTTParty.get"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["Marshal.load", "Marshal.restore", "YAML.load"],
         label: DataLabel::Sink(Cap::DESERIALIZE),
+        case_sensitive: false,
     },
 ];
 

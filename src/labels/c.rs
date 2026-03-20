@@ -6,15 +6,18 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["getenv"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["fgets", "scanf", "fscanf", "gets", "read"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["sanitize_"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
@@ -22,22 +25,27 @@ pub static RULES: &[LabelRule] = &[
             "system", "popen", "exec", "execl", "execlp", "execle", "execve", "execvp",
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["sprintf", "strcpy", "strcat"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["printf", "fprintf"],
         label: DataLabel::Sink(Cap::FMT_STRING),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["fopen", "open"],
         label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["curl_easy_perform"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
     },
 ];
 

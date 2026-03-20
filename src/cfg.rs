@@ -484,7 +484,12 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
             let def_node = ast
                 .child_by_field_name("pattern")
                 .or_else(|| ast.child_by_field_name("name"))
-                .or_else(|| ast.child_by_field_name("left"));
+                .or_else(|| ast.child_by_field_name("left"))
+                // Python `with_item`: value is `as_pattern` whose `alias` holds the target
+                .or_else(|| {
+                    ast.child_by_field_name("value")
+                        .and_then(|v| v.child_by_field_name("alias"))
+                });
 
             let val_node = ast
                 .child_by_field_name("value")

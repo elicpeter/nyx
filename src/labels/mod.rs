@@ -20,6 +20,7 @@ use std::collections::HashMap;
 pub struct LabelRule {
     pub matchers: &'static [&'static str],
     pub label: DataLabel,
+    pub case_sensitive: bool,
 }
 
 bitflags! {
@@ -280,6 +281,7 @@ pub fn severity_for_source_kind(kind: SourceKind) -> crate::patterns::Severity {
 pub struct RuntimeLabelRule {
     pub matchers: Vec<String>,
     pub label: DataLabel,
+    pub case_sensitive: bool,
 }
 
 /// Parse a capability name string into a `Cap` bitflag.
@@ -334,6 +336,7 @@ pub fn build_lang_rules(
             Some(RuntimeLabelRule {
                 matchers: r.matchers.clone(),
                 label,
+                case_sensitive: r.case_sensitive,
             })
         })
         .collect();
@@ -345,29 +348,48 @@ pub fn build_lang_rules(
     }
 }
 
-/// Case-insensitive suffix check (ASCII).
+/// Suffix check with configurable case sensitivity.
 #[inline]
-fn ends_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+fn ends_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
     let start = haystack.len() - needle.len();
-    haystack[start..]
-        .iter()
-        .zip(needle)
-        .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    if case_sensitive {
+        haystack[start..] == *needle
+    } else {
+        haystack[start..]
+            .iter()
+            .zip(needle)
+            .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    }
 }
 
-/// Case-insensitive prefix check (ASCII).
+/// Prefix check with configurable case sensitivity.
 #[inline]
-fn starts_with_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+fn starts_with_cs(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> bool {
     if needle.len() > haystack.len() {
         return false;
     }
-    haystack[..needle.len()]
-        .iter()
-        .zip(needle)
-        .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    if case_sensitive {
+        haystack[..needle.len()] == *needle
+    } else {
+        haystack[..needle.len()]
+            .iter()
+            .zip(needle)
+            .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    }
+}
+
+/// Word-boundary suffix match with configurable case sensitivity.
+#[inline]
+fn match_suffix_cs(text: &[u8], matcher: &[u8], case_sensitive: bool) -> bool {
+    if ends_with_cs(text, matcher, case_sensitive) {
+        let start = text.len() - matcher.len();
+        start == 0 || matches!(text[start - 1], b'.' | b':')
+    } else {
+        false
+    }
 }
 
 /// Try to classify a piece of syntax text.
@@ -398,7 +420,9 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
                 if m.last() == Some(&b'_') {
                     continue;
                 }
-                if match_suffix(trimmed, m) || match_suffix(full_norm_bytes, m) {
+                if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                    || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
+                {
                     return Some(rule.label);
                 }
             }
@@ -408,8 +432,8 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
             for raw in &rule.matchers {
                 let m = raw.as_bytes();
                 if m.last() == Some(&b'_')
-                    && (starts_with_ignore_case(trimmed, m)
-                        || starts_with_ignore_case(full_norm_bytes, m))
+                    && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                        || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
                 {
                     return Some(rule.label);
                 }
@@ -430,7 +454,9 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
             if m.last() == Some(&b'_') {
                 continue;
             }
-            if match_suffix(trimmed, m) || match_suffix(full_norm_bytes, m) {
+            if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
+            {
                 return Some(rule.label);
             }
         }
@@ -441,8 +467,8 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
         for raw in rule.matchers {
             let m = raw.as_bytes();
             if m.last() == Some(&b'_')
-                && (starts_with_ignore_case(trimmed, m)
-                    || starts_with_ignore_case(full_norm_bytes, m))
+                && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                    || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
             {
                 return Some(rule.label);
             }
@@ -450,17 +476,6 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     }
 
     None
-}
-
-/// Check if `text` ends with `matcher` at a word boundary (`.` or `:`).
-#[inline]
-fn match_suffix(text: &[u8], matcher: &[u8]) -> bool {
-    if ends_with_ignore_case(text, matcher) {
-        let start = text.len() - matcher.len();
-        start == 0 || matches!(text[start - 1], b'.' | b':')
-    } else {
-        false
-    }
 }
 
 /// Normalize a chained method call: strip `()` between `.` segments.
@@ -524,6 +539,7 @@ mod tests {
         let extras = vec![RuntimeLabelRule {
             matchers: vec!["escapeHtml".into()],
             label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+            case_sensitive: false,
         }];
 
         let result = classify("javascript", "escapeHtml", Some(&extras));
@@ -540,6 +556,7 @@ mod tests {
         let extras = vec![RuntimeLabelRule {
             matchers: vec!["innerHTML".into()],
             label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+            case_sensitive: false,
         }];
 
         let result = classify("javascript", "innerHTML", Some(&extras));
@@ -556,6 +573,63 @@ mod tests {
     fn classify_bare_href_is_none() {
         // Bare "href" should NOT be a sink — only "location.href" and variants
         let result = classify("javascript", "href", None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_case_insensitive_is_default() {
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["myCustomSink".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        }];
+        // Default case_sensitive=false: case-insensitive match
+        let result = classify("javascript", "MYCUSTOMSINK", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sink(Cap::HTML_ESCAPE)));
+    }
+
+    #[test]
+    fn classify_case_sensitive_exact_match() {
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["MyExactSink".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: true,
+        }];
+        // Exact case matches
+        let result = classify("javascript", "MyExactSink", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sink(Cap::HTML_ESCAPE)));
+        // Wrong case does NOT match
+        let result = classify("javascript", "myexactsink", Some(&extras));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_case_sensitive_prefix() {
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["Sanitize_".into()],
+            label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+            case_sensitive: true,
+        }];
+        // Correct case prefix matches
+        let result = classify("javascript", "Sanitize_input", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sanitizer(Cap::HTML_ESCAPE)));
+        // Wrong case does NOT match
+        let result = classify("javascript", "sanitize_input", Some(&extras));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_case_sensitive_suffix_boundary() {
+        let extras = vec![RuntimeLabelRule {
+            matchers: vec!["Execute".into()],
+            label: DataLabel::Sink(Cap::SQL_QUERY),
+            case_sensitive: true,
+        }];
+        // Correct case with dot boundary
+        let result = classify("javascript", "db.Execute", Some(&extras));
+        assert_eq!(result, Some(DataLabel::Sink(Cap::SQL_QUERY)));
+        // Wrong case does NOT match
+        let result = classify("javascript", "db.execute", Some(&extras));
         assert_eq!(result, None);
     }
 

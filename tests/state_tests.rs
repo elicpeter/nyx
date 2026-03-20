@@ -304,3 +304,50 @@ fn findings_carry_messages() {
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// (7) Python resource lifecycle
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn python_file_leak() {
+    assert_has_prefix("python_file_open_no_close.py", "state-resource-leak");
+}
+
+#[test]
+fn python_file_clean() {
+    assert_no_state_findings("python_file_open_close.py");
+}
+
+#[test]
+fn python_double_close() {
+    assert_has("python_double_close.py", "state-double-close");
+}
+
+#[test]
+fn python_use_after_close() {
+    assert_has("python_use_after_close.py", "state-use-after-close");
+}
+
+#[test]
+fn python_with_statement_known_limitation() {
+    // Python `with` is a context manager that guarantees cleanup via __exit__.
+    // The CFG sees `open()` → acquire and the `as f` binding → defines,
+    // but has no model for the implicit __exit__ close — so it reports a
+    // false-positive leak.  Acceptable: better to over-report than miss the call.
+    assert_has_prefix("python_with_statement.py", "state-resource-leak");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// (8) JavaScript resource lifecycle
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn js_fs_open_no_close() {
+    assert_has_prefix("js_fs_open_no_close.js", "state-resource-leak");
+}
+
+#[test]
+fn js_fs_open_close() {
+    assert_no_state_findings("js_fs_open_close.js");
+}

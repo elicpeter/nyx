@@ -963,6 +963,7 @@ fn config_sanitizer_suppresses_unguarded_sink() {
         extra_labels: vec![crate::labels::RuntimeLabelRule {
             matchers: vec!["escapeHtml".into()],
             label: crate::labels::DataLabel::Sanitizer(crate::labels::Cap::HTML_ESCAPE),
+            case_sensitive: false,
         }],
         terminators: vec![],
         event_handlers: vec![],

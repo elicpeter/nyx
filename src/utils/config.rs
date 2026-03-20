@@ -291,6 +291,8 @@ pub struct ConfigLabelRule {
     /// Capability name: "html_escape", "shell_escape", "url_encode", "json_parse",
     /// "env_var", "file_io", or "all"
     pub cap: String,
+    #[serde(default)]
+    pub case_sensitive: bool,
 }
 
 /// Per-language analysis configuration from config file.
@@ -490,6 +492,7 @@ fn merge_analysis_rules_unions_and_dedupes() {
                 matchers: vec!["escapeHtml".into()],
                 kind: "sanitizer".into(),
                 cap: "html_escape".into(),
+                case_sensitive: false,
             }],
             terminators: vec!["process.exit".into()],
             event_handlers: vec![],
@@ -505,11 +508,13 @@ fn merge_analysis_rules_unions_and_dedupes() {
                     matchers: vec!["escapeHtml".into()],
                     kind: "sanitizer".into(),
                     cap: "html_escape".into(),
+                    case_sensitive: false,
                 },
                 ConfigLabelRule {
                     matchers: vec!["sanitizeUrl".into()],
                     kind: "sanitizer".into(),
                     cap: "url_encode".into(),
+                    case_sensitive: false,
                 },
             ],
             terminators: vec!["process.exit".into(), "abort".into()],

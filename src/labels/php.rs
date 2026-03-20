@@ -22,23 +22,28 @@ pub static RULES: &[LabelRule] = &[
             "_ENV",
         ],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["file_get_contents", "fread"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["htmlspecialchars", "htmlentities"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["escapeshellarg", "escapeshellcmd"],
         label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["basename"],
         label: DataLabel::Sanitizer(Cap::FILE_IO),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
@@ -51,30 +56,37 @@ pub static RULES: &[LabelRule] = &[
             "popen",
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["eval", "assert"],
         label: DataLabel::Sink(Cap::CODE_EXEC),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["include", "include_once", "require", "require_once"],
         label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["unserialize"],
         label: DataLabel::Sink(Cap::DESERIALIZE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["move_uploaded_file", "copy", "file_put_contents", "fwrite"],
         label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["echo", "print"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["mysqli_query", "pg_query", "query"],
         label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
     },
     // NOTE: `file_get_contents` can fetch URLs (SSRF vector) and local files (LFI vector).
     // As a Sink(SSRF) it only fires when the argument is tainted.
@@ -84,6 +96,7 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["file_get_contents", "curl_exec"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
     },
 ];
 

@@ -6,6 +6,7 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["os.Getenv"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -20,32 +21,39 @@ pub static RULES: &[LabelRule] = &[
             "Request.URL",
         ],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["html.EscapeString", "template.HTMLEscapeString"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["url.QueryEscape", "url.PathEscape"],
         label: DataLabel::Sanitizer(Cap::URL_ENCODE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["filepath.Clean", "filepath.Base"],
         label: DataLabel::Sanitizer(Cap::FILE_IO),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["exec.Command"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["db.Query", "db.Exec", "db.QueryRow", "db.Prepare"],
         label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["fmt.Fprintf", "fmt.Sprintf", "fmt.Printf"],
         label: DataLabel::Sink(Cap::FMT_STRING),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -56,14 +64,17 @@ pub static RULES: &[LabelRule] = &[
             "os.ReadFile",
         ],
         label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["template.HTML"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["http.Get", "http.Post", "http.NewRequest"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
     },
 ];
 

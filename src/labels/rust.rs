@@ -6,19 +6,23 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["std::env::var", "env::var", "source_env"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["source_file"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["html_escape::encode_safe", "sanitize_", "sanitize_html"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["shell_escape::unix::escape", "sanitize_shell"],
         label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
@@ -31,10 +35,12 @@ pub static RULES: &[LabelRule] = &[
             "command::output",
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["sink_html"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -45,10 +51,12 @@ pub static RULES: &[LabelRule] = &[
             "File::create",
         ],
         label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["reqwest::get", "reqwest::Client.execute"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
     },
 ];
 

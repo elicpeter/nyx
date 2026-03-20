@@ -904,6 +904,39 @@ common middleware patterns.
 
 ---
 
+### Phase 14.5 — Per-Rule Case-Sensitive Matching ✅
+
+**Category**: matcher precision
+
+**Why**: All label matching was case-insensitive (ASCII `eq_ignore_ascii_case`). This
+prevented distinguishing case-significant identifiers like Django's `request.GET` vs
+`request.get`. Before adding framework rule packs, the matcher needed per-rule opt-in
+for exact case matching without changing any existing behavior.
+
+**What was done**:
+- Added `case_sensitive: bool` field to `LabelRule`, `RuntimeLabelRule`, and
+  `ConfigLabelRule` (all default to `false` at construction sites)
+- Added parameterized helpers `ends_with_cs()`, `starts_with_cs()`, `match_suffix_cs()`
+  that branch on the flag
+- Updated all 4 matching loops in `classify()` and `match_config_sanitizer()` in
+  `guards.rs` to use the new helpers
+- Threaded `case_sensitive` through `build_lang_rules()` so config-specified case
+  sensitivity propagates to runtime rules
+- `#[serde(default)]` on `ConfigLabelRule.case_sensitive` for backwards-compatible
+  deserialization
+- Removed old `ends_with_ignore_case`, `starts_with_ignore_case`, `match_suffix`
+  (replaced by parameterized versions)
+- 4 new unit tests covering default case-insensitive, exact match, prefix, and
+  suffix boundary behavior
+
+**Files changed**: `src/labels/mod.rs`, `src/utils/config.rs`,
+`src/cfg_analysis/guards.rs`, all 10 language rule files (`case_sensitive: false`
+on every existing `LabelRule`)
+
+**Dependencies**: None (pure additive, no behavior change for existing rules)
+
+---
+
 ### Phase 15 — Flask/Django framework rule pack
 
 **Category**: rule depth

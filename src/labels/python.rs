@@ -6,6 +6,7 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["os.getenv", "os.environ"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -14,17 +15,33 @@ pub static RULES: &[LabelRule] = &[
             "request.json",
             "request.headers",
             "request.cookies",
+            "request.files",
+            "request.data",
+            "request.values",
+            "request.environ",
+            "request.url",
+            "request.base_url",
+            "request.host",
             "input",
         ],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
+    },
+    // Django-specific sources (case-sensitive to avoid request.get() dict method FP)
+    LabelRule {
+        matchers: &["request.GET", "request.POST", "request.META", "request.body"],
+        label: DataLabel::Source(Cap::all()),
+        case_sensitive: true,
     },
     LabelRule {
         matchers: &["sys.argv"],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["open"],
         label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -34,20 +51,51 @@ pub static RULES: &[LabelRule] = &[
             "requests.post",
         ],
         label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["html.escape"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["shlex.quote"],
         label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["bleach.clean", "markupsafe.escape", "django.utils.html.escape"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
+    // Flask sinks
+    LabelRule {
+        matchers: &["render_template_string"],
+        label: DataLabel::Sink(Cap::CODE_EXEC),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["make_response"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["redirect"],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    // Django sinks
+    LabelRule {
+        matchers: &["HttpResponse", "mark_safe"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
     LabelRule {
         matchers: &["eval", "exec"],
         label: DataLabel::Sink(Cap::CODE_EXEC),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -60,22 +108,27 @@ pub static RULES: &[LabelRule] = &[
             "subprocess.check_call",
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["cursor.execute", "cursor.executemany"],
         label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["send_file", "send_from_directory"],
         label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["os.path.realpath"],
         label: DataLabel::Sanitizer(Cap::FILE_IO),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &["urllib.request.urlopen", "requests.get", "requests.post", "requests.request", "httpx.get", "httpx.request"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
     },
     LabelRule {
         matchers: &[
@@ -87,6 +140,7 @@ pub static RULES: &[LabelRule] = &[
             "shelve.open",
         ],
         label: DataLabel::Sink(Cap::DESERIALIZE),
+        case_sensitive: false,
     },
 ];
 
@@ -107,6 +161,8 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "else_clause"           => Kind::Block,
     "elif_clause"           => Kind::Block,
     "with_statement"        => Kind::Block,
+    "with_clause"           => Kind::Block,
+    "with_item"             => Kind::CallWrapper,
     "function_definition"   => Kind::Function,
     "try_statement"         => Kind::Block,
     "except_clause"         => Kind::Block,
