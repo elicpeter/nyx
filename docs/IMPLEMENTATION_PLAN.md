@@ -1,13 +1,10 @@
 # Nyx Phase 1 Hardening — Implementation Plan
 
 > **Purpose**: Concrete, phase-by-phase execution plan to harden Nyx's static analysis
-> engine before any Phase 2 dynamic work. Each phase is scoped for a single focused
-> Claude Code session.
+> engine before any Phase 2 dynamic work.
 >
 > **Based on**: Full repository audit (March 2026) covering correctness, validation,
 > rule quality, architecture, and product credibility.
->
-> **Usage**: Tell Claude Code: *"Implement Phase N from `docs/IMPLEMENTATION_PLAN.md`"*
 
 ---
 
@@ -23,7 +20,7 @@ The work is ordered to maximize trustworthiness early:
 6. **Harden product credibility** — align documentation claims with reality
 
 Each phase is designed to be:
-- **Small**: 1 focused Claude Code session (typically 1–3 files changed)
+- **Small**: 1 focused session (typically 1–3 files changed)
 - **Self-contained**: compiles and passes tests independently
 - **Measurable**: has a clear definition of done
 - **Safe**: limited blast radius, no architectural rewrites
