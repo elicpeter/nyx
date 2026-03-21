@@ -72,7 +72,7 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["http.Get", "http.Post", "http.NewRequest", "net.Dial", "net.DialTimeout"],
+        matchers: &["http.Get", "http.Post", "http.NewRequest", "http.NewRequestWithContext", "net.Dial", "net.DialTimeout"],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },

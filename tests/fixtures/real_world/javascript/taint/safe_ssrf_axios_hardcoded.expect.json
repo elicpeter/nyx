@@ -1,0 +1,6 @@
+{
+  "description": "SSRF negative: hardcoded URL in bare axios() call — no taint source, no finding expected",
+  "tags": ["taint", "ssrf", "negative", "axios"],
+  "modes": ["full"],
+  "expected": []
+}

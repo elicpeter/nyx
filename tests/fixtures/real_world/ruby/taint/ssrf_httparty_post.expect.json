@@ -1,0 +1,15 @@
+{
+  "description": "SSRF: user-controlled URL from params flows to HTTParty.post()",
+  "tags": ["taint", "ssrf", "httparty"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 6],
+      "evidence_contains": [],
+      "notes": "params[:url] flows to HTTParty.post(url) without URL validation"
+    }
+  ]
+}

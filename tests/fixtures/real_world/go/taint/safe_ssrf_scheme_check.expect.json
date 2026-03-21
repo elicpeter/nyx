@@ -1,0 +1,15 @@
+{
+  "description": "SSRF negative: scheme check before http.Get — validation not modeled as sanitizer",
+  "tags": ["taint", "ssrf", "negative", "validation"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [9, 17],
+      "evidence_contains": [],
+      "notes": "Scheme check guards the request; scanner may still flag because URL parsing is not modeled as sanitization"
+    }
+  ]
+}

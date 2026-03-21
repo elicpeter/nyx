@@ -57,7 +57,7 @@ pub static RULES: &[LabelRule] = &[
     // URI.open is the network-capable Kernel#open wrapper — more specific than
     // plain `open` (excluded to avoid file I/O false positives).
     LabelRule {
-        matchers: &["Net::HTTP.get", "URI.open", "HTTParty.get"],
+        matchers: &["Net::HTTP.get", "Net::HTTP.post", "URI.open", "HTTParty.get", "HTTParty.post"],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
