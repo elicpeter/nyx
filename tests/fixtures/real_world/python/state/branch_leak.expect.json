@@ -20,17 +20,6 @@
       ],
       "evidence_contains": [],
       "notes": "File handle closed in if branch but leaked in else branch"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        4,
-        6
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on f.read() in conditional_open — ordinary file I/O, no security context"
     }
   ]
 }

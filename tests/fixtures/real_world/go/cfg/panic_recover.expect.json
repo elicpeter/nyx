@@ -21,17 +21,6 @@
       "notes": "If code between os.Open and f.Close panics, f is leaked \u2014 no defer f.Close()"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        8,
-        11
-      ],
-      "evidence_contains": [],
-      "notes": "noise: os.Open on line 9 has error check immediately after \u2014 fixture is about panic/recover patterns"
-    },
-    {
       "rule_id": "state-use-after-close",
       "severity": "HIGH",
       "must_match": false,

@@ -31,21 +31,13 @@
       "notes": "unsafe block wrapping mem::transmute call"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        3,
-        7
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on data.len() / 4 in reinterpret \u2014 not a security sink"
-    },
-    {
       "rule_id": "rs.quality.unsafe_fn",
       "severity": "MEDIUM",
       "must_match": true,
-      "line_range": [3, 3],
+      "line_range": [
+        3,
+        3
+      ],
       "evidence_contains": [],
       "notes": "TP: unsafe fn reinterpret declaration correctly flagged by AST quality rule"
     }

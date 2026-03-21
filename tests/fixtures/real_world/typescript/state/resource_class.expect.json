@@ -22,18 +22,13 @@
       "notes": "Database created in leak() but close() never called; scanner may not track class-based resource lifecycle in TS"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [27, 27],
-      "evidence_contains": [],
-      "notes": "noise: function declaration for clean(), not a dangerous sink"
-    },
-    {
       "rule_id": "state-resource-leak",
       "severity": "MEDIUM",
       "must_match": true,
-      "line_range": [7, 7],
+      "line_range": [
+        7,
+        7
+      ],
       "evidence_contains": [],
       "notes": "TP: fs.openSync in Database constructor allocates a resource that can leak if close() is never called (as in leak() function)"
     }

@@ -1,21 +1,23 @@
 {
-  "description": "ENV source flows through Shellwords.escape (SHELL_ESCAPE sanitizer) before reaching system sink — taint should be cleared.",
-  "tags": ["taint", "negative", "cmdi", "sanitizer"],
-  "modes": ["full"],
+  "description": "ENV source flows through Shellwords.escape (SHELL_ESCAPE sanitizer) before reaching system sink \u2014 taint should be cleared.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi",
+    "sanitizer"
+  ],
+  "modes": [
+    "full"
+  ],
   "expected": [
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [8, 8],
-      "evidence_contains": [],
-      "notes": "noise: system() in safe_* fixture; non-taint finding irrelevant to sanitizer test"
-    },
     {
       "rule_id": "rb.cmdi.system_interp",
       "severity": "HIGH",
       "must_match": false,
-      "line_range": [5, 5],
+      "line_range": [
+        5,
+        5
+      ],
       "evidence_contains": [],
       "notes": "noise: system() with Shellwords.escape-sanitized input; AST-level rule fires but input is properly sanitized in safe_* fixture"
     }

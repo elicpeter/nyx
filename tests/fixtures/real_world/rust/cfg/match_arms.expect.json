@@ -1,5 +1,5 @@
 {
-  "description": "Command execution inside match arm — pattern matching dispatches to shell execution",
+  "description": "Command execution inside match arm \u2014 pattern matching dispatches to shell execution",
   "tags": [
     "cmdi",
     "cfg"
@@ -18,17 +18,6 @@
       ],
       "evidence_contains": [],
       "notes": ".unwrap() on Command output Result"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "LOW",
-      "must_match": false,
-      "line_range": [
-        11,
-        11
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

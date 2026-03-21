@@ -58,17 +58,6 @@
       "notes": "File handle opened in read branch but never closed"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        6,
-        8
-      ],
-      "evidence_contains": [],
-      "notes": "noise: eval() already covered by taint and php.code_exec.eval rules; redundant cfg finding"
-    },
-    {
       "rule_id": "taint-unsanitised-flow",
       "severity": "HIGH",
       "must_match": true,

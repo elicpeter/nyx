@@ -89,17 +89,6 @@
       ],
       "evidence_contains": [],
       "notes": "response.getWriter().println(new String(data)) in read branch; AST pattern correctly matches getWriter().println call"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        26,
-        26
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

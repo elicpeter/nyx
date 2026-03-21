@@ -40,17 +40,6 @@
       ],
       "evidence_contains": [],
       "notes": "mem::forget prevents RAII cleanup \u2014 aspirational, requires forget-aware state analysis"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        3,
-        7
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on File::open \u2014 ordinary Rust call with hardcoded path"
     }
   ]
 }

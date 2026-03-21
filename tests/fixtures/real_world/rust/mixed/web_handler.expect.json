@@ -19,7 +19,7 @@
         13
       ],
       "evidence_contains": [],
-      "notes": "env::var(\"USER_CMD\") flows to Command .arg(&cmd) — command injection"
+      "notes": "env::var(\"USER_CMD\") flows to Command .arg(&cmd) \u2014 command injection"
     },
     {
       "rule_id": "taint-unsanitised-flow",
@@ -30,7 +30,7 @@
         16
       ],
       "evidence_contains": [],
-      "notes": "env::var(\"USER_PATH\") flows to fs::read_to_string — path traversal"
+      "notes": "env::var(\"USER_PATH\") flows to fs::read_to_string \u2014 path traversal"
     },
     {
       "rule_id": "rs.quality.unwrap",
@@ -85,18 +85,7 @@
         12
       ],
       "evidence_contains": [],
-      "notes": "noise: state-resource-leak-possible on Command builder chain — output is captured, no resource leak"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        20,
-        26
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink at line 24 — file is only 16 lines, likely an indexing artifact"
+      "notes": "noise: state-resource-leak-possible on Command builder chain \u2014 output is captured, no resource leak"
     },
     {
       "rule_id": "state-unauthed-access",
@@ -107,7 +96,7 @@
         14
       ],
       "evidence_contains": [],
-      "notes": "noise: state-unauthed-access — no auth model in this fixture"
+      "notes": "noise: state-unauthed-access \u2014 no auth model in this fixture"
     },
     {
       "rule_id": "state-unauthed-access",
@@ -118,7 +107,7 @@
         7
       ],
       "evidence_contains": [],
-      "notes": "noise: state-unauthed-access — no auth model in this fixture"
+      "notes": "noise: state-unauthed-access \u2014 no auth model in this fixture"
     }
   ]
 }

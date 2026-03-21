@@ -56,15 +56,15 @@
       "notes": "response.getWriter().println(\"Done\") matched by AST pattern; constant string so low security value but pattern match is correct"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
+      "rule_id": "taint-unsanitised-flow",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_match": true,
       "line_range": [
-        11,
-        11
+        8,
+        9
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "readObject() result cast to String flows directly to Runtime.exec \u2014 additional taint path for deserialized command"
     }
   ]
 }

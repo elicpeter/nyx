@@ -1,5 +1,5 @@
 {
-  "description": "getenv source flows through sanitize_input (HTML_ESCAPE sanitizer) before reaching sprintf sink — taint should be cleared.",
+  "description": "getenv source flows through sanitize_input (HTML_ESCAPE sanitizer) before reaching sprintf sink \u2014 taint should be cleared.",
   "tags": [
     "taint",
     "negative",
@@ -19,18 +19,7 @@
         22
       ],
       "evidence_contains": [],
-      "notes": "sprintf(msg, ...) is a dangerous unbounded write — AST pattern correctly flags it even though taint was sanitized."
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        23,
-        23
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "sprintf(msg, ...) is a dangerous unbounded write \u2014 AST pattern correctly flags it even though taint was sanitized."
     }
   ]
 }

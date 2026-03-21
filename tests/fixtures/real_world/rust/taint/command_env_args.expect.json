@@ -35,11 +35,11 @@
       "severity": "MEDIUM",
       "must_match": false,
       "line_range": [
-        6,
-        12
+        8,
+        8
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on Command::new \u2014 ordinary Rust call, guarded by if args.len() > 1"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 8 \u2014 taint active but no confirmed flow"
     }
   ]
 }

@@ -33,18 +33,13 @@
       "notes": "request.getInputStream() flows into ObjectInputStream.readObject \u2014 taint may not track through constructor chain"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [5, 8],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on throws clause (line 6); method declaration is not a sink"
-    },
-    {
       "rule_id": "taint-unsanitised-flow",
       "severity": "MEDIUM",
       "must_match": false,
-      "line_range": [11, 11],
+      "line_range": [
+        11,
+        11
+      ],
       "evidence_contains": [],
       "notes": "TP in full mode only: source at 8:9 (ois.readObject()) flows to out.println on line 11; does not fire in ast mode since taint analysis requires CFG"
     }

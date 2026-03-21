@@ -43,50 +43,6 @@
       ],
       "evidence_contains": [],
       "notes": "use_after_close reads from file handle after closing it"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        13,
-        13
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        18,
-        18
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        2,
-        2
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        7,
-        7
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

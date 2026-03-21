@@ -1,23 +1,24 @@
 {
   "description": "SSRF: environment variable flows through curl handle to curl_easy_perform()",
-  "tags": ["taint", "ssrf", "curl"],
-  "modes": ["full"],
+  "tags": [
+    "taint",
+    "ssrf",
+    "curl"
+  ],
+  "modes": [
+    "full"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
       "must_match": true,
-      "line_range": [4, 10],
+      "line_range": [
+        4,
+        10
+      ],
       "evidence_contains": [],
-      "notes": "getenv(\"TARGET_URL\") flows to curl_easy_setopt then curl_easy_perform — handle propagation enables detection"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [4, 10],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on curl_easy_perform"
+      "notes": "getenv(\"TARGET_URL\") flows to curl_easy_setopt then curl_easy_perform \u2014 handle propagation enables detection"
     }
   ]
 }

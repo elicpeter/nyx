@@ -32,6 +32,14 @@
       ],
       "evidence_contains": [],
       "notes": "User data flows into yaml.load - aspirational taint finding"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [9, 9],
+      "evidence_contains": [],
+      "notes": "yaml.load is a DESERIALIZE sink — structural detection of unguarded deserialization (full mode only)"
     }
   ]
 }

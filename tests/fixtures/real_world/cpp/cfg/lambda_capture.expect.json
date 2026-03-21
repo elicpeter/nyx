@@ -25,11 +25,11 @@
       "severity": "MEDIUM",
       "must_match": false,
       "line_range": [
-        4,
+        7,
         7
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on function definition containing system() — redundant with taint-level cmdi finding"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 7 \u2014 taint active but no confirmed flow"
     }
   ]
 }

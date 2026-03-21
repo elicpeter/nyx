@@ -1,5 +1,5 @@
 {
-  "description": "strcpy/strcat/sprintf called with only hardcoded string literals — no taint source.",
+  "description": "strcpy/strcat/sprintf called with only hardcoded string literals \u2014 no taint source.",
   "tags": [
     "taint",
     "negative",
@@ -18,51 +18,7 @@
         7
       ],
       "evidence_contains": [],
-      "notes": "FP: scanner does not fire cpp.memory.strcpy on std::strcpy — qualified name not matched by AST rule"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        6,
-        6
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        7,
-        7
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        8,
-        8
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        9,
-        9
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "FP: scanner does not fire cpp.memory.strcpy on std::strcpy \u2014 qualified name not matched by AST rule"
     }
   ]
 }

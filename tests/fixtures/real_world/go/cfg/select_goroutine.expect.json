@@ -30,18 +30,7 @@
         32
       ],
       "evidence_contains": [],
-      "notes": "os.Getenv(\"CMD\") flows through runWithTimeout to exec.Command — cross-function taint may not resolve"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        11,
-        11
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "os.Getenv(\"CMD\") flows through runWithTimeout to exec.Command \u2014 cross-function taint may not resolve"
     }
   ]
 }

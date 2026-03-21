@@ -1,15 +1,12 @@
 {
-  "description": "println fed by locally-constructed strings — no taint source involved.",
-  "tags": ["taint", "negative", "xss"],
-  "modes": ["full"],
-  "expected": [
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [4, 7],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on string concatenation (line 5) in safe fixture; no taint source, purely local string construction"
-    }
-  ]
+  "description": "println fed by locally-constructed strings \u2014 no taint source involved.",
+  "tags": [
+    "taint",
+    "negative",
+    "xss"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
 }

@@ -1,18 +1,12 @@
 {
   "description": "Rust early return with RAII: File dropped automatically on all paths including early return",
-  "tags": ["state", "raii", "early-return"],
-  "modes": ["full"],
-  "expected": [
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        3,
-        7
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on File::open \u2014 ordinary Rust call, properly guarded with .ok()?"
-    }
-  ]
+  "tags": [
+    "state",
+    "raii",
+    "early-return"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
 }

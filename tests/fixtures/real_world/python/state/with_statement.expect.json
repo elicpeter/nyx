@@ -22,29 +22,7 @@
       "notes": "else branch opens file manually and never closes it"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        12,
-        12
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        15,
-        15
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
+      "rule_id": "state-resource-leak",
       "severity": "MEDIUM",
       "must_match": false,
       "line_range": [
@@ -52,10 +30,10 @@
         2
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "noise: open() inside with statement \u2014 context manager auto-closes"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
+      "rule_id": "state-resource-leak",
       "severity": "MEDIUM",
       "must_match": false,
       "line_range": [
@@ -63,10 +41,10 @@
         6
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "noise: open() inside with statement in nested_with \u2014 context manager auto-closes"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
+      "rule_id": "state-resource-leak",
       "severity": "MEDIUM",
       "must_match": false,
       "line_range": [
@@ -74,7 +52,29 @@
         7
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "noise: open() inside with statement in nested_with \u2014 context manager auto-closes"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        12,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "noise: open() inside with statement in conditional_with \u2014 context manager auto-closes"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": "MEDIUM",
+      "must_match": true,
+      "line_range": [
+        15,
+        15
+      ],
+      "evidence_contains": [],
+      "notes": "open() in else branch without with statement \u2014 f never closed, real resource leak"
     }
   ]
 }

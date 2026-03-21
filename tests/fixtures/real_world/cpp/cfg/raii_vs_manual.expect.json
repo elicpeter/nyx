@@ -1,5 +1,5 @@
 {
-  "description": "RAII ifstream vs manual FILE* — RAII auto-closes, manual version leaks",
+  "description": "RAII ifstream vs manual FILE* \u2014 RAII auto-closes, manual version leaks",
   "tags": [
     "cfg",
     "resource-leak",
@@ -18,7 +18,7 @@
         20
       ],
       "evidence_contains": [],
-      "notes": "fopen at line 14 never fclose'd in read_manual — aspirational CFG finding"
+      "notes": "fopen at line 14 never fclose'd in read_manual \u2014 aspirational CFG finding"
     },
     {
       "rule_id": "state-resource-leak",
@@ -29,18 +29,7 @@
         14
       ],
       "evidence_contains": [],
-      "notes": "fopen at line 14 in read_manual is never fclose'd — real resource leak, TP."
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        14,
-        14
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "fopen at line 14 in read_manual is never fclose'd \u2014 real resource leak, TP."
     }
   ]
 }

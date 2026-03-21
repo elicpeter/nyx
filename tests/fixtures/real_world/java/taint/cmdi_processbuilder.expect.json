@@ -1,5 +1,5 @@
 {
-  "description": "HttpServletRequest parameters flow into ProcessBuilder constructor — command injection via user-controlled program and arguments",
+  "description": "HttpServletRequest parameters flow into ProcessBuilder constructor \u2014 command injection via user-controlled program and arguments",
   "tags": [
     "taint",
     "cmdi",
@@ -30,17 +30,6 @@
       ],
       "evidence_contains": [],
       "notes": "source at 8:9 (request.getParameter(\"arg\")) flows into new ProcessBuilder(program, arg) on line 10; specific arg-to-sink flow"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        18,
-        18
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }

@@ -22,17 +22,6 @@
       "notes": "fetchUrl opens cURL handle but never calls curl_close"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        3,
-        5
-      ],
-      "evidence_contains": [],
-      "notes": "noise: curl_setopt is a configuration call, not a security-sensitive sink"
-    },
-    {
       "rule_id": "state-resource-leak",
       "severity": "MEDIUM",
       "must_match": true,

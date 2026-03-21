@@ -294,19 +294,21 @@ impl CfgAnalysis for UnguardedSink {
             let in_entrypoint = sink_in_entrypoint(ctx, *sink);
 
             let (severity, confidence) = if has_taint || source_derived {
-                // Taint-confirmed or directly source-derived → HIGH
                 (Severity::High, Confidence::High)
             } else if param_only && !in_entrypoint {
-                // Wrapper function consuming only parameters → LOW
+                // Wrapper function with param-only args — zero signal. Suppress.
+                continue;
+            } else if !ctx.taint_active {
+                // AST-only / cfg-only mode — preserve as LOW (unchanged)
                 (Severity::Low, Confidence::Low)
-            } else if !ctx.taint_active && !source_derived {
-                // CFG-only mode without taint confirmation → LOW
-                (Severity::Low, Confidence::Low)
-            } else if in_entrypoint && !param_only {
-                // Entrypoint with non-parameter args but no taint confirmation → MEDIUM
-                (Severity::Medium, Confidence::Medium)
             } else {
-                // Generic structural finding → MEDIUM
+                // taint_active=true but found nothing.
+                // Keep high-risk sinks (SHELL_ESCAPE, CODE_EXEC, SQL_QUERY, DESERIALIZE)
+                // as structural backup. Suppress low-risk sinks (FILE_IO, SSRF, etc.).
+                let high_risk = Cap::SHELL_ESCAPE | Cap::CODE_EXEC | Cap::SQL_QUERY | Cap::DESERIALIZE;
+                if (sink_caps & high_risk).is_empty() {
+                    continue; // FILE_IO, SSRF, FMT_STRING etc. without taint → noise
+                }
                 (Severity::Medium, Confidence::Medium)
             };
 

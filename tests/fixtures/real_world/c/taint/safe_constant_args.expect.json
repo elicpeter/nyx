@@ -1,5 +1,5 @@
 {
-  "description": "sprintf/strcpy/strcat called with only hardcoded string literals — no taint source.",
+  "description": "sprintf/strcpy/strcat called with only hardcoded string literals \u2014 no taint source.",
   "tags": [
     "taint",
     "negative",
@@ -18,7 +18,7 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "sprintf(buf, ...) is a dangerous function even with constant args — AST pattern match is correct."
+      "notes": "sprintf(buf, ...) is a dangerous function even with constant args \u2014 AST pattern match is correct."
     },
     {
       "rule_id": "c.memory.strcpy",
@@ -29,7 +29,7 @@
         9
       ],
       "evidence_contains": [],
-      "notes": "strcpy(buf, \"constant value\") is a dangerous function even with constant args — AST pattern match is correct."
+      "notes": "strcpy(buf, \"constant value\") is a dangerous function even with constant args \u2014 AST pattern match is correct."
     },
     {
       "rule_id": "c.memory.strcat",
@@ -40,51 +40,7 @@
         10
       ],
       "evidence_contains": [],
-      "notes": "strcat(buf, \" appended\") is a dangerous function even with constant args — AST pattern match is correct."
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        6,
-        6
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        7,
-        7
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        8,
-        8
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        9,
-        9
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "strcat(buf, \" appended\") is a dangerous function even with constant args \u2014 AST pattern match is correct."
     }
   ]
 }

@@ -20,7 +20,7 @@
         17
       ],
       "evidence_contains": [],
-      "notes": "cmd parameter inside lambda flows to Runtime.exec — scanner may not track taint through lambda bodies"
+      "notes": "cmd parameter inside lambda flows to Runtime.exec \u2014 scanner may not track taint through lambda bodies"
     },
     {
       "rule_id": "java.sqli.execute_concat",
@@ -31,7 +31,7 @@
         10
       ],
       "evidence_contains": [],
-      "notes": "SQL string concatenation inside stream map lambda — AST pattern may not match inside lambda context"
+      "notes": "SQL string concatenation inside stream map lambda \u2014 AST pattern may not match inside lambda context"
     },
     {
       "rule_id": "java.cmdi.runtime_exec",
@@ -53,7 +53,7 @@
         13
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 13 \u2014 taint active but no confirmed flow"
     }
   ]
 }

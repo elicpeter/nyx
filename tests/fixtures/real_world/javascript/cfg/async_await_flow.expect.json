@@ -52,7 +52,7 @@
         3
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 3 \u2014 taint active but no confirmed flow"
     }
   ]
 }

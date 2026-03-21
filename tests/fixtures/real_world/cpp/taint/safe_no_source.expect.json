@@ -1,5 +1,5 @@
 {
-  "description": "sprintf fed by locally-constructed strings — no taint source involved.",
+  "description": "sprintf fed by locally-constructed strings \u2014 no taint source involved.",
   "tags": [
     "taint",
     "negative",
@@ -8,28 +8,5 @@
   "modes": [
     "full"
   ],
-  "expected": [
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        8,
-        8
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        9,
-        9
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    }
-  ]
+  "expected": []
 }

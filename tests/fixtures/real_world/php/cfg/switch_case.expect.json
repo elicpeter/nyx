@@ -35,17 +35,6 @@
       "notes": "system() called in switch case with function parameter"
     },
     {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "LOW",
-      "must_match": false,
-      "line_range": [
-        5,
-        5
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
       "rule_id": "cfg-unreachable-sink",
       "severity": "MEDIUM",
       "must_match": false,
@@ -54,7 +43,7 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unreachable-sink — code is reachable via case label"
+      "notes": "noise: cfg-unreachable-sink \u2014 code is reachable via case label"
     }
   ]
 }

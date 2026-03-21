@@ -1,5 +1,5 @@
 {
-  "description": "os.system/subprocess.run called with only hardcoded string literals — no taint source.",
+  "description": "os.system/subprocess.run called with only hardcoded string literals \u2014 no taint source.",
   "tags": [
     "taint",
     "negative",
@@ -18,7 +18,7 @@
         4
       ],
       "evidence_contains": [],
-      "notes": "noise: py.cmdi.os_system on os.system('ls -la /tmp') — AST pattern fires but args are hardcoded constants, no real vulnerability in this safe fixture"
+      "notes": "noise: py.cmdi.os_system on os.system('ls -la /tmp') \u2014 AST pattern fires but args are hardcoded constants, no real vulnerability in this safe fixture"
     },
     {
       "rule_id": "cfg-unguarded-sink",
@@ -29,7 +29,7 @@
         5
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 5 \u2014 taint active but no confirmed flow"
     }
   ]
 }

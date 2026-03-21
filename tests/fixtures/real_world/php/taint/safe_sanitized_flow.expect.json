@@ -1,19 +1,15 @@
 {
-  "description": "$_GET source flows through escapeshellarg (SHELL_ESCAPE sanitizer) before reaching system sink — taint should be cleared.",
-  "tags": ["taint", "negative", "cmdi", "sanitizer"],
-  "modes": ["full"],
+  "description": "$_GET source flows through escapeshellarg (SHELL_ESCAPE sanitizer) before reaching system sink \u2014 taint should be cleared.",
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi",
+    "sanitizer"
+  ],
+  "modes": [
+    "full"
+  ],
   "expected": [
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        4,
-        6
-      ],
-      "evidence_contains": [],
-      "notes": "noise: safe_sanitized_flow fixture; system() input is sanitized via escapeshellarg; cfg-unguarded-sink ignores sanitization context"
-    },
     {
       "rule_id": "php.cmdi.system",
       "severity": "HIGH",

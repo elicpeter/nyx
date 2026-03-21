@@ -41,7 +41,7 @@
         23
       ],
       "evidence_contains": [],
-      "notes": "Error from json.Decode not returned — execution falls through to exec.Command"
+      "notes": "Error from json.Decode not returned \u2014 execution falls through to exec.Command"
     },
     {
       "rule_id": "cfg-unguarded-sink",
@@ -52,7 +52,7 @@
         21
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 21 \u2014 taint active but no confirmed flow"
     },
     {
       "rule_id": "cfg-unguarded-sink",
@@ -63,7 +63,7 @@
         36
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 36 \u2014 taint active but no confirmed flow"
     }
   ]
 }

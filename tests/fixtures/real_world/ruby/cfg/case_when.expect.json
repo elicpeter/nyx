@@ -43,18 +43,7 @@
         4
       ],
       "evidence_contains": [],
-      "notes": "noise: state-unauthed-access — no auth model in this fixture"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        4,
-        4
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "noise: state-unauthed-access \u2014 no auth model in this fixture"
     },
     {
       "rule_id": "state-unauthed-access",
@@ -65,29 +54,7 @@
         6
       ],
       "evidence_contains": [],
-      "notes": "noise: state-unauthed-access — no auth model in this fixture"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        6,
-        6
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        8,
-        8
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "noise: state-unauthed-access \u2014 no auth model in this fixture"
     }
   ]
 }

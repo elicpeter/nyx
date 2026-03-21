@@ -18,17 +18,6 @@
       ],
       "evidence_contains": [],
       "notes": "f only closed inside if(flag) block \u2014 leaked on the else path"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        6,
-        9
-      ],
-      "evidence_contains": [],
-      "notes": "noise: flagging near os.Open on line 6 or if-block on line 7 \u2014 fixture is about branch-conditional resource leak"
     }
   ]
 }

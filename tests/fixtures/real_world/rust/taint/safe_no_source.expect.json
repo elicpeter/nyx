@@ -1,18 +1,24 @@
 {
   "description": "Command::new fed by locally-constructed string array \u2014 no taint source involved.",
-  "tags": ["taint", "negative", "cmdi"],
-  "modes": ["full"],
+  "tags": [
+    "taint",
+    "negative",
+    "cmdi"
+  ],
+  "modes": [
+    "full"
+  ],
   "expected": [
     {
       "rule_id": "cfg-unguarded-sink",
       "severity": "MEDIUM",
       "must_match": false,
       "line_range": [
-        3,
-        11
+        6,
+        6
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink on Command::new(cmd) \u2014 safe negative fixture, cmd comes from hardcoded vec"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 6 \u2014 taint active but no confirmed flow"
     }
   ]
 }

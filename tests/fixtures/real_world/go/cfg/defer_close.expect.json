@@ -17,7 +17,7 @@
         35
       ],
       "evidence_contains": [],
-      "notes": "readLeaky returns on line 32 error path without closing f — missing defer f.Close()"
+      "notes": "readLeaky returns on line 32 error path without closing f \u2014 missing defer f.Close()"
     },
     {
       "rule_id": "state-resource-leak-possible",
@@ -28,7 +28,7 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "noise: os.Open on line 8 in readSafe — f.Close() is properly deferred on line 12"
+      "notes": "noise: os.Open on line 8 in readSafe \u2014 f.Close() is properly deferred on line 12"
     },
     {
       "rule_id": "state-use-after-close",
@@ -39,29 +39,7 @@
         15
       ],
       "evidence_contains": [],
-      "notes": "noise: f.Read on line 15 in readSafe — f.Close() is deferred (runs at function exit), f is still open here"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        23,
-        23
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        8,
-        8
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
+      "notes": "noise: f.Read on line 15 in readSafe \u2014 f.Close() is deferred (runs at function exit), f is still open here"
     }
   ]
 }

@@ -18,6 +18,14 @@
       "line_range": [14, 17],
       "evidence_contains": [],
       "notes": "r.FormValue(\"key\") flows to des.NewCipher() — user data used as weak cipher key"
+    },
+    {
+      "rule_id": "go.crypto.md5",
+      "severity": "LOW",
+      "must_match": true,
+      "line_range": [11, 11],
+      "evidence_contains": [],
+      "notes": "AST pattern detects md5.Sum() usage — weak cryptographic hash"
     }
   ]
 }

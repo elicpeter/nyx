@@ -41,17 +41,6 @@
       ],
       "evidence_contains": [],
       "notes": "source at 10:9 (request.getParameter(\"id\")) flows through tainted SQL query (line 12) into result set output at out.println(rs.getString(\"name\")); second-order taint via query results"
-    },
-    {
-      "rule_id": "cfg-unguarded-sink",
-      "severity": "MEDIUM",
-      "must_match": false,
-      "line_range": [
-        29,
-        29
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unguarded-sink — low-value finding, no meaningful auth/validation context"
     }
   ]
 }
