@@ -424,6 +424,168 @@ fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
     }
 }
 
+// -------------------------------------------------------------------------
+//    Short-circuit boolean operator helpers
+// -------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BoolOp {
+    And,
+    Or,
+}
+
+/// Check if an AST node is a boolean operator (`&&`/`||`/`and`/`or`).
+fn is_boolean_operator(node: Node) -> Option<BoolOp> {
+    match node.kind() {
+        "binary_expression" | "boolean_operator" | "binary" => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                match child.kind() {
+                    "&&" | "and" => return Some(BoolOp::And),
+                    "||" | "or" => return Some(BoolOp::Or),
+                    _ => {}
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Strip parenthesized_expression wrappers.
+fn unwrap_parens(node: Node) -> Node {
+    if node.kind() == "parenthesized_expression" {
+        if let Some(inner) = node.named_child(0) {
+            return unwrap_parens(inner);
+        }
+    }
+    node
+}
+
+/// Extract `left` and `right` operands from a binary boolean node.
+fn get_boolean_operands<'a>(node: Node<'a>) -> Option<(Node<'a>, Node<'a>)> {
+    // Field-based (all supported grammars)
+    if let (Some(left), Some(right)) = (
+        node.child_by_field_name("left"),
+        node.child_by_field_name("right"),
+    ) {
+        return Some((left, right));
+    }
+    // Positional fallback (safety net)
+    let mut cursor = node.walk();
+    let named: Vec<_> = node.named_children(&mut cursor).collect();
+    if named.len() >= 2 {
+        return Some((named[0], named[named.len() - 1]));
+    }
+    None
+}
+
+/// Create a lightweight `StmtKind::If` node for a sub-condition in a boolean chain.
+fn push_condition_node<'a>(
+    g: &mut Cfg,
+    cond_ast: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+    enclosing_func: Option<&str>,
+) -> NodeIndex {
+    // Pass cond_ast as both args — sub-conditions are never `unless` nodes
+    let (inner, negated) = detect_negation(cond_ast, cond_ast, lang);
+    let mut vars = Vec::new();
+    collect_idents(inner, code, &mut vars);
+    vars.sort();
+    vars.dedup();
+    vars.truncate(MAX_COND_VARS);
+    let text = text_of(cond_ast, code).map(|t| {
+        if t.len() > 128 {
+            t[..128].to_string()
+        } else {
+            t
+        }
+    });
+    let span = (cond_ast.start_byte(), cond_ast.end_byte());
+    g.add_node(NodeInfo {
+        kind: StmtKind::If,
+        span,
+        labels: SmallVec::new(),
+        defines: None,
+        uses: Vec::new(),
+        callee: None,
+        receiver: None,
+        enclosing_func: enclosing_func.map(|s| s.to_string()),
+        call_ordinal: 0,
+        condition_text: text,
+        condition_vars: vars,
+        condition_negated: negated,
+        arg_uses: Vec::new(),
+        sink_payload_args: None,
+        catch_param: false,
+    })
+}
+
+/// Recursively decompose a boolean condition into a chain of `StmtKind::If` nodes
+/// with short-circuit edges.
+///
+/// Returns `(true_exits, false_exits)` — the sets of nodes from which True/False
+/// edges should connect to the then/else branches.
+fn build_condition_chain<'a>(
+    cond_ast: Node<'a>,
+    preds: &[NodeIndex],
+    pred_edge: EdgeKind,
+    g: &mut Cfg,
+    lang: &str,
+    code: &'a [u8],
+    enclosing_func: Option<&str>,
+) -> (Vec<NodeIndex>, Vec<NodeIndex>) {
+    let inner = unwrap_parens(cond_ast);
+
+    match is_boolean_operator(inner) {
+        Some(BoolOp::And) => {
+            if let Some((left, right)) = get_boolean_operands(inner) {
+                // Left operand with current preds
+                let (left_true, left_false) =
+                    build_condition_chain(left, preds, pred_edge, g, lang, code, enclosing_func);
+                // Right operand only evaluated when left is true
+                let (right_true, right_false) =
+                    build_condition_chain(right, &left_true, EdgeKind::True, g, lang, code, enclosing_func);
+                // AND: true only when both true; false when either false
+                let mut false_exits = left_false;
+                false_exits.extend(right_false);
+                (right_true, false_exits)
+            } else {
+                // Safety fallback: treat as leaf
+                let node = push_condition_node(g, inner, lang, code, enclosing_func);
+                connect_all(g, preds, node, pred_edge);
+                (vec![node], vec![node])
+            }
+        }
+        Some(BoolOp::Or) => {
+            if let Some((left, right)) = get_boolean_operands(inner) {
+                // Left operand with current preds
+                let (left_true, left_false) =
+                    build_condition_chain(left, preds, pred_edge, g, lang, code, enclosing_func);
+                // Right operand only evaluated when left is false
+                let (right_true, right_false) =
+                    build_condition_chain(right, &left_false, EdgeKind::False, g, lang, code, enclosing_func);
+                // OR: true when either true; false only when both false
+                let mut true_exits = left_true;
+                true_exits.extend(right_true);
+                (true_exits, right_false)
+            } else {
+                // Safety fallback: treat as leaf
+                let node = push_condition_node(g, inner, lang, code, enclosing_func);
+                connect_all(g, preds, node, pred_edge);
+                (vec![node], vec![node])
+            }
+        }
+        None => {
+            // Leaf: single condition node
+            let node = push_condition_node(g, inner, lang, code, enclosing_func);
+            connect_all(g, preds, node, pred_edge);
+            (vec![node], vec![node])
+        }
+    }
+}
+
 /// Find the inner CallFn/CallMethod/CallMacro node within an AST node.
 /// For direct call nodes, returns the node itself. For wrappers, searches
 /// up to two levels of children.
@@ -1379,18 +1541,72 @@ fn build_sub<'a>(
         //  IF‑/ELSE: two branches that re‑merge afterwards
         // ─────────────────────────────────────────────────────────────────
         Kind::If => {
-            // Condition node
-            let cond = push_node(
-                g,
-                StmtKind::If,
-                ast,
-                lang,
-                code,
-                enclosing_func,
-                0,
-                analysis_rules,
-            );
-            connect_all(g, preds, cond, EdgeKind::Seq);
+            // Check if condition contains a boolean operator for short-circuit decomposition.
+            let cond_subtree = ast.child_by_field_name("condition").or_else(|| {
+                // Rust `if_expression` uses positional children
+                let mut cursor = ast.walk();
+                ast.children(&mut cursor).find(|c| {
+                    let k = c.kind();
+                    !matches!(lookup(lang, k), Kind::Block | Kind::Trivia)
+                        && k != "if"
+                        && k != "else"
+                        && k != "let"
+                        && k != "{"
+                        && k != "}"
+                        && k != "("
+                        && k != ")"
+                })
+            });
+
+            let has_short_circuit = cond_subtree
+                .map(|c| is_boolean_operator(unwrap_parens(c)).is_some())
+                .unwrap_or(false);
+
+            // Check for negation wrapping the entire condition (e.g. `!(a && b)`)
+            // — if present, skip short-circuit decomposition (De Morgan out of scope).
+            let has_short_circuit = has_short_circuit && cond_subtree.map_or(false, |c| {
+                let unwrapped = unwrap_parens(c);
+                !matches!(
+                    unwrapped.kind(),
+                    "unary_expression" | "not_operator" | "prefix_unary_expression" | "unary_not"
+                )
+            });
+
+            let is_unless = ast.kind() == "unless";
+
+            // Determine true/false exit sets for wiring branches.
+            let (true_exits, false_exits) = if has_short_circuit {
+                let cond_ast = cond_subtree.unwrap();
+                build_condition_chain(
+                    cond_ast, preds, EdgeKind::Seq, g, lang, code, enclosing_func,
+                )
+            } else {
+                // Single-node path (original behavior)
+                let cond = push_node(
+                    g,
+                    StmtKind::If,
+                    ast,
+                    lang,
+                    code,
+                    enclosing_func,
+                    0,
+                    analysis_rules,
+                );
+                connect_all(g, preds, cond, EdgeKind::Seq);
+                (vec![cond], vec![cond])
+            };
+
+            // For `unless`, swap: body runs when condition is false.
+            let (then_preds, else_preds) = if is_unless {
+                (&false_exits, &true_exits)
+            } else {
+                (&true_exits, &false_exits)
+            };
+            let (then_edge, else_edge) = if is_unless {
+                (EdgeKind::False, EdgeKind::True)
+            } else {
+                (EdgeKind::True, EdgeKind::False)
+            };
 
             // Locate then & else blocks using field-based lookup first,
             // then positional fallback (Rust uses positional blocks).
@@ -1418,7 +1634,7 @@ fn build_sub<'a>(
             let then_exits = if let Some(b) = then_block {
                 let exits = build_sub(
                     b,
-                    &[cond],
+                    then_preds,
                     g,
                     lang,
                     code,
@@ -1431,18 +1647,15 @@ fn build_sub<'a>(
                     continue_targets,
                     throw_targets,
                 );
-                // Add True edge from condition to first node of then-branch.
-                // We use the first node created (by index) rather than the
-                // exit, because the branch may terminate (return/break) and
-                // have no exits.
+                // Add True/False edge from condition exit(s) to first node of then-branch.
                 if then_first_node.index() < g.node_count() {
-                    connect_all(g, &[cond], then_first_node, EdgeKind::True);
+                    connect_all(g, then_preds, then_first_node, then_edge);
                 } else if let Some(&first) = exits.first() {
-                    connect_all(g, &[cond], first, EdgeKind::True);
+                    connect_all(g, then_preds, first, then_edge);
                 }
                 exits
             } else {
-                vec![cond]
+                then_preds.to_vec()
             };
 
             // ELSE branch
@@ -1450,7 +1663,7 @@ fn build_sub<'a>(
             let else_exits = if let Some(b) = else_block {
                 let exits = build_sub(
                     b,
-                    &[cond],
+                    else_preds,
                     g,
                     lang,
                     code,
@@ -1464,18 +1677,14 @@ fn build_sub<'a>(
                     throw_targets,
                 );
                 if else_first_node.index() < g.node_count() {
-                    connect_all(g, &[cond], else_first_node, EdgeKind::False);
+                    connect_all(g, else_preds, else_first_node, else_edge);
                 } else if let Some(&first) = exits.first() {
-                    connect_all(g, &[cond], first, EdgeKind::False);
+                    connect_all(g, else_preds, first, else_edge);
                 }
                 exits
             } else {
                 // No explicit else → create a synthetic pass-through node
-                // for the false path.  This avoids routing the False edge
-                // to a then-block exit (which would make it appear that the
-                // false path goes *through* the then-block) and gives
-                // path-sensitive analysis an explicit False edge to record
-                // predicates on.
+                // for the false path.
                 let pass = g.add_node(NodeInfo {
                     kind: StmtKind::Seq,
                     span: (ast.end_byte(), ast.end_byte()),
@@ -1493,7 +1702,7 @@ fn build_sub<'a>(
                     sink_payload_args: None,
                     catch_param: false,
                 });
-                connect_all(g, &[cond], pass, EdgeKind::False);
+                connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
             };
 
@@ -1571,6 +1780,20 @@ fn build_sub<'a>(
             );
             connect_all(g, preds, header, EdgeKind::Seq);
 
+            // Check for short-circuit condition
+            let cond_subtree = ast.child_by_field_name("condition");
+            let has_short_circuit = cond_subtree
+                .map(|c| {
+                    let unwrapped = unwrap_parens(c);
+                    is_boolean_operator(unwrapped).is_some()
+                        && !matches!(
+                            unwrapped.kind(),
+                            "unary_expression" | "not_operator"
+                                | "prefix_unary_expression" | "unary_not"
+                        )
+                })
+                .unwrap_or(false);
+
             // Fresh break/continue targets scoped to this loop
             let mut loop_breaks = Vec::new();
             let mut loop_continues = Vec::new();
@@ -1585,35 +1808,83 @@ fn build_sub<'a>(
                 })
                 .expect("loop without body");
 
-            let body_exits = build_sub(
-                body,
-                &[header],
-                g,
-                lang,
-                code,
-                summaries,
-                file_path,
-                enclosing_func,
-                call_ordinal,
-                analysis_rules,
-                &mut loop_breaks,
-                &mut loop_continues,
-                throw_targets,
-            );
+            if has_short_circuit {
+                let cond_ast = cond_subtree.unwrap();
+                let (true_exits, false_exits) = build_condition_chain(
+                    cond_ast,
+                    &[header],
+                    EdgeKind::Seq,
+                    g,
+                    lang,
+                    code,
+                    enclosing_func,
+                );
 
-            // Back‑edge for every linear exit → header.
-            for &e in &body_exits {
-                connect_all(g, &[e], header, EdgeKind::Back);
+                // Wire body from true_exits
+                let body_first = NodeIndex::new(g.node_count());
+                let body_exits = build_sub(
+                    body,
+                    &true_exits,
+                    g,
+                    lang,
+                    code,
+                    summaries,
+                    file_path,
+                    enclosing_func,
+                    call_ordinal,
+                    analysis_rules,
+                    &mut loop_breaks,
+                    &mut loop_continues,
+                    throw_targets,
+                );
+                // Add True edges from condition chain to body
+                if body_first.index() < g.node_count() {
+                    connect_all(g, &true_exits, body_first, EdgeKind::True);
+                }
+
+                // Back-edges go to header (not into the condition chain)
+                for &e in &body_exits {
+                    connect_all(g, &[e], header, EdgeKind::Back);
+                }
+                for &c in &loop_continues {
+                    connect_all(g, &[c], header, EdgeKind::Back);
+                }
+
+                // Loop exits = false_exits + breaks
+                let mut exits: Vec<NodeIndex> = false_exits;
+                exits.extend(loop_breaks);
+                exits
+            } else {
+                let body_exits = build_sub(
+                    body,
+                    &[header],
+                    g,
+                    lang,
+                    code,
+                    summaries,
+                    file_path,
+                    enclosing_func,
+                    call_ordinal,
+                    analysis_rules,
+                    &mut loop_breaks,
+                    &mut loop_continues,
+                    throw_targets,
+                );
+
+                // Back‑edge for every linear exit → header.
+                for &e in &body_exits {
+                    connect_all(g, &[e], header, EdgeKind::Back);
+                }
+                // Wire continue targets as back edges to header
+                for &c in &loop_continues {
+                    connect_all(g, &[c], header, EdgeKind::Back);
+                }
+                // Falling out of the loop = header’s false branch +
+                // any break targets that exit the loop.
+                let mut exits = vec![header];
+                exits.extend(loop_breaks);
+                exits
             }
-            // Wire continue targets as back edges to header
-            for &c in &loop_continues {
-                connect_all(g, &[c], header, EdgeKind::Back);
-            }
-            // Falling out of the loop = header’s false branch +
-            // any break targets that exit the loop.
-            let mut exits = vec![header];
-            exits.extend(loop_breaks);
-            exits
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -2654,5 +2925,243 @@ mod cfg_tests {
             catch_param_nodes.is_empty(),
             "catch without parameter should not create a catch_param node"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Short-circuit evaluation tests
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Helper: collect all If nodes from the CFG.
+    fn if_nodes(cfg: &Cfg) -> Vec<NodeIndex> {
+        cfg.node_indices()
+            .filter(|&n| cfg[n].kind == StmtKind::If)
+            .collect()
+    }
+
+    /// Helper: check if an edge of the given kind exists from `src` to `dst`.
+    fn has_edge(cfg: &Cfg, src: NodeIndex, dst: NodeIndex, kind_match: fn(&EdgeKind) -> bool) -> bool {
+        cfg.edges(src).any(|e| e.target() == dst && kind_match(e.weight()))
+    }
+
+    #[test]
+    fn js_if_and_short_circuit() {
+        // `if (a && b) { then(); }`
+        // Should produce 2 If nodes: [a] --True--> [b]
+        // False from a → else-path, False from b → else-path
+        let src = b"function f() { if (a && b) { then(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let ifs = if_nodes(&cfg);
+        assert_eq!(ifs.len(), 2, "Expected 2 If nodes for `a && b`, got {}", ifs.len());
+
+        // Find which is `a` and which is `b` by condition_vars
+        let a_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"a".to_string())).copied().unwrap();
+        let b_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"b".to_string())).copied().unwrap();
+
+        // True edge from a to b
+        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
+            "Expected True edge from a to b");
+
+        // Both a and b should have False edges going somewhere (else-path)
+        let a_false: Vec<_> = cfg.edges(a_node).filter(|e| matches!(e.weight(), EdgeKind::False)).collect();
+        let b_false: Vec<_> = cfg.edges(b_node).filter(|e| matches!(e.weight(), EdgeKind::False)).collect();
+        assert!(!a_false.is_empty(), "Expected False edge from a");
+        assert!(!b_false.is_empty(), "Expected False edge from b");
+    }
+
+    #[test]
+    fn js_if_or_short_circuit() {
+        // `if (a || b) { then(); }`
+        // Should produce 2 If nodes: [a] --False--> [b]
+        // True from a → then-path, True from b → then-path
+        let src = b"function f() { if (a || b) { then(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let ifs = if_nodes(&cfg);
+        assert_eq!(ifs.len(), 2, "Expected 2 If nodes for `a || b`, got {}", ifs.len());
+
+        let a_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"a".to_string())).copied().unwrap();
+        let b_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"b".to_string())).copied().unwrap();
+
+        // False edge from a to b
+        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::False)),
+            "Expected False edge from a to b");
+
+        // Both a and b should have True edges
+        let a_true: Vec<_> = cfg.edges(a_node).filter(|e| matches!(e.weight(), EdgeKind::True)).collect();
+        let b_true: Vec<_> = cfg.edges(b_node).filter(|e| matches!(e.weight(), EdgeKind::True)).collect();
+        assert!(!a_true.is_empty(), "Expected True edge from a");
+        assert!(!b_true.is_empty(), "Expected True edge from b");
+    }
+
+    #[test]
+    fn js_if_nested_and_or() {
+        // `if (a && (b || c)) { then(); }`
+        // 3 If nodes: [a] --True--> [b], [b] --False--> [c]
+        // True from b or c → then; False from a or c → else
+        let src = b"function f() { if (a && (b || c)) { then(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let ifs = if_nodes(&cfg);
+        assert_eq!(ifs.len(), 3, "Expected 3 If nodes for `a && (b || c)`, got {}", ifs.len());
+
+        let a_node = ifs.iter().find(|&&n| {
+            let vars = &cfg[n].condition_vars;
+            vars.contains(&"a".to_string()) && vars.len() == 1
+        }).copied().unwrap();
+        let b_node = ifs.iter().find(|&&n| {
+            let vars = &cfg[n].condition_vars;
+            vars.contains(&"b".to_string()) && vars.len() == 1
+        }).copied().unwrap();
+        let c_node = ifs.iter().find(|&&n| {
+            let vars = &cfg[n].condition_vars;
+            vars.contains(&"c".to_string()) && vars.len() == 1
+        }).copied().unwrap();
+
+        // a --True--> b
+        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)));
+        // b --False--> c
+        assert!(has_edge(&cfg, b_node, c_node, |e| matches!(e, EdgeKind::False)));
+    }
+
+    #[test]
+    fn js_while_and_short_circuit() {
+        // `while (a && b) { body(); }`
+        // Loop header + 2 If nodes, back-edge goes to header
+        let src = b"function f() { while (a && b) { body(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let ifs = if_nodes(&cfg);
+        assert_eq!(ifs.len(), 2, "Expected 2 If nodes in while condition, got {}", ifs.len());
+
+        // There should be a Loop header
+        let loop_headers: Vec<_> = cfg.node_indices()
+            .filter(|&n| cfg[n].kind == StmtKind::Loop)
+            .collect();
+        assert_eq!(loop_headers.len(), 1, "Expected 1 Loop header");
+        let header = loop_headers[0];
+
+        // Back-edges should go to header
+        let back_edges: Vec<_> = cfg.edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Back))
+            .collect();
+        assert!(!back_edges.is_empty(), "Expected back edges");
+        for e in &back_edges {
+            assert_eq!(e.target(), header, "Back edge should go to loop header, not into condition chain");
+        }
+    }
+
+    #[test]
+    fn python_if_and() {
+        // Python uses `boolean_operator` with `and` token
+        let src = b"def f():\n    if a and b:\n        pass\n";
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
+
+        let ifs = if_nodes(&cfg);
+        assert_eq!(ifs.len(), 2, "Expected 2 If nodes for Python `a and b`, got {}", ifs.len());
+
+        let a_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"a".to_string())).copied().unwrap();
+        let b_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"b".to_string())).copied().unwrap();
+
+        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
+            "Expected True edge from a to b in Python and");
+    }
+
+    #[test]
+    fn ruby_unless_and() {
+        // `unless a && b` — chain built, branches swapped
+        // Body should run when condition is false
+        let src = b"def f\n  unless a && b\n    x\n  end\nend\n";
+        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+        let ifs = if_nodes(&cfg);
+        assert_eq!(ifs.len(), 2, "Expected 2 If nodes for Ruby `unless a && b`, got {}", ifs.len());
+
+        let a_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"a".to_string())).copied().unwrap();
+        let b_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"b".to_string())).copied().unwrap();
+
+        // Still has True edge from a to b (the chain is the same)
+        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
+            "Expected True edge from a to b in unless");
+
+        // For `unless`, the False exits should connect to the body with False edge
+        // (since body runs when condition is false)
+        let a_false_targets: Vec<_> = cfg.edges(a_node)
+            .filter(|e| matches!(e.weight(), EdgeKind::False))
+            .map(|e| e.target())
+            .collect();
+        // a's false exit should connect to the body (not to a pass-through)
+        // because for `unless (a && b)`, when a is false the full condition is false,
+        // meaning the body should execute
+        assert!(!a_false_targets.is_empty(), "a should have False edges in unless");
+    }
+
+    #[test]
+    fn while_short_circuit_continue() {
+        // `while (a && b) { if (cond) { continue; } body(); }`
+        // Verify continue goes to loop header
+        let src = b"function f() { while (a && b) { if (cond) { continue; } body(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let loop_headers: Vec<_> = cfg.node_indices()
+            .filter(|&n| cfg[n].kind == StmtKind::Loop)
+            .collect();
+        assert_eq!(loop_headers.len(), 1);
+        let header = loop_headers[0];
+
+        // Continue nodes should have back-edge to header
+        let continue_nodes: Vec<_> = cfg.node_indices()
+            .filter(|&n| cfg[n].kind == StmtKind::Continue)
+            .collect();
+        assert!(!continue_nodes.is_empty(), "Expected continue node");
+        for &cont in &continue_nodes {
+            assert!(has_edge(&cfg, cont, header, |e| matches!(e, EdgeKind::Back)),
+                "Continue should have back-edge to loop header");
+        }
+    }
+
+    #[test]
+    fn negated_boolean_no_decomposition() {
+        // `!(a && b)` should NOT be decomposed (De Morgan out of scope)
+        let src = b"function f() { if (!(a && b)) { then(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let ifs = if_nodes(&cfg);
+        // Should be exactly 1 If node (no decomposition)
+        assert_eq!(ifs.len(), 1, "Negated boolean should NOT be decomposed, got {} If nodes", ifs.len());
+    }
+
+    #[test]
+    fn js_triple_and_chain() {
+        // `if (a && b && c) { then(); }`
+        // Tree-sitter parses as `(a && b) && c` → left-to-right chain
+        let src = b"function f() { if (a && b && c) { then(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let ifs = if_nodes(&cfg);
+        assert_eq!(ifs.len(), 3, "Expected 3 If nodes for `a && b && c`, got {}", ifs.len());
+    }
+
+    #[test]
+    fn js_or_precedence_with_and() {
+        // `if (a || b && c) { then(); }`
+        // Tree-sitter respects precedence: `a || (b && c)`
+        // → [a] --False--> [b] --True--> [c]
+        // True from a or c → then; False from c (and b) → else
+        let src = b"function f() { if (a || b && c) { then(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let ifs = if_nodes(&cfg);
+        assert_eq!(ifs.len(), 3, "Expected 3 If nodes for `a || b && c`, got {}", ifs.len());
     }
 }
