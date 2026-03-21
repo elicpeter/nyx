@@ -15,13 +15,13 @@ pub struct AuthGap;
 /// Shell execution, file I/O, and similar sensitive operations.
 fn is_privileged_sink(info: &crate::cfg::NodeInfo) -> bool {
     use crate::labels::Cap;
-    match info.label {
-        Some(DataLabel::Sink(caps)) => {
-            // Shell execution or file I/O are privileged
+    info.labels.iter().any(|l| {
+        if let DataLabel::Sink(caps) = l {
             caps.intersects(Cap::SHELL_ESCAPE | Cap::FILE_IO)
+        } else {
+            false
         }
-        _ => false,
-    }
+    })
 }
 
 /// Web handler parameter patterns by language.

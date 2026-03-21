@@ -174,7 +174,7 @@ mod tests {
         NodeInfo {
             kind,
             span: (0, 0),
-            label: None,
+            labels: smallvec::SmallVec::new(),
             defines: None,
             uses: vec![],
             callee: None,

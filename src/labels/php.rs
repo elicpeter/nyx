@@ -90,9 +90,6 @@ pub static RULES: &[LabelRule] = &[
     },
     // NOTE: `file_get_contents` can fetch URLs (SSRF vector) and local files (LFI vector).
     // As a Sink(SSRF) it only fires when the argument is tainted.
-    // KNOWN ISSUE: `file_get_contents` is also labeled Source(Cap::all()) at rule index 1;
-    // since classify() returns the first match, this Source label takes priority and the
-    // SSRF sink label is effectively dead. Fixing dual-label ordering is out of scope here.
     LabelRule {
         matchers: &["file_get_contents", "curl_exec"],
         label: DataLabel::Sink(Cap::SSRF),

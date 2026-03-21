@@ -299,7 +299,7 @@ mod tests {
         let info = NodeInfo {
             kind: StmtKind::Call,
             span: (0, 10),
-            label: None,
+            labels: smallvec::SmallVec::new(),
             defines: Some("f".into()),
             uses: vec![],
             callee: Some("fopen".into()),
@@ -337,7 +337,7 @@ mod tests {
         let info = NodeInfo {
             kind: StmtKind::Call,
             span: (10, 20),
-            label: None,
+            labels: smallvec::SmallVec::new(),
             defines: None,
             uses: vec!["f".into()],
             callee: Some("fclose".into()),
@@ -374,7 +374,7 @@ mod tests {
         let info = NodeInfo {
             kind: StmtKind::Call,
             span: (20, 30),
-            label: None,
+            labels: smallvec::SmallVec::new(),
             defines: None,
             uses: vec!["f".into()],
             callee: Some("fclose".into()),
@@ -412,7 +412,7 @@ mod tests {
         let info = NodeInfo {
             kind: StmtKind::Call,
             span: (30, 40),
-            label: None,
+            labels: smallvec::SmallVec::new(),
             defines: None,
             uses: vec!["f".into()],
             callee: Some("fread".into()),

@@ -202,10 +202,13 @@ fn find_acquire_span(
 
 /// Check if a node is a privileged sink (shell execution or file I/O).
 fn is_privileged_sink(info: &crate::cfg::NodeInfo) -> bool {
-    match info.label {
-        Some(DataLabel::Sink(caps)) => caps.intersects(Cap::SHELL_ESCAPE | Cap::FILE_IO),
-        _ => false,
-    }
+    info.labels.iter().any(|l| {
+        if let DataLabel::Sink(caps) = l {
+            caps.intersects(Cap::SHELL_ESCAPE | Cap::FILE_IO)
+        } else {
+            false
+        }
+    })
 }
 
 /// Simplified web entrypoint check (avoids AnalysisContext dependency).
@@ -273,7 +276,7 @@ mod tests {
         NodeInfo {
             kind,
             span: (0, 0),
-            label: None,
+            labels: smallvec::SmallVec::new(),
             defines: None,
             uses: vec![],
             callee: None,

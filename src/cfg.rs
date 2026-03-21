@@ -3,9 +3,10 @@ use petgraph::prelude::*;
 use tracing::debug;
 use tree_sitter::{Node, Tree};
 
-use crate::labels::{Cap, DataLabel, Kind, LangAnalysisRules, classify, classify_gated_sink, lookup, param_config};
+use crate::labels::{Cap, DataLabel, Kind, LangAnalysisRules, classify, classify_all, classify_gated_sink, lookup, param_config};
 use crate::summary::FuncSummary;
 use crate::symbol::{FuncKey, Lang};
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 
 /// -------------------------------------------------------------------------
@@ -40,7 +41,7 @@ const MAX_COND_VARS: usize = 8;
 pub struct NodeInfo {
     pub kind: StmtKind,
     pub span: (usize, usize),     // byte offsets in the original file
-    pub label: Option<DataLabel>, // taint classification if any
+    pub labels: SmallVec<[DataLabel; 2]>, // taint classifications (multi-label)
     pub defines: Option<String>,  // variable written by this stmt
     pub uses: Vec<String>,        // variables read
     pub callee: Option<String>,
@@ -813,11 +814,11 @@ fn push_node<'a>(
     /* ── 2.  LABEL LOOK-UP  ───────────────────────────────────────────── */
 
     let extra = analysis_rules.map(|r| r.extra_labels.as_slice());
-    let mut label = classify(lang, &text, extra);
+    let mut labels = classify_all(lang, &text, extra);
 
     // If the outermost call didn't classify, try inner/nested calls.
     // E.g. `str(eval(expr))` — `str` is not a sink, but `eval` is.
-    if label.is_none()
+    if labels.is_empty()
         && matches!(
             lookup(lang, ast.kind()),
             Kind::CallWrapper | Kind::Assignment | Kind::Return
@@ -825,7 +826,7 @@ fn push_node<'a>(
         && let Some((inner_text, inner_label)) =
             find_classifiable_inner_call(ast, lang, code, extra)
     {
-        label = Some(inner_label);
+        labels.push(inner_label);
         text = inner_text;
     }
 
@@ -836,7 +837,7 @@ fn push_node<'a>(
     //
     // This covers both direct `Kind::Assignment` nodes and `Kind::CallWrapper`
     // nodes (expression_statement) that wrap an assignment.
-    if label.is_none() {
+    if labels.is_empty() {
         let assign_node = if matches!(lookup(lang, ast.kind()), Kind::Assignment) {
             Some(ast)
         } else if matches!(lookup(lang, ast.kind()), Kind::CallWrapper) {
@@ -854,15 +855,19 @@ fn push_node<'a>(
             // Try full member expression first (e.g. "location.href") — more
             // specific and avoids false positives on `a.href`.
             if let Some(full) = member_expr_text(lhs, code) {
-                label = classify(lang, &full, extra);
+                if let Some(l) = classify(lang, &full, extra) {
+                    labels.push(l);
+                }
             }
             // Fall back to property-only (e.g. "innerHTML") for sinks that
             // don't need object context.
-            if label.is_none()
+            if labels.is_empty()
                 && let Some(prop) = lhs.child_by_field_name("property")
                 && let Some(prop_text) = text_of(prop, code)
             {
-                label = classify(lang, &prop_text, extra);
+                if let Some(l) = classify(lang, &prop_text, extra) {
+                    labels.push(l);
+                }
             }
         }
     }
@@ -871,14 +876,14 @@ fn push_node<'a>(
     // try to classify the member expression text as a source.
     // This handles `var x = process.env.CMD` (JS), `os.environ["KEY"]` (Python),
     // and similar property-access-based source patterns.
-    if label.is_none()
+    if labels.is_empty()
         && matches!(
             lookup(lang, ast.kind()),
             Kind::CallWrapper | Kind::Assignment
         )
         && let Some(found) = first_member_label(ast, lang, code, extra)
     {
-        label = Some(found);
+        labels.push(found);
         // Update text so the callee name reflects the source
         if let Some(member_text) = first_member_text(ast, code) {
             text = member_text;
@@ -888,7 +893,7 @@ fn push_node<'a>(
     // For `if let` / `while let` patterns: try to classify the value expression
     // in the let-condition as a source/sink.  E.g. `if let Ok(cmd) = env::var("CMD")`
     // should recognise `env::var` as a taint source and label this node accordingly.
-    if label.is_none()
+    if labels.is_empty()
         && matches!(lookup(lang, ast.kind()), Kind::If | Kind::While)
         && let Some(cond) = ast.child_by_field_name("condition")
         && cond.kind() == "let_condition"
@@ -897,14 +902,14 @@ fn push_node<'a>(
         if let Some(ident) = first_call_ident(val, lang, code)
             && let Some(l) = classify(lang, &ident, extra)
         {
-            label = Some(l);
+            labels.push(l);
             text = ident;
         }
-        if label.is_none()
+        if labels.is_empty()
             && let Some(ident_text) = text_of(val, code)
             && let Some(l) = classify(lang, &ident_text, extra)
         {
-            label = Some(l);
+            labels.push(l);
             text = ident_text;
         }
     }
@@ -915,12 +920,12 @@ fn push_node<'a>(
     // Gated sinks: argument-sensitive classification (e.g., setAttribute).
     // Runs for any node containing a classifiable call, regardless of StmtKind.
     let mut sink_payload_args: Option<Vec<usize>> = None;
-    if label.is_none() {
+    if labels.is_empty() {
         if let Some(cn) = call_ast {
             if let Some((gated_label, payload)) = classify_gated_sink(lang, &text, |idx| {
                 extract_const_string_arg(cn, idx, code)
             }) {
-                label = Some(gated_label);
+                labels.push(gated_label);
                 if !payload.is_empty() {
                     sink_payload_args = Some(payload.to_vec());
                 }
@@ -934,7 +939,7 @@ fn push_node<'a>(
 
     let (defines, uses) = def_use(ast, lang, code);
 
-    let callee = if kind == StmtKind::Call || label.is_some() {
+    let callee = if kind == StmtKind::Call || !labels.is_empty() {
         Some(text.clone())
     } else {
         None
@@ -984,7 +989,7 @@ fn push_node<'a>(
     let idx = g.add_node(NodeInfo {
         kind,
         span,
-        label,
+        labels,
         defines,
         uses,
         callee,
@@ -1001,12 +1006,12 @@ fn push_node<'a>(
 
     debug!(
         target: "cfg",
-        "node {} ← {:?} txt=`{}` span={:?} label={:?}",
+        "node {} ← {:?} txt=`{}` span={:?} labels={:?}",
         idx.index(),
         kind,
         text,
         span,
-        label
+        g[idx].labels
     );
     idx
 }
@@ -1254,7 +1259,7 @@ fn build_try<'a>(
                 let synth = g.add_node(NodeInfo {
                     kind: StmtKind::Seq,
                     span: (catch_node.start_byte(), catch_node.start_byte()),
-                    label: None,
+                    labels: SmallVec::new(),
                     defines: Some(name.clone()),
                     uses: Vec::new(),
                     callee: None,
@@ -1474,7 +1479,7 @@ fn build_sub<'a>(
                 let pass = g.add_node(NodeInfo {
                     kind: StmtKind::Seq,
                     span: (ast.end_byte(), ast.end_byte()),
-                    label: None,
+                    labels: SmallVec::new(),
                     defines: None,
                     uses: Vec::new(),
                     callee: None,
@@ -1903,21 +1908,20 @@ fn build_sub<'a>(
                 }
 
                 // record explicit label caps (all three independently)
-                if let Some(DataLabel::Source(bits)) = info.label {
-                    fn_src_bits |= bits;
-                }
-                if let Some(DataLabel::Sanitizer(bits)) = info.label {
-                    fn_sani_bits |= bits;
-                }
-                if let Some(DataLabel::Sink(bits)) = info.label {
-                    fn_sink_bits |= bits;
-
-                    // check whether any param flows to this sink
-                    for u in &info.uses {
-                        if let Some(pos) = param_names.iter().position(|p| p == u)
-                            && !tainted_sink_params.contains(&pos)
-                        {
-                            tainted_sink_params.push(pos);
+                for lbl in &info.labels {
+                    match *lbl {
+                        DataLabel::Source(bits) => fn_src_bits |= bits,
+                        DataLabel::Sanitizer(bits) => fn_sani_bits |= bits,
+                        DataLabel::Sink(bits) => {
+                            fn_sink_bits |= bits;
+                            // check whether any param flows to this sink
+                            for u in &info.uses {
+                                if let Some(pos) = param_names.iter().position(|p| p == u)
+                                    && !tainted_sink_params.contains(&pos)
+                                {
+                                    tainted_sink_params.push(pos);
+                                }
+                            }
                         }
                     }
                 }
@@ -1932,7 +1936,7 @@ fn build_sub<'a>(
 
                 //  b) apply this node’s own label
                 let mut out_bits = in_bits;
-                if let Some(lab) = &info.label {
+                for lab in &info.labels {
                     match *lab {
                         DataLabel::Source(bits) => out_bits |= bits,
                         DataLabel::Sanitizer(bits) => out_bits &= !bits,
@@ -2027,7 +2031,7 @@ fn build_sub<'a>(
             let exit_idx = g.add_node(NodeInfo {
                 kind: StmtKind::Return,
                 span: (ast.start_byte(), ast.end_byte()),
-                label: None,
+                labels: SmallVec::new(),
                 defines: None,
                 uses: Vec::new(),
                 callee: None,
@@ -2300,7 +2304,7 @@ pub(crate) fn build_cfg<'a>(
     let entry = g.add_node(NodeInfo {
         kind: StmtKind::Entry,
         span: (0, 0),
-        label: None,
+        labels: SmallVec::new(),
         defines: None,
         uses: Vec::new(),
         callee: None,
@@ -2317,7 +2321,7 @@ pub(crate) fn build_cfg<'a>(
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
         span: (code.len(), code.len()),
-        label: None,
+        labels: SmallVec::new(),
         defines: None,
         uses: Vec::new(),
         callee: None,

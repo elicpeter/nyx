@@ -12,6 +12,7 @@ mod typescript;
 use bitflags::bitflags;
 use once_cell::sync::Lazy;
 use phf::Map;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 
 /// A single rule: if the AST text equals (or ends with) one of the `matchers`,
@@ -508,6 +509,101 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     None
 }
 
+/// Classify a piece of syntax text, returning **all** matching labels.
+///
+/// Same two-pass (exact/suffix then prefix) structure as [`classify()`], but
+/// collects every match instead of returning on first hit.  Deduplicates
+/// exact `(variant, caps)` pairs.
+pub fn classify_all(
+    lang: &str,
+    text: &str,
+    extra: Option<&[RuntimeLabelRule]>,
+) -> SmallVec<[DataLabel; 2]> {
+    let head = text.split(['(', '<']).next().unwrap_or("");
+    let trimmed = head.trim().as_bytes();
+
+    let full_normalized = normalize_chained_call(text);
+    let full_norm_bytes = full_normalized.as_bytes();
+
+    let mut out: SmallVec<[DataLabel; 2]> = SmallVec::new();
+
+    // Helper: push if not already present (dedup by variant+caps equality).
+    #[inline]
+    fn push_dedup(out: &mut SmallVec<[DataLabel; 2]>, label: DataLabel) {
+        if !out.contains(&label) {
+            out.push(label);
+        }
+    }
+
+    // ── Check runtime (config) rules first — they take priority ──────
+    if let Some(extras) = extra {
+        // Pass 1: exact / suffix
+        for rule in extras {
+            for raw in &rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_') {
+                    continue;
+                }
+                if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                    || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
+                {
+                    push_dedup(&mut out, rule.label);
+                }
+            }
+        }
+        // Pass 2: prefix
+        for rule in extras {
+            for raw in &rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_')
+                    && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                        || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
+                {
+                    push_dedup(&mut out, rule.label);
+                }
+            }
+        }
+    }
+
+    // ── Built-in static rules ────────────────────────────────────────
+    let rules = REGISTRY.get(lang).or_else(|| {
+        let key = lang.to_ascii_lowercase();
+        REGISTRY.get(key.as_str())
+    });
+
+    if let Some(rules) = rules {
+        // Pass 1: exact / suffix matches (high confidence)
+        for rule in *rules {
+            for raw in rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_') {
+                    continue;
+                }
+                if match_suffix_cs(trimmed, m, rule.case_sensitive)
+                    || match_suffix_cs(full_norm_bytes, m, rule.case_sensitive)
+                {
+                    push_dedup(&mut out, rule.label);
+                }
+            }
+        }
+
+        // Pass 2: prefix matches (catch-all, lower priority)
+        for rule in *rules {
+            for raw in rule.matchers {
+                let m = raw.as_bytes();
+                if m.last() == Some(&b'_')
+                    && (starts_with_cs(trimmed, m, rule.case_sensitive)
+                        || starts_with_cs(full_norm_bytes, m, rule.case_sensitive))
+                {
+                    push_dedup(&mut out, rule.label);
+                }
+            }
+        }
+    }
+
+    out
+}
+
 /// Classify a call against gated sink rules.
 ///
 /// Returns `Some((label, payload_args))` if the callee matches a gated rule AND the
@@ -807,5 +903,44 @@ mod tests {
             }
         });
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_all_single_label() {
+        let result = classify_all("javascript", "innerHTML", None);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], DataLabel::Sink(Cap::HTML_ESCAPE));
+    }
+
+    #[test]
+    fn classify_all_dual_label_php() {
+        let result = classify_all("php", "file_get_contents", None);
+        assert!(result.len() >= 2, "expected dual label, got {:?}", result);
+        assert!(
+            result.contains(&DataLabel::Source(Cap::all())),
+            "expected Source(all), got {:?}",
+            result
+        );
+        assert!(
+            result.contains(&DataLabel::Sink(Cap::SSRF)),
+            "expected Sink(SSRF), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn classify_all_dual_label_java() {
+        let result = classify_all("java", "readObject", None);
+        assert!(result.len() >= 2, "expected dual label, got {:?}", result);
+        assert!(
+            result.contains(&DataLabel::Source(Cap::all())),
+            "expected Source(all), got {:?}",
+            result
+        );
+        assert!(
+            result.contains(&DataLabel::Sink(Cap::DESERIALIZE)),
+            "expected Sink(DESERIALIZE), got {:?}",
+            result
+        );
     }
 }

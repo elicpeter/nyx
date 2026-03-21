@@ -38,7 +38,7 @@ pub fn find_exit_node(cfg: &Cfg) -> Option<NodeIndex> {
 /// Find all nodes that are sinks (have DataLabel::Sink).
 pub fn find_sink_nodes(cfg: &Cfg) -> Vec<NodeIndex> {
     cfg.node_indices()
-        .filter(|&idx| matches!(cfg[idx].label, Some(DataLabel::Sink(_))))
+        .filter(|&idx| cfg[idx].labels.iter().any(|l| matches!(l, DataLabel::Sink(_))))
         .collect()
 }
 

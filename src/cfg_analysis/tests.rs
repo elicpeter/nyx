@@ -670,8 +670,8 @@ fn taint_and_unguarded_sink_deduped() {
         .node_indices()
         .find(|&idx| {
             matches!(
-                cfg_graph[idx].label,
-                Some(crate::labels::DataLabel::Sink(_))
+                cfg_graph[idx].labels.iter().any(|l| matches!(l, crate::labels::DataLabel::Sink(_))),
+                true
             )
         })
         .expect("test code should have a sink node");
@@ -915,7 +915,7 @@ fn location_href_assignment_is_sink() {
 
     let has_sink = cfg
         .node_indices()
-        .any(|idx| matches!(cfg[idx].label, Some(crate::labels::DataLabel::Sink(_))));
+        .any(|idx| cfg[idx].labels.iter().any(|l| matches!(l, crate::labels::DataLabel::Sink(_))));
     assert!(has_sink, "location.href = url should produce a Sink node");
 }
 
@@ -935,7 +935,7 @@ fn a_href_assignment_is_not_sink() {
 
     let has_sink = cfg
         .node_indices()
-        .any(|idx| matches!(cfg[idx].label, Some(crate::labels::DataLabel::Sink(_))));
+        .any(|idx| cfg[idx].labels.iter().any(|l| matches!(l, crate::labels::DataLabel::Sink(_))));
     assert!(
         !has_sink,
         "el.href = '/about' should NOT produce a Sink node"

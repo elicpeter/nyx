@@ -1,0 +1,15 @@
+{
+  "description": "Deserialization + command injection: readObject (Source+Sink) flows to Runtime.exec",
+  "tags": ["taint", "deser", "cmdi", "multi-label"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 8],
+      "evidence_contains": [],
+      "notes": "readObject has dual Source+Sink(DESERIALIZE) labels; Source taints obj, which flows to Runtime.exec"
+    }
+  ]
+}

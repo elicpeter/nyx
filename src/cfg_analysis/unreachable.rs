@@ -66,34 +66,32 @@ impl CfgAnalysis for UnreachableCode {
                 continue;
             }
 
-            let (rule_id, title, severity) = match info.label {
-                Some(DataLabel::Sanitizer(_)) => (
-                    "cfg-unreachable-sanitizer",
-                    "Unreachable sanitizer",
-                    Severity::Medium,
-                ),
-                Some(DataLabel::Sink(_)) => {
-                    ("cfg-unreachable-sink", "Unreachable sink", Severity::Medium)
-                }
-                Some(DataLabel::Source(_)) => (
-                    "cfg-unreachable-source",
-                    "Unreachable source",
-                    Severity::Low,
-                ),
-                _ => {
-                    // Check if it's a guard/auth call
-                    if super::is_guard_call(info, ctx.lang, ctx.analysis_rules)
-                        || super::is_auth_call(info, ctx.lang)
-                    {
-                        (
-                            "cfg-unreachable-guard",
-                            "Unreachable guard/auth check",
-                            Severity::Medium,
-                        )
-                    } else {
-                        // Plain unreachable code — low severity
-                        continue;
-                    }
+            // Check labels in priority order: Sink > Sanitizer > Source
+            let label_classification = if info.labels.iter().any(|l| matches!(l, DataLabel::Sink(_))) {
+                Some(("cfg-unreachable-sink", "Unreachable sink", Severity::Medium))
+            } else if info.labels.iter().any(|l| matches!(l, DataLabel::Sanitizer(_))) {
+                Some(("cfg-unreachable-sanitizer", "Unreachable sanitizer", Severity::Medium))
+            } else if info.labels.iter().any(|l| matches!(l, DataLabel::Source(_))) {
+                Some(("cfg-unreachable-source", "Unreachable source", Severity::Low))
+            } else {
+                None
+            };
+
+            let (rule_id, title, severity) = if let Some(lc) = label_classification {
+                lc
+            } else {
+                // Check if it's a guard/auth call
+                if super::is_guard_call(info, ctx.lang, ctx.analysis_rules)
+                    || super::is_auth_call(info, ctx.lang)
+                {
+                    (
+                        "cfg-unreachable-guard",
+                        "Unreachable guard/auth check",
+                        Severity::Medium,
+                    )
+                } else {
+                    // Plain unreachable code — low severity
+                    continue;
                 }
             };
 

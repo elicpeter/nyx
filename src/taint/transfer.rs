@@ -88,20 +88,38 @@ impl Transfer<TaintState> for TaintTransfer<'_> {
             }
             // Skip normal label/assignment processing — this is a synthetic node.
         } else {
-            // ── Apply taint transfer ────────────────────────────────────────
-            match info.label {
-                Some(DataLabel::Source(bits)) => {
-                    self.apply_source(node, info, bits, &mut state);
+            // ── Apply taint transfer (multi-label) ────────────────────────
+            // 1. Apply all Source labels (introduce taint on defined var)
+            for lbl in &info.labels {
+                if let DataLabel::Source(bits) = lbl {
+                    self.apply_source(node, info, *bits, &mut state);
                 }
-                Some(DataLabel::Sanitizer(bits)) => {
-                    self.apply_sanitizer(info, bits, &mut state);
+            }
+
+            // 2. Apply all Sanitizer labels (strip caps from defined var)
+            for lbl in &info.labels {
+                if let DataLabel::Sanitizer(bits) = lbl {
+                    self.apply_sanitizer(info, *bits, &mut state);
                 }
-                _ if info.kind == StmtKind::Call => {
+            }
+
+            // 3. Normal call/assignment behavior — always runs when applicable
+            let has_source_or_sanitizer = info
+                .labels
+                .iter()
+                .any(|l| matches!(l, DataLabel::Source(_) | DataLabel::Sanitizer(_)));
+            if !has_source_or_sanitizer {
+                // No explicit labels handled the defined var — use default path
+                if info.kind == StmtKind::Call {
                     self.apply_call(node, info, caller_func, &mut state);
-                }
-                _ => {
+                } else {
                     self.apply_assignment(info, &mut state);
                 }
+            } else if info.kind == StmtKind::Call {
+                // Has Source/Sanitizer labels AND is a call — still run apply_call
+                // so callee summary resolution, propagation, and sanitizer behavior
+                // from summaries are preserved.
+                self.apply_call(node, info, caller_func, &mut state);
             }
         }
 
@@ -318,10 +336,11 @@ impl TaintTransfer<'_> {
 
     /// Default gen/kill: propagate taint through variable assignments.
     fn apply_assignment(&self, info: &NodeInfo, state: &mut TaintState) {
-        if matches!(
-            info.label,
-            Some(DataLabel::Source(_)) | Some(DataLabel::Sanitizer(_))
-        ) {
+        if info
+            .labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Source(_) | DataLabel::Sanitizer(_)))
+        {
             return;
         }
 
@@ -435,15 +454,22 @@ impl TaintTransfer<'_> {
 
     /// Resolve sink caps from label or callee summary.
     fn resolve_sink_caps(&self, info: &NodeInfo, caller_func: &str) -> Cap {
-        match info.label {
-            Some(DataLabel::Sink(caps)) => caps,
-            _ => info
-                .callee
+        let label_sink_caps = info.labels.iter().fold(Cap::empty(), |acc, lbl| {
+            if let DataLabel::Sink(caps) = lbl {
+                acc | *caps
+            } else {
+                acc
+            }
+        });
+        if !label_sink_caps.is_empty() {
+            label_sink_caps
+        } else {
+            info.callee
                 .as_ref()
                 .and_then(|c| self.resolve_callee(c, caller_func, info.call_ordinal))
                 .filter(|r| !r.sink_caps.is_empty())
                 .map(|r| r.sink_caps)
-                .unwrap_or(Cap::empty()),
+                .unwrap_or(Cap::empty())
         }
     }
 

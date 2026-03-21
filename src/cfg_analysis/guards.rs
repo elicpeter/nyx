@@ -33,7 +33,7 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
             if info.defines.as_deref() == Some(u.as_str()) {
                 // If the defining node has no uses (pure constant) and is not
                 // a Source, the variable is constant.
-                if info.uses.is_empty() && !matches!(info.label, Some(DataLabel::Source(_))) {
+                if info.uses.is_empty() && !info.labels.iter().any(|l| matches!(l, DataLabel::Source(_))) {
                     return true;
                 }
             }
@@ -144,7 +144,7 @@ fn sink_arg_is_source_derived(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
         if info.enclosing_func.as_deref() != sink_func {
             continue;
         }
-        if !matches!(info.label, Some(DataLabel::Source(_))) {
+        if !info.labels.iter().any(|l| matches!(l, DataLabel::Source(_))) {
             continue;
         }
         // Source node defines a variable that the sink reads → source-derived
@@ -212,10 +212,12 @@ impl CfgAnalysis for UnguardedSink {
 
         for sink in &sink_nodes {
             let sink_info = &ctx.cfg[*sink];
-            let sink_caps = match sink_info.label {
-                Some(DataLabel::Sink(caps)) => caps,
-                _ => continue,
-            };
+            let sink_caps = sink_info.labels.iter().fold(Cap::empty(), |acc, l| {
+                if let DataLabel::Sink(caps) = l { acc | *caps } else { acc }
+            });
+            if sink_caps.is_empty() {
+                continue;
+            }
 
             let sink_func = sink_info.enclosing_func.as_deref();
 
@@ -231,13 +233,15 @@ impl CfgAnalysis for UnguardedSink {
             // Also check if an inline sanitizer dominates this sink (same function).
             let has_sanitizer = ctx.cfg.node_indices().any(|idx| {
                 let node_func = ctx.cfg[idx].enclosing_func.as_deref();
-                if let Some(DataLabel::Sanitizer(san_caps)) = ctx.cfg[idx].label {
-                    (san_caps & sink_caps) != Cap::empty()
-                        && node_func == sink_func
-                        && dominates(&doms, idx, *sink)
-                } else {
-                    false
-                }
+                ctx.cfg[idx].labels.iter().any(|l| {
+                    if let DataLabel::Sanitizer(san_caps) = l {
+                        (*san_caps & sink_caps) != Cap::empty()
+                            && node_func == sink_func
+                            && dominates(&doms, idx, *sink)
+                    } else {
+                        false
+                    }
+                })
             });
 
             if is_guarded || has_sanitizer {
