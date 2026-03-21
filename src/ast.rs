@@ -1,9 +1,9 @@
-use crate::cfg::{build_cfg, export_summaries};
+use crate::cfg::{build_cfg, export_summaries, Cfg, FuncSummaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
 use crate::evidence::{Evidence, SpanEvidence, StateEvidence};
-use crate::labels::{build_lang_rules, severity_for_source_kind};
+use crate::labels::{build_lang_rules, severity_for_source_kind, LangAnalysisRules};
 use crate::patterns::{FindingCategory, Severity};
 use crate::state;
 use crate::summary::{FuncSummary, GlobalSummaries};
@@ -12,6 +12,8 @@ use crate::taint::analyse_file;
 use crate::utils::config::AnalysisMode;
 use crate::utils::ext::lowercase_ext;
 use crate::utils::{Config, query_cache};
+use petgraph::graph::NodeIndex;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::Path;
 use tree_sitter::{Language, QueryCursor, StreamingIterator};
@@ -228,6 +230,338 @@ fn downgrade_severity(s: Severity) -> Severity {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  ParsedSource + ParsedFile: shared parse/CFG pipeline
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Level 1: parsed tree + lang info. No CFG construction.
+struct ParsedSource<'a> {
+    tree: tree_sitter::Tree,
+    ts_lang: Language,
+    lang_slug: &'static str,
+    bytes: &'a [u8],
+    path: &'a Path,
+    file_path_str: Cow<'a, str>,
+}
+
+impl<'a> ParsedSource<'a> {
+    /// Parse bytes into a tree-sitter AST. Returns `None` for binary files or
+    /// unsupported languages.
+    fn try_new(bytes: &'a [u8], path: &'a Path) -> NyxResult<Option<Self>> {
+        if is_binary(bytes) {
+            return Ok(None);
+        }
+        let Some((ts_lang, lang_slug)) = lang_for_path(path) else {
+            return Ok(None);
+        };
+        let tree = PARSER.with(|cell| {
+            let mut parser = cell.borrow_mut();
+            parser.set_language(&ts_lang)?;
+            parser
+                .parse(bytes, None)
+                .ok_or_else(|| NyxError::Other("tree-sitter failed".into()))
+        })?;
+        let file_path_str = path.to_string_lossy();
+        Ok(Some(Self {
+            tree,
+            ts_lang,
+            lang_slug,
+            bytes,
+            path,
+            file_path_str,
+        }))
+    }
+
+    /// Run AST pattern queries and return diagnostics.
+    fn run_ast_queries(&self, cfg: &Config) -> Vec<Diag> {
+        let root = self.tree.root_node();
+        let compiled = query_cache::for_lang(self.lang_slug, self.ts_lang.clone());
+        let mut cursor = QueryCursor::new();
+        let mut out = Vec::new();
+
+        for cq in compiled.iter() {
+            if cq.meta.severity > cfg.scanner.min_severity {
+                continue;
+            }
+            let mut matches = cursor.matches(&cq.query, root, self.bytes);
+            while let Some(m) = matches.next() {
+                if let Some(cap) = m.captures.iter().find(|c| c.index == 0) {
+                    // Layer A: suppress Security findings on calls with all-literal args
+                    if cq.meta.category.finding_category() == FindingCategory::Security
+                        && is_call_all_args_literal(cap.node, self.bytes)
+                    {
+                        continue;
+                    }
+                    let point = cap.node.start_position();
+                    out.push(Diag {
+                        path: self.path.to_string_lossy().into_owned(),
+                        line: point.row + 1,
+                        col: point.column + 1,
+                        severity: cq.meta.severity,
+                        id: cq.meta.id.to_owned(),
+                        category: cq.meta.category.finding_category(),
+                        path_validated: false,
+                        guard_kind: None,
+                        message: Some(cq.meta.description.to_owned()),
+                        labels: vec![],
+                        confidence: Some(cq.meta.confidence),
+                        evidence: Some(Evidence {
+                            source: None,
+                            sink: Some(SpanEvidence {
+                                path: self.path.to_string_lossy().into_owned(),
+                                line: (point.row + 1) as u32,
+                                col: (point.column + 1) as u32,
+                                kind: "sink".into(),
+                                snippet: None,
+                            }),
+                            guards: vec![],
+                            sanitizers: vec![],
+                            state: None,
+                            notes: vec![],
+                        }),
+                        rank_score: None,
+                        rank_reason: None,
+                        suppressed: false,
+                        suppression: None,
+                        rollup: None,
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Sort, dedup, and optionally downgrade severity for non-production paths.
+    fn finalize_diags(&self, out: &mut Vec<Diag>, cfg: &Config) {
+        out.sort_by(|a, b| {
+            (a.line, a.col, &a.id, a.severity).cmp(&(b.line, b.col, &b.id, b.severity))
+        });
+        out.dedup_by(|a, b| {
+            a.line == b.line && a.col == b.col && a.id == b.id && a.severity == b.severity
+        });
+
+        if !cfg.scanner.include_nonprod && is_nonprod_path(self.path) {
+            for d in out.iter_mut() {
+                d.severity = downgrade_severity(d.severity);
+            }
+        }
+    }
+}
+
+/// Level 2: adds CFG graph, summaries, lang rules on top of ParsedSource.
+struct ParsedFile<'a> {
+    source: ParsedSource<'a>,
+    cfg_graph: Cfg,
+    entry: NodeIndex,
+    local_summaries: FuncSummaries,
+    lang_rules: LangAnalysisRules,
+    has_lang_rules: bool,
+}
+
+impl<'a> ParsedFile<'a> {
+    /// Build CFG + lang rules from a parsed source.
+    fn from_source(source: ParsedSource<'a>, cfg: &Config) -> Self {
+        let lang_rules = build_lang_rules(cfg, source.lang_slug);
+        let has_lang_rules = !lang_rules.extra_labels.is_empty()
+            || !lang_rules.terminators.is_empty()
+            || !lang_rules.event_handlers.is_empty();
+        let rules_ref = if has_lang_rules {
+            Some(&lang_rules)
+        } else {
+            None
+        };
+        let (cfg_graph, entry, local_summaries) = build_cfg(
+            &source.tree,
+            source.bytes,
+            source.lang_slug,
+            &source.file_path_str,
+            rules_ref,
+        );
+        Self {
+            source,
+            cfg_graph,
+            entry,
+            local_summaries,
+            lang_rules,
+            has_lang_rules,
+        }
+    }
+
+    fn rules_ref(&self) -> Option<&LangAnalysisRules> {
+        if self.has_lang_rules {
+            Some(&self.lang_rules)
+        } else {
+            None
+        }
+    }
+
+    fn export_summaries(&self) -> Vec<FuncSummary> {
+        export_summaries(
+            &self.local_summaries,
+            &self.source.file_path_str,
+            self.source.lang_slug,
+        )
+    }
+
+    /// Run taint analysis, CFG structural analyses, and state-model analysis.
+    fn run_cfg_analyses(
+        &self,
+        cfg: &Config,
+        global_summaries: Option<&GlobalSummaries>,
+        scan_root: Option<&Path>,
+    ) -> Vec<Diag> {
+        let mut out = Vec::new();
+        let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
+
+        // ── Taint analysis ──────────────────────────────────────────────
+        tracing::debug!("Running taint analysis on: {}", self.source.path.display());
+        tracing::debug!("Func summaries: {:?}", self.local_summaries);
+        let scan_root_str = scan_root.map(|p| p.to_string_lossy());
+        let namespace =
+            normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
+        let taint_results = analyse_file(
+            &self.cfg_graph,
+            self.entry,
+            &self.local_summaries,
+            global_summaries,
+            caller_lang,
+            &namespace,
+            &[],
+        );
+        for finding in &taint_results {
+            out.push(build_taint_diag(
+                finding,
+                &self.cfg_graph,
+                &self.source.tree,
+                self.source.path,
+            ));
+        }
+
+        // ── CFG structural analyses ─────────────────────────────────────
+        let taint_active = global_summaries.is_some() || !taint_results.is_empty();
+        let cfg_ctx = cfg_analysis::AnalysisContext {
+            cfg: &self.cfg_graph,
+            entry: self.entry,
+            lang: caller_lang,
+            file_path: &self.source.file_path_str,
+            source_bytes: self.source.bytes,
+            func_summaries: &self.local_summaries,
+            global_summaries,
+            taint_findings: &taint_results,
+            analysis_rules: self.rules_ref(),
+            taint_active,
+        };
+        for cf in cfg_analysis::run_all(&cfg_ctx) {
+            let point = byte_offset_to_point(&self.source.tree, cf.span.0);
+            let cfg_confidence = Some(match cf.confidence {
+                cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
+                cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
+                cfg_analysis::Confidence::Low => crate::evidence::Confidence::Low,
+            });
+            out.push(Diag {
+                path: self.source.path.to_string_lossy().into_owned(),
+                line: point.row + 1,
+                col: point.column + 1,
+                severity: cf.severity,
+                id: cf.rule_id,
+                category: FindingCategory::Security,
+                path_validated: false,
+                guard_kind: None,
+                message: Some(cf.message),
+                labels: vec![],
+                confidence: cfg_confidence,
+                evidence: Some(Evidence {
+                    source: None,
+                    sink: Some(SpanEvidence {
+                        path: self.source.path.to_string_lossy().into_owned(),
+                        line: (point.row + 1) as u32,
+                        col: (point.column + 1) as u32,
+                        kind: "sink".into(),
+                        snippet: None,
+                    }),
+                    guards: vec![],
+                    sanitizers: vec![],
+                    state: None,
+                    notes: vec![],
+                }),
+                rank_score: None,
+                rank_reason: None,
+                suppressed: false,
+                suppression: None,
+                rollup: None,
+            });
+        }
+
+        // ── State-model dataflow analysis ────────────────────────────────
+        if cfg.scanner.enable_state_analysis {
+            let state_findings = state::run_state_analysis(
+                &self.cfg_graph,
+                self.entry,
+                caller_lang,
+                self.source.bytes,
+                &self.local_summaries,
+                global_summaries,
+            );
+            let state_lines: std::collections::HashSet<usize> = state_findings
+                .iter()
+                .map(|sf| byte_offset_to_point(&self.source.tree, sf.span.0).row + 1)
+                .collect();
+
+            for sf in &state_findings {
+                let point = byte_offset_to_point(&self.source.tree, sf.span.0);
+                out.push(Diag {
+                    path: self.source.path.to_string_lossy().into_owned(),
+                    line: point.row + 1,
+                    col: point.column + 1,
+                    severity: sf.severity,
+                    id: sf.rule_id.clone(),
+                    category: FindingCategory::Security,
+                    path_validated: false,
+                    guard_kind: None,
+                    message: Some(sf.message.clone()),
+                    labels: vec![],
+                    confidence: None,
+                    evidence: Some(Evidence {
+                        source: None,
+                        sink: Some(SpanEvidence {
+                            path: self.source.path.to_string_lossy().into_owned(),
+                            line: (point.row + 1) as u32,
+                            col: (point.column + 1) as u32,
+                            kind: "sink".into(),
+                            snippet: None,
+                        }),
+                        guards: vec![],
+                        sanitizers: vec![],
+                        state: Some(StateEvidence {
+                            machine: sf.machine.into(),
+                            subject: sf.subject.clone(),
+                            from_state: sf.from_state.into(),
+                            to_state: sf.to_state.into(),
+                        }),
+                        notes: vec![],
+                    }),
+                    rank_score: None,
+                    rank_reason: None,
+                    suppressed: false,
+                    suppression: None,
+                    rollup: None,
+                });
+            }
+
+            // Suppress cfg-resource-leak / cfg-auth-gap when state analysis
+            // already covers the same line (state analysis is more precise).
+            if !state_findings.is_empty() {
+                out.retain(|d| {
+                    !((d.id == "cfg-resource-leak" || d.id == "cfg-auth-gap")
+                        && state_lines.contains(&d.line))
+                });
+            }
+        }
+
+        out
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Pass 1: Extract function summaries (no taint analysis)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -238,43 +572,14 @@ fn downgrade_severity(s: Severity) -> Severity {
 pub fn extract_summaries_from_bytes(
     bytes: &[u8],
     path: &Path,
-    _cfg: &Config,
+    cfg: &Config,
 ) -> NyxResult<Vec<FuncSummary>> {
     let _span = tracing::debug_span!("extract_summaries", file = %path.display()).entered();
-    if is_binary(bytes) {
-        return Ok(vec![]);
-    }
-
-    let Some((ts_lang, lang_slug)) = lang_for_path(path) else {
+    let Some(source) = ParsedSource::try_new(bytes, path)? else {
         return Ok(vec![]);
     };
-
-    let tree = PARSER.with(|cell| {
-        let mut parser = cell.borrow_mut();
-        parser.set_language(&ts_lang)?;
-        parser
-            .parse(bytes, None)
-            .ok_or_else(|| NyxError::Other("tree-sitter failed".into()))
-    })?;
-
-    let file_path_str = path.to_string_lossy();
-    let lang_rules = build_lang_rules(_cfg, lang_slug);
-    let rules_ref = if lang_rules.extra_labels.is_empty()
-        && lang_rules.terminators.is_empty()
-        && lang_rules.event_handlers.is_empty()
-    {
-        None
-    } else {
-        Some(&lang_rules)
-    };
-    let (_cfg_graph, _entry, local_summaries) =
-        build_cfg(&tree, bytes, lang_slug, &file_path_str, rules_ref);
-
-    Ok(export_summaries(
-        &local_summaries,
-        &file_path_str,
-        lang_slug,
-    ))
+    let parsed = ParsedFile::from_source(source, cfg);
+    Ok(parsed.export_summaries())
 }
 
 /// Convenience wrapper that reads the file then delegates to
@@ -452,253 +757,27 @@ pub fn run_rules_on_bytes(
 ) -> NyxResult<Vec<Diag>> {
     let _span = tracing::debug_span!("run_rules", file = %path.display()).entered();
 
-    if is_binary(bytes) {
-        return Ok(vec![]);
-    }
-
-    let Some((ts_lang, lang_slug)) = lang_for_path(path) else {
+    let Some(source) = ParsedSource::try_new(bytes, path)? else {
         return Ok(vec![]);
     };
 
-    let tree = PARSER.with(|cell| {
-        let mut parser = cell.borrow_mut();
-        parser.set_language(&ts_lang)?;
-        parser
-            .parse(bytes, None)
-            .ok_or_else(|| NyxError::Other("tree-sitter failed".into()))
-    })?;
-
     let mut out = Vec::new();
-    let file_path_str = path.to_string_lossy();
 
     // CFG construction + taint + cfg_analysis only needed for Full/Taint modes.
     let needs_cfg =
         cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Taint;
 
     if needs_cfg {
-        // Build CFG — needed for both taint analysis and CFG structural analyses.
-        let lang_rules = build_lang_rules(cfg, lang_slug);
-        let rules_ref = if lang_rules.extra_labels.is_empty()
-            && lang_rules.terminators.is_empty()
-            && lang_rules.event_handlers.is_empty()
-        {
-            None
-        } else {
-            Some(&lang_rules)
-        };
-        let (cfg_graph, entry, summaries) =
-            build_cfg(&tree, bytes, lang_slug, &file_path_str, rules_ref);
-        let caller_lang = Lang::from_slug(lang_slug).unwrap_or(Lang::Rust);
-
-        // ── Taint analysis ──────────────────────────────────────────────
-        tracing::debug!("Running taint analysis on: {}", path.display());
-        tracing::debug!("Func summaries: {:?}", summaries);
-        let scan_root_str = scan_root.map(|p| p.to_string_lossy());
-        let namespace = normalize_namespace(&file_path_str, scan_root_str.as_deref());
-        let taint_results = analyse_file(
-            &cfg_graph,
-            entry,
-            &summaries,
-            global_summaries,
-            caller_lang,
-            &namespace,
-            &[],
-        );
-        for finding in &taint_results {
-            out.push(build_taint_diag(finding, &cfg_graph, &tree, path));
+        let parsed = ParsedFile::from_source(source, cfg);
+        out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
+        if cfg.scanner.mode == AnalysisMode::Full {
+            out.extend(parsed.source.run_ast_queries(cfg));
         }
-
-        // ── CFG structural analyses ─────────────────────────────────────
-        let taint_active = global_summaries.is_some() || !taint_results.is_empty();
-        let cfg_ctx = cfg_analysis::AnalysisContext {
-            cfg: &cfg_graph,
-            entry,
-            lang: caller_lang,
-            file_path: &file_path_str,
-            source_bytes: bytes,
-            func_summaries: &summaries,
-            global_summaries,
-            taint_findings: &taint_results,
-            analysis_rules: rules_ref,
-            taint_active,
-        };
-        for cf in cfg_analysis::run_all(&cfg_ctx) {
-            let point = byte_offset_to_point(&tree, cf.span.0);
-            let cfg_confidence = Some(match cf.confidence {
-                cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
-                cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
-                cfg_analysis::Confidence::Low => crate::evidence::Confidence::Low,
-            });
-            out.push(Diag {
-                path: path.to_string_lossy().into_owned(),
-                line: point.row + 1,
-                col: point.column + 1,
-                severity: cf.severity,
-                id: cf.rule_id,
-                category: FindingCategory::Security,
-                path_validated: false,
-                guard_kind: None,
-                message: Some(cf.message),
-                labels: vec![],
-                confidence: cfg_confidence,
-                evidence: Some(Evidence {
-                    source: None,
-                    sink: Some(SpanEvidence {
-                        path: path.to_string_lossy().into_owned(),
-                        line: (point.row + 1) as u32,
-                        col: (point.column + 1) as u32,
-                        kind: "sink".into(),
-                        snippet: None,
-                    }),
-                    guards: vec![],
-                    sanitizers: vec![],
-                    state: None,
-                    notes: vec![],
-                }),
-                rank_score: None,
-                rank_reason: None,
-                suppressed: false,
-                suppression: None,
-                rollup: None,
-            });
-        }
-
-        // ── State-model dataflow analysis ────────────────────────────────
-        if cfg.scanner.enable_state_analysis {
-            let state_findings = state::run_state_analysis(
-                &cfg_graph,
-                entry,
-                caller_lang,
-                bytes,
-                &summaries,
-                global_summaries,
-            );
-            // Collect state finding lines to dedup overlapping CFG findings.
-            let state_lines: std::collections::HashSet<usize> = state_findings
-                .iter()
-                .map(|sf| byte_offset_to_point(&tree, sf.span.0).row + 1)
-                .collect();
-
-            for sf in &state_findings {
-                let point = byte_offset_to_point(&tree, sf.span.0);
-                out.push(Diag {
-                    path: path.to_string_lossy().into_owned(),
-                    line: point.row + 1,
-                    col: point.column + 1,
-                    severity: sf.severity,
-                    id: sf.rule_id.clone(),
-                    category: FindingCategory::Security,
-                    path_validated: false,
-                    guard_kind: None,
-                    message: Some(sf.message.clone()),
-                    labels: vec![],
-                    confidence: None,
-                    evidence: Some(Evidence {
-                        source: None,
-                        sink: Some(SpanEvidence {
-                            path: path.to_string_lossy().into_owned(),
-                            line: (point.row + 1) as u32,
-                            col: (point.column + 1) as u32,
-                            kind: "sink".into(),
-                            snippet: None,
-                        }),
-                        guards: vec![],
-                        sanitizers: vec![],
-                        state: Some(StateEvidence {
-                            machine: sf.machine.into(),
-                            subject: sf.subject.clone(),
-                            from_state: sf.from_state.into(),
-                            to_state: sf.to_state.into(),
-                        }),
-                        notes: vec![],
-                    }),
-                    rank_score: None,
-                    rank_reason: None,
-                    suppressed: false,
-                    suppression: None,
-                    rollup: None,
-                });
-            }
-
-            // Suppress cfg-resource-leak / cfg-auth-gap when state analysis
-            // already covers the same line (state analysis is more precise).
-            if !state_findings.is_empty() {
-                out.retain(|d| {
-                    !((d.id == "cfg-resource-leak" || d.id == "cfg-auth-gap")
-                        && state_lines.contains(&d.line))
-                });
-            }
-        }
-    }
-
-    if cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Ast {
-        let root = tree.root_node();
-
-        let compiled = query_cache::for_lang(lang_slug, ts_lang);
-        let mut cursor = QueryCursor::new();
-
-        for cq in compiled.iter() {
-            if cq.meta.severity > cfg.scanner.min_severity {
-                continue;
-            }
-            let mut matches = cursor.matches(&cq.query, root, bytes);
-            while let Some(m) = matches.next() {
-                if let Some(cap) = m.captures.iter().find(|c| c.index == 0) {
-                    // Layer A: suppress Security findings on calls with all-literal args
-                    if cq.meta.category.finding_category() == FindingCategory::Security
-                        && is_call_all_args_literal(cap.node, bytes)
-                    {
-                        continue;
-                    }
-                    let point = cap.node.start_position();
-                    out.push(Diag {
-                        path: path.to_string_lossy().into_owned(),
-                        line: point.row + 1,
-                        col: point.column + 1,
-                        severity: cq.meta.severity,
-                        id: cq.meta.id.to_owned(),
-                        category: cq.meta.category.finding_category(),
-                        path_validated: false,
-                        guard_kind: None,
-                        message: Some(cq.meta.description.to_owned()),
-                        labels: vec![],
-                        confidence: Some(cq.meta.confidence),
-                        evidence: Some(Evidence {
-                            source: None,
-                            sink: Some(SpanEvidence {
-                                path: path.to_string_lossy().into_owned(),
-                                line: (point.row + 1) as u32,
-                                col: (point.column + 1) as u32,
-                                kind: "sink".into(),
-                                snippet: None,
-                            }),
-                            guards: vec![],
-                            sanitizers: vec![],
-                            state: None,
-                            notes: vec![],
-                        }),
-                        rank_score: None,
-                        rank_reason: None,
-                        suppressed: false,
-                        suppression: None,
-                        rollup: None,
-                    });
-                }
-            }
-        }
-    }
-
-    // Check to ensure no duplicates
-    out.sort_by(|a, b| (a.line, a.col, &a.id, a.severity).cmp(&(b.line, b.col, &b.id, b.severity)));
-    out.dedup_by(|a, b| {
-        a.line == b.line && a.col == b.col && a.id == b.id && a.severity == b.severity
-    });
-
-    // Downgrade severity for non-production paths unless opted out
-    if !cfg.scanner.include_nonprod && is_nonprod_path(path) {
-        for d in &mut out {
-            d.severity = downgrade_severity(d.severity);
-        }
+        parsed.source.finalize_diags(&mut out, cfg);
+    } else {
+        // AST-only: no CFG construction (fast path preserved)
+        out.extend(source.run_ast_queries(cfg));
+        source.finalize_diags(&mut out, cfg);
     }
 
     Ok(out)
@@ -743,260 +822,27 @@ pub fn analyse_file_fused(
 ) -> NyxResult<FusedResult> {
     let _span = tracing::debug_span!("analyse_fused", file = %path.display()).entered();
 
-    if is_binary(bytes) {
-        return Ok(FusedResult {
-            summaries: vec![],
-            diags: vec![],
-        });
-    }
-
-    let Some((ts_lang, lang_slug)) = lang_for_path(path) else {
+    let Some(source) = ParsedSource::try_new(bytes, path)? else {
         return Ok(FusedResult {
             summaries: vec![],
             diags: vec![],
         });
     };
 
-    let tree = PARSER.with(|cell| {
-        let mut parser = cell.borrow_mut();
-        parser.set_language(&ts_lang)?;
-        parser
-            .parse(bytes, None)
-            .ok_or_else(|| NyxError::Other("tree-sitter failed".into()))
-    })?;
-
-    let file_path_str = path.to_string_lossy();
-
-    // Build language-specific analysis rules once
-    let lang_rules = build_lang_rules(cfg, lang_slug);
-    let rules_ref = if lang_rules.extra_labels.is_empty()
-        && lang_rules.terminators.is_empty()
-        && lang_rules.event_handlers.is_empty()
-    {
-        None
-    } else {
-        Some(&lang_rules)
-    };
-
-    // Build CFG once — used for both summary extraction AND analysis
-    let (cfg_graph, entry, local_summaries) =
-        build_cfg(&tree, bytes, lang_slug, &file_path_str, rules_ref);
-
-    // Export summaries (always — needed for cross-file merging)
-    let summaries = export_summaries(&local_summaries, &file_path_str, lang_slug);
+    let parsed = ParsedFile::from_source(source, cfg);
+    let summaries = parsed.export_summaries();
 
     let mut out = Vec::new();
 
-    // Taint + CFG structural analyses
     let needs_cfg =
         cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Taint;
-
     if needs_cfg {
-        let caller_lang = Lang::from_slug(lang_slug).unwrap_or(Lang::Rust);
-        let scan_root_str = scan_root.map(|p| p.to_string_lossy());
-        let namespace = normalize_namespace(&file_path_str, scan_root_str.as_deref());
-
-        let taint_results = analyse_file(
-            &cfg_graph,
-            entry,
-            &local_summaries,
-            global_summaries,
-            caller_lang,
-            &namespace,
-            &[],
-        );
-        for finding in &taint_results {
-            out.push(build_taint_diag(finding, &cfg_graph, &tree, path));
-        }
-
-        let taint_active = global_summaries.is_some() || !taint_results.is_empty();
-        let cfg_ctx = cfg_analysis::AnalysisContext {
-            cfg: &cfg_graph,
-            entry,
-            lang: caller_lang,
-            file_path: &file_path_str,
-            source_bytes: bytes,
-            func_summaries: &local_summaries,
-            global_summaries,
-            taint_findings: &taint_results,
-            analysis_rules: rules_ref,
-            taint_active,
-        };
-        for cf in cfg_analysis::run_all(&cfg_ctx) {
-            let point = byte_offset_to_point(&tree, cf.span.0);
-            let fused_cfg_confidence = Some(match cf.confidence {
-                cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
-                cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
-                cfg_analysis::Confidence::Low => crate::evidence::Confidence::Low,
-            });
-            out.push(Diag {
-                path: path.to_string_lossy().into_owned(),
-                line: point.row + 1,
-                col: point.column + 1,
-                severity: cf.severity,
-                id: cf.rule_id,
-                category: FindingCategory::Security,
-                path_validated: false,
-                guard_kind: None,
-                message: Some(cf.message),
-                labels: vec![],
-                confidence: fused_cfg_confidence,
-                evidence: Some(Evidence {
-                    source: None,
-                    sink: Some(SpanEvidence {
-                        path: path.to_string_lossy().into_owned(),
-                        line: (point.row + 1) as u32,
-                        col: (point.column + 1) as u32,
-                        kind: "sink".into(),
-                        snippet: None,
-                    }),
-                    guards: vec![],
-                    sanitizers: vec![],
-                    state: None,
-                    notes: vec![],
-                }),
-                rank_score: None,
-                rank_reason: None,
-                suppressed: false,
-                suppression: None,
-                rollup: None,
-            });
-        }
-
-        // ── State-model dataflow analysis ────────────────────────────────
-        if cfg.scanner.enable_state_analysis {
-            let state_findings = state::run_state_analysis(
-                &cfg_graph,
-                entry,
-                caller_lang,
-                bytes,
-                &local_summaries,
-                global_summaries,
-            );
-            let state_lines: std::collections::HashSet<usize> = state_findings
-                .iter()
-                .map(|sf| byte_offset_to_point(&tree, sf.span.0).row + 1)
-                .collect();
-
-            for sf in &state_findings {
-                let point = byte_offset_to_point(&tree, sf.span.0);
-                out.push(Diag {
-                    path: path.to_string_lossy().into_owned(),
-                    line: point.row + 1,
-                    col: point.column + 1,
-                    severity: sf.severity,
-                    id: sf.rule_id.clone(),
-                    category: FindingCategory::Security,
-                    path_validated: false,
-                    guard_kind: None,
-                    message: Some(sf.message.clone()),
-                    labels: vec![],
-                    confidence: None,
-                    evidence: Some(Evidence {
-                        source: None,
-                        sink: Some(SpanEvidence {
-                            path: path.to_string_lossy().into_owned(),
-                            line: (point.row + 1) as u32,
-                            col: (point.column + 1) as u32,
-                            kind: "sink".into(),
-                            snippet: None,
-                        }),
-                        guards: vec![],
-                        sanitizers: vec![],
-                        state: Some(StateEvidence {
-                            machine: sf.machine.into(),
-                            subject: sf.subject.clone(),
-                            from_state: sf.from_state.into(),
-                            to_state: sf.to_state.into(),
-                        }),
-                        notes: vec![],
-                    }),
-                    rank_score: None,
-                    rank_reason: None,
-                    suppressed: false,
-                    suppression: None,
-                    rollup: None,
-                });
-            }
-
-            if !state_findings.is_empty() {
-                out.retain(|d| {
-                    !((d.id == "cfg-resource-leak" || d.id == "cfg-auth-gap")
-                        && state_lines.contains(&d.line))
-                });
-            }
-        }
+        out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
     }
-
-    // AST pattern queries
     if cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Ast {
-        let root = tree.root_node();
-        let compiled = query_cache::for_lang(lang_slug, ts_lang);
-        let mut cursor = QueryCursor::new();
-
-        for cq in compiled.iter() {
-            if cq.meta.severity > cfg.scanner.min_severity {
-                continue;
-            }
-            let mut matches = cursor.matches(&cq.query, root, bytes);
-            while let Some(m) = matches.next() {
-                if let Some(cap) = m.captures.iter().find(|c| c.index == 0) {
-                    // Layer A: suppress Security findings on calls with all-literal args
-                    if cq.meta.category.finding_category() == FindingCategory::Security
-                        && is_call_all_args_literal(cap.node, bytes)
-                    {
-                        continue;
-                    }
-                    let point = cap.node.start_position();
-                    out.push(Diag {
-                        path: path.to_string_lossy().into_owned(),
-                        line: point.row + 1,
-                        col: point.column + 1,
-                        severity: cq.meta.severity,
-                        id: cq.meta.id.to_owned(),
-                        category: cq.meta.category.finding_category(),
-                        path_validated: false,
-                        guard_kind: None,
-                        message: Some(cq.meta.description.to_owned()),
-                        labels: vec![],
-                        confidence: Some(cq.meta.confidence),
-                        evidence: Some(Evidence {
-                            source: None,
-                            sink: Some(SpanEvidence {
-                                path: path.to_string_lossy().into_owned(),
-                                line: (point.row + 1) as u32,
-                                col: (point.column + 1) as u32,
-                                kind: "sink".into(),
-                                snippet: None,
-                            }),
-                            guards: vec![],
-                            sanitizers: vec![],
-                            state: None,
-                            notes: vec![],
-                        }),
-                        rank_score: None,
-                        rank_reason: None,
-                        suppressed: false,
-                        suppression: None,
-                        rollup: None,
-                    });
-                }
-            }
-        }
+        out.extend(parsed.source.run_ast_queries(cfg));
     }
-
-    // Dedup
-    out.sort_by(|a, b| (a.line, a.col, &a.id, a.severity).cmp(&(b.line, b.col, &b.id, b.severity)));
-    out.dedup_by(|a, b| {
-        a.line == b.line && a.col == b.col && a.id == b.id && a.severity == b.severity
-    });
-
-    // Downgrade severity for non-production paths unless opted out
-    if !cfg.scanner.include_nonprod && is_nonprod_path(path) {
-        for d in &mut out {
-            d.severity = downgrade_severity(d.severity);
-        }
-    }
+    parsed.source.finalize_diags(&mut out, cfg);
 
     Ok(FusedResult {
         summaries,

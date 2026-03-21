@@ -235,6 +235,43 @@ pub fn handle(
 }
 
 // --------------------------------------------------------------------------------------------
+// Shared post-processing helpers
+// --------------------------------------------------------------------------------------------
+
+/// Rank, assign confidence, and truncate diagnostics.
+fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
+    if cfg.output.attack_surface_ranking {
+        crate::rank::rank_diags(diags);
+    }
+    for d in diags.iter_mut() {
+        if d.confidence.is_none() {
+            d.confidence = Some(crate::evidence::compute_confidence(d));
+        }
+    }
+    if let Some(max) = cfg.output.max_results {
+        diags.truncate(max as usize);
+    }
+}
+
+/// Build the call graph from global summaries and run SCC/topo analysis.
+fn build_and_analyse_call_graph(
+    global_summaries: &GlobalSummaries,
+) -> (crate::callgraph::CallGraph, crate::callgraph::CallGraphAnalysis) {
+    let _span = tracing::info_span!("build_call_graph").entered();
+    let call_graph = crate::callgraph::build_call_graph(global_summaries, &[]);
+    let cg_analysis = crate::callgraph::analyse(&call_graph);
+    tracing::info!(
+        nodes = call_graph.graph.node_count(),
+        edges = call_graph.graph.edge_count(),
+        unresolved_not_found = call_graph.unresolved_not_found.len(),
+        unresolved_ambiguous = call_graph.unresolved_ambiguous.len(),
+        sccs = cg_analysis.sccs.len(),
+        "call graph built"
+    );
+    (call_graph, cg_analysis)
+}
+
+// --------------------------------------------------------------------------------------------
 // Two‑pass scanning (no index)
 // --------------------------------------------------------------------------------------------
 
@@ -295,17 +332,7 @@ pub(crate) fn scan_filesystem(
             .collect();
         pb.finish_and_clear();
 
-        if cfg.output.attack_surface_ranking {
-            crate::rank::rank_diags(&mut diags);
-        }
-        for d in &mut diags {
-            if d.confidence.is_none() {
-                d.confidence = Some(crate::evidence::compute_confidence(d));
-            }
-        }
-        if let Some(max) = cfg.output.max_results {
-            diags.truncate(max as usize);
-        }
+        post_process_diags(&mut diags, cfg);
         return Ok(diags);
     }
 
@@ -366,21 +393,7 @@ pub(crate) fn scan_filesystem(
     };
 
     // ── Build call graph ────────────────────────────────────────────────
-    let (call_graph, cg_analysis) = {
-        let _span = tracing::info_span!("build_call_graph").entered();
-        // TODO: wire interop_edges from config/index when InteropEdge sources are implemented
-        let call_graph = crate::callgraph::build_call_graph(&global_summaries, &[]);
-        let cg_analysis = crate::callgraph::analyse(&call_graph);
-        tracing::info!(
-            nodes = call_graph.graph.node_count(),
-            edges = call_graph.graph.edge_count(),
-            unresolved_not_found = call_graph.unresolved_not_found.len(),
-            unresolved_ambiguous = call_graph.unresolved_ambiguous.len(),
-            sccs = cg_analysis.sccs.len(),
-            "call graph built"
-        );
-        (call_graph, cg_analysis)
-    };
+    let (call_graph, cg_analysis) = build_and_analyse_call_graph(&global_summaries);
 
     // ── Pass 2: re-run with cross-file global summaries ──────────────────
     let mut diags: Vec<Diag> = {
@@ -436,17 +449,7 @@ pub(crate) fn scan_filesystem(
     };
     tracing::info!(diags = diags.len(), "pass 2 complete");
 
-    if cfg.output.attack_surface_ranking {
-        crate::rank::rank_diags(&mut diags);
-    }
-    for d in &mut diags {
-        if d.confidence.is_none() {
-            d.confidence = Some(crate::evidence::compute_confidence(d));
-        }
-    }
-    if let Some(max) = cfg.output.max_results {
-        diags.truncate(max as usize);
-    }
+    post_process_diags(&mut diags, cfg);
 
     Ok(diags)
 }
@@ -529,18 +532,7 @@ pub fn scan_with_index_parallel(
 
     // ── Build call graph ────────────────────────────────────────────────
     if let Some(ref gs) = global_summaries {
-        let _span = tracing::info_span!("build_call_graph").entered();
-        // TODO: wire interop_edges from config/index when InteropEdge sources are implemented
-        let call_graph = crate::callgraph::build_call_graph(gs, &[]);
-        let cg_analysis = crate::callgraph::analyse(&call_graph);
-        tracing::info!(
-            nodes = call_graph.graph.node_count(),
-            edges = call_graph.graph.edge_count(),
-            unresolved_not_found = call_graph.unresolved_not_found.len(),
-            unresolved_ambiguous = call_graph.unresolved_ambiguous.len(),
-            sccs = cg_analysis.sccs.len(),
-            "call graph built"
-        );
+        let _ = build_and_analyse_call_graph(gs);
     }
 
     // ── Pass 2: full analysis ────────────────────────────────────────────
@@ -624,17 +616,7 @@ pub fn scan_with_index_parallel(
 
     let mut diags: Vec<Diag> = diag_map.into_iter().flat_map(|(_, v)| v).collect();
 
-    if cfg.output.attack_surface_ranking {
-        crate::rank::rank_diags(&mut diags);
-    }
-    for d in &mut diags {
-        if d.confidence.is_none() {
-            d.confidence = Some(crate::evidence::compute_confidence(d));
-        }
-    }
-    if let Some(max) = cfg.output.max_results {
-        diags.truncate(max as usize);
-    }
+    post_process_diags(&mut diags, cfg);
 
     Ok(diags)
 }
