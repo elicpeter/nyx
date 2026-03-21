@@ -77,6 +77,8 @@ pub enum Kind {
     Function,
     Assignment,
     CallWrapper,
+    Try,
+    Throw,
     Trivia,
     Other,
 }

@@ -303,6 +303,7 @@ mod tests {
             defines: Some("f".into()),
             uses: vec![],
             callee: Some("fopen".into()),
+            receiver: None,
             enclosing_func: None,
             call_ordinal: 0,
             condition_text: None,
@@ -310,6 +311,7 @@ mod tests {
             condition_negated: false,
             arg_uses: vec![],
             sink_payload_args: None,
+            catch_param: false,
         };
 
         let (state, events) =
@@ -339,6 +341,7 @@ mod tests {
             defines: None,
             uses: vec!["f".into()],
             callee: Some("fclose".into()),
+            receiver: None,
             enclosing_func: None,
             call_ordinal: 0,
             condition_text: None,
@@ -346,6 +349,7 @@ mod tests {
             condition_negated: false,
             arg_uses: vec![],
             sink_payload_args: None,
+            catch_param: false,
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -374,6 +378,7 @@ mod tests {
             defines: None,
             uses: vec!["f".into()],
             callee: Some("fclose".into()),
+            receiver: None,
             enclosing_func: None,
             call_ordinal: 0,
             condition_text: None,
@@ -381,6 +386,7 @@ mod tests {
             condition_negated: false,
             arg_uses: vec![],
             sink_payload_args: None,
+            catch_param: false,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -410,6 +416,7 @@ mod tests {
             defines: None,
             uses: vec!["f".into()],
             callee: Some("fread".into()),
+            receiver: None,
             enclosing_func: None,
             call_ordinal: 0,
             condition_text: None,
@@ -417,6 +424,7 @@ mod tests {
             condition_negated: false,
             arg_uses: vec![],
             sink_payload_args: None,
+            catch_param: false,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);

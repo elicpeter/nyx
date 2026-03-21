@@ -1467,6 +1467,123 @@ causes false negatives on method chains like `tainted_response.send(data)`.
 
 ---
 
+### Phase 19.5 — Multi-label classification for taint labels
+
+**Category**: core correctness
+
+**Why**: Nyx’s current label classification model returns only the **first matching
+label** for a callee. This is too restrictive for real APIs, because some functions
+legitimately behave as more than one thing at once. For example:
+
+- `file_get_contents` in PHP can act as a **Source** (its return value contains data)
+  and also as an **SSRF Sink** (its URL argument can trigger an outbound request)
+- `readObject` in Java can act as a **Source-like producer of attacker-controlled data**
+  and also as a **DESERIALIZE Sink**
+- future framework wrappers may need to behave as **Sink + Sanitizer** or
+  **Source + Sink** depending on usage
+
+As long as classification is single-label, the rule base is forced into awkward
+tradeoffs, and later vulnerability modeling (especially SSRF and deserialization)
+remains artificially shallow.
+
+This phase upgrades the core classification interface so a single API can carry
+multiple labels safely and deterministically.
+
+**Goals**:
+- Replace single-label classification with **multi-label classification**
+- Allow a callee to return multiple matching labels in stable order
+- Update taint analysis to consume multiple labels without changing existing semantics
+  for single-label rules
+- Add regression coverage for dual-label APIs like PHP `file_get_contents` and
+  Java `readObject`
+- Keep the implementation narrow: classification + taint consumption only
+
+**Files to touch**:
+- `src/labels/mod.rs` — classification API and helpers
+- `src/taint/transfer.rs` — consume multiple labels at call sites
+- `src/labels/php.rs` — verify dual-label rules like `file_get_contents`
+- `src/labels/java.rs` — verify dual-label rules like `readObject`
+- `tests/` — new unit tests and/or fixture updates for multi-label behaviour
+- `tests/fixtures/real_world/{lang}/taint/*.expect.json` — update expectations if
+  previously-shadowed findings now correctly appear
+
+**Implementation tasks**:
+
+1. **Replace first-match classification with all-match classification**
+    - Introduce a new classification helper that returns **all matching labels** for a
+      callee rather than a single `Option<DataLabel>`.
+    - Preserve rule order from the label file so results remain deterministic.
+    - Keep the old single-label helper only if needed for compatibility, but migrate
+      taint analysis to the new multi-label path.
+
+2. **Update taint transfer to consume multiple labels**
+    - At call handling sites in `src/taint/transfer.rs`, process all matching labels:
+        - apply `Source(...)` behaviour
+        - apply `Sink(...)` behaviour
+        - apply `Sanitizer(...)` behaviour
+    - Ensure the behaviours compose safely for the same callee:
+        - a call may generate taint on its return value
+        - also check its arguments as a sink
+        - also strip caps if it is a sanitizer
+    - Preserve existing behaviour for APIs that only have one label.
+
+3. **Add dual-label regression cases**
+    - PHP:
+        - `file_get_contents(url)` with tainted URL should be able to act as an SSRF sink
+        - `x = file_get_contents(url)` should still act as a source for returned data
+    - Java:
+        - `readObject` should remain compatible with existing patterns while also being
+          available as `Sink(Cap::DESERIALIZE)`
+    - Add targeted unit tests or real-world fixture assertions for both cases.
+
+4. **Audit label files for existing shadowed cases**
+    - Search for functions that currently have multiple intended semantics but are
+      blocked by first-match behaviour.
+    - At minimum verify:
+        - PHP `file_get_contents`
+        - Java `readObject`
+    - If additional shadowed cases exist and are clearly correct, leave the rules in
+      place and let this phase unlock them. Do not broaden rule coverage here.
+
+5. **Update expectations where correct new findings appear**
+    - Some fixtures may now produce `taint-unsanitised-flow` findings that were
+      previously impossible due to label shadowing.
+    - If the new finding is correct, promote it into the relevant `.expect.json`.
+    - Do not suppress newly-correct findings just to keep counts unchanged.
+
+**Test tasks**:
+- Add unit test: single-label API still behaves exactly as before
+- Add unit test: dual-label API can act as both Source and Sink in one call path
+- Add regression test: PHP `file_get_contents` no longer loses SSRF sink behaviour
+- Add regression test: Java `readObject` dual-label case is handled deterministically
+- `cargo test` must pass
+- Run relevant targeted fixture suites (`php`, `java`, `ssrf`, `deser`) and update
+  expect files where correct findings now appear
+
+**Definition of done**:
+- Classification API returns all matching labels in stable order
+- Taint transfer correctly applies multiple labels at a call site
+- PHP `file_get_contents` no longer loses SSRF sink behaviour because of first-match shadowing
+- Java `readObject` can coexist as both source-like and sink-like semantics
+- Existing single-label rules behave unchanged
+- All tests pass
+
+**Risks / gotchas**:
+- This touches a core engine interface. Keep the change minimal and tightly tested.
+- Order must remain deterministic even when multiple labels match.
+- Do not silently change non-taint consumers of classification unless required.
+- A multi-label call can both create and consume taint; apply behaviours carefully so
+  one does not accidentally erase another.
+- This phase is about classification semantics only. Do NOT bundle in validator
+  recognition, framework expansion, or broader SSRF work.
+
+**Dependencies**:
+- Phase 7 / 8 benefit from this change, but this phase can be implemented after they
+  land and before later semantic-completion work
+- Best placed before deep SSRF semantic completion and before final Phase 2 readiness assessment
+
+--- 
+
 ### Phase 20 — Evaluation benchmark corpus
 
 **Category**: evaluation
@@ -1669,123 +1786,6 @@ evidence.
 **Dependencies**: Phase 21 (benchmark results to reference)
 
 ---
-
-### Phase 22.5 — Multi-label classification for taint labels
-
-**Category**: core correctness
-
-**Why**: Nyx’s current label classification model returns only the **first matching
-label** for a callee. This is too restrictive for real APIs, because some functions
-legitimately behave as more than one thing at once. For example:
-
-- `file_get_contents` in PHP can act as a **Source** (its return value contains data)
-  and also as an **SSRF Sink** (its URL argument can trigger an outbound request)
-- `readObject` in Java can act as a **Source-like producer of attacker-controlled data**
-  and also as a **DESERIALIZE Sink**
-- future framework wrappers may need to behave as **Sink + Sanitizer** or
-  **Source + Sink** depending on usage
-
-As long as classification is single-label, the rule base is forced into awkward
-tradeoffs, and later vulnerability modeling (especially SSRF and deserialization)
-remains artificially shallow.
-
-This phase upgrades the core classification interface so a single API can carry
-multiple labels safely and deterministically.
-
-**Goals**:
-- Replace single-label classification with **multi-label classification**
-- Allow a callee to return multiple matching labels in stable order
-- Update taint analysis to consume multiple labels without changing existing semantics
-  for single-label rules
-- Add regression coverage for dual-label APIs like PHP `file_get_contents` and
-  Java `readObject`
-- Keep the implementation narrow: classification + taint consumption only
-
-**Files to touch**:
-- `src/labels/mod.rs` — classification API and helpers
-- `src/taint/transfer.rs` — consume multiple labels at call sites
-- `src/labels/php.rs` — verify dual-label rules like `file_get_contents`
-- `src/labels/java.rs` — verify dual-label rules like `readObject`
-- `tests/` — new unit tests and/or fixture updates for multi-label behaviour
-- `tests/fixtures/real_world/{lang}/taint/*.expect.json` — update expectations if
-  previously-shadowed findings now correctly appear
-
-**Implementation tasks**:
-
-1. **Replace first-match classification with all-match classification**
-    - Introduce a new classification helper that returns **all matching labels** for a
-      callee rather than a single `Option<DataLabel>`.
-    - Preserve rule order from the label file so results remain deterministic.
-    - Keep the old single-label helper only if needed for compatibility, but migrate
-      taint analysis to the new multi-label path.
-
-2. **Update taint transfer to consume multiple labels**
-    - At call handling sites in `src/taint/transfer.rs`, process all matching labels:
-        - apply `Source(...)` behaviour
-        - apply `Sink(...)` behaviour
-        - apply `Sanitizer(...)` behaviour
-    - Ensure the behaviours compose safely for the same callee:
-        - a call may generate taint on its return value
-        - also check its arguments as a sink
-        - also strip caps if it is a sanitizer
-    - Preserve existing behaviour for APIs that only have one label.
-
-3. **Add dual-label regression cases**
-    - PHP:
-        - `file_get_contents(url)` with tainted URL should be able to act as an SSRF sink
-        - `x = file_get_contents(url)` should still act as a source for returned data
-    - Java:
-        - `readObject` should remain compatible with existing patterns while also being
-          available as `Sink(Cap::DESERIALIZE)`
-    - Add targeted unit tests or real-world fixture assertions for both cases.
-
-4. **Audit label files for existing shadowed cases**
-    - Search for functions that currently have multiple intended semantics but are
-      blocked by first-match behaviour.
-    - At minimum verify:
-        - PHP `file_get_contents`
-        - Java `readObject`
-    - If additional shadowed cases exist and are clearly correct, leave the rules in
-      place and let this phase unlock them. Do not broaden rule coverage here.
-
-5. **Update expectations where correct new findings appear**
-    - Some fixtures may now produce `taint-unsanitised-flow` findings that were
-      previously impossible due to label shadowing.
-    - If the new finding is correct, promote it into the relevant `.expect.json`.
-    - Do not suppress newly-correct findings just to keep counts unchanged.
-
-**Test tasks**:
-- Add unit test: single-label API still behaves exactly as before
-- Add unit test: dual-label API can act as both Source and Sink in one call path
-- Add regression test: PHP `file_get_contents` no longer loses SSRF sink behaviour
-- Add regression test: Java `readObject` dual-label case is handled deterministically
-- `cargo test` must pass
-- Run relevant targeted fixture suites (`php`, `java`, `ssrf`, `deser`) and update
-  expect files where correct findings now appear
-
-**Definition of done**:
-- Classification API returns all matching labels in stable order
-- Taint transfer correctly applies multiple labels at a call site
-- PHP `file_get_contents` no longer loses SSRF sink behaviour because of first-match shadowing
-- Java `readObject` can coexist as both source-like and sink-like semantics
-- Existing single-label rules behave unchanged
-- All tests pass
-
-**Risks / gotchas**:
-- This touches a core engine interface. Keep the change minimal and tightly tested.
-- Order must remain deterministic even when multiple labels match.
-- Do not silently change non-taint consumers of classification unless required.
-- A multi-label call can both create and consume taint; apply behaviours carefully so
-  one does not accidentally erase another.
-- This phase is about classification semantics only. Do NOT bundle in validator
-  recognition, framework expansion, or broader SSRF work.
-
-**Dependencies**:
-- Phase 7 / 8 benefit from this change, but this phase can be implemented after they
-  land and before later semantic-completion work
-- Best placed before deep SSRF semantic completion and before final Phase 2 readiness assessment
-
---- 
 
 ### Phase 23 — Expand Go rule depth
 
@@ -2335,7 +2335,7 @@ remaining static-analysis limits.
 
 **Dependencies**:
 - Phase 7
-- Phase 22.5 — multi-label classification should be complete before dual-label SSRF cases are relied on
+- Phase 19.5 — multi-label classification should be complete before dual-label SSRF cases are relied on
 - Phase 20 / 21 / 29 — benchmark infrastructure and baseline measurements should exist
 ---
 

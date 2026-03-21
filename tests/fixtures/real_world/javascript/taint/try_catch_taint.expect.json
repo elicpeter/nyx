@@ -1,0 +1,23 @@
+{
+  "description": "Taint via exception path: source flows to sink in catch handler. Sanitized version should not fire.",
+  "tags": ["taint", "xss", "try-catch", "exception-path"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 11],
+      "evidence_contains": [],
+      "notes": "req.query.name flows to res.send in catch block — XSS via exception path"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [13, 22],
+      "evidence_contains": [],
+      "notes": "DOMPurify.sanitize strips cap so res.send in catch should NOT fire"
+    }
+  ]
+}

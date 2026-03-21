@@ -76,7 +76,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "do_statement"                 => Kind::While,
 
     "return_statement"             => Kind::Return,
-    "throw_statement"              => Kind::Return,
+    "throw_statement"              => Kind::Throw,
     "break_statement"              => Kind::Break,
     "continue_statement"           => Kind::Continue,
 
@@ -91,7 +91,8 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "switch_expression"            => Kind::Block,
     "switch_block"                 => Kind::Block,
     "switch_block_statement_group" => Kind::Block,
-    "try_statement"                => Kind::Block,
+    "try_statement"                => Kind::Try,
+    "try_with_resources_statement" => Kind::Try,
     "catch_clause"                 => Kind::Block,
     "finally_clause"               => Kind::Block,
     "lambda_expression"            => Kind::Block,

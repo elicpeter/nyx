@@ -26,10 +26,11 @@ pub enum StmtKind {
 
 #[derive(Debug, Clone, Copy)]
 pub enum EdgeKind {
-    Seq,   // ordinary fall‑through
-    True,  // `cond == true` branch
-    False, // `cond == false` branch
-    Back,  // back‑edge that closes a loop
+    Seq,       // ordinary fall‑through
+    True,      // `cond == true` branch
+    False,     // `cond == false` branch
+    Back,      // back‑edge that closes a loop
+    Exception, // from call/throw inside try body → catch entry
 }
 
 /// Maximum number of identifiers to store from a condition expression.
@@ -43,6 +44,10 @@ pub struct NodeInfo {
     pub defines: Option<String>,  // variable written by this stmt
     pub uses: Vec<String>,        // variables read
     pub callee: Option<String>,
+    /// For `CallMethod` nodes: the receiver identifier (e.g. `tainted` in
+    /// `tainted.foo()`).  `None` for non-method calls or complex receivers
+    /// (member expressions, call expressions, etc.).
+    pub receiver: Option<String>,
     /// Name of the enclosing function (set during CFG construction).
     pub enclosing_func: Option<String>,
     /// Per-function call ordinal (0-based, only meaningful for Call nodes).
@@ -61,6 +66,10 @@ pub struct NodeInfo {
     /// When `Some`, only variables from these `arg_uses` positions are checked
     /// for taint.  `None` = all arguments are payload (default).
     pub sink_payload_args: Option<Vec<usize>>,
+    /// True for synthetic catch-parameter nodes injected at catch clause entry.
+    /// The taint transfer function uses this to conservatively taint the
+    /// caught exception variable.
+    pub catch_param: bool,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -940,12 +949,36 @@ fn push_node<'a>(
 
     // Extract per-argument identifiers for Call nodes.
     // Also extract for gated-sink nodes so payload-arg filtering works.
-    let arg_uses = if kind == StmtKind::Call || sink_payload_args.is_some() {
+    let mut arg_uses = if kind == StmtKind::Call || sink_payload_args.is_some() {
         call_ast
             .map(|cn| extract_arg_uses(cn, code))
             .unwrap_or_default()
     } else {
         Vec::new()
+    };
+
+    // For CallMethod nodes, extract the receiver identifier and prepend it
+    // to arg_uses at position 0. This allows `collect_propagating_uses_taint`
+    // to apply an offset so that `propagating_params[0]` maps to the first
+    // real argument (not the receiver).
+    let receiver = if let Some(cn) = call_ast
+        && matches!(lookup(lang, cn.kind()), Kind::CallMethod)
+    {
+        let recv_node = cn
+            .child_by_field_name("object")
+            .or_else(|| cn.child_by_field_name("receiver"));
+        if let Some(rn) = recv_node
+            && matches!(rn.kind(), "identifier" | "variable_name")
+            && let Some(recv_text) = text_of(rn, code)
+        {
+            // Prepend receiver as arg_uses[0]
+            arg_uses.insert(0, vec![recv_text.clone()]);
+            Some(recv_text)
+        } else {
+            None
+        }
+    } else {
+        None
     };
 
     let idx = g.add_node(NodeInfo {
@@ -955,6 +988,7 @@ fn push_node<'a>(
         defines,
         uses,
         callee,
+        receiver,
         enclosing_func: enclosing_func.map(|s| s.to_string()),
         call_ordinal,
         condition_text,
@@ -962,6 +996,7 @@ fn push_node<'a>(
         condition_negated,
         arg_uses,
         sink_payload_args,
+        catch_param: false,
     });
 
     debug!(
@@ -1053,6 +1088,268 @@ fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind: EdgeKind) 
 }
 
 // -------------------------------------------------------------------------
+//    Exception-source detection for try/catch wiring
+// -------------------------------------------------------------------------
+
+/// Returns true if this CFG node can implicitly raise an exception (calls).
+/// Explicit throws are collected separately via `throw_targets`.
+fn is_exception_source(info: &NodeInfo) -> bool {
+    matches!(info.kind, StmtKind::Call)
+}
+
+/// Extract the catch parameter name from a catch clause AST node.
+///
+/// Returns `None` for parameter-less catch (`catch {}` in JS) or
+/// catch-all (`catch(...)` in C++).
+fn extract_catch_param_name<'a>(catch_node: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
+    match lang {
+        "javascript" | "js" | "typescript" | "ts" | "tsx" => {
+            // JS/TS: catch_clause has a "parameter" field
+            let param = catch_node.child_by_field_name("parameter")?;
+            text_of(param, code)
+        }
+        "java" => {
+            // Java: catch_clause → catch_formal_parameter → field "name"
+            let mut cursor = catch_node.walk();
+            for child in catch_node.children(&mut cursor) {
+                if child.kind() == "catch_formal_parameter" {
+                    if let Some(name_node) = child.child_by_field_name("name") {
+                        return text_of(name_node, code);
+                    }
+                }
+            }
+            None
+        }
+        "php" => {
+            // PHP: catch_clause has a "name" field, strip $ prefix
+            let name_node = catch_node.child_by_field_name("name")?;
+            text_of(name_node, code).map(|s| s.trim_start_matches('$').to_string())
+        }
+        "cpp" | "c++" => {
+            // C++: catch_clause has a "parameters" field → collect idents → last
+            let params = catch_node.child_by_field_name("parameters")?;
+            let mut idents = Vec::new();
+            collect_idents(params, code, &mut idents);
+            idents.pop()
+        }
+        _ => None,
+    }
+}
+
+// -------------------------------------------------------------------------
+//    try/catch/finally handler
+// -------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+fn build_try<'a>(
+    ast: Node<'a>,
+    preds: &[NodeIndex],
+    g: &mut Cfg,
+    lang: &str,
+    code: &'a [u8],
+    summaries: &mut FuncSummaries,
+    file_path: &str,
+    enclosing_func: Option<&str>,
+    call_ordinal: &mut u32,
+    analysis_rules: Option<&LangAnalysisRules>,
+    break_targets: &mut Vec<NodeIndex>,
+    continue_targets: &mut Vec<NodeIndex>,
+    throw_targets: &mut Vec<NodeIndex>,
+) -> Vec<NodeIndex> {
+    // 1. Extract child AST nodes (language-aware field lookup)
+    let try_body = ast.child_by_field_name("body");
+
+    // Catch clauses: JS/TS use "handler" field, Java uses positional "catch_clause" children
+    let catch_clauses: Vec<Node<'a>> = {
+        let mut clauses = Vec::new();
+        if let Some(handler) = ast.child_by_field_name("handler") {
+            clauses.push(handler);
+        }
+        // Also collect positional catch_clause children (Java, PHP, C++)
+        let mut cursor = ast.walk();
+        for child in ast.children(&mut cursor) {
+            if child.kind() == "catch_clause" && !clauses.iter().any(|c| c.id() == child.id()) {
+                clauses.push(child);
+            }
+        }
+        clauses
+    };
+
+    // Finally: JS/TS use "finalizer" field, Java/PHP use positional "finally_clause" child
+    let finally_clause = ast.child_by_field_name("finalizer").or_else(|| {
+        let mut cursor = ast.walk();
+        ast.children(&mut cursor)
+            .find(|child| child.kind() == "finally_clause")
+    });
+
+    // For Java try-with-resources: build resources as sequential predecessors
+    let try_preds = if let Some(resources) = ast.child_by_field_name("resources") {
+        build_sub(
+            resources,
+            preds,
+            g,
+            lang,
+            code,
+            summaries,
+            file_path,
+            enclosing_func,
+            call_ordinal,
+            analysis_rules,
+            break_targets,
+            continue_targets,
+            throw_targets,
+        )
+    } else {
+        preds.to_vec()
+    };
+
+    // 2. Build try body sub-CFG
+    let try_body_first_idx = g.node_count();
+    let mut try_throw_targets = Vec::new();
+    let try_exits = if let Some(body) = try_body {
+        build_sub(
+            body,
+            &try_preds,
+            g,
+            lang,
+            code,
+            summaries,
+            file_path,
+            enclosing_func,
+            call_ordinal,
+            analysis_rules,
+            break_targets,
+            continue_targets,
+            &mut try_throw_targets,
+        )
+    } else {
+        try_preds
+    };
+    let try_body_last_idx = g.node_count();
+
+    // 3. Collect exception sources: implicit (calls) + explicit (throws)
+    let mut exception_sources: Vec<NodeIndex> = Vec::new();
+    for raw in try_body_first_idx..try_body_last_idx {
+        let idx = NodeIndex::new(raw);
+        if is_exception_source(&g[idx]) {
+            exception_sources.push(idx);
+        }
+    }
+    exception_sources.extend(&try_throw_targets);
+
+    // 4. Build each catch clause and wire exception edges
+    let mut all_catch_exits: Vec<NodeIndex> = Vec::new();
+
+    if catch_clauses.is_empty() {
+        // try/finally without catch: throws propagate outward after finally
+        // (handled below in the finally section)
+    } else {
+        for catch_node in &catch_clauses {
+            let param_name = extract_catch_param_name(*catch_node, lang, code);
+
+            // If the catch has a named parameter, inject a synthetic node that
+            // defines it.  The taint transfer function will conservatively
+            // taint this variable (catch_param = true).
+            let catch_preds = if let Some(ref name) = param_name {
+                let synth = g.add_node(NodeInfo {
+                    kind: StmtKind::Seq,
+                    span: (catch_node.start_byte(), catch_node.start_byte()),
+                    label: None,
+                    defines: Some(name.clone()),
+                    uses: Vec::new(),
+                    callee: None,
+                    receiver: None,
+                    enclosing_func: enclosing_func.map(|s| s.to_string()),
+                    call_ordinal: 0,
+                    condition_text: None,
+                    condition_vars: Vec::new(),
+                    condition_negated: false,
+                    arg_uses: Vec::new(),
+                    sink_payload_args: None,
+                    catch_param: true,
+                });
+
+                // Wire exception edges from every exception source → synthetic node
+                for &src in &exception_sources {
+                    g.add_edge(src, synth, EdgeKind::Exception);
+                }
+
+                vec![synth]
+            } else {
+                // No param name — wire exception edges directly to first catch body node
+                Vec::new()
+            };
+
+            let catch_first_idx = NodeIndex::new(g.node_count());
+            // Pass outer throw_targets so throws in catch propagate to enclosing try
+            let catch_exits = build_sub(
+                *catch_node,
+                &catch_preds,
+                g,
+                lang,
+                code,
+                summaries,
+                file_path,
+                enclosing_func,
+                call_ordinal,
+                analysis_rules,
+                break_targets,
+                continue_targets,
+                throw_targets,
+            );
+
+            // If no param name, wire exception edges to the first catch body node
+            if param_name.is_none() {
+                let catch_entry = if catch_first_idx.index() < g.node_count() {
+                    catch_first_idx
+                } else {
+                    continue;
+                };
+                for &src in &exception_sources {
+                    g.add_edge(src, catch_entry, EdgeKind::Exception);
+                }
+            }
+
+            all_catch_exits.extend(catch_exits);
+        }
+    }
+
+    // 5. Build finally clause (if present)
+    if let Some(finally_node) = finally_clause {
+        // Finally predecessors = try normal exits + catch exits
+        // For try/finally without catch, also include throw targets from try body
+        let mut finally_preds: Vec<NodeIndex> = Vec::new();
+        finally_preds.extend(&try_exits);
+        finally_preds.extend(&all_catch_exits);
+        if catch_clauses.is_empty() {
+            finally_preds.extend(&try_throw_targets);
+        }
+
+        let finally_exits = build_sub(
+            finally_node,
+            &finally_preds,
+            g,
+            lang,
+            code,
+            summaries,
+            file_path,
+            enclosing_func,
+            call_ordinal,
+            analysis_rules,
+            break_targets,
+            continue_targets,
+            throw_targets,
+        );
+        finally_exits
+    } else {
+        // No finally: return try normal exits + catch exits
+        let mut exits = try_exits;
+        exits.extend(all_catch_exits);
+        exits
+    }
+}
+
+// -------------------------------------------------------------------------
 //    The recursive *work‑horse* that converts an AST node into a CFG slice.
 //    Returns the set of *exit* nodes that need to be wired further.
 // -------------------------------------------------------------------------
@@ -1070,6 +1367,7 @@ fn build_sub<'a>(
     analysis_rules: Option<&LangAnalysisRules>,
     break_targets: &mut Vec<NodeIndex>,
     continue_targets: &mut Vec<NodeIndex>,
+    throw_targets: &mut Vec<NodeIndex>,
 ) -> Vec<NodeIndex> {
     match lookup(lang, ast.kind()) {
         // ─────────────────────────────────────────────────────────────────
@@ -1126,6 +1424,7 @@ fn build_sub<'a>(
                     analysis_rules,
                     break_targets,
                     continue_targets,
+                    throw_targets,
                 );
                 // Add True edge from condition to first node of then-branch.
                 // We use the first node created (by index) rather than the
@@ -1157,6 +1456,7 @@ fn build_sub<'a>(
                     analysis_rules,
                     break_targets,
                     continue_targets,
+                    throw_targets,
                 );
                 if else_first_node.index() < g.node_count() {
                     connect_all(g, &[cond], else_first_node, EdgeKind::False);
@@ -1178,6 +1478,7 @@ fn build_sub<'a>(
                     defines: None,
                     uses: Vec::new(),
                     callee: None,
+                    receiver: None,
                     enclosing_func: enclosing_func.map(|s| s.to_string()),
                     call_ordinal: 0,
                     condition_text: None,
@@ -1185,6 +1486,7 @@ fn build_sub<'a>(
                     condition_negated: false,
                     arg_uses: Vec::new(),
                     sink_payload_args: None,
+                    catch_param: false,
                 });
                 connect_all(g, &[cond], pass, EdgeKind::False);
                 vec![pass]
@@ -1227,6 +1529,7 @@ fn build_sub<'a>(
                 analysis_rules,
                 &mut loop_breaks,
                 &mut loop_continues,
+                throw_targets,
             );
 
             // Back-edge from every linear exit to header
@@ -1290,6 +1593,7 @@ fn build_sub<'a>(
                 analysis_rules,
                 &mut loop_breaks,
                 &mut loop_continues,
+                throw_targets,
             );
 
             // Back‑edge for every linear exit → header.
@@ -1354,6 +1658,65 @@ fn build_sub<'a>(
                 Vec::new() // terminates this path
             }
         }
+        Kind::Throw => {
+            if has_call_descendant(ast, lang) {
+                let ord = *call_ordinal;
+                *call_ordinal += 1;
+                let call_idx = push_node(
+                    g,
+                    StmtKind::Call,
+                    ast,
+                    lang,
+                    code,
+                    enclosing_func,
+                    ord,
+                    analysis_rules,
+                );
+                connect_all(g, preds, call_idx, EdgeKind::Seq);
+                let ret = push_node(
+                    g,
+                    StmtKind::Return,
+                    ast,
+                    lang,
+                    code,
+                    enclosing_func,
+                    0,
+                    analysis_rules,
+                );
+                connect_all(g, &[call_idx], ret, EdgeKind::Seq);
+                throw_targets.push(ret);
+                Vec::new()
+            } else {
+                let ret = push_node(
+                    g,
+                    StmtKind::Return,
+                    ast,
+                    lang,
+                    code,
+                    enclosing_func,
+                    0,
+                    analysis_rules,
+                );
+                connect_all(g, preds, ret, EdgeKind::Seq);
+                throw_targets.push(ret);
+                Vec::new()
+            }
+        }
+        Kind::Try => build_try(
+            ast,
+            preds,
+            g,
+            lang,
+            code,
+            summaries,
+            file_path,
+            enclosing_func,
+            call_ordinal,
+            analysis_rules,
+            break_targets,
+            continue_targets,
+            throw_targets,
+        ),
         Kind::Break => {
             let brk = push_node(
                 g,
@@ -1428,6 +1791,7 @@ fn build_sub<'a>(
                     analysis_rules,
                     break_targets,
                     continue_targets,
+                    throw_targets,
                 );
 
                 let is_preproc = child.kind().starts_with("preproc_");
@@ -1491,6 +1855,7 @@ fn build_sub<'a>(
             let mut fn_call_ordinal: u32 = 0;
             let mut fn_breaks = Vec::new();
             let mut fn_continues = Vec::new();
+            let mut fn_throws = Vec::new();
             let body_exits = build_sub(
                 body,
                 &[entry_idx],
@@ -1504,6 +1869,7 @@ fn build_sub<'a>(
                 analysis_rules,
                 &mut fn_breaks,
                 &mut fn_continues,
+                &mut fn_throws,
             );
 
             // ───── 3) light-weight dataflow ──────────────────────────────────────
@@ -1665,6 +2031,7 @@ fn build_sub<'a>(
                 defines: None,
                 uses: Vec::new(),
                 callee: None,
+                receiver: None,
                 enclosing_func: Some(fn_name.clone()),
                 call_ordinal: 0,
                 condition_text: None,
@@ -1672,6 +2039,7 @@ fn build_sub<'a>(
                 condition_negated: false,
                 arg_uses: Vec::new(),
                 sink_payload_args: None,
+                catch_param: false,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -1745,6 +2113,7 @@ fn build_sub<'a>(
                     analysis_rules,
                     break_targets,
                     continue_targets,
+                    throw_targets,
                 );
             }
 
@@ -1800,6 +2169,7 @@ fn build_sub<'a>(
                     analysis_rules,
                     break_targets,
                     continue_targets,
+                    throw_targets,
                 );
             }
 
@@ -1846,6 +2216,7 @@ fn build_sub<'a>(
                     analysis_rules,
                     break_targets,
                     continue_targets,
+                    throw_targets,
                 );
             }
 
@@ -1933,6 +2304,7 @@ pub(crate) fn build_cfg<'a>(
         defines: None,
         uses: Vec::new(),
         callee: None,
+        receiver: None,
         enclosing_func: None,
         call_ordinal: 0,
         condition_text: None,
@@ -1940,6 +2312,7 @@ pub(crate) fn build_cfg<'a>(
         condition_negated: false,
         arg_uses: Vec::new(),
         sink_payload_args: None,
+        catch_param: false,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -1948,6 +2321,7 @@ pub(crate) fn build_cfg<'a>(
         defines: None,
         uses: Vec::new(),
         callee: None,
+        receiver: None,
         enclosing_func: None,
         call_ordinal: 0,
         condition_text: None,
@@ -1955,12 +2329,14 @@ pub(crate) fn build_cfg<'a>(
         condition_negated: false,
         arg_uses: Vec::new(),
         sink_payload_args: None,
+        catch_param: false,
     });
 
     // Build the body below the synthetic ENTRY.
     let mut top_ordinal: u32 = 0;
     let mut top_breaks = Vec::new();
     let mut top_continues = Vec::new();
+    let mut top_throws = Vec::new();
     let exits = build_sub(
         tree.root_node(),
         &[entry],
@@ -1974,6 +2350,7 @@ pub(crate) fn build_cfg<'a>(
         analysis_rules,
         &mut top_breaks,
         &mut top_continues,
+        &mut top_throws,
     );
     debug!(target: "cfg", "exits: {:?}", exits);
     // Wire every real exit to our synthetic EXIT node.
@@ -2068,3 +2445,210 @@ pub(crate) fn export_summaries(
 //         );
 //     }
 // }
+
+#[cfg(test)]
+mod cfg_tests {
+    use super::*;
+    use petgraph::visit::EdgeRef;
+    use tree_sitter::Language;
+
+    fn parse_and_build(src: &[u8], lang_str: &str, ts_lang: Language) -> (Cfg, NodeIndex) {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&ts_lang).unwrap();
+        let tree = parser.parse(src, None).unwrap();
+        let (cfg, entry, _) = build_cfg(&tree, src, lang_str, "test.js", None);
+        (cfg, entry)
+    }
+
+    #[test]
+    fn js_try_catch_has_exception_edges() {
+        let src = b"function f() { try { foo(); } catch (e) { bar(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let exception_edges: Vec<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .collect();
+        assert!(
+            !exception_edges.is_empty(),
+            "Expected at least one Exception edge"
+        );
+        // Verify source is a Call node
+        for e in &exception_edges {
+            assert_eq!(cfg[e.source()].kind, StmtKind::Call);
+        }
+    }
+
+    #[test]
+    fn js_try_finally_no_exception_edges() {
+        let src = b"function f() { try { foo(); } finally { cleanup(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let exception_edges: Vec<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .collect();
+        // No catch clause → no exception edges
+        assert!(
+            exception_edges.is_empty(),
+            "Expected no Exception edges for try/finally without catch"
+        );
+
+        // Verify finally nodes are reachable from entry
+        let mut reachable = HashSet::new();
+        let mut bfs = petgraph::visit::Bfs::new(&cfg, _entry);
+        while let Some(nx) = bfs.next(&cfg) {
+            reachable.insert(nx);
+        }
+        assert_eq!(
+            reachable.len(),
+            cfg.node_count(),
+            "All nodes should be reachable (finally connected to try body)"
+        );
+    }
+
+    #[test]
+    fn java_try_catch_has_exception_edges() {
+        let src = b"class Foo { void bar() { try { baz(); } catch (Exception e) { qux(); } } }";
+        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
+
+        let exception_edges: Vec<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .collect();
+        assert!(
+            !exception_edges.is_empty(),
+            "Expected at least one Exception edge in Java try/catch"
+        );
+        for e in &exception_edges {
+            assert_eq!(cfg[e.source()].kind, StmtKind::Call);
+        }
+    }
+
+    #[test]
+    fn js_try_catch_finally_all_reachable() {
+        let src = b"function f() { try { foo(); } catch (e) { bar(); } finally { baz(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, entry) = parse_and_build(src, "javascript", ts_lang);
+
+        // All nodes should be reachable
+        let mut reachable = HashSet::new();
+        let mut bfs = petgraph::visit::Bfs::new(&cfg, entry);
+        while let Some(nx) = bfs.next(&cfg) {
+            reachable.insert(nx);
+        }
+        assert_eq!(
+            reachable.len(),
+            cfg.node_count(),
+            "All nodes should be reachable in try/catch/finally"
+        );
+
+        // Should have exception edges
+        let exception_edges: Vec<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .collect();
+        assert!(!exception_edges.is_empty());
+    }
+
+    #[test]
+    fn js_throw_in_try_catch_has_exception_edge() {
+        let src = b"function f() { try { throw new Error('bad'); } catch (e) { handle(e); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let exception_edges: Vec<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .collect();
+        assert!(
+            !exception_edges.is_empty(),
+            "throw inside try should create exception edge to catch"
+        );
+    }
+
+    #[test]
+    fn java_multiple_catch_clauses() {
+        let src = b"class Foo { void bar() { try { baz(); } catch (IOException e) { a(); } catch (Exception e) { b(); } } }";
+        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
+
+        let exception_edges: Vec<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .collect();
+        // Should have exception edges to both catch clauses
+        assert!(
+            exception_edges.len() >= 2,
+            "Expected exception edges to multiple catch clauses, got {}",
+            exception_edges.len()
+        );
+    }
+
+    #[test]
+    fn js_catch_param_defines_variable() {
+        let src = b"function f() { try { foo(); } catch (e) { bar(e); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        // Find the synthetic catch-param node
+        let catch_param_nodes: Vec<_> = cfg
+            .node_indices()
+            .filter(|&n| cfg[n].catch_param)
+            .collect();
+        assert_eq!(
+            catch_param_nodes.len(),
+            1,
+            "Expected exactly one catch_param node"
+        );
+        let cp = &cfg[catch_param_nodes[0]];
+        assert_eq!(cp.defines.as_deref(), Some("e"));
+        assert_eq!(cp.kind, StmtKind::Seq);
+
+        // Exception edges should target the synthetic node
+        let exception_targets: Vec<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .map(|e| e.target())
+            .collect();
+        assert!(exception_targets.iter().all(|&t| t == catch_param_nodes[0]));
+    }
+
+    #[test]
+    fn java_catch_param_extracted() {
+        let src = b"class Foo { void bar() { try { baz(); } catch (Exception e) { qux(e); } } }";
+        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
+
+        let catch_param_nodes: Vec<_> = cfg
+            .node_indices()
+            .filter(|&n| cfg[n].catch_param)
+            .collect();
+        assert_eq!(
+            catch_param_nodes.len(),
+            1,
+            "Expected exactly one catch_param node in Java"
+        );
+        assert_eq!(cfg[catch_param_nodes[0]].defines.as_deref(), Some("e"));
+    }
+
+    #[test]
+    fn js_catch_no_param_no_synthetic() {
+        // catch {} with no parameter should not create a catch_param node
+        let src = b"function f() { try { foo(); } catch { bar(); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let catch_param_nodes: Vec<_> = cfg
+            .node_indices()
+            .filter(|&n| cfg[n].catch_param)
+            .collect();
+        assert!(
+            catch_param_nodes.is_empty(),
+            "catch without parameter should not create a catch_param node"
+        );
+    }
+}

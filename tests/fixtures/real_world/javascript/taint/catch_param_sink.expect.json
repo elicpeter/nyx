@@ -1,0 +1,15 @@
+{
+  "description": "Catch parameter is conservatively tainted: e flows to res.send — XSS",
+  "tags": ["taint", "xss", "try-catch", "catch-param"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 10],
+      "evidence_contains": [],
+      "notes": "catch(e) binds e as tainted; e flows to res.send — XSS via catch parameter"
+    }
+  ]
+}

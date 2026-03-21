@@ -277,6 +277,7 @@ mod tests {
             defines: None,
             uses: vec![],
             callee: None,
+            receiver: None,
             enclosing_func: None,
             call_ordinal: 0,
             condition_text: None,
@@ -284,6 +285,7 @@ mod tests {
             condition_negated: false,
             arg_uses: vec![],
             sink_payload_args: None,
+            catch_param: false,
         }
     }
 

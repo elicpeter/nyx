@@ -60,21 +60,48 @@ impl Transfer<TaintState> for TaintTransfer<'_> {
             }
         }
 
+        // Exception edges bypass try-block conditions, so predicate state
+        // (NullCheck, EmptyCheck, ErrorCheck) must not carry into catch handlers.
+        if matches!(edge, Some(EdgeKind::Exception)) {
+            state.predicates.clear();
+        }
+
         let caller_func = info.enclosing_func.as_deref().unwrap_or("");
 
-        // ── Apply taint transfer ────────────────────────────────────────
-        match info.label {
-            Some(DataLabel::Source(bits)) => {
-                self.apply_source(node, info, bits, &mut state);
+        // Catch parameter binding: conservatively taint the caught exception variable.
+        // Exception objects may carry user-controlled data.
+        if info.catch_param {
+            if let Some(ref v) = info.defines
+                && let Some(sym) = self.interner.get(v)
+            {
+                let origin = TaintOrigin {
+                    node,
+                    source_kind: crate::labels::SourceKind::Unknown,
+                };
+                state.set(
+                    sym,
+                    VarTaint {
+                        caps: Cap::all(),
+                        origins: SmallVec::from_elem(origin, 1),
+                    },
+                );
             }
-            Some(DataLabel::Sanitizer(bits)) => {
-                self.apply_sanitizer(info, bits, &mut state);
-            }
-            _ if info.kind == StmtKind::Call => {
-                self.apply_call(node, info, caller_func, &mut state);
-            }
-            _ => {
-                self.apply_assignment(info, &mut state);
+            // Skip normal label/assignment processing — this is a synthetic node.
+        } else {
+            // ── Apply taint transfer ────────────────────────────────────────
+            match info.label {
+                Some(DataLabel::Source(bits)) => {
+                    self.apply_source(node, info, bits, &mut state);
+                }
+                Some(DataLabel::Sanitizer(bits)) => {
+                    self.apply_sanitizer(info, bits, &mut state);
+                }
+                _ if info.kind == StmtKind::Call => {
+                    self.apply_call(node, info, caller_func, &mut state);
+                }
+                _ => {
+                    self.apply_assignment(info, &mut state);
+                }
             }
         }
 
@@ -354,17 +381,25 @@ impl TaintTransfer<'_> {
         state: &TaintState,
         propagating_params: &[usize],
     ) -> (Cap, SmallVec<[TaintOrigin; 2]>) {
-        // Require arg_uses for reliable positional mapping.
-        // If empty, fall back to all-uses (safe over-approximation).
-        if info.arg_uses.is_empty() {
+        // Count real arguments (exclude receiver slot at position 0).
+        let real_arg_count = if info.receiver.is_some() {
+            info.arg_uses.len().saturating_sub(1)
+        } else {
+            info.arg_uses.len()
+        };
+        // Require real args for reliable positional mapping.
+        // If zero, fall back to all-uses (safe over-approximation).
+        if real_arg_count == 0 {
             return self.collect_uses_taint(info, state);
         }
 
+        let offset = if info.receiver.is_some() { 1 } else { 0 };
         let mut combined_caps = Cap::empty();
         let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
         for &param_idx in propagating_params {
-            let Some(arg_idents) = info.arg_uses.get(param_idx) else {
+            let adj = param_idx + offset;
+            let Some(arg_idents) = info.arg_uses.get(adj) else {
                 continue; // param index out of range (fewer args than params)
             };
             for ident in arg_idents {
@@ -425,8 +460,10 @@ impl TaintTransfer<'_> {
         // only check variables from the designated payload argument positions.
         if let Some(ref positions) = info.sink_payload_args {
             if !info.arg_uses.is_empty() {
+                let offset = if info.receiver.is_some() { 1 } else { 0 };
                 for &pos in positions {
-                    if let Some(arg_idents) = info.arg_uses.get(pos) {
+                    let adj = pos + offset;
+                    if let Some(arg_idents) = info.arg_uses.get(adj) {
                         for u in arg_idents {
                             if let Some(taint) = self.lookup_var(u, state)
                                 && (taint.caps & sink_caps) != Cap::empty()
