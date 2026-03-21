@@ -1815,6 +1815,7 @@ evidence.
 - Add missing qualifications (state analysis opt-in, interop requires manual setup)
 - Remove or qualify the unsubstantiated "rust-lang/rust in ~1s" performance claim
 - Add benchmark results reference
+- Make README sound more human
 
 **Files to touch**:
 - `README.md`
