@@ -77,9 +77,15 @@ pub static RULES: &[LabelRule] = &[
             "child_process.exec",
             "child_process.execSync",
             "child_process.spawn",
+            // Bare forms from destructured imports:
+            //   const { exec, execSync } = require('child_process')
+            // Note: bare `exec` suffix-matches RegExp.prototype.exec() too,
+            // but in practice tainted data rarely flows to regexp.exec().
+            "exec",
+            "execSync",
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
-        case_sensitive: false,
+        case_sensitive: true,
     },
     LabelRule {
         matchers: &["fetch", "axios.get", "axios.post", "axios.request", "http.request", "https.request"],

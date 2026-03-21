@@ -286,6 +286,156 @@ pub fn extract_summaries_from_file(path: &Path, cfg: &Config) -> NyxResult<Vec<F
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Constant-argument suppression helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns `true` when the captured call node has only literal arguments
+/// (string, number, boolean, null/nil/none).  Used to suppress AST pattern
+/// findings on provably-constant calls like `os.system("echo health-ok")`.
+///
+/// Conservative: returns `false` whenever the tree structure is unclear or
+/// any argument is non-literal (including interpolated strings).
+fn is_call_all_args_literal(node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    // Walk upwards from the captured node to find the closest call_expression
+    // (or similar) ancestor, then locate its argument list child.
+    let call_node = find_enclosing_call(node);
+    let call_node = match call_node {
+        Some(n) => n,
+        None => return false,
+    };
+
+    // Find the argument_list / arguments child of the call node.
+    let arg_list = find_arg_list(call_node);
+    let arg_list = match arg_list {
+        Some(n) => n,
+        None => return false,
+    };
+
+    let mut has_any_arg = false;
+    for i in 0..arg_list.named_child_count() as u32 {
+        let child = match arg_list.named_child(i) {
+            Some(c) => c,
+            None => continue,
+        };
+        has_any_arg = true;
+        if !is_literal_node(child, bytes) {
+            return false;
+        }
+    }
+
+    // If the argument list is empty (no args), we conservatively do NOT
+    // suppress — the danger may come from side effects, not arguments.
+    has_any_arg
+}
+
+/// Walk up to find a call-expression-like ancestor of the captured node.
+/// Stops at statement/block boundaries to avoid matching unrelated outer calls.
+fn find_enclosing_call(mut node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    // The captured node may already be the call, or it could be the callee
+    // identifier inside a call_expression.  Walk up a few levels.
+    for _ in 0..4 {
+        let kind = node.kind();
+        if kind.contains("call") && !kind.contains("callee") {
+            return Some(node);
+        }
+        // PHP: function_call_expression
+        if kind == "function_call_expression" {
+            return Some(node);
+        }
+        // Stop at scope/statement boundaries — don't cross into outer calls
+        if kind.contains("block")
+            || kind.contains("body")
+            || kind == "program"
+            || kind == "module"
+            || kind == "expression_statement"
+        {
+            return None;
+        }
+        node = node.parent()?;
+    }
+    None
+}
+
+/// Find the argument-list child of a call node across languages.
+fn find_arg_list(call: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    for i in 0..call.child_count() as u32 {
+        if let Some(child) = call.child(i) {
+            let kind = child.kind();
+            // Common argument list node kinds across languages:
+            // Python/JS/TS/Java/Go/C/C++/Rust: argument_list / arguments
+            // PHP: arguments
+            // Ruby: argument_list
+            if kind == "argument_list"
+                || kind == "arguments"
+                || kind == "actual_parameters"
+            {
+                return Some(child);
+            }
+        }
+    }
+    None
+}
+
+/// Check if a tree-sitter node represents a literal value.
+fn is_literal_node(node: tree_sitter::Node, bytes: &[u8]) -> bool {
+    let kind = node.kind();
+    match kind {
+        // String literals (most languages)
+        "string" | "string_literal" | "interpreted_string_literal"
+        | "raw_string_literal" | "string_content" | "string_fragment" => true,
+
+        // Numeric literals
+        "integer" | "integer_literal" | "int_literal"
+        | "float" | "float_literal" | "number" => true,
+
+        // Boolean / null / nil / none
+        "true" | "false" | "null" | "nil" | "none" | "null_literal"
+        | "boolean" | "boolean_literal" => true,
+
+        // PHP encapsed_string: safe only if it has no variable interpolation
+        "encapsed_string" => {
+            // If it contains `$` variable interpolation nodes, it's not literal
+            !has_interpolation(node)
+        }
+
+        // Wrapper nodes: PHP wraps each arg in an `argument` node,
+        // Go uses `argument` too.  Unwrap and check the inner value.
+        "argument" => {
+            node.named_child_count() == 1
+                && node.named_child(0).map_or(false, |c| is_literal_node(c, bytes))
+        }
+
+        // Unary minus on a number literal: `-42`
+        "unary_expression" | "unary_op" => {
+            node.named_child_count() == 1
+                && node.named_child(0).map_or(false, |c| is_literal_node(c, bytes))
+        }
+
+        // String concatenation of literals: `"a" + "b"` or `"a" . "b"`
+        "binary_expression" | "concatenated_string" => {
+            node.named_child_count() >= 2
+                && (0..node.named_child_count() as u32)
+                    .all(|i| node.named_child(i).map_or(false, |c| is_literal_node(c, bytes)))
+        }
+
+        _ => false,
+    }
+}
+
+/// Check if a string node contains interpolation (e.g., PHP `"Hello $name"`).
+fn has_interpolation(node: tree_sitter::Node) -> bool {
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            let kind = child.kind();
+            if kind == "variable_name" || kind == "simple_variable" || kind.contains("interpolation") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Pass 2 / single‑file: Full rule execution (AST queries + taint)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -494,6 +644,12 @@ pub fn run_rules_on_bytes(
             let mut matches = cursor.matches(&cq.query, root, bytes);
             while let Some(m) = matches.next() {
                 if let Some(cap) = m.captures.iter().find(|c| c.index == 0) {
+                    // Layer A: suppress Security findings on calls with all-literal args
+                    if cq.meta.category.finding_category() == FindingCategory::Security
+                        && is_call_all_args_literal(cap.node, bytes)
+                    {
+                        continue;
+                    }
                     let point = cap.node.start_position();
                     out.push(Diag {
                         path: path.to_string_lossy().into_owned(),
@@ -785,6 +941,12 @@ pub fn analyse_file_fused(
             let mut matches = cursor.matches(&cq.query, root, bytes);
             while let Some(m) = matches.next() {
                 if let Some(cap) = m.captures.iter().find(|c| c.index == 0) {
+                    // Layer A: suppress Security findings on calls with all-literal args
+                    if cq.meta.category.finding_category() == FindingCategory::Security
+                        && is_call_all_args_literal(cap.node, bytes)
+                    {
+                        continue;
+                    }
                     let point = cap.node.start_position();
                     out.push(Diag {
                         path: path.to_string_lossy().into_owned(),
@@ -929,4 +1091,76 @@ fn nonprod_path_downgrades_findings() {
     // Not all diagnostics are necessarily high, but include_nonprod should not downgrade
     // Just verify that if there are findings, they weren't downgraded by the nonprod logic
     let _ = diags_prod;
+}
+
+#[test]
+fn constant_arg_suppression_works() {
+    use tree_sitter::StreamingIterator;
+
+    // PHP: system("echo health-ok") should be suppressed
+    {
+        let mut parser = tree_sitter::Parser::new();
+        let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+        parser.set_language(&lang).unwrap();
+        let code = b"<?php\nsystem(\"echo health-ok\");\n";
+        let tree = parser.parse(code, None).unwrap();
+        let query_str = r#"(function_call_expression
+            function: (name) @n (#match? @n "^(system)$"))
+            @vuln"#;
+        let query = tree_sitter::Query::new(&lang, query_str).unwrap();
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), code.as_slice());
+        let m = matches.next().expect("query should match");
+        let cap = m.captures.iter().find(|c| c.index == 0).unwrap();
+        assert!(
+            is_call_all_args_literal(cap.node, code),
+            "PHP system(\"echo health-ok\") should have all-literal args"
+        );
+    }
+
+    // Python: os.system("echo health-ok") should be suppressed
+    {
+        let mut parser = tree_sitter::Parser::new();
+        let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+        parser.set_language(&lang).unwrap();
+        let code = b"import os\nos.system(\"echo health-ok\")\n";
+        let tree = parser.parse(code, None).unwrap();
+        let query_str = r#"(call
+            function: (attribute
+                object: (identifier) @pkg (#eq? @pkg "os")
+                attribute: (identifier) @fn (#eq? @fn "system")))
+            @vuln"#;
+        let query = tree_sitter::Query::new(&lang, query_str).unwrap();
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), code.as_slice());
+        let m = matches.next().expect("query should match");
+        let cap = m.captures.iter().find(|c| c.index == 0).unwrap();
+        assert!(
+            is_call_all_args_literal(cap.node, code),
+            "Python os.system(\"echo health-ok\") should have all-literal args"
+        );
+    }
+
+    // Python: os.system(cmd) should NOT be suppressed (variable arg)
+    {
+        let mut parser = tree_sitter::Parser::new();
+        let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+        parser.set_language(&lang).unwrap();
+        let code = b"import os\nos.system(cmd)\n";
+        let tree = parser.parse(code, None).unwrap();
+        let query_str = r#"(call
+            function: (attribute
+                object: (identifier) @pkg (#eq? @pkg "os")
+                attribute: (identifier) @fn (#eq? @fn "system")))
+            @vuln"#;
+        let query = tree_sitter::Query::new(&lang, query_str).unwrap();
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), code.as_slice());
+        let m = matches.next().expect("query should match");
+        let cap = m.captures.iter().find(|c| c.index == 0).unwrap();
+        assert!(
+            !is_call_all_args_literal(cap.node, code),
+            "Python os.system(cmd) should NOT have all-literal args"
+        );
+    }
 }

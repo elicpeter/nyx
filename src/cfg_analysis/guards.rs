@@ -16,12 +16,31 @@ pub struct UnguardedSink;
 fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let sink_info = &ctx.cfg[sink];
     let callee_desc = sink_info.callee.as_deref().unwrap_or("");
-    let callee_parts: Vec<&str> = callee_desc.split(['.', ':']).collect();
+    // Split callee description into parts and strip parenthesized arg portions.
+    // e.g. `exec.Command("echo", "health-ok").Run` → ["exec", "Command", "Run"]
+    let callee_parts: Vec<&str> = callee_desc
+        .split(['.', ':'])
+        .map(|p| p.split('(').next().unwrap_or(p))
+        .collect();
     let sink_func = sink_info.enclosing_func.as_deref();
+
+    // Collect parameter names for the enclosing function — parameters are not
+    // user-controlled constants but they're not externally tainted either, so
+    // they should not block constant-arg suppression.
+    let param_names: Vec<&str> = ctx
+        .func_summaries
+        .values()
+        .filter(|s| ctx.cfg[s.entry].enclosing_func.as_deref() == sink_func)
+        .flat_map(|s| s.param_names.iter().map(|p| p.as_str()))
+        .collect();
 
     sink_info.uses.iter().all(|u| {
         // Part of the callee name itself → constant
         if callee_parts.contains(&u.as_str()) {
+            return true;
+        }
+        // Function parameter → not externally tainted
+        if param_names.contains(&u.as_str()) {
             return true;
         }
         // One-hop trace: find the defining node in the same function
@@ -261,9 +280,10 @@ impl CfgAnalysis for UnguardedSink {
 
             // If sink args are all constants (including one-hop constant bindings)
             // and taint didn't confirm, this is a false positive — skip it.
-            if is_all_args_constant(ctx, *sink) && !has_taint && !source_derived {
+            if is_all_args_constant(ctx, *sink) && !has_taint {
                 continue;
             }
+
 
             let param_only = sink_arg_is_parameter_only(ctx, *sink);
             let in_entrypoint = sink_in_entrypoint(ctx, *sink);

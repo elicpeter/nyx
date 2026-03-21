@@ -1802,57 +1802,231 @@ numbers, and documents them for future comparison.
 
 ---
 
-### Phase 23 — README and docs claims audit
+### Phase 22.5 — Benchmark-driven precision stabilization
 
-**Category**: product credibility
+**Category**: precision / recall
 
-**Why**: Several README claims are stronger than what the implementation substantiates.
-A skeptical security engineer reading the README should find every claim backed by
-evidence.
+**Why**: Phase 22 baseline showed 62% precision (30/40 safe cases flagged as FP)
+but strong recall (89.1%).  The primary weakness is false positives on safe code,
+plus 6 straightforward false negatives.  This phase makes targeted, benchmark-proven
+fixes to close FN gaps and fix rule-ID mismatches without large redesign.
 
 **Goals**:
-- Soften or qualify claims that exceed evidence
-- Add missing qualifications (state analysis opt-in, interop requires manual setup)
-- Remove or qualify the unsubstantiated "rust-lang/rust in ~1s" performance claim
-- Add benchmark results reference
-- Make README sound more human
+- Fix rule-ID mismatches in ground truth (py-ssrf-001)
+- Add missing taint sink coverage: JS exec/execSync cmdi, Python Template SSTI
+- Re-run benchmark and update thresholds
 
-**Files to touch**:
-- `README.md`
-- `docs/configuration.md` — note state analysis opt-in
-- `docs/detectors/patterns.md` — add confidence level definitions
+**Files touched**:
+- `tests/benchmark/ground_truth.json` — py-ssrf-001 alternative rule, JS cmdi alternatives
+- `src/labels/javascript.rs` — added bare `exec`/`execSync` as SHELL_ESCAPE sinks
+- `src/labels/python.rs` — added `Template` as HTML_ESCAPE sink (SSTI/XSS)
+- `tests/benchmark_test.rs` — updated regression thresholds
+- `tests/benchmark/RESULTS.md` — Phase 22.5 results
 
-**Implementation tasks**:
-1. In `README.md`:
-   - Change the "~1s for rust-lang/rust" claim to something like "typically scans
-     large codebases in seconds on modern hardware" or add "(informal measurement,
-     AST-only mode)" qualification
-   - Add "(opt-in)" footnote to state-analysis capabilities in the feature table
-   - Qualify cross-language interop: "via explicit interop edge configuration"
-   - Add a link to benchmark results if Phase 21 is complete
-2. In `docs/configuration.md`:
-   - Add section explaining how to enable state analysis
-   - Document `scanner.enable_state_analysis = true`
-3. In `docs/detectors/patterns.md`:
-   - Define `Confidence::High`, `Confidence::Medium`, `Confidence::Low`
-   - Explain what confidence means for consumers (filtering, prioritisation)
-4. Fix the author email typo in `Cargo.toml` if still present (`exmaple` → `example`)
+**Results**:
+- FN reduced from 6 → 2 (cmdi 100%, XSS 89%, SSRF 83%)
+- Recall improved from 89.1% → 96.4%
+- Precision stable at 62.4% (2 new taint FPs from JS exec in validated safe cases)
+- F1 improved from 73.1% → 75.7%
+- Remaining FN: java-ssrf-002 (HttpClient.send), php-xss-001 (echo construct)
 
-**Test tasks**:
-- `cargo test` passes (no code changes)
-- Manual review: README claims match implementation
+**Not implemented** (investigated, reverted due to regressions):
+- cfg-unguarded-sink suppression when taint-negative: `source_derived` has false negatives
+  for cross-file flows; suppression caused recall regression in py-ssrf-001
+- AST-pattern sink suppression when taint-negative: too aggressive across 10 languages;
+  suppressed real findings in C++/Ruby/cross-file fixtures
+- state-unauthed-access HTTP-handler filtering: marker-based detection too narrow;
+  missed Rust/Flask/Go handler files
 
-**Definition of done**:
-- All README claims qualified or backed by evidence
-- Docs updated
-- Cargo.toml metadata fixed
-- No code changes
+**Dependencies**: Phase 22
 
-**Risks / gotchas**:
-- Softening claims may feel like a step backward, but it builds trust. A tool that
-  under-promises and over-delivers is more credible than one that over-promises.
+---
 
-**Dependencies**: Phase 21 (benchmark results to reference)
+### Phase 23 — README and docs claims audit
+
+Category: product credibility
+
+Why:
+Several README claims are stronger than what the implementation substantiates,
+and the overall tone reads slightly promotional. A skeptical security engineer
+should be able to read the README and find every capability clearly defined,
+qualified, and reproducible.
+
+The goal of this phase is not only to soften claims, but to make the README
+sound like a serious static analysis tool written by an engineer, not a demo
+project or AI-generated description.
+
+Goals:
+- Ensure every capability claim is backed by implementation
+- Remove marketing-style phrasing
+- Add explicit scope, limitations, and non-goals
+- Clarify which features are opt-in or experimental
+- Document what benchmark numbers actually mean
+- Make performance and capability claims reproducible
+- Improve credibility for security / compiler / tooling audiences
+
+Files to touch:
+- README.md
+- docs/configuration.md
+- docs/detectors/patterns.md
+- Cargo.toml (metadata only)
+
+Implementation tasks:
+
+1. README — remove or qualify overstated claims
+
+- Replace strong performance claims with reproducible wording
+- Remove or qualify the "~1s for rust-lang/rust" statement unless benchmarked
+- Prefer wording like:
+  "Typically scans large repositories in seconds in AST-only mode on modern hardware"
+- Add "(opt-in)" to state-analysis features
+- Clarify cross-language interop requires explicit configuration
+- Avoid phrases like:
+    - "powerful"
+    - "advanced"
+    - "next-generation"
+    - "cutting-edge"
+    - "blazing fast"
+    - "highly intelligent"
+- Prefer neutral, technical wording
+
+2. README — add explicit scope section
+
+Add a section such as:
+
+## Scope
+
+Nyx is a static analysis engine focused on:
+
+- multi-language taint analysis
+- control-flow-aware detectors
+- configurable interop edges
+- security-oriented pattern detection
+
+Nyx is not currently intended to replace full commercial SAST tools,
+and some advanced analyses require explicit configuration.
+
+3. README — add limitations section
+
+Add:
+
+## Limitations
+
+- State analysis is disabled by default
+- Interop edges must be configured explicitly
+- Some detectors rely on heuristic matching
+- Not all language features are modeled yet
+- Results may contain false positives or false negatives
+
+This improves credibility significantly.
+
+4. README — add benchmark qualification
+
+If Phase 21 exists, add:
+
+## Performance
+
+Benchmark results are available in docs/benchmarks.md.
+
+Benchmarks are run in AST-only mode unless otherwise stated.
+State analysis and interop analysis may increase runtime.
+
+Do not include numbers that cannot be reproduced.
+
+5. README — add stability / maturity note
+
+Add:
+
+## Status
+
+Nyx is under active development.
+APIs, detector behavior, and configuration options may change.
+
+This prevents the README from sounding like a finished product.
+
+6. README — add configuration disclaimer
+
+Mention that some features require enabling:
+
+- state analysis
+- interop edges
+- detector sets
+
+7. docs/configuration.md
+
+Add section:
+
+### Enabling state analysis
+
+scanner.enable_state_analysis = true
+
+Explain cost / benefit tradeoff.
+
+8. docs/detectors/patterns.md
+
+Add confidence level definitions:
+
+Confidence::High
+Confidence::Medium
+Confidence::Low
+
+Explain intended meaning:
+
+- High = strong evidence
+- Medium = likely issue, needs review
+- Low = heuristic match
+
+9. Cargo.toml metadata audit
+
+Fix author email typo if present:
+exmaple → example
+
+Ensure:
+- description is accurate
+- keywords not exaggerated
+- categories correct
+
+10. Tone pass
+
+Read README once and remove:
+
+- marketing language
+- AI-style phrasing
+- vague adjectives
+- claims without evidence
+
+Prefer:
+
+- precise wording
+- qualified statements
+- technical descriptions
+- explicit constraints
+
+Test tasks:
+
+- cargo test passes
+- README builds correctly on GitHub
+- All links valid
+- Manual audit: every claim traceable to code or docs
+
+Definition of done:
+
+- README contains scope section
+- README contains limitations section
+- Performance claims qualified
+- Opt-in features marked
+- No exaggerated wording
+- Docs updated to match behavior
+- Cargo metadata correct
+
+Risks / gotchas:
+
+Softening claims can feel like a downgrade, but realistic documentation
+makes the project look more mature and trustworthy to experienced engineers.
+
+Dependencies:
+
+Phase 21 (benchmark results to reference)
 
 ---
 

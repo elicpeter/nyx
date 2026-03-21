@@ -76,6 +76,12 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::CODE_EXEC),
         case_sensitive: false,
     },
+    // Jinja2 / string.Template — tainted template string enables SSTI
+    LabelRule {
+        matchers: &["Template"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: true,
+    },
     LabelRule {
         matchers: &["make_response"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
