@@ -13,9 +13,23 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
         case_sensitive: false,
     },
+    // Rails request object — user-controlled HTTP request data.
+    // Dotted matchers work via push_node receiver.method text construction
+    // (confirmed by existing Net::HTTP.get matcher in ssrf_net_http fixture).
+    LabelRule {
+        matchers: &["request.headers", "request.body", "request.url", "request.referrer", "request.path"],
+        label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
+    },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["CGI.escapeHTML", "ERB::Util.html_escape"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    // Rails HTML escaping / sanitization helpers.
+    LabelRule {
+        matchers: &["CGI.escape", "Rack::Utils.escape_html", "sanitize", "strip_tags"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
@@ -50,6 +64,30 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["Marshal.load", "Marshal.restore", "YAML.load"],
         label: DataLabel::Sink(Cap::DESERIALIZE),
+        case_sensitive: false,
+    },
+    // SQL injection: ActiveRecord unsafe raw-query execution APIs.
+    LabelRule {
+        matchers: &["find_by_sql", "connection.execute", "select_all"],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    // Open redirect: redirect_to with user-controlled destination.
+    LabelRule {
+        matchers: &["redirect_to"],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    // Path traversal: file serving with user-controlled path.
+    LabelRule {
+        matchers: &["send_file"],
+        label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
+    },
+    // XSS escape-bypass footguns: html_safe and raw disable auto-escaping.
+    LabelRule {
+        matchers: &["html_safe", "raw"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
 ];

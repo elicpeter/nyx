@@ -284,7 +284,6 @@ impl CfgAnalysis for UnguardedSink {
                 continue;
             }
 
-
             let param_only = sink_arg_is_parameter_only(ctx, *sink);
             let in_entrypoint = sink_in_entrypoint(ctx, *sink);
 

@@ -958,6 +958,17 @@ fn push_node<'a>(
             .and_then(|n| text_of(n, code))
             .unwrap_or_default(),
 
+        // Function definitions: use just the function name, not the full
+        // body text.  The raw body text can spuriously match label rules
+        // (e.g. `def search\n  find_by_sql(…)\nend` would suffix-match
+        // the `find_by_sql` sink via the `head = text.split('(')` logic
+        // in classify_all).
+        Kind::Function => ast
+            .child_by_field_name("name")
+            .or_else(|| ast.child_by_field_name("declarator"))
+            .and_then(|n| text_of(n, code))
+            .unwrap_or_default(),
+
         // everything else – fallback to raw slice
         _ => text_of(ast, code).unwrap_or_default(),
     };

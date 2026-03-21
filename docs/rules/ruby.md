@@ -12,6 +12,7 @@ Ruby has moderate taint label coverage. Sources, sinks, and sanitizers are defin
 |---------|-----|
 | `ENV`, `gets` | all |
 | `params` | all |
+| `request.headers`, `request.body`, `request.url`, `request.referrer`, `request.path` | all |
 
 > **Note:** Ruby's `params[:cmd]` subscript access is detected via `element_reference` node handling in the CFG. Sinatra/Rails `do...end` blocks are walked as function scopes.
 
@@ -21,14 +22,21 @@ Ruby has moderate taint label coverage. Sources, sinks, and sanitizers are defin
 |---------|-----|
 | `CGI.escapeHTML`, `ERB::Util.html_escape` | HTML_ESCAPE |
 | `Shellwords.escape`, `Shellwords.shellescape` | SHELL_ESCAPE |
+| `CGI.escape`, `Rack::Utils.escape_html`, `sanitize`, `strip_tags` | HTML_ESCAPE |
 
 ### Sinks
 
 | Matcher | Cap |
 |---------|-----|
 | `system`, `exec` | SHELL_ESCAPE |
-| `eval` | SHELL_ESCAPE |
+| `eval` | CODE_EXEC |
 | `puts`, `print` | HTML_ESCAPE |
+| `Net::HTTP.get`, `URI.open`, `HTTParty.get` | SSRF |
+| `Marshal.load`, `Marshal.restore`, `YAML.load` | DESERIALIZE |
+| `find_by_sql`, `connection.execute`, `select_all` | SQL_QUERY |
+| `redirect_to` | SSRF |
+| `send_file` | FILE_IO |
+| `html_safe`, `raw` | HTML_ESCAPE |
 
 ---
 
@@ -129,4 +137,45 @@ obj = Marshal.load(request.body.read)
 **Safe alternative:**
 ```ruby
 data = JSON.parse(request.body.read)
+```
+
+### SQL injection via `find_by_sql`
+
+**Vulnerable:**
+```ruby
+@posts = Post.find_by_sql("SELECT * FROM posts WHERE title LIKE '%#{params[:q]}%'")
+```
+
+**Safe alternative** (parameterized `where` is not a sink):
+```ruby
+@posts = Post.where("title LIKE ?", "%#{params[:q]}%")
+```
+
+### Open redirect via `redirect_to`
+
+Modeled as an untrusted destination sink under SSRF for cross-language consistency, not server-side fetch behavior.
+
+**Vulnerable:**
+```ruby
+redirect_to params[:redirect_url]
+```
+
+**Safe alternative:**
+```ruby
+redirect_to root_path
+```
+
+### XSS via `html_safe` / `raw`
+
+Escape-bypass footguns that disable Rails auto-escaping. Modeled under HTML_ESCAPE because they defeat the escaping boundary.
+
+**Vulnerable:**
+```ruby
+"<b>#{user_input}</b>".html_safe
+raw(user_input)
+```
+
+**Safe alternative:**
+```ruby
+content_tag(:b, user_input)  # auto-escaped by Rails
 ```
