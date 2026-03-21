@@ -1,0 +1,23 @@
+{
+  "description": "SQL injection via Spring JdbcTemplate and JPA EntityManager with user input",
+  "tags": ["taint", "sqli", "spring"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [8, 13],
+      "evidence_contains": [],
+      "notes": "getParameter(\"name\") concatenated into SQL string passed to jdbcTemplate.query()"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [15, 20],
+      "evidence_contains": [],
+      "notes": "getParameter(\"id\") concatenated into SQL string passed to entityManager.createNativeQuery()"
+    }
+  ]
+}

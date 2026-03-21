@@ -1,0 +1,6 @@
+{
+  "description": "Safe Spring/JPA/JNDI patterns with constant arguments — no taint source.",
+  "tags": ["taint", "negative", "spring"],
+  "modes": ["full"],
+  "expected": []
+}

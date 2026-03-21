@@ -1,0 +1,15 @@
+{
+  "description": "JNDI injection: user-controlled input flows to ctx.lookup()",
+  "tags": ["taint", "jndi", "servlet"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [6, 11],
+      "evidence_contains": [],
+      "notes": "getParameter(\"resource\") flows to ctx.lookup() without validation"
+    }
+  ]
+}

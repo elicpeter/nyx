@@ -17,6 +17,10 @@ pub static RULES: &[LabelRule] = &[
             "getReader",
             "getQueryString",
             "getPathInfo",
+            "getRequestURI",
+            "getRequestURL",
+            "getServletPath",
+            "getContextPath",
         ],
         label: DataLabel::Source(Cap::all()),
         case_sensitive: false,
@@ -56,13 +60,62 @@ pub static RULES: &[LabelRule] = &[
     // openConnection() is the standard java.net.URL API for initiating a connection.
     // It is the correct interception point — the URL is already set on the object.
     LabelRule {
-        matchers: &["openConnection", "HttpClient.send", "HttpClient.sendAsync", "getForObject", "RestTemplate.exchange"],
+        matchers: &["openConnection", "HttpClient.send", "HttpClient.sendAsync", "getForObject", "RestTemplate.exchange", "postForObject", "postForEntity"],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
     LabelRule {
         matchers: &["readObject", "readUnshared", "XMLDecoder.readObject"],
         label: DataLabel::Sink(Cap::DESERIALIZE),
+        case_sensitive: false,
+    },
+    // ─── Spring / JPA / Hibernate SQL sinks ───
+    LabelRule {
+        matchers: &[
+            "jdbcTemplate.query",
+            "jdbcTemplate.update",
+            "jdbcTemplate.execute",
+            "jdbcTemplate.queryForObject",
+            "jdbcTemplate.queryForList",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &[
+            "entityManager.createNativeQuery",
+            "entityManager.createQuery",
+            "session.createQuery",
+            "session.createSQLQuery",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+    },
+    // ─── Logging format injection sinks ───
+    LabelRule {
+        matchers: &[
+            "logger.info", "logger.warn", "logger.error",
+            "logger.debug", "logger.trace", "logger.fatal",
+            "log.info", "log.warn", "log.error",
+            "log.debug", "log.trace", "log.fatal",
+        ],
+        label: DataLabel::Sink(Cap::FMT_STRING),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["String.format"],
+        label: DataLabel::Sink(Cap::FMT_STRING),
+        case_sensitive: true,
+    },
+    // ─── JNDI injection sinks ───
+    LabelRule {
+        matchers: &[
+            "InitialContext.lookup",
+            "ctx.lookup",
+            "context.lookup",
+            "dirContext.lookup",
+        ],
+        label: DataLabel::Sink(Cap::CODE_EXEC),
         case_sensitive: false,
     },
 ];
