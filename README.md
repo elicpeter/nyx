@@ -358,6 +358,31 @@ AST-only mode (`--mode ast`) is the fastest and skips CFG construction and taint
 
 Incremental indexing significantly reduces scan time for subsequent runs on unchanged files.
 
+### Detection Accuracy
+
+Measured against a 95-case corpus (55 vulnerable, 40 safe) across Go, Java, JavaScript, PHP, and Python covering 8 vulnerability classes. Full results in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
+
+| Metric | Score |
+|---|---|
+| Precision | 65.4% |
+| Recall | 96.4% |
+| F1 | 77.9% |
+
+Per vulnerability class:
+
+| Class | Precision | Recall |
+|---|---|---|
+| Command injection | 100% | 100% |
+| SQL injection | 100% | 100% |
+| Code injection | 100% | 100% |
+| Deserialization | 100% | 100% |
+| Path traversal | 100% | 100% |
+| Format string | 100% | 100% |
+| SSRF | 100% | 83.3% |
+| XSS | 100% | 88.9% |
+
+Recall is strong across all classes. Precision is limited by false positives on safe code where sanitization, reassignment, or type-checking patterns are not yet recognized by the taint engine. Improving precision is an active focus area.
+
 ---
 
 ## Roadmap
