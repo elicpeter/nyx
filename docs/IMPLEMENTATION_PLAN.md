@@ -29,38 +29,43 @@ Each phase is designed to be:
 
 ## Phase ordering
 
-| #  | Title | Category | Est. size |
-|----|-------|----------|-----------|
-| 1  | Negative taint test suite | evaluation | S |
-| 2  | Categorise unexpected real-world findings | evaluation | S |
-| 3  | Extract shared taint→Diag construction | refactor | S |
-| 4  | Fix Cap mismatch: SQL and eval sinks | precision | S |
-| 5  | Fix Ruby receiver-qualified call classification | core correctness | S |
-| 6  | Expand Cap bitflags to u16 | core correctness | M |
-| 7  | Add SSRF vulnerability class | rule depth | M |
-| 8  | Add deserialization sinks (Python, Ruby, Java) | rule depth | S |
-| 9  | Per-argument taint propagation — summary model | core correctness | M |
-| 10 | Per-argument taint propagation — transfer wiring | core correctness | M |
-| 11 | Wire call graph topo ordering into pass 2 | core correctness | S |
-| 12 | Fix JS two-level solve stale seed | core correctness | M |
-| 13 | Add state analysis fixtures for Python and JS | evaluation | S |
-| 14 | Express.js framework rule pack | rule depth | M |
-| 15 | Flask/Django framework rule pack | rule depth | M |
-| 16 | Expand JS/TS DOM and browser API sinks | rule depth | S |
-| 17 | Model try/catch in CFG — Java and JavaScript | core correctness | L |
-| 18 | Model try/catch in taint transfer | core correctness | M |
-| 19 | Method receiver taint propagation | core correctness | M |
-| 20 | Evaluation benchmark corpus (50 known vulns) | evaluation | L |
-| 21 | Run benchmark and publish baseline numbers | evaluation | M |
-| 22 | README and docs claims audit | product credibility | S |
-| 23 | Expand Go rule depth (SSRF, template, crypto) | rule depth | S |
-| 24 | Expand Java rule depth (Spring, JPA, logging) | rule depth | M |
-| 25 | Expand Ruby rule depth (Rails, ERB) | rule depth | S |
-| 26 | Short-circuit evaluation in CFG | core correctness | M |
-| 27 | Constant-argument sink suppression | precision | M |
-| 28 | Scan path deduplication refactor | refactor | M |
-| 29 | Re-run benchmark and measure improvement | evaluation | S |
-| 30 | Phase 2 readiness assessment | evaluation | S |
+| #    | Title | Category | Est. size |
+|------|-------|----------|-----------|
+| 1    | Negative taint test suite | evaluation | S |
+| 2    | Categorise unexpected real-world findings | evaluation | S |
+| 3    | Extract shared taint→Diag construction | refactor | S |
+| 4    | Fix Cap mismatch: SQL and eval sinks | precision | S |
+| 5    | Fix Ruby receiver-qualified call classification | core correctness | S |
+| 6    | Expand Cap bitflags to u16 | core correctness | M |
+| 7    | Add SSRF vulnerability class | rule depth | M |
+| 8    | Add deserialization sinks (Python, Ruby, Java) | rule depth | S |
+| 9    | Per-argument taint propagation — summary model | core correctness | M |
+| 10   | Per-argument taint propagation — transfer wiring | core correctness | M |
+| 11   | Wire call graph topo ordering into pass 2 | core correctness | S |
+| 12   | Fix JS two-level solve stale seed | core correctness | M |
+| 13   | Add state analysis fixtures for Python and JS | evaluation | S |
+| 14   | Express.js framework rule pack | rule depth | M |
+| 14.5 | Per-rule case-sensitive matching ✅ | matcher precision | S |
+| 15   | Flask/Django framework rule pack | rule depth | M |
+| 16   | Expand JS/TS DOM and browser API sinks | rule depth | S |
+| 16.5 | Argument-sensitive sink modeling | precision | M |
+| 16.6 | Argument-role-aware sink modeling | precision | M |
+| 17   | Model try/catch in CFG — Java and JavaScript | core correctness | L |
+| 18   | Model try/catch in taint transfer | core correctness | M |
+| 19   | Method receiver taint propagation | core correctness | M |
+| 19.5 | Multi-label classification for taint labels | core correctness | M |
+| 20   | Short-circuit evaluation in CFG | core correctness | M |
+| 21   | Evaluation benchmark corpus (50 known vulns) | evaluation | L |
+| 22   | Run benchmark and publish baseline numbers | evaluation | M |
+| 23   | README and docs claims audit | product credibility | S |
+| 24   | Expand Go rule depth (SSRF, template, crypto) | rule depth | S |
+| 25   | Expand Java rule depth (Spring, JPA, logging) | rule depth | M |
+| 26   | Expand Ruby rule depth (Rails, ERB) | rule depth | S |
+| 27   | Constant-argument sink suppression | precision | M |
+| 28   | Scan path deduplication refactor | refactor | M |
+| 29   | Re-run benchmark and measure improvement | evaluation | S |
+| 30   | SSRF semantic completion | rule depth | L |
+| 31   | Phase 2 readiness assessment | evaluation | S |
 
 ---
 
