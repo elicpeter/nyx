@@ -37,20 +37,20 @@ Java has moderate taint label coverage. Sources, sinks, and sanitizers are defin
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `java.deser.readobject` | High | A | `ObjectInputStream.readObject()` — unsafe deserialization |
+| `java.deser.readobject` | High | A | `ObjectInputStream.readObject()` -- unsafe deserialization |
 
 ### Command Execution
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `java.cmdi.runtime_exec` | High | A | `Runtime.getRuntime().exec()` — shell command execution |
+| `java.cmdi.runtime_exec` | High | A | `Runtime.getRuntime().exec()` -- shell command execution |
 
 ### Reflection
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `java.reflection.class_forname` | Medium | A | `Class.forName()` — dynamic class loading |
-| `java.reflection.method_invoke` | Medium | A | `Method.invoke()` — reflective method invocation |
+| `java.reflection.class_forname` | Medium | A | `Class.forName()` -- dynamic class loading |
+| `java.reflection.method_invoke` | Medium | A | `Method.invoke()` -- reflective method invocation |
 
 ### SQL Injection
 
@@ -62,20 +62,20 @@ Java has moderate taint label coverage. Sources, sinks, and sanitizers are defin
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `java.crypto.insecure_random` | Low | A | `new Random()` — `java.util.Random` is not cryptographically secure |
+| `java.crypto.insecure_random` | Low | A | `new Random()` -- `java.util.Random` is not cryptographically secure |
 | `java.crypto.weak_digest` | Low | A | `MessageDigest.getInstance("MD5"/"SHA1")` |
 
 ### XSS
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `java.xss.getwriter_print` | Medium | A | `response.getWriter().print/println/write` — direct output |
+| `java.xss.getwriter_print` | Medium | A | `response.getWriter().print/println/write` -- direct output |
 
 ---
 
 ## Examples
 
-### `java.deser.readobject` — Unsafe deserialization
+### `java.deser.readobject`: Unsafe deserialization
 
 **Vulnerable:**
 ```java
@@ -90,7 +90,7 @@ ObjectMapper mapper = new ObjectMapper();
 MyType obj = mapper.readValue(request.getInputStream(), MyType.class);
 ```
 
-### `java.sqli.execute_concat` — SQL concatenation
+### `java.sqli.execute_concat`: SQL concatenation
 
 **Vulnerable:**
 ```java
@@ -105,7 +105,7 @@ ps.setString(1, userId);
 ResultSet rs = ps.executeQuery();
 ```
 
-### `java.cmdi.runtime_exec` — Command execution
+### `java.cmdi.runtime_exec`: Command execution
 
 **Vulnerable:**
 ```java
@@ -118,7 +118,7 @@ ProcessBuilder pb = new ProcessBuilder("cmd", "/c", "dir");
 // Use explicit argument list, never concatenate user input
 ```
 
-### `java.reflection.class_forname` — Dynamic class loading
+### `java.reflection.class_forname`: Dynamic class loading
 
 **Flagged:**
 ```java

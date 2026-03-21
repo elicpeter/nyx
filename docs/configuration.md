@@ -14,8 +14,8 @@ Run `nyx config path` to see the exact directory on your system.
 
 ## File Precedence
 
-1. **`nyx.conf`** — Default config (auto-created from built-in template on first run)
-2. **`nyx.local`** — User overrides (loaded on top of defaults)
+1. **`nyx.conf`** -- Default config (auto-created from built-in template on first run)
+2. **`nyx.local`** -- User overrides (loaded on top of defaults)
 
 Both files are optional. CLI flags take precedence over both.
 
@@ -36,7 +36,7 @@ excluded_extensions = ["jpg", "png", "exe"]
 excluded_extensions = ["foo", "jpg"]
 
 # Effective result:
-# ["exe", "foo", "jpg", "png"]  — sorted, deduped union
+# ["exe", "foo", "jpg", "png"]  -- sorted, deduped union
 ```
 
 ---
@@ -181,3 +181,23 @@ nyx config add-terminator --lang javascript --name process.exit
 # Verify
 nyx config show
 ```
+
+---
+
+## Enabling State Analysis
+
+State analysis detects resource lifecycle violations (use-after-close, double-close, resource leaks) and unauthenticated access patterns. It is disabled by default because it adds analysis overhead and may produce findings that require more careful review.
+
+To enable:
+
+```toml
+[scanner]
+enable_state_analysis = true
+```
+
+State analysis requires `mode = "full"` or `mode = "cfg"`. It has no effect in `mode = "ast"`.
+
+**Tradeoffs**:
+- Increased scan time due to additional per-function state machine analysis
+- May produce findings that require domain knowledge to evaluate (e.g., whether a resource handle is intentionally left open)
+- Most useful for C, C++, Rust, Go, and Java where acquire/release patterns are common

@@ -39,8 +39,8 @@ JavaScript has the most complete taint label coverage alongside Rust. Nyx detect
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `js.code_exec.eval` | High | A | `eval()` — dynamic code execution |
-| `js.code_exec.new_function` | High | A | `new Function()` — eval equivalent |
+| `js.code_exec.eval` | High | A | `eval()` -- dynamic code execution |
+| `js.code_exec.new_function` | High | A | `new Function()` -- eval equivalent |
 | `js.code_exec.settimeout_string` | Medium | A | `setTimeout`/`setInterval` with string argument |
 
 ### XSS Sinks
@@ -50,7 +50,7 @@ JavaScript has the most complete taint label coverage alongside Rust. Nyx detect
 | `js.xss.document_write` | Medium | A | `document.write()` / `document.writeln()` |
 | `js.xss.outer_html` | Medium | A | Assignment to `.outerHTML` |
 | `js.xss.insert_adjacent_html` | Medium | A | `insertAdjacentHTML()` |
-| `js.xss.location_assign` | Medium | A | Assignment to `location`/`location.href` — open redirect |
+| `js.xss.location_assign` | Medium | A | Assignment to `location`/`location.href` -- open redirect |
 | `js.xss.cookie_write` | Medium | A | Write to `document.cookie` |
 
 ### Prototype Pollution
@@ -65,19 +65,19 @@ JavaScript has the most complete taint label coverage alongside Rust. Nyx detect
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
 | `js.crypto.weak_hash` | Low | A | `crypto.createHash("md5"/"sha1")` |
-| `js.crypto.math_random` | Low | A | `Math.random()` — not cryptographically secure |
+| `js.crypto.math_random` | Low | A | `Math.random()` -- not cryptographically secure |
 
 ### Insecure Transport
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `js.transport.fetch_http` | Low | A | `fetch("http://...")` — plaintext HTTP |
+| `js.transport.fetch_http` | Low | A | `fetch("http://...")` -- plaintext HTTP |
 
 ---
 
 ## Examples
 
-### `js.code_exec.eval` — Dynamic code execution
+### `js.code_exec.eval`: Dynamic code execution
 
 **Vulnerable:**
 ```javascript
@@ -92,7 +92,7 @@ const allowed = { add: (a, b) => a + b };
 const result = allowed[req.query.operation]?.(req.query.a, req.query.b);
 ```
 
-### `js.xss.document_write` — XSS sink
+### `js.xss.document_write`: XSS sink
 
 **Vulnerable:**
 ```javascript
@@ -106,7 +106,7 @@ el.textContent = userName;
 document.body.appendChild(el);
 ```
 
-### `js.prototype.proto_assignment` — Prototype pollution
+### `js.prototype.proto_assignment`: Prototype pollution
 
 **Vulnerable:**
 ```javascript

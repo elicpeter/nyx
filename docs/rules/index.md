@@ -48,16 +48,16 @@ These rules apply to all supported languages:
 
 Each language page lists all AST pattern rules with examples:
 
-- [Rust](rust.md) — 12 rules (memory safety, code quality)
-- [C](c.md) — 8 rules (banned functions, command execution, format strings)
-- [C++](cpp.md) — 9 rules (banned functions, dangerous casts, command execution)
-- [Java](java.md) — 8 rules (deserialization, command execution, reflection, SQL, crypto, XSS)
-- [Go](go.md) — 8 rules (command execution, unsafe pointer, TLS, crypto, SQL, secrets, deserialization)
-- [JavaScript](javascript.md) — 12 rules (code execution, XSS, prototype pollution, crypto, transport)
-- [TypeScript](typescript.md) — 10 rules (mirrors JS + type-safety escapes)
-- [Python](python.md) — 12 rules (code execution, command execution, deserialization, SQL, crypto, XSS)
-- [PHP](php.md) — 11 rules (code execution, command execution, deserialization, SQL, path traversal, crypto)
-- [Ruby](ruby.md) — 10 rules (code execution, command execution, deserialization, reflection, SSRF, crypto)
+- [Rust](rust.md) -- 12 rules (memory safety, code quality)
+- [C](c.md) -- 8 rules (banned functions, command execution, format strings)
+- [C++](cpp.md) -- 9 rules (banned functions, dangerous casts, command execution)
+- [Java](java.md) -- 8 rules (deserialization, command execution, reflection, SQL, crypto, XSS)
+- [Go](go.md) -- 8 rules (command execution, unsafe pointer, TLS, crypto, SQL, secrets, deserialization)
+- [JavaScript](javascript.md) -- 12 rules (code execution, XSS, prototype pollution, crypto, transport)
+- [TypeScript](typescript.md) -- 10 rules (mirrors JS + type-safety escapes)
+- [Python](python.md) -- 12 rules (code execution, command execution, deserialization, SQL, crypto, XSS)
+- [PHP](php.md) -- 11 rules (code execution, command execution, deserialization, SQL, path traversal, crypto)
+- [Ruby](ruby.md) -- 10 rules (code execution, command execution, deserialization, reflection, SSRF, crypto)
 
 ## Taint Label Coverage
 

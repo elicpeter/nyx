@@ -43,10 +43,10 @@ PHP has moderate taint label coverage. Sources, sinks, and sanitizers are define
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `php.code_exec.eval` | High | A | `eval()` — dynamic code execution |
-| `php.code_exec.create_function` | High | A | `create_function()` — deprecated eval-like constructor |
-| `php.code_exec.preg_replace_e` | High | A | `preg_replace` with `/e` modifier — code execution via regex |
-| `php.code_exec.assert_string` | High | A | `assert()` with string argument — evaluates PHP code |
+| `php.code_exec.eval` | High | A | `eval()` -- dynamic code execution |
+| `php.code_exec.create_function` | High | A | `create_function()` -- deprecated eval-like constructor |
+| `php.code_exec.preg_replace_e` | High | A | `preg_replace` with `/e` modifier -- code execution via regex |
+| `php.code_exec.assert_string` | High | A | `assert()` with string argument -- evaluates PHP code |
 
 ### Command Execution
 
@@ -58,7 +58,7 @@ PHP has moderate taint label coverage. Sources, sinks, and sanitizers are define
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `php.deser.unserialize` | High | A | `unserialize()` — PHP object injection |
+| `php.deser.unserialize` | High | A | `unserialize()` -- PHP object injection |
 
 ### SQL Injection
 
@@ -70,21 +70,21 @@ PHP has moderate taint label coverage. Sources, sinks, and sanitizers are define
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `php.path.include_variable` | High | B | `include`/`require` with variable path — file inclusion |
+| `php.path.include_variable` | High | B | `include`/`require` with variable path -- file inclusion |
 
 ### Weak Crypto
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `php.crypto.md5` | Low | A | `md5()` — weak hash function |
-| `php.crypto.sha1` | Low | A | `sha1()` — weak hash function |
-| `php.crypto.rand` | Low | A | `rand()`/`mt_rand()` — not cryptographically secure |
+| `php.crypto.md5` | Low | A | `md5()` -- weak hash function |
+| `php.crypto.sha1` | Low | A | `sha1()` -- weak hash function |
+| `php.crypto.rand` | Low | A | `rand()`/`mt_rand()` -- not cryptographically secure |
 
 ---
 
 ## Examples
 
-### `php.code_exec.eval` — Dynamic code execution
+### `php.code_exec.eval`: Dynamic code execution
 
 **Vulnerable:**
 ```php
@@ -97,7 +97,7 @@ eval($_GET['code']);
 // Use a template engine or allowlisted operations
 ```
 
-### `php.deser.unserialize` — Object injection
+### `php.deser.unserialize`: Object injection
 
 **Vulnerable:**
 ```php
@@ -109,7 +109,7 @@ $obj = unserialize($_COOKIE['data']);
 $data = json_decode($_COOKIE['data'], true);
 ```
 
-### `php.path.include_variable` — File inclusion
+### `php.path.include_variable`: File inclusion
 
 **Vulnerable:**
 ```php
@@ -123,7 +123,7 @@ $page = in_array($_GET['page'], $allowed) ? $_GET['page'] : 'home';
 include("pages/{$page}.php");
 ```
 
-### `php.sqli.query_concat` — SQL concatenation
+### `php.sqli.query_concat`: SQL concatenation
 
 **Vulnerable:**
 ```php

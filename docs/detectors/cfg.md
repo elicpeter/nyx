@@ -4,7 +4,7 @@
 
 Nyx builds an intra-procedural control-flow graph (CFG) for each function and analyzes structural properties: whether sinks are guarded by sanitizers or validators, whether web handlers check authentication, whether resources are released on all exit paths, and whether error-handling code terminates properly.
 
-These detectors use **dominator analysis** — they check whether a guard node dominates (must execute before) a sink node on the CFG.
+These detectors use **dominator analysis** -- they check whether a guard node dominates (must execute before) a sink node on the CFG.
 
 ## Rule IDs
 

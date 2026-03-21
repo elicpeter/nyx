@@ -41,7 +41,7 @@ Each finding shows:
 
 ## Common workflows
 
-### CI gate — fail on high-severity findings
+### CI gate -- fail on high-severity findings
 
 ```bash
 nyx scan . --fail-on high --quiet
@@ -97,7 +97,7 @@ nyx scan . --keep-nonprod-severity
 
 ## Next steps
 
-- [CLI Reference](cli.md) — All flags and options
-- [Configuration](configuration.md) — Customize rules, exclusions, and behavior
-- [Detector Overview](detectors.md) — How the analysis engines work
-- [Rule Reference](rules/index.md) — Browse all rules by language
+- [CLI Reference](cli.md) -- All flags and options
+- [Configuration](configuration.md) -- Customize rules, exclusions, and behavior
+- [Detector Overview](detectors.md) -- How the analysis engines work
+- [Rule Reference](rules/index.md) -- Browse all rules by language

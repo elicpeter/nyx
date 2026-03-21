@@ -2,9 +2,9 @@
 name = "nyx-scanner"
 version = "0.4.0"
 edition = "2024"
-description = "A CLI security scanner for automating vulnerability checks"
+description = "A multi-language static analysis tool for detecting security vulnerabilities"
 license = "GPL-3.0"
-authors = ["Eli Peter <elicpeter@exmaple.com>"]
+authors = ["Eli Peter <elicpeter@example.com>"]
 homepage = "https://github.com/elicpeter/nyx"
 repository = "https://github.com/elicpeter/nyx"
 documentation = "https://github.com/elicpeter/nyx/tree/master/docs"

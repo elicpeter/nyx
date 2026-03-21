@@ -1,4 +1,4 @@
-# Nyx Phase 1 Hardening — Implementation Plan
+# Nyx Phase 1 Hardening -- Implementation Plan
 
 > **Purpose**: Concrete, phase-by-phase execution plan to harden Nyx's static analysis
 > engine before any Phase 2 dynamic work.
@@ -12,12 +12,12 @@
 
 The work is ordered to maximize trustworthiness early:
 
-1. **Measure first** — build evaluation infrastructure so every subsequent change can be measured
-2. **Fix precision** — eliminate false-positive sources that erode trust
-3. **Fix recall** — close the correctness gaps that cause real vulnerabilities to be missed
-4. **Deepen rules** — expand coverage for commercially important languages and vulnerability classes
-5. **Refactor for maintainability** — pay down technical debt that slows future work
-6. **Harden product credibility** — align documentation claims with reality
+1. **Measure first** -- build evaluation infrastructure so every subsequent change can be measured
+2. **Fix precision** -- eliminate false-positive sources that erode trust
+3. **Fix recall** -- close the correctness gaps that cause real vulnerabilities to be missed
+4. **Deepen rules** -- expand coverage for commercially important languages and vulnerability classes
+5. **Refactor for maintainability** -- pay down technical debt that slows future work
+6. **Harden product credibility** -- align documentation claims with reality
 
 Each phase is designed to be:
 - **Small**: 1 focused session (typically 1–3 files changed)
@@ -39,8 +39,8 @@ Each phase is designed to be:
 | 6    | Expand Cap bitflags to u16 | core correctness | M |
 | 7    | Add SSRF vulnerability class | rule depth | M |
 | 8    | Add deserialization sinks (Python, Ruby, Java) | rule depth | S |
-| 9    | Per-argument taint propagation — summary model | core correctness | M |
-| 10   | Per-argument taint propagation — transfer wiring | core correctness | M |
+| 9    | Per-argument taint propagation -- summary model | core correctness | M |
+| 10   | Per-argument taint propagation -- transfer wiring | core correctness | M |
 | 11   | Wire call graph topo ordering into pass 2 | core correctness | S |
 | 12   | Fix JS two-level solve stale seed | core correctness | M |
 | 13   | Add state analysis fixtures for Python and JS | evaluation | S |
@@ -50,7 +50,7 @@ Each phase is designed to be:
 | 16   | Expand JS/TS DOM and browser API sinks | rule depth | S |
 | 16.5 | Argument-sensitive sink modeling | precision | M |
 | 16.6 | Argument-role-aware sink modeling | precision | M |
-| 17   | Model try/catch in CFG — Java and JavaScript | core correctness | L |
+| 17   | Model try/catch in CFG -- Java and JavaScript | core correctness | L |
 | 18   | Model try/catch in taint transfer | core correctness | M |
 | 19   | Method receiver taint propagation | core correctness | M |
 | 19.5 | Multi-label classification for taint labels | core correctness | M |
@@ -73,7 +73,7 @@ Each phase is designed to be:
 
 ---
 
-### Phase 1 — Negative taint test suite
+### Phase 1 -- Negative taint test suite
 
 **Category**: evaluation
 
@@ -88,8 +88,8 @@ for false-positive measurement before changing the engine.
 - Assert exactly zero taint findings on each fixture
 
 **Files to touch**:
-- `tests/fixtures/real_world/{lang}/taint/` — new `safe_*.{ext}` + `.expect.json` files
-- `tests/real_world_tests.rs` — verify the fixture discovery works (no code changes
+- `tests/fixtures/real_world/{lang}/taint/` -- new `safe_*.{ext}` + `.expect.json` files
+- `tests/real_world_tests.rs` -- verify the fixture discovery works (no code changes
   expected; the existing discovery mechanism should pick up new fixtures automatically)
 
 **Implementation tasks**:
@@ -123,7 +123,7 @@ for false-positive measurement before changing the engine.
 
 ---
 
-### Phase 2 — Categorise unexpected real-world findings
+### Phase 2 -- Categorise unexpected real-world findings
 
 **Category**: evaluation
 
@@ -139,10 +139,10 @@ categorised, we don't know whether precision or recall is the bigger problem.
 - Produce a summary count: TP / FP / noise
 
 **Files to touch**:
-- `tests/fixtures/real_world/*/taint/*.expect.json` — update expected arrays
-- `tests/fixtures/real_world/*/cfg/*.expect.json` — update expected arrays
-- `tests/fixtures/real_world/*/state/*.expect.json` — update expected arrays
-- `tests/fixtures/real_world/*/mixed/*.expect.json` — update expected arrays
+- `tests/fixtures/real_world/*/taint/*.expect.json` -- update expected arrays
+- `tests/fixtures/real_world/*/cfg/*.expect.json` -- update expected arrays
+- `tests/fixtures/real_world/*/state/*.expect.json` -- update expected arrays
+- `tests/fixtures/real_world/*/mixed/*.expect.json` -- update expected arrays
 
 **Implementation tasks**:
 1. Run the real-world test suite with `NYX_TEST_VERBOSE=1` to capture all unexpected findings
@@ -176,7 +176,7 @@ categorised, we don't know whether precision or recall is the bigger problem.
 
 ---
 
-### Phase 3 — Extract shared taint→Diag construction
+### Phase 3 -- Extract shared taint→Diag construction
 
 **Category**: refactor
 
@@ -188,10 +188,10 @@ and non-indexed scan modes.
 **Goals**:
 - Extract a single `fn build_taint_diag(...)` helper function
 - Both call sites delegate to it
-- Zero behaviour change — output must be identical
+- Zero behaviour change -- output must be identical
 
 **Files to touch**:
-- `src/ast.rs` — extract helper, update both call sites
+- `src/ast.rs` -- extract helper, update both call sites
 
 **Implementation tasks**:
 1. Read `src/ast.rs` lines 250-352 and 646-744 carefully
@@ -200,7 +200,7 @@ and non-indexed scan modes.
    - `&Finding`
    - `&Tree` (for `byte_offset_to_point`)
    - `&Path` (file path)
-   - `Option<&Path>` (scan_root, for namespace — only used in one path but pass through)
+   - `Option<&Path>` (scan_root, for namespace -- only used in one path but pass through)
 3. Create `fn build_taint_diag(cfg: &Cfg, finding: &Finding, tree: &Tree, path: &Path) -> Diag`
    as a private function in `ast.rs`
 4. Replace both duplicated blocks with calls to `build_taint_diag()`
@@ -208,7 +208,7 @@ and non-indexed scan modes.
 
 **Test tasks**:
 - `cargo test` must pass with zero changes to test expectations
-- Run `cargo test real_world` — findings must be identical (same count, same content)
+- Run `cargo test real_world` -- findings must be identical (same count, same content)
 
 **Definition of done**:
 - Single `build_taint_diag()` function in `ast.rs`
@@ -227,7 +227,7 @@ and non-indexed scan modes.
 
 ---
 
-### Phase 4 — Fix Cap mismatch: SQL and eval sinks
+### Phase 4 -- Fix Cap mismatch: SQL and eval sinks
 
 **Category**: precision
 
@@ -244,19 +244,19 @@ positives**.
 - Verify existing tests still pass (with possible expected finding adjustments)
 
 **Files to touch**:
-- `src/labels/java.rs` — SQL sinks, reflection sinks
-- `src/labels/python.rs` — `cursor.execute` sink
-- `src/labels/go.rs` — `db.Query`, `db.Exec` sinks
-- `src/labels/php.rs` — `mysqli_query` sink, eval sinks
-- `src/labels/javascript.rs` — `eval` sink
-- `src/labels/typescript.rs` — `eval` sink
-- `src/labels/ruby.rs` — `eval` sink
+- `src/labels/java.rs` -- SQL sinks, reflection sinks
+- `src/labels/python.rs` -- `cursor.execute` sink
+- `src/labels/go.rs` -- `db.Query`, `db.Exec` sinks
+- `src/labels/php.rs` -- `mysqli_query` sink, eval sinks
+- `src/labels/javascript.rs` -- `eval` sink
+- `src/labels/typescript.rs` -- `eval` sink
+- `src/labels/ruby.rs` -- `eval` sink
 
 **Implementation tasks**:
 1. Audit every `LabelRule` across all 10 language files
 2. For each rule where the sink cap is `SHELL_ESCAPE` but the vulnerability class is
    SQL injection or code injection (eval/exec), change to `Cap::all()`
-3. Leave command injection sinks (system, exec, spawn) as `SHELL_ESCAPE` — this is correct
+3. Leave command injection sinks (system, exec, spawn) as `SHELL_ESCAPE` -- this is correct
 4. For sinks that could be multiple vulnerability classes (e.g., `os.system` is both
    CMDI and code exec), use `Cap::all()`
 
@@ -281,7 +281,7 @@ positives**.
 
 ---
 
-### Phase 5 — Fix Ruby receiver-qualified call classification
+### Phase 5 -- Fix Ruby receiver-qualified call classification
 
 **Category**: core correctness
 
@@ -309,8 +309,8 @@ This was discovered as a false positive in `tests/fixtures/real_world/ruby/taint
 - Verify bare calls (`system`, `exec`, `eval`, `puts`, `print`, `gets`) still match
 
 **Files to touch**:
-- `src/labels/ruby.rs` — change `"call" => Kind::CallFn` to `"call" => Kind::CallMethod`
-- `tests/fixtures/real_world/ruby/taint/safe_sanitized_flow.expect.json` — remove the
+- `src/labels/ruby.rs` -- change `"call" => Kind::CallFn` to `"call" => Kind::CallMethod`
+- `tests/fixtures/real_world/ruby/taint/safe_sanitized_flow.expect.json` -- remove the
   `must_match: false` FP entry (the finding should no longer appear)
 
 **Implementation tasks**:
@@ -357,13 +357,13 @@ This was discovered as a false positive in `tests/fixtures/real_world/ruby/taint
   (e.g., `command`, `command_call`). These are not in the current KINDS map and are
   unaffected by this change. If they need similar treatment, that's a follow-up.
 
-**Dependencies**: None (but blocks Phase 25: Expand Ruby rule depth — receiver-qualified
+**Dependencies**: None (but blocks Phase 25: Expand Ruby rule depth -- receiver-qualified
 Rails patterns like `ActiveRecord.where`, `Net::HTTP.get` will need this fix to be
 recognised)
 
 ---
 
-### Phase 6 — Expand Cap bitflags to u16
+### Phase 6 -- Expand Cap bitflags to u16
 
 **Category**: core correctness
 
@@ -379,13 +379,13 @@ all future rule depth work.
 - Update database schema if caps are stored as u8
 
 **Files to touch**:
-- `src/labels/mod.rs` — `Cap` bitflags definition, `parse_cap()` function
-- `src/summary/mod.rs` — `FuncSummary` struct fields (u8 → u16), accessor methods
-- `src/database.rs` — schema and serialisation (summaries stored as JSON, so the
+- `src/labels/mod.rs` -- `Cap` bitflags definition, `parse_cap()` function
+- `src/summary/mod.rs` -- `FuncSummary` struct fields (u8 → u16), accessor methods
+- `src/database.rs` -- schema and serialisation (summaries stored as JSON, so the
   serde-derived format handles it, but verify)
-- `src/cfg.rs` — `LocalFuncSummary` uses `Cap` directly (no u8 cast needed)
-- `src/taint/transfer.rs` — uses `Cap` directly (no changes expected)
-- All `src/labels/{lang}.rs` files — update rules to use new cap constants where
+- `src/cfg.rs` -- `LocalFuncSummary` uses `Cap` directly (no u8 cast needed)
+- `src/taint/transfer.rs` -- uses `Cap` directly (no changes expected)
+- All `src/labels/{lang}.rs` files -- update rules to use new cap constants where
   appropriate (SQL sinks → `SQL_QUERY`, eval → `CODE_EXEC`, etc.)
 
 **Implementation tasks**:
@@ -421,7 +421,7 @@ all future rule depth work.
 - `FuncSummary` uses `u16` for cap fields
 - All language rules use semantically correct caps
 - All tests pass
-- Database schema migration handled (drop and recreate summaries table if needed —
+- Database schema migration handled (drop and recreate summaries table if needed  -- 
   the existing migration logic in `database.rs` handles this)
 
 **Risks / gotchas**:
@@ -436,11 +436,11 @@ all future rule depth work.
 
 ---
 
-### Phase 7 — Add SSRF vulnerability class
+### Phase 7 -- Add SSRF vulnerability class
 
 **Category**: rule depth
 
-**Why**: SSRF is the #1 missing vulnerability class — zero coverage across all 10
+**Why**: SSRF is the #1 missing vulnerability class -- zero coverage across all 10
 languages. This is a high-impact, frequently exploited vulnerability class (OWASP
 Top 10 #10, responsible for major breaches like Capital One).
 
@@ -449,17 +449,17 @@ Top 10 #10, responsible for major breaches like Capital One).
 - Add test fixtures proving SSRF detection works end-to-end
 
 **Files to touch**:
-- `src/labels/javascript.rs` — add `fetch`, `axios`, `http.request`, `XMLHttpRequest`
-- `src/labels/typescript.rs` — same as JS
-- `src/labels/python.rs` — add `urllib.urlopen`, `requests.get/post`, `httpx.get`
-- `src/labels/java.rs` — add `HttpURLConnection`, `HttpClient`, `RestTemplate`
-- `src/labels/go.rs` — add `http.Get`, `http.Post`, `http.NewRequest`
-- `src/labels/php.rs` — add `file_get_contents`, `curl_exec`, `fopen` (URL)
-- `src/labels/ruby.rs` — add `Net::HTTP`, `open-uri`, `HTTParty`
-- `src/labels/rust.rs` — add `reqwest::get`, `hyper::Client`
-- `src/labels/c.rs` — add `curl_easy_perform` (libcurl)
-- `src/labels/cpp.rs` — add `curl_easy_perform`
-- `tests/fixtures/real_world/{lang}/taint/` — new SSRF fixtures
+- `src/labels/javascript.rs` -- add `fetch`, `axios`, `http.request`, `XMLHttpRequest`
+- `src/labels/typescript.rs` -- same as JS
+- `src/labels/python.rs` -- add `urllib.urlopen`, `requests.get/post`, `httpx.get`
+- `src/labels/java.rs` -- add `HttpURLConnection`, `HttpClient`, `RestTemplate`
+- `src/labels/go.rs` -- add `http.Get`, `http.Post`, `http.NewRequest`
+- `src/labels/php.rs` -- add `file_get_contents`, `curl_exec`, `fopen` (URL)
+- `src/labels/ruby.rs` -- add `Net::HTTP`, `open-uri`, `HTTParty`
+- `src/labels/rust.rs` -- add `reqwest::get`, `hyper::Client`
+- `src/labels/c.rs` -- add `curl_easy_perform` (libcurl)
+- `src/labels/cpp.rs` -- add `curl_easy_perform`
+- `tests/fixtures/real_world/{lang}/taint/` -- new SSRF fixtures
 
 **Implementation tasks**:
 1. For each language, add 1-3 `LabelRule` entries for HTTP client functions as
@@ -491,7 +491,7 @@ Top 10 #10, responsible for major breaches like Capital One).
 **Risks / gotchas**:
 - Some function names (like `open` in Ruby, `file_get_contents` in PHP) are
   multi-purpose. They may trigger on file operations that aren't SSRF. This is
-  acceptable — the Cap system will ensure only URL-sourced taint matches.
+  acceptable -- the Cap system will ensure only URL-sourced taint matches.
 - `fetch` in JS is a browser global; in Node.js it's `node-fetch` or built-in.
   The string matcher handles both.
 
@@ -499,7 +499,7 @@ Top 10 #10, responsible for major breaches like Capital One).
 
 ---
 
-### Phase 8 — Add deserialization sinks (Python, Ruby, Java)
+### Phase 8 -- Add deserialization sinks (Python, Ruby, Java)
 
 **Category**: rule depth
 
@@ -513,15 +513,15 @@ sinks. Insecure deserialization is OWASP Top 10 #8.
 - Add test fixtures
 
 **Files to touch**:
-- `src/labels/python.rs` — add `pickle.loads`, `pickle.load`, `yaml.unsafe_load`,
+- `src/labels/python.rs` -- add `pickle.loads`, `pickle.load`, `yaml.unsafe_load`,
   `yaml.full_load`, `shelve.open`
-- `src/labels/ruby.rs` — add `Marshal.load`, `Marshal.restore`, `YAML.load`
+- `src/labels/ruby.rs` -- add `Marshal.load`, `Marshal.restore`, `YAML.load`
   (without safe_load)
-- `src/labels/java.rs` — add `readObject`, `readUnshared`, `XMLDecoder`,
+- `src/labels/java.rs` -- add `readObject`, `readUnshared`, `XMLDecoder`,
   `ObjectInputStream`
-- `src/labels/php.rs` — change existing `unserialize` from `SHELL_ESCAPE` to
+- `src/labels/php.rs` -- change existing `unserialize` from `SHELL_ESCAPE` to
   `Cap::DESERIALIZE`
-- `tests/fixtures/real_world/{lang}/taint/` — new deser fixtures
+- `tests/fixtures/real_world/{lang}/taint/` -- new deser fixtures
 
 **Implementation tasks**:
 1. Add `LabelRule` entries as `Sink(Cap::DESERIALIZE)`:
@@ -556,7 +556,7 @@ sinks. Insecure deserialization is OWASP Top 10 #8.
 
 ---
 
-### Phase 9 — Per-argument taint propagation: summary model
+### Phase 9 -- Per-argument taint propagation: summary model
 
 **Category**: core correctness
 
@@ -573,10 +573,10 @@ next phase wires it into the transfer function.
 - Update summary extraction in `cfg.rs` to populate `propagating_params`
 
 **Files to touch**:
-- `src/summary/mod.rs` — `FuncSummary` struct, merge logic, serialisation
-- `src/cfg.rs` — `LocalFuncSummary` struct, `export_summaries()`, dominance-based
+- `src/summary/mod.rs` -- `FuncSummary` struct, merge logic, serialisation
+- `src/cfg.rs` -- `LocalFuncSummary` struct, `export_summaries()`, dominance-based
   propagation detection
-- `src/database.rs` — verify JSON serialisation handles the new field
+- `src/database.rs` -- verify JSON serialisation handles the new field
 
 **Implementation tasks**:
 1. In `FuncSummary`, replace:
@@ -623,7 +623,7 @@ next phase wires it into the transfer function.
 
 ---
 
-### Phase 10 — Per-argument taint propagation: transfer wiring
+### Phase 10 -- Per-argument taint propagation: transfer wiring
 
 **Category**: core correctness
 
@@ -638,7 +638,7 @@ use it, eliminating false positives from `func(tainted, safe)` returning tainted
   `propagates_taint` is true, treat as "all params propagate" (old behaviour)
 
 **Files to touch**:
-- `src/taint/transfer.rs` — `apply_call()`, `resolve_callee()`, `ResolvedSummary`
+- `src/taint/transfer.rs` -- `apply_call()`, `resolve_callee()`, `ResolvedSummary`
 
 **Implementation tasks**:
 1. Add `propagating_params: Vec<usize>` to `ResolvedSummary`.
@@ -659,13 +659,13 @@ use it, eliminating false positives from `func(tainted, safe)` returning tainted
    - Backward compat: if `propagating_params` is empty and old `propagates_taint` was
      true, fall back to collecting from all uses (preserving old behaviour)
 4. Similarly update `collect_tainted_sink_vars()` to use `tainted_sink_params` from
-   the resolved summary — check which argument positions are marked as flowing to sinks.
+   the resolved summary -- check which argument positions are marked as flowing to sinks.
 
 **Test tasks**:
 - New unit test: `func(tainted, safe)` where only param 0 propagates → return NOT tainted
 - New unit test: `func(safe, tainted)` where only param 0 propagates → return NOT tainted
 - New unit test: `func(tainted, safe)` where param 0 propagates → return IS tainted
-- New unit test: backward compat — old summary with `propagates_taint: true` → all params propagate
+- New unit test: backward compat -- old summary with `propagates_taint: true` → all params propagate
 - All existing taint tests pass
 
 **Definition of done**:
@@ -679,7 +679,7 @@ use it, eliminating false positives from `func(tainted, safe)` returning tainted
   iterating the call's argument children in tree-sitter order. Verify this matches
   `param_names` order in the summary.
 - Some call patterns (named args, spread args) may not have a clean positional mapping.
-  For these, fall back to "propagate all" — better to over-report than under-report.
+  For these, fall back to "propagate all" -- better to over-report than under-report.
 - This may reduce finding count. Run `cargo test real_world` and update expectations
   for any findings that correctly disappear.
 
@@ -687,7 +687,7 @@ use it, eliminating false positives from `func(tainted, safe)` returning tainted
 
 ---
 
-### Phase 11 — Wire call graph topo ordering into pass 2
+### Phase 11 -- Wire call graph topo ordering into pass 2
 
 **Category**: core correctness
 
@@ -701,8 +701,8 @@ are analysed. Wiring topo ordering ensures callees are fully analysed before cal
 - Remove `#[allow(dead_code)]` annotations from call graph fields
 
 **Files to touch**:
-- `src/commands/scan.rs` — `scan_filesystem()` pass 2 section (lines 384-410)
-- `src/callgraph.rs` — remove dead_code annotations
+- `src/commands/scan.rs` -- `scan_filesystem()` pass 2 section (lines 384-410)
+- `src/callgraph.rs` -- remove dead_code annotations
 
 **Implementation tasks**:
 1. In `scan_filesystem()`, capture `call_graph` and `cg_analysis` outside the block
@@ -712,7 +712,7 @@ are analysed. Wiring topo ordering ensures callees are fully analysed before cal
    files containing those functions.
 3. Process files in SCC order: files whose functions have no callees first, then files
    whose callees are all resolved, etc. Within an SCC, process in parallel (they're
-   mutually recursive — ordering doesn't help).
+   mutually recursive -- ordering doesn't help).
 4. Files not in the call graph (no functions found) can be processed in any order
    (append to the end).
 5. Remove `#[allow(dead_code)]` from `topo_scc_callee_first`, `node_to_scc`, and
@@ -723,7 +723,7 @@ are analysed. Wiring topo ordering ensures callees are fully analysed before cal
 - New integration test: create a two-file fixture where file A has a source function
   and file B calls it as a sink. Verify that topo ordering ensures A's summary is
   available when B is analysed.
-- `cargo test real_world` — verify no regressions
+- `cargo test real_world` -- verify no regressions
 
 **Definition of done**:
 - Pass 2 uses topo ordering
@@ -744,7 +744,7 @@ are analysed. Wiring topo ordering ensures callees are fully analysed before cal
 
 ---
 
-### Phase 12 — Fix JS two-level solve stale seed
+### Phase 12 -- Fix JS two-level solve stale seed
 
 **Category**: core correctness
 
@@ -760,7 +760,7 @@ codebases where global state mutation is common.
 - Cap iterations to prevent divergence (e.g., max 3 rounds)
 
 **Files to touch**:
-- `src/taint/mod.rs` — `analyse_js_two_level()`
+- `src/taint/mod.rs` -- `analyse_js_two_level()`
 
 **Implementation tasks**:
 1. After Level 2 (all functions analysed), collect the "exit states" from each function
@@ -795,7 +795,7 @@ codebases where global state mutation is common.
 
 ---
 
-### Phase 13 — Add state analysis fixtures for Python and JS
+### Phase 13 -- Add state analysis fixtures for Python and JS
 
 **Category**: evaluation
 
@@ -809,20 +809,20 @@ Rust resource lifecycle test fixtures.
 - Identify any language-specific gaps in resource pair definitions
 
 **Files to touch**:
-- `tests/fixtures/state/` — new `*.py` and `*.js` files
-- `tests/state_tests.rs` — new test functions
-- `src/state/transfer.rs` — may need new `ResourcePair` entries for Python/JS patterns
+- `tests/fixtures/state/` -- new `*.py` and `*.js` files
+- `tests/state_tests.rs` -- new test functions
+- `src/state/transfer.rs` -- may need new `ResourcePair` entries for Python/JS patterns
 
 **Implementation tasks**:
 1. Create Python fixtures:
-   - `python_file_open_no_close.py` — `f = open("x"); f.read()` (no close → leak)
-   - `python_file_open_close.py` — `f = open("x"); f.read(); f.close()` (clean)
-   - `python_double_close.py` — `f = open("x"); f.close(); f.close()` (double close)
-   - `python_with_statement.py` — `with open("x") as f: f.read()` (clean — context
+   - `python_file_open_no_close.py` -- `f = open("x"); f.read()` (no close → leak)
+   - `python_file_open_close.py` -- `f = open("x"); f.read(); f.close()` (clean)
+   - `python_double_close.py` -- `f = open("x"); f.close(); f.close()` (double close)
+   - `python_with_statement.py` -- `with open("x") as f: f.read()` (clean -- context
      manager; may not be detected depending on CFG modelling of `with`)
 2. Create JavaScript fixtures:
-   - `js_fs_open_no_close.js` — `const fd = fs.openSync("x"); fs.readSync(fd)` (leak)
-   - `js_fs_open_close.js` — `const fd = fs.openSync("x"); fs.closeSync(fd)` (clean)
+   - `js_fs_open_no_close.js` -- `const fd = fs.openSync("x"); fs.readSync(fd)` (leak)
+   - `js_fs_open_close.js` -- `const fd = fs.openSync("x"); fs.closeSync(fd)` (clean)
 3. Add corresponding test functions in `tests/state_tests.rs`
 4. If resource pairs are missing (e.g., Python `open`/`close`, JS `openSync`/`closeSync`),
    add them to the appropriate resource pair definitions in `src/state/transfer.rs`
@@ -849,7 +849,7 @@ Rust resource lifecycle test fixtures.
 
 ---
 
-### Phase 14 — Express.js framework rule pack
+### Phase 14 -- Express.js framework rule pack
 
 **Category**: rule depth
 
@@ -863,24 +863,24 @@ common middleware patterns.
 - Add test fixtures demonstrating Express-specific taint flows
 
 **Files to touch**:
-- `src/labels/javascript.rs` — new rules
-- `src/labels/typescript.rs` — mirror JS rules
-- `tests/fixtures/real_world/javascript/taint/` — new Express fixtures
-- `tests/fixtures/real_world/typescript/taint/` — new Express fixtures
+- `src/labels/javascript.rs` -- new rules
+- `src/labels/typescript.rs` -- mirror JS rules
+- `tests/fixtures/real_world/javascript/taint/` -- new Express fixtures
+- `tests/fixtures/real_world/typescript/taint/` -- new Express fixtures
 
 **Implementation tasks**:
 1. Add Express.js **sources** (if not already present):
-   - `req.body`, `req.query`, `req.params` (already present — verify)
+   - `req.body`, `req.query`, `req.params` (already present -- verify)
    - `req.hostname`, `req.ip`, `req.path`, `req.protocol`, `req.url`
    - `req.get` (header access), `req.header`
 2. Add Express.js **sinks**:
-   - `res.send`, `res.json`, `res.render` — XSS sinks (`Cap::HTML_ESCAPE`)
-   - `res.redirect` — open redirect / SSRF (`Cap::SSRF`)
-   - `res.sendFile` — path traversal (`Cap::FILE_IO`)
-   - `res.set`, `res.header` — header injection (`Cap::HTML_ESCAPE`)
+   - `res.send`, `res.json`, `res.render` -- XSS sinks (`Cap::HTML_ESCAPE`)
+   - `res.redirect` -- open redirect / SSRF (`Cap::SSRF`)
+   - `res.sendFile` -- path traversal (`Cap::FILE_IO`)
+   - `res.set`, `res.header` -- header injection (`Cap::HTML_ESCAPE`)
 3. Add Express.js **sanitizers**:
    - `express-validator` patterns: `body().trim().escape()`, `validationResult`
-   - `helmet` middleware (header hardening — mark as sanitizer for header injection)
+   - `helmet` middleware (header hardening -- mark as sanitizer for header injection)
 4. Add `xss` and `sanitize-html` as sanitizer matchers
 5. Create 2 Express taint fixtures per language (JS + TS):
    - `express_xss.js`: `req.query.name` → `res.send(name)` (XSS)
@@ -909,7 +909,7 @@ common middleware patterns.
 
 ---
 
-### Phase 14.5 — Per-Rule Case-Sensitive Matching
+### Phase 14.5 -- Per-Rule Case-Sensitive Matching
 
 **Category**: matcher precision
 
@@ -942,7 +942,7 @@ on every existing `LabelRule`)
 
 ---
 
-### Phase 15 — Flask/Django framework rule pack
+### Phase 15 -- Flask/Django framework rule pack
 
 **Category**: rule depth
 
@@ -955,8 +955,8 @@ sinks or ORM-aware patterns.
 - Add test fixtures
 
 **Files to touch**:
-- `src/labels/python.rs` — new rules
-- `tests/fixtures/real_world/python/taint/` — new Flask/Django fixtures
+- `src/labels/python.rs` -- new rules
+- `tests/fixtures/real_world/python/taint/` -- new Flask/Django fixtures
 
 **Implementation tasks**:
 1. Add Flask **sources** (verify existing, add missing):
@@ -964,22 +964,22 @@ sinks or ORM-aware patterns.
    - `request.files`, `request.data`, `request.values`, `request.environ`
    - `request.url`, `request.base_url`, `request.host`
 2. Add Flask **sinks**:
-   - `render_template_string` — SSTI / code injection (`Cap::CODE_EXEC`)
-   - `make_response` — XSS if raw HTML (`Cap::HTML_ESCAPE`)
-   - `redirect` — open redirect (`Cap::SSRF`)
-   - `send_file`, `send_from_directory` — path traversal (`Cap::FILE_IO`)
+   - `render_template_string` -- SSTI / code injection (`Cap::CODE_EXEC`)
+   - `make_response` -- XSS if raw HTML (`Cap::HTML_ESCAPE`)
+   - `redirect` -- open redirect (`Cap::SSRF`)
+   - `send_file`, `send_from_directory` -- path traversal (`Cap::FILE_IO`)
 3. Add Django **sources**:
    - `request.GET`, `request.POST`, `request.META`, `request.body`
    - `request.FILES`, `request.COOKIES`
 4. Add Django **sinks**:
-   - `HttpResponse` — XSS (`Cap::HTML_ESCAPE`)
-   - `mark_safe` — explicitly marks string as safe (actually a dangerous operation
-     if called on user input — this is a sink, not a sanitizer)
-   - `cursor.execute` with string formatting — SQL injection (`Cap::SQL_QUERY`)
+   - `HttpResponse` -- XSS (`Cap::HTML_ESCAPE`)
+   - `mark_safe` -- explicitly marks string as safe (actually a dangerous operation
+     if called on user input -- this is a sink, not a sanitizer)
+   - `cursor.execute` with string formatting -- SQL injection (`Cap::SQL_QUERY`)
 5. Add **sanitizers**:
-   - `bleach.clean` — HTML sanitizer
-   - `markupsafe.escape` — HTML escaping
-   - `django.utils.html.escape` — Django's escape
+   - `bleach.clean` -- HTML sanitizer
+   - `markupsafe.escape` -- HTML escaping
+   - `django.utils.html.escape` -- Django's escape
 6. Create 2 fixtures:
    - `flask_ssti.py`: `request.args.get("name")` → `render_template_string(name)` (SSTI)
    - `django_sqli.py`: `request.GET["q"]` → `cursor.execute("SELECT * WHERE " + q)` (SQLi)
@@ -1004,7 +1004,7 @@ sinks or ORM-aware patterns.
 
 ---
 
-### Phase 16 — Expand JS/TS DOM and browser API sinks
+### Phase 16 -- Expand JS/TS DOM and browser API sinks
 
 **Category**: rule depth
 
@@ -1018,24 +1018,24 @@ sinks or ORM-aware patterns.
 - Add test fixtures
 
 **Files to touch**:
-- `src/labels/javascript.rs` — new sink rules
-- `src/labels/typescript.rs` — mirror
-- `tests/fixtures/real_world/javascript/taint/` — new fixtures
+- `src/labels/javascript.rs` -- new sink rules
+- `src/labels/typescript.rs` -- mirror
+- `tests/fixtures/real_world/javascript/taint/` -- new fixtures
 
 **Implementation tasks**:
-1. Add DOM **sinks** (XSS — `Cap::HTML_ESCAPE`):
+1. Add DOM **sinks** (XSS -- `Cap::HTML_ESCAPE`):
    - `document.write`, `document.writeln`
    - `outerHTML` (assignment)
    - `insertAdjacentHTML`
    - `setAttribute` (when setting `href`, `src`, `onload`, etc.)
    - `DOMParser.parseFromString` (if injecting user HTML)
-2. Add navigation **sinks** (open redirect — `Cap::SSRF`):
+2. Add navigation **sinks** (open redirect -- `Cap::SSRF`):
    - `location.assign`, `location.replace`, `window.open`
 3. Add message **sinks** (data leak):
-   - `postMessage` — potential cross-origin data leak (`Cap::HTML_ESCAPE`)
+   - `postMessage` -- potential cross-origin data leak (`Cap::HTML_ESCAPE`)
 4. Add Node.js **sinks**:
-   - `fs.writeFileSync`, `fs.writeFile` — path traversal (`Cap::FILE_IO`)
-   - `net.createConnection` — SSRF (`Cap::SSRF`)
+   - `fs.writeFileSync`, `fs.writeFile` -- path traversal (`Cap::FILE_IO`)
+   - `net.createConnection` -- SSRF (`Cap::SSRF`)
 5. Create 2 test fixtures:
    - `dom_xss.js`: user input → `document.write()` (DOM XSS)
    - `open_redirect.js`: user input → `location.assign()` (redirect)
@@ -1060,7 +1060,7 @@ sinks or ORM-aware patterns.
 
 ---
 
-### Phase 16.5 — Argument-sensitive sink modeling
+### Phase 16.5 -- Argument-sensitive sink modeling
 
 **Category**: precision
 
@@ -1076,18 +1076,18 @@ sink when specific constant argument values indicate danger.
 **Goals**:
 - Add support for sink activation gated by constant argument values
 - Model `setAttribute(name, value)` precisely enough to avoid broad false positives
-- Keep the implementation narrow and explicit — no general symbolic reasoning
+- Keep the implementation narrow and explicit -- no general symbolic reasoning
 - Add regression tests for both dangerous and harmless attribute names
 
 **Files to touch**:
-- `src/labels/mod.rs` — extend rule metadata to support optional argument gating
-- `src/taint/transfer.rs` and/or classification path — activate sink behavior only when
+- `src/labels/mod.rs` -- extend rule metadata to support optional argument gating
+- `src/taint/transfer.rs` and/or classification path -- activate sink behavior only when
   the gating condition matches
-- `src/cfg.rs` — ensure call nodes expose enough constant-argument information to
+- `src/cfg.rs` -- ensure call nodes expose enough constant-argument information to
   inspect specific argument positions
-- `src/labels/javascript.rs` — add `setAttribute` using the new gated sink model
-- `src/labels/typescript.rs` — mirror JS
-- `src/taint/tests.rs` and/or `tests/fixtures/real_world/javascript/taint/` —
+- `src/labels/javascript.rs` -- add `setAttribute` using the new gated sink model
+- `src/labels/typescript.rs` -- mirror JS
+- `src/taint/tests.rs` and/or `tests/fixtures/real_world/javascript/taint/`  -- 
   dangerous vs harmless `setAttribute` cases
 
 **Implementation tasks**:
@@ -1162,13 +1162,13 @@ sink when specific constant argument values indicate danger.
   but this phase should focus on `setAttribute` and the reusable mechanism.
 
 **Dependencies**:
-- Phase 16 — broad DOM/browser sink expansion lands first
-- Phase 10 — per-argument taint propagation is already in place, which reduces
+- Phase 16 -- broad DOM/browser sink expansion lands first
+- Phase 10 -- per-argument taint propagation is already in place, which reduces
   ambiguity around call argument positions
 
 ---
 
-### Phase 16.6 — Argument-role-aware sink modeling
+### Phase 16.6 -- Argument-role-aware sink modeling
 
 **Category**: precision
 
@@ -1193,13 +1193,13 @@ selection can be modeled independently.
 - Preserve conservative behavior for dynamic / unknown activation arguments
 
 **Files to touch**:
-- `src/labels/mod.rs` — extend `SinkGate` to include payload argument positions
-- `src/cfg.rs` — store per-node payload-argument metadata for gated sinks
-- `src/taint/transfer.rs` — restrict sink taint checks to payload args when configured
-- `src/labels/javascript.rs` — refine `setAttribute`, add `parseFromString`
-- `src/labels/typescript.rs` — mirror JS
-- `tests/fixtures/real_world/javascript/taint/` — add/update gated sink fixtures
-- `src/labels/mod.rs` tests — extend gated-sink unit coverage
+- `src/labels/mod.rs` -- extend `SinkGate` to include payload argument positions
+- `src/cfg.rs` -- store per-node payload-argument metadata for gated sinks
+- `src/taint/transfer.rs` -- restrict sink taint checks to payload args when configured
+- `src/labels/javascript.rs` -- refine `setAttribute`, add `parseFromString`
+- `src/labels/typescript.rs` -- mirror JS
+- `tests/fixtures/real_world/javascript/taint/` -- add/update gated sink fixtures
+- `src/labels/mod.rs` tests -- extend gated-sink unit coverage
 
 **Implementation tasks**:
 
@@ -1281,12 +1281,12 @@ selection can be modeled independently.
   browser/DOM threat model; document that choice in fixture or changelog notes.
 
 **Dependencies**:
-- Phase 16.5 — argument-sensitive sink activation exists already
-- Phase 10 — per-argument taint propagation is already in place
+- Phase 16.5 -- argument-sensitive sink activation exists already
+- Phase 10 -- per-argument taint propagation is already in place
 
 ---
 
-### Phase 17 — Model try/catch in CFG: Java and JavaScript
+### Phase 17 -- Model try/catch in CFG: Java and JavaScript
 
 **Category**: core correctness
 
@@ -1301,11 +1301,11 @@ finally-based cleanup. This is the largest CFG correctness gap.
 - Model finally blocks as running on both normal and exception paths
 
 **Files to touch**:
-- `src/labels/mod.rs` — add `Try`, `Catch`, `Finally` to `Kind` enum
-- `src/labels/java.rs` — map `try_statement`, `catch_clause`, `finally_clause` to new Kinds
-- `src/labels/javascript.rs` — map `try_statement`, `catch_clause`, `finally_clause`
-- `src/labels/typescript.rs` — same
-- `src/cfg.rs` — add `try_statement` handling in `build_sub()`
+- `src/labels/mod.rs` -- add `Try`, `Catch`, `Finally` to `Kind` enum
+- `src/labels/java.rs` -- map `try_statement`, `catch_clause`, `finally_clause` to new Kinds
+- `src/labels/javascript.rs` -- map `try_statement`, `catch_clause`, `finally_clause`
+- `src/labels/typescript.rs` -- same
+- `src/cfg.rs` -- add `try_statement` handling in `build_sub()`
 
 **Implementation tasks**:
 1. Add to `Kind` enum: `Try`, `Catch`, `Finally`
@@ -1323,7 +1323,7 @@ finally-based cleanup. This is the largest CFG correctness gap.
    - Add normal flow edge: catch exit → finally entry (if present)
    - Add edge: finally exit → outer next node
 4. Mark exception edges with a new `EdgeKind::Exception` (or reuse `EdgeKind::False`
-   for simplicity — the catch block is the "false" path where the try didn't succeed)
+   for simplicity -- the catch block is the "false" path where the try didn't succeed)
 5. Ensure the `entry` and `exit` of the try/catch compound are connected correctly
 
 **Test tasks**:
@@ -1349,7 +1349,7 @@ finally-based cleanup. This is the largest CFG correctness gap.
 - Don't try to model checked vs unchecked exceptions in Java. Treat all calls as
   potentially throwing.
 - Python's try/except has different syntax (`except` vs `catch`). Defer Python to a
-  follow-up phase — focus on Java and JS first.
+  follow-up phase -- focus on Java and JS first.
 - Go doesn't have try/catch (uses `defer`/`recover`). Skip Go.
 
 **Dependencies**: None (but should be done after Phases 9-10 so test expectations are
@@ -1357,12 +1357,12 @@ stable before this larger change)
 
 ---
 
-### Phase 18 — Model try/catch in taint transfer
+### Phase 18 -- Model try/catch in taint transfer
 
 **Category**: core correctness
 
 **Why**: Phase 17 added try/catch edges to the CFG. This phase ensures the taint
-transfer function correctly handles exception edges — specifically, that taint state
+transfer function correctly handles exception edges -- specifically, that taint state
 on exception edges reflects the state at the throwing call, not at the end of the try
 block.
 
@@ -1372,9 +1372,9 @@ block.
 - Handle finally cleanup semantics in taint
 
 **Files to touch**:
-- `src/taint/transfer.rs` — handle `EdgeKind::Exception` (if added) or the exception
+- `src/taint/transfer.rs` -- handle `EdgeKind::Exception` (if added) or the exception
   edge semantics
-- `src/cfg.rs` — ensure `NodeInfo` for catch clause binds the exception variable
+- `src/cfg.rs` -- ensure `NodeInfo` for catch clause binds the exception variable
 
 **Implementation tasks**:
 1. If Phase 17 used `EdgeKind::Exception` (new variant):
@@ -1418,7 +1418,7 @@ block.
 
 ---
 
-### Phase 19 — Method receiver taint propagation
+### Phase 19 -- Method receiver taint propagation
 
 **Category**: core correctness
 
@@ -1431,8 +1431,8 @@ causes false negatives on method chains like `tainted_response.send(data)`.
 - Propagate receiver taint through method calls
 
 **Files to touch**:
-- `src/cfg.rs` — when building a method call node, add the receiver to `uses`
-- `src/taint/transfer.rs` — no changes needed if receiver is in `uses` (existing
+- `src/cfg.rs` -- when building a method call node, add the receiver to `uses`
+- `src/taint/transfer.rs` -- no changes needed if receiver is in `uses` (existing
   `collect_uses_taint` handles it)
 
 **Implementation tasks**:
@@ -1461,7 +1461,7 @@ causes false negatives on method chains like `tainted_response.send(data)`.
 
 **Risks / gotchas**:
 - This may increase findings. Some of these will be true positives (good), some may
-  be false positives (e.g., `tainted_string.length` — the length is an int, not
+  be false positives (e.g., `tainted_string.length` -- the length is an int, not
   tainted). Without type awareness, we can't distinguish. Accept this trade-off.
 - Only handle simple identifier receivers initially. Complex receiver expressions
   (function calls, member access chains) can be added later.
@@ -1472,7 +1472,7 @@ causes false negatives on method chains like `tainted_response.send(data)`.
 
 ---
 
-### Phase 19.5 — Multi-label classification for taint labels
+### Phase 19.5 -- Multi-label classification for taint labels
 
 **Category**: core correctness
 
@@ -1504,12 +1504,12 @@ multiple labels safely and deterministically.
 - Keep the implementation narrow: classification + taint consumption only
 
 **Files to touch**:
-- `src/labels/mod.rs` — classification API and helpers
-- `src/taint/transfer.rs` — consume multiple labels at call sites
-- `src/labels/php.rs` — verify dual-label rules like `file_get_contents`
-- `src/labels/java.rs` — verify dual-label rules like `readObject`
-- `tests/` — new unit tests and/or fixture updates for multi-label behaviour
-- `tests/fixtures/real_world/{lang}/taint/*.expect.json` — update expectations if
+- `src/labels/mod.rs` -- classification API and helpers
+- `src/taint/transfer.rs` -- consume multiple labels at call sites
+- `src/labels/php.rs` -- verify dual-label rules like `file_get_contents`
+- `src/labels/java.rs` -- verify dual-label rules like `readObject`
+- `tests/` -- new unit tests and/or fixture updates for multi-label behaviour
+- `tests/fixtures/real_world/{lang}/taint/*.expect.json` -- update expectations if
   previously-shadowed findings now correctly appear
 
 **Implementation tasks**:
@@ -1589,7 +1589,7 @@ multiple labels safely and deterministically.
 
 --- 
 
-### Phase 20 — Short-circuit evaluation in CFG
+### Phase 20 -- Short-circuit evaluation in CFG
 
 **Category**: core correctness
 
@@ -1604,7 +1604,7 @@ cover dangerous operations but the CFG doesn't respect short-circuit semantics.
 - Model: `a || b` → evaluate `a`; if true, skip `b`; if false, evaluate `b`
 
 **Files to touch**:
-- `src/cfg.rs` — condition handling in `build_sub()` for `Kind::If`
+- `src/cfg.rs` -- condition handling in `build_sub()` for `Kind::If`
 
 **Implementation tasks**:
 1. In `build_sub()` If handling, before creating the condition node:
@@ -1621,13 +1621,13 @@ cover dangerous operations but the CFG doesn't respect short-circuit semantics.
     - False edge of `a` → node for `b`
     - True/False edges of `b` → normal If True/False branches
 4. Handle nested operators: `a && b && c` → left-to-right chaining
-5. Only apply this to the top-level condition of If/While/For — don't split
+5. Only apply this to the top-level condition of If/While/For -- don't split
    conditions inside assignments or other expressions
 
 **Test tasks**:
-- New test: `if (input != null && sink(input))` — `sink` should only be reachable
+- New test: `if (input != null && sink(input))` -- `sink` should only be reachable
   when input is not null (predicate tracked on True edge of null check)
-- New test: `if (is_safe(x) || validate(x))` — both validation paths should mark
+- New test: `if (is_safe(x) || validate(x))` -- both validation paths should mark
   the True branch as validated
 - Existing tests pass (verify that existing If conditions without `&&`/`||` are
   unaffected)
@@ -1652,7 +1652,7 @@ cover dangerous operations but the CFG doesn't respect short-circuit semantics.
 
 ---
 
-### Phase 21 — Evaluation benchmark corpus
+### Phase 21 -- Evaluation benchmark corpus
 
 **Category**: evaluation
 
@@ -1668,10 +1668,10 @@ truth so every subsequent change can be measured.
 - Support automated scoring: precision, recall, F1
 
 **Files to touch**:
-- `tests/benchmark/` — new directory
-- `tests/benchmark/corpus/{lang}/{vuln_class}/` — test case files
-- `tests/benchmark/ground_truth.json` — expected findings per file
-- `tests/benchmark_test.rs` — automated scoring harness
+- `tests/benchmark/` -- new directory
+- `tests/benchmark/corpus/{lang}/{vuln_class}/` -- test case files
+- `tests/benchmark/ground_truth.json` -- expected findings per file
+- `tests/benchmark_test.rs` -- automated scoring harness
 
 **Implementation tasks**:
 1. Create benchmark directory structure:
@@ -1693,7 +1693,7 @@ truth so every subsequent change can be measured.
    - 1× Path traversal (user-controlled file path)
    - 1× Deserialization (if applicable to language)
    - 1× Code injection (eval with user input)
-   - 1× Safe variant (same pattern but properly sanitised — should NOT trigger)
+   - 1× Safe variant (same pattern but properly sanitised -- should NOT trigger)
 3. Create `ground_truth.json` mapping each file to expected findings:
    ```json
    {
@@ -1733,7 +1733,7 @@ truth so every subsequent change can be measured.
 - Baseline precision/recall numbers recorded
 
 **Risks / gotchas**:
-- Initial scores may be low. That's fine — this is a measurement, not a goal. The
+- Initial scores may be low. That's fine -- this is a measurement, not a goal. The
   purpose is to establish a baseline for measuring improvement.
 - Creating good minimal vulnerability patterns requires security expertise. Base them
   on well-known patterns from OWASP testing guides.
@@ -1745,7 +1745,7 @@ place for meaningful measurement)
 
 ---
 
-### Phase 22 — Run benchmark and publish baseline numbers
+### Phase 22 -- Run benchmark and publish baseline numbers
 
 **Category**: evaluation
 
@@ -1759,8 +1759,8 @@ numbers, and documents them for future comparison.
 - Document in a file that can be diffed over time
 
 **Files to touch**:
-- `tests/benchmark/RESULTS.md` — new file with baseline numbers
-- `tests/benchmark_test.rs` — may need adjustments based on initial run
+- `tests/benchmark/RESULTS.md` -- new file with baseline numbers
+- `tests/benchmark_test.rs` -- may need adjustments based on initial run
 
 **Implementation tasks**:
 1. Run `cargo test benchmark -- --ignored --nocapture` to get full output
@@ -1802,7 +1802,7 @@ numbers, and documents them for future comparison.
 
 ---
 
-### Phase 22.5 — Benchmark-driven precision stabilization
+### Phase 22.5 -- Benchmark-driven precision stabilization
 
 **Category**: precision / recall
 
@@ -1817,11 +1817,11 @@ fixes to close FN gaps and fix rule-ID mismatches without large redesign.
 - Re-run benchmark and update thresholds
 
 **Files touched**:
-- `tests/benchmark/ground_truth.json` — py-ssrf-001 alternative rule, JS cmdi alternatives
-- `src/labels/javascript.rs` — added bare `exec`/`execSync` as SHELL_ESCAPE sinks
-- `src/labels/python.rs` — added `Template` as HTML_ESCAPE sink (SSTI/XSS)
-- `tests/benchmark_test.rs` — updated regression thresholds
-- `tests/benchmark/RESULTS.md` — Phase 22.5 results
+- `tests/benchmark/ground_truth.json` -- py-ssrf-001 alternative rule, JS cmdi alternatives
+- `src/labels/javascript.rs` -- added bare `exec`/`execSync` as SHELL_ESCAPE sinks
+- `src/labels/python.rs` -- added `Template` as HTML_ESCAPE sink (SSTI/XSS)
+- `tests/benchmark_test.rs` -- updated regression thresholds
+- `tests/benchmark/RESULTS.md` -- Phase 22.5 results
 
 **Results**:
 - FN reduced from 6 → 2 (cmdi 100%, XSS 89%, SSRF 83%)
@@ -1842,7 +1842,7 @@ fixes to close FN gaps and fix rule-ID mismatches without large redesign.
 
 ---
 
-### Phase 23 — README and docs claims audit
+### Phase 23 -- README and docs claims audit
 
 Category: product credibility
 
@@ -1873,7 +1873,7 @@ Files to touch:
 
 Implementation tasks:
 
-1. README — remove or qualify overstated claims
+1. README -- remove or qualify overstated claims
 
 - Replace strong performance claims with reproducible wording
 - Remove or qualify the "~1s for rust-lang/rust" statement unless benchmarked
@@ -1890,7 +1890,7 @@ Implementation tasks:
     - "highly intelligent"
 - Prefer neutral, technical wording
 
-2. README — add explicit scope section
+2. README -- add explicit scope section
 
 Add a section such as:
 
@@ -1906,7 +1906,7 @@ Nyx is a static analysis engine focused on:
 Nyx is not currently intended to replace full commercial SAST tools,
 and some advanced analyses require explicit configuration.
 
-3. README — add limitations section
+3. README -- add limitations section
 
 Add:
 
@@ -1920,7 +1920,7 @@ Add:
 
 This improves credibility significantly.
 
-4. README — add benchmark qualification
+4. README -- add benchmark qualification
 
 If Phase 21 exists, add:
 
@@ -1933,7 +1933,7 @@ State analysis and interop analysis may increase runtime.
 
 Do not include numbers that cannot be reproduced.
 
-5. README — add stability / maturity note
+5. README -- add stability / maturity note
 
 Add:
 
@@ -1944,7 +1944,7 @@ APIs, detector behavior, and configuration options may change.
 
 This prevents the README from sounding like a finished product.
 
-6. README — add configuration disclaimer
+6. README -- add configuration disclaimer
 
 Mention that some features require enabling:
 
@@ -2030,7 +2030,7 @@ Phase 21 (benchmark results to reference)
 
 ---
 
-### Phase 24 — Expand Go rule depth
+### Phase 24 -- Expand Go rule depth
 
 **Category**: rule depth
 
@@ -2043,13 +2043,13 @@ is missing SSRF sinks, template security model, and crypto patterns.
 
 **Files to touch**:
 - `src/labels/go.rs`
-- `tests/fixtures/real_world/go/taint/` — new fixtures
+- `tests/fixtures/real_world/go/taint/` -- new fixtures
 
 **Implementation tasks**:
 1. Add SSRF sinks: `http.Get`, `http.Post`, `http.NewRequest`, `net.Dial`, `net.DialTimeout`
 2. Add crypto sinks: `md5.New`, `sha1.New`, `des.NewCipher`, `rc4.NewCipher`
-   as `Sink(Cap::CRYPTO)` — using weak crypto with any input is a finding
-3. Add template sinks: `template.HTML` (marks string as safe — dangerous if user input),
+   as `Sink(Cap::CRYPTO)` -- using weak crypto with any input is a finding
+3. Add template sinks: `template.HTML` (marks string as safe -- dangerous if user input),
    `template.JS`, `template.CSS`
 4. Add sanitizers: `filepath.Clean` (already present?), `url.PathEscape`
 5. Create 2 fixtures: `go_ssrf.go`, `go_weak_crypto.go`
@@ -2073,7 +2073,7 @@ is missing SSRF sinks, template security model, and crypto patterns.
 
 ---
 
-### Phase 25 — Expand Java rule depth (Spring, JPA, logging)
+### Phase 25 -- Expand Java rule depth (Spring, JPA, logging)
 
 **Category**: rule depth
 
@@ -2089,7 +2089,7 @@ JNDI injection.
 
 **Files to touch**:
 - `src/labels/java.rs`
-- `tests/fixtures/real_world/java/taint/` — new fixtures
+- `tests/fixtures/real_world/java/taint/` -- new fixtures
 
 **Implementation tasks**:
 1. Add Spring **sources**:
@@ -2100,16 +2100,16 @@ JNDI injection.
    - `@RequestBody` → method parameter (tree-sitter may not see annotations easily;
      skip for now)
 2. Add Spring **sinks**:
-   - `jdbcTemplate.query`, `jdbcTemplate.update` — SQL (`Cap::SQL_QUERY`)
-   - `RestTemplate.getForObject`, `RestTemplate.exchange` — SSRF (`Cap::SSRF`)
+   - `jdbcTemplate.query`, `jdbcTemplate.update` -- SQL (`Cap::SQL_QUERY`)
+   - `RestTemplate.getForObject`, `RestTemplate.exchange` -- SSRF (`Cap::SSRF`)
 3. Add JPA **sinks**:
-   - `entityManager.createNativeQuery` — SQL injection (`Cap::SQL_QUERY`)
-   - `entityManager.createQuery` with string concat — SQL injection
+   - `entityManager.createNativeQuery` -- SQL injection (`Cap::SQL_QUERY`)
+   - `entityManager.createQuery` with string concat -- SQL injection
 4. Add logging **sinks**:
    - `logger.info`, `logger.warn`, `logger.error` with format injection (`Cap::FMT_STRING`)
-   - `String.format` — format string (`Cap::FMT_STRING`)
+   - `String.format` -- format string (`Cap::FMT_STRING`)
 5. Add JNDI **sinks**:
-   - `InitialContext.lookup`, `Context.lookup` — JNDI injection (`Cap::CODE_EXEC`)
+   - `InitialContext.lookup`, `Context.lookup` -- JNDI injection (`Cap::CODE_EXEC`)
 6. Create 2 fixtures: `spring_sqli.java`, `jndi_injection.java`
 
 **Test tasks**:
@@ -2135,7 +2135,7 @@ JNDI injection.
 
 ---
 
-### Phase 26 — Expand Ruby rule depth (Rails, ERB)
+### Phase 26 -- Expand Ruby rule depth (Rails, ERB)
 
 **Category**: rule depth
 
@@ -2149,26 +2149,26 @@ bare function names). Rails is the dominant Ruby web framework.
 
 **Files to touch**:
 - `src/labels/ruby.rs`
-- `tests/fixtures/real_world/ruby/taint/` — new fixtures
+- `tests/fixtures/real_world/ruby/taint/` -- new fixtures
 
 **Implementation tasks**:
 1. Add Rails **sources**:
-   - `params` (already present — verify)
+   - `params` (already present -- verify)
    - `params.require`, `params.permit` (these are sanitizers in Rails' strong params model!)
    - `request.headers`, `request.body`, `request.url`, `request.referrer`
    - `cookies`, `session`
 2. Add Rails **sinks**:
-   - `render html:` — XSS (`Cap::HTML_ESCAPE`)
-   - `render inline:` — template injection (`Cap::CODE_EXEC`)
-   - `redirect_to` — open redirect (`Cap::SSRF`)
-   - `send_file`, `send_data` — path traversal (`Cap::FILE_IO`)
-   - `ActiveRecord.where` with string — SQL injection (`Cap::SQL_QUERY`)
-   - `ActiveRecord.find_by_sql` — SQL injection
-   - `constantize` — code injection (`Cap::CODE_EXEC`)
+   - `render html:` -- XSS (`Cap::HTML_ESCAPE`)
+   - `render inline:` -- template injection (`Cap::CODE_EXEC`)
+   - `redirect_to` -- open redirect (`Cap::SSRF`)
+   - `send_file`, `send_data` -- path traversal (`Cap::FILE_IO`)
+   - `ActiveRecord.where` with string -- SQL injection (`Cap::SQL_QUERY`)
+   - `ActiveRecord.find_by_sql` -- SQL injection
+   - `constantize` -- code injection (`Cap::CODE_EXEC`)
 3. Add **sanitizers**:
    - `html_safe` is NOT a sanitizer (it marks string as safe, which is dangerous)
    - `ERB::Util.html_escape`, `CGI.escape`, `Rack::Utils.escape_html`
-   - `params.require(...).permit(...)` — strong params (partial sanitiser)
+   - `params.require(...).permit(...)` -- strong params (partial sanitiser)
 4. Create 2 fixtures: `rails_sqli.rb`, `rails_redirect.rb`
 
 **Test tasks**:
@@ -2193,7 +2193,7 @@ bare function names). Rails is the dominant Ruby web framework.
 
 ---
 
-### Phase 27 — Constant-argument sink suppression
+### Phase 27 -- Constant-argument sink suppression
 
 **Category**: precision
 
@@ -2208,9 +2208,9 @@ detection (Python tests reference it) should be generalised.
 - Keep the finding if ANY argument has taint flow
 
 **Files to touch**:
-- `src/cfg.rs` — add `is_constant: bool` field to `NodeInfo` for call nodes
-- `src/taint/transfer.rs` — skip sink check when all arguments are constants
-- `src/cfg_analysis/` — use constant detection in structural analysis
+- `src/cfg.rs` -- add `is_constant: bool` field to `NodeInfo` for call nodes
+- `src/taint/transfer.rs` -- skip sink check when all arguments are constants
+- `src/cfg_analysis/` -- use constant detection in structural analysis
 
 **Implementation tasks**:
 1. In `cfg.rs`, when building a call node:
@@ -2249,7 +2249,7 @@ detection (Python tests reference it) should be generalised.
 
 ---
 
-### Phase 28 — Scan path deduplication refactor
+### Phase 28 -- Scan path deduplication refactor
 
 **Category**: refactor
 
@@ -2264,20 +2264,20 @@ maintenance burden and makes it easy for one path to diverge from the other.
 - Ensure both paths behave identically
 
 **Files to touch**:
-- `src/commands/scan.rs` — refactor into shared helpers
+- `src/commands/scan.rs` -- refactor into shared helpers
 
 **Implementation tasks**:
 1. Extract `fn build_global_summaries(summaries: Vec<FuncSummary>) -> GlobalSummaries`
-   — shared summary merging logic
+   -- shared summary merging logic
 2. Extract `fn build_and_analyse_call_graph(summaries: &GlobalSummaries) -> CallGraphAnalysis`
-   — shared call graph construction and analysis
-3. Extract `fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config)` — shared
+   -- shared call graph construction and analysis
+3. Extract `fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config)` -- shared
    ranking, confidence, and truncation logic
 4. Update both `scan_filesystem` and `scan_with_index_parallel` to use shared helpers
 5. Verify identical output on test fixtures
 
 **Test tasks**:
-- Run `cargo test` with both indexed and non-indexed modes — same findings
+- Run `cargo test` with both indexed and non-indexed modes -- same findings
 - `cargo test real_world` passes
 - `cargo test` passes
 - Run the benchmark test to verify no performance regression
@@ -2301,7 +2301,7 @@ the pattern)
 
 ---
 
-### Phase 29 — Re-run benchmark and measure improvement
+### Phase 29 -- Re-run benchmark and measure improvement
 
 **Category**: evaluation
 
@@ -2315,7 +2315,7 @@ the impact. This validates whether the work made a meaningful difference.
 - Identify remaining gaps
 
 **Files to touch**:
-- `tests/benchmark/RESULTS.md` — add new measurement section
+- `tests/benchmark/RESULTS.md` -- add new measurement section
 
 **Implementation tasks**:
 1. Run `cargo test benchmark -- --ignored --nocapture`
@@ -2342,7 +2342,7 @@ point to measure incremental progress)
 
 ---
 
-### Phase 30 — SSRF semantic completion
+### Phase 30 -- SSRF semantic completion
 
 **Category**: rule depth
 
@@ -2371,19 +2371,19 @@ remaining static-analysis limits.
 - Document the remaining boundaries of static SSRF detection honestly
 
 **Files to touch**:
-- `src/labels/javascript.rs` — SSRF wrapper/sanitizer additions
-- `src/labels/typescript.rs` — mirror JS additions
-- `src/labels/python.rs` — SSRF wrapper/sanitizer additions
-- `src/labels/java.rs` — SSRF wrapper/sanitizer additions
-- `src/labels/go.rs` — SSRF wrapper/sanitizer additions
-- `src/labels/ruby.rs` — SSRF wrapper/sanitizer additions
-- `src/labels/php.rs` — SSRF wrapper/sanitizer additions
-- `src/taint/transfer.rs` — SSRF sanitizer / validation semantics
-- `tests/fixtures/real_world/{lang}/taint/` — new SSRF precision fixtures
-- `tests/benchmark/corpus/{lang}/ssrf/` — SSRF benchmark cases
-- `tests/benchmark/ground_truth.json` — SSRF benchmark expectations
-- `tests/benchmark/RESULTS.md` — SSRF subsection with measured results
-- `docs/` or `README.md` — brief note on SSRF scope and known limits if appropriate
+- `src/labels/javascript.rs` -- SSRF wrapper/sanitizer additions
+- `src/labels/typescript.rs` -- mirror JS additions
+- `src/labels/python.rs` -- SSRF wrapper/sanitizer additions
+- `src/labels/java.rs` -- SSRF wrapper/sanitizer additions
+- `src/labels/go.rs` -- SSRF wrapper/sanitizer additions
+- `src/labels/ruby.rs` -- SSRF wrapper/sanitizer additions
+- `src/labels/php.rs` -- SSRF wrapper/sanitizer additions
+- `src/taint/transfer.rs` -- SSRF sanitizer / validation semantics
+- `tests/fixtures/real_world/{lang}/taint/` -- new SSRF precision fixtures
+- `tests/benchmark/corpus/{lang}/ssrf/` -- SSRF benchmark cases
+- `tests/benchmark/ground_truth.json` -- SSRF benchmark expectations
+- `tests/benchmark/RESULTS.md` -- SSRF subsection with measured results
+- `docs/` or `README.md` -- brief note on SSRF scope and known limits if appropriate
 
 **Implementation tasks**:
 
@@ -2515,11 +2515,11 @@ remaining static-analysis limits.
 
 **Dependencies**:
 - Phase 7
-- Phase 19.5 — multi-label classification should be complete before dual-label SSRF cases are relied on
-- Phase 20 / 21 / 29 — benchmark infrastructure and baseline measurements should exist
+- Phase 19.5 -- multi-label classification should be complete before dual-label SSRF cases are relied on
+- Phase 20 / 21 / 29 -- benchmark infrastructure and baseline measurements should exist
 ---
 
-### Phase 31 — Phase 2 readiness assessment
+### Phase 31 -- Phase 2 readiness assessment
 
 **Category**: evaluation
 
@@ -2534,7 +2534,7 @@ engine is ready to build on. This phase produces a go/no-go recommendation.
   on a solid foundation?
 
 **Files to touch**:
-- `docs/PHASE2_READINESS.md` — new assessment document
+- `docs/PHASE2_READINESS.md` -- new assessment document
 
 **Implementation tasks**:
 1. Compile all quality metrics:

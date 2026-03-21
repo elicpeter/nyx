@@ -41,25 +41,25 @@ Python has moderate taint label coverage. Sources, sinks, and sanitizers are def
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `py.code_exec.eval` | High | A | `eval()` — dynamic code execution |
-| `py.code_exec.exec` | High | A | `exec()` — dynamic code execution |
+| `py.code_exec.eval` | High | A | `eval()` -- dynamic code execution |
+| `py.code_exec.exec` | High | A | `exec()` -- dynamic code execution |
 | `py.code_exec.compile` | Medium | A | `compile()` with exec/eval mode |
 
 ### Command Execution
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `py.cmdi.os_system` | High | A | `os.system()` — shell command execution |
-| `py.cmdi.os_popen` | High | A | `os.popen()` — shell command execution |
+| `py.cmdi.os_system` | High | A | `os.system()` -- shell command execution |
+| `py.cmdi.os_popen` | High | A | `os.popen()` -- shell command execution |
 | `py.cmdi.subprocess_shell` | High | B | `subprocess.*` with `shell=True` |
 
 ### Deserialization
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `py.deser.pickle_loads` | High | A | `pickle.loads()` / `pickle.load()` — arbitrary object deserialization |
+| `py.deser.pickle_loads` | High | A | `pickle.loads()` / `pickle.load()` -- arbitrary object deserialization |
 | `py.deser.yaml_load` | High | A | `yaml.load()` without SafeLoader |
-| `py.deser.shelve_open` | Medium | A | `shelve.open()` — pickle-backed deserialization |
+| `py.deser.shelve_open` | Medium | A | `shelve.open()` -- pickle-backed deserialization |
 
 ### SQL Injection
 
@@ -71,20 +71,20 @@ Python has moderate taint label coverage. Sources, sinks, and sanitizers are def
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `py.crypto.md5` | Low | A | `hashlib.md5()` — weak hash algorithm |
-| `py.crypto.sha1` | Low | A | `hashlib.sha1()` — weak hash algorithm |
+| `py.crypto.md5` | Low | A | `hashlib.md5()` -- weak hash algorithm |
+| `py.crypto.sha1` | Low | A | `hashlib.sha1()` -- weak hash algorithm |
 
 ### Template Injection
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `py.xss.jinja_from_string` | Medium | A | `jinja2.Template.from_string()` — template injection |
+| `py.xss.jinja_from_string` | Medium | A | `jinja2.Template.from_string()` -- template injection |
 
 ---
 
 ## Examples
 
-### `py.deser.pickle_loads` — Unsafe deserialization
+### `py.deser.pickle_loads`: Unsafe deserialization
 
 **Vulnerable:**
 ```python
@@ -98,7 +98,7 @@ import json
 data = json.loads(request.body)  # JSON is safe
 ```
 
-### `py.cmdi.subprocess_shell` — Shell execution
+### `py.cmdi.subprocess_shell`: Shell execution
 
 **Vulnerable:**
 ```python
@@ -115,7 +115,7 @@ subprocess.call(shlex.split(user_input), shell=False)
 subprocess.call(["ls", "-la", user_dir])
 ```
 
-### `py.deser.yaml_load` — Unsafe YAML
+### `py.deser.yaml_load`: Unsafe YAML
 
 **Vulnerable:**
 ```python
@@ -129,7 +129,7 @@ import yaml
 config = yaml.safe_load(user_data)  # Only basic Python types
 ```
 
-### `py.sqli.execute_format` — SQL concatenation
+### `py.sqli.execute_format`: SQL concatenation
 
 **Vulnerable:**
 ```python

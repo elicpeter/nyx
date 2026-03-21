@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/logo.png" alt="nyx logo" width="300"/>
 
-**Fast, cross-language cli vulnerability scanner.**
+**A cross-language static analysis tool for security vulnerabilities.**
 
 [![crates.io](https://img.shields.io/crates/v/nyx-scanner.svg)](https://crates.io/crates/nyx-scanner)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -13,7 +13,7 @@
 
 ## What is Nyx?
 
-**Nyx** is a lightweight, lightning-fast Rust-native command-line tool that detects security vulnerabilities across 10 programming languages. It combines [`tree-sitter`](https://tree-sitter.github.io/) parsing, intra-procedural control-flow graphs, and cross-file taint analysis with an optional SQLite-backed index to deliver deep, repeatable scans on projects of any size.
+**Nyx** is a Rust-native command-line tool that detects security vulnerabilities across 10 programming languages. It combines [`tree-sitter`](https://tree-sitter.github.io/) parsing, intra-procedural control-flow graphs, and cross-file taint analysis with an optional SQLite-backed index for incremental scans.
 
 ---
 
@@ -25,7 +25,7 @@
 | AST-level pattern matching | Language-specific queries written against precise parse trees |
 | Control-flow graph analysis | Auth gaps, unguarded sinks, unreachable security code, resource leaks, error fallthrough |
 | Cross-file taint tracking | Monotone forward dataflow taint analysis from sources through sanitizers to sinks with function summaries |
-| Cross-language interop | Taint flows across language boundaries via explicit interop edges |
+| Cross-language interop | Taint flows across language boundaries via explicit interop edges (requires configuration) |
 | Two-pass architecture | Pass 1 extracts function summaries; Pass 2 runs taint with full cross-file context |
 | Incremental indexing | SQLite database stores file hashes, summaries, and findings to skip unchanged files |
 | Parallel execution | File walking and analysis run concurrently via Rayon; scales with available CPU cores |
@@ -36,17 +36,17 @@
 
 ---
 
-## Why choose Nyx?
+## Design Goals
 
-| Advantage | What it means for you |
+| Property | Details |
 |---|---|
-| **Pure-Rust, single binary** | No JVM, Python, or server to install; drop the `nyx` executable into your `$PATH` and go. |
-| **Massively parallel** | Uses Rayon and a thread-pool walker; scales to all CPU cores. Scanning the entire **rust-lang/rust** codebase (~53,000 files) on an M2 MacBook Pro takes **~1 s**. |
-| **Deep analysis** | Real CFG construction and monotone dataflow taint analysis with guaranteed termination, not just regex matching. Cross-file function summaries, capability-based sanitizer tracking, and scored findings. |
-| **Index-aware** | An optional SQLite index stores file hashes and findings; subsequent scans touch *only* changed files, slashing CI times. |
-| **Offline & privacy-friendly** | Requires no login, cloud account, or telemetry. Perfect for air-gapped environments and strict compliance policies. |
-| **Tree-sitter precision** | Parses real language grammars, not regexes, giving far fewer false positives than line-based scanners. |
-| **Extensible** | Add new patterns with concise `tree-sitter` queries; no SaaS lock-in. |
+| **Pure-Rust, single binary** | No JVM, Python, or server required. |
+| **Parallel** | Uses Rayon for concurrent file walking and analysis; scales with available CPU cores. Typically scans large repositories in seconds in AST-only mode on modern hardware. |
+| **CFG + taint analysis** | Intra-procedural CFG construction and monotone forward dataflow taint analysis with guaranteed termination. Cross-file function summaries and capability-based sanitizer tracking. |
+| **Index-aware** | An optional SQLite index stores file hashes and findings; subsequent scans skip unchanged files. |
+| **Offline** | No login, cloud account, or telemetry required. Suitable for air-gapped environments. |
+| **Tree-sitter parsing** | Parses real language grammars rather than using regex matching. |
+| **Extensible** | Custom sources, sanitizers, sinks, and terminators can be added via TOML config or CLI. |
 
 ---
 
@@ -192,15 +192,15 @@ Nyx supports four analysis modes, selectable via `--mode` or the `scanner.mode` 
 | Unreachable security code | `cfg-unreachable-*` | Sanitizers, guards, or sinks in dead code branches |
 | Error fallthrough | `cfg-error-fallthrough` | Error-handling branches that don't terminate, allowing execution to fall through to dangerous operations |
 | Resource leak | `cfg-resource-leak` | Resources acquired but not released on all exit paths (malloc/free, fopen/fclose, Lock/Unlock) |
-| Use-after-close | `state-use-after-close` | Variable read/written after its resource handle was closed |
-| Double-close | `state-double-close` | Resource handle closed more than once |
-| Must-leak | `state-resource-leak` | Resource acquired but never closed on any exit path |
-| May-leak | `state-resource-leak-possible` | Resource open on some but not all exit paths |
-| Unauthenticated access | `state-unauthed-access` | Sensitive sink reached without a preceding auth/admin check |
+| Use-after-close | `state-use-after-close` | Variable read/written after its resource handle was closed (opt-in) |
+| Double-close | `state-double-close` | Resource handle closed more than once (opt-in) |
+| Must-leak | `state-resource-leak` | Resource acquired but never closed on any exit path (opt-in) |
+| May-leak | `state-resource-leak-possible` | Resource open on some but not all exit paths (opt-in) |
+| Unauthenticated access | `state-unauthed-access` | Sensitive sink reached without a preceding auth/admin check (opt-in) |
 
 ### Attack Surface Ranking
 
-Every finding is assigned a deterministic **attack-surface score** that estimates exploitability using only information already in memory — no extra source passes are needed. Findings are sorted by descending score before truncation, so `max_results` always keeps the most important results.
+Every finding is assigned a deterministic **attack-surface score** that estimates exploitability using only information already in memory. No extra source passes are needed. Findings are sorted by descending score before truncation, so `max_results` always keeps the most important results.
 
 The score is the sum of five components:
 
@@ -210,7 +210,7 @@ The score is the sum of five components:
 | **Analysis kind** | taint = +10, state = +8, cfg = +3/+5, ast = 0 | Taint-confirmed flows are the strongest signal; AST-only pattern matches rank lowest at equal severity. CFG findings with evidence get +5, without get +3. |
 | **Evidence strength** | +1 per evidence item (max 4), +2–6 for source kind | More evidence increases confidence. Source-kind priority: user input (+6) > env/config (+5) > unknown (+4) > file system (+3) > database (+2). |
 | **State rule type** | +1 to +6 | Use-after-close and unauthenticated access (+6) rank above double-close (+3), must-leak (+2), and may-leak (+1). |
-| **Path validation** | −5 | Findings on paths guarded by a validation predicate receive a small exploitability penalty — the guard may prevent triggering. |
+| **Path validation** | −5 | Findings on paths guarded by a validation predicate receive a small exploitability penalty because the guard may prevent triggering. |
 
 **Score ranges** (approximate):
 
@@ -309,40 +309,81 @@ A fully documented `nyx.conf` is generated automatically on first run.
 
 Nyx uses a **two-pass architecture** to enable cross-file analysis without sacrificing parallelism:
 
-1. **File enumeration** -- A parallel walker (Rayon + `ignore` crate) applies gitignore rules, size limits, and user exclusions.
-2. **Pass 1 -- Summary extraction** -- Each file is parsed via tree-sitter, an intra-procedural CFG is built (petgraph), and a `FuncSummary` is exported per function capturing source/sanitizer/sink capabilities (bitflags), taint propagation behavior, and callee lists. Summaries are persisted to SQLite.
-3. **Summary merge** -- All per-file summaries are merged into a `GlobalSummaries` map with conservative conflict resolution (union caps, OR booleans).
-4. **Pass 2 -- Analysis** -- Files are re-parsed and analyzed with the full cross-file context: a monotone forward dataflow engine resolves callees against local and global summaries and propagates taint through a bounded lattice with guaranteed convergence. CFG analysis checks for auth gaps, unguarded sinks, resource leaks, and more.
-5. **Reporting** -- Findings are scored, ranked, deduplicated, and emitted to the console or serialized as JSON.
+1. **File enumeration.** A parallel walker (Rayon + `ignore` crate) applies gitignore rules, size limits, and user exclusions.
+2. **Pass 1: Summary extraction.** Each file is parsed via tree-sitter, an intra-procedural CFG is built (petgraph), and a `FuncSummary` is exported per function capturing source/sanitizer/sink capabilities (bitflags), taint propagation behavior, and callee lists. Summaries are persisted to SQLite.
+3. **Summary merge.** All per-file summaries are merged into a `GlobalSummaries` map with conservative conflict resolution (union caps, OR booleans).
+4. **Pass 2: Analysis.** Files are re-parsed and analyzed with the full cross-file context: a monotone forward dataflow engine resolves callees against local and global summaries and propagates taint through a bounded lattice with guaranteed convergence. CFG analysis checks for auth gaps, unguarded sinks, resource leaks, and more.
+5. **Reporting.** Findings are scored, ranked, deduplicated, and emitted to the console or serialized as JSON.
 
 With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged, and cached findings are served directly for AST-only results.
 
 ---
 
+## Status
+
+Nyx is under active development. APIs, detector behavior, and configuration options may change between releases.
+
+---
+
+## Scope
+
+Nyx is a static analysis engine focused on:
+
+- Multi-language taint analysis (source → sanitizer → sink)
+- Control-flow-aware structural detectors
+- Security-oriented AST pattern matching
+- Optional cross-language interop edges (requires explicit configuration)
+- Optional resource lifecycle and auth state analysis (disabled by default)
+
+Nyx is not intended to replace full commercial SAST tools. Some analyses are heuristic-based and results may require manual review.
+
+---
+
+## Limitations
+
+- State analysis (`use-after-close`, `double-close`, `resource-leak`, `unauthenticated-access`) is disabled by default; enable with `scanner.enable_state_analysis = true`
+- Cross-language interop edges must be configured explicitly
+- Taint analysis is intra-procedural with cross-file function summaries; it does not perform full inter-procedural analysis
+- Some detectors rely on heuristic matching (see [AST Patterns](docs/detectors/patterns.md) for false positive/negative details)
+- Not all language features are modeled (e.g., macros, dynamic dispatch, aliased imports)
+- Results may contain false positives or false negatives
+
+---
+
+## Performance
+
+Benchmarks can be run locally with `cargo bench`. Results depend on hardware, repository size, and analysis mode.
+
+AST-only mode (`--mode ast`) is the fastest and skips CFG construction and taint analysis. Full mode (`--mode full`) includes CFG and taint analysis and is slower. State analysis adds additional overhead when enabled.
+
+Incremental indexing significantly reduces scan time for subsequent runs on unchanged files.
+
+---
+
 ## Roadmap
 
-### Phase 1 -- Deep Static Engine (Complete)
+### Phase 1: Deep Static Engine (Complete)
 
 | Feature | Status | Description |
 |---|--------|---|
 | Interprocedural call graph | Done | Precise symbol resolution via `FuncKey`, language-scoped namespaces, cross-module linking. Full call graph with SCC and topological analysis. |
 | Path-sensitive analysis | Done | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Monotone predicate summaries with contradiction pruning. |
 | Dataflow & state modeling | Done | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Generic `Transfer` trait over bounded lattices with guaranteed convergence. |
-| Monotone taint analysis | Done | Replaced BFS taint engine with a forward worklist dataflow analysis over a finite `TaintState` lattice. Multi-origin tracking, dual validated-must/may sets, JS/TS two-level solve. Guaranteed termination via lattice finiteness. |
+| Monotone taint analysis | Done | Forward worklist dataflow analysis over a finite `TaintState` lattice. Multi-origin tracking, dual validated-must/may sets, JS/TS two-level solve. Termination guaranteed by lattice finiteness. |
 | Attack surface ranking | Done | Deterministic post-analysis scoring of findings by severity, analysis kind, evidence strength, source-kind exploitability, and validation state. Findings sorted by score before truncation so `max_results` keeps the most important results. |
 | Inline suppressions | Done | `nyx:ignore` and `nyx:ignore-next-line` comments with wildcard matching, all 10 languages supported. `--show-suppressed` flag for visibility. |
 | Low-noise prioritization | Done | Category filtering, rollup grouping for high-frequency rules, configurable LOW budgets. Quality-category findings hidden by default. |
 | Pattern-level confidence | Done | Explicit High/Medium/Low confidence on every AST pattern. Confidence flows into output alongside severity and rank score. |
 | AST pattern overhaul | Done | 30+ new patterns across all languages, 11 broken query fixes, namespaced IDs, severity recalibration. |
 
-### Phase 2 -- Dynamic Capability
+### Phase 2: Dynamic Capability (Planned)
 
 | Feature | Description |
 |---|---|
-| Controlled dynamic execution | Local sandbox: identify entry points, spin up test harnesses, inject payloads, detect runtime crashes and command execution. Deterministic automated exploit validation -- static finds `exec(user_input)`, dynamic confirms it with `; id`. |
+| Controlled dynamic execution | Local sandbox: identify entry points, spin up test harnesses, inject payloads, detect runtime crashes and command execution. Deterministic automated exploit validation: static finds `exec(user_input)`, dynamic confirms it with `; id`. |
 | Fuzzing integration | libFuzzer (C/C++), cargo-fuzz (Rust), go-fuzz, HTTP fuzzing harness. Static engine identifies interesting functions, fuzzer targets only those. |
 
-### Phase 3 -- Intelligent Reasoning Layer
+### Phase 3: Reasoning Layer (Planned)
 
 | Feature | Description |
 |---|---|
@@ -359,7 +400,7 @@ With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged
 | Rule updates | Remote rule feed with signature verification |
 | UX | Smart file-watch re-scan |
 
-Community feedback shapes priorities -- please [open an issue](https://github.com/elicpeter/nyx/issues) to discuss proposed changes.
+Community feedback shapes priorities. [Open an issue](https://github.com/elicpeter/nyx/issues) to discuss proposed changes.
 
 ---
 
@@ -367,17 +408,17 @@ Community feedback shapes priorities -- please [open an issue](https://github.co
 
 Full documentation is available in the [`docs/`](docs/index.md) directory:
 
-- [Installation](docs/installation.md) — cargo, binaries, CI tips
-- [Quick Start](docs/quickstart.md) — Your first scan in 60 seconds
-- [CLI Reference](docs/cli.md) — Every flag and subcommand
-- [Configuration](docs/configuration.md) — Config file schema, custom rules
-- [Output Formats](docs/output.md) — Console, JSON, SARIF; exit codes
-- [Detector Overview](docs/detectors.md) — How the four detector families work
-  - [Taint Analysis](docs/detectors/taint.md) — Cross-file source-to-sink dataflow
-  - [CFG Structural](docs/detectors/cfg.md) — Auth gaps, unguarded sinks, resource leaks
-  - [State Model](docs/detectors/state.md) — Resource lifecycle, authentication state
-  - [AST Patterns](docs/detectors/patterns.md) — Tree-sitter structural matching
-- [Rule Reference](docs/rules/index.md) — Per-language rule listings with examples
+- [Installation](docs/installation.md): cargo, binaries, CI tips
+- [Quick Start](docs/quickstart.md): first scan in 60 seconds
+- [CLI Reference](docs/cli.md): every flag and subcommand
+- [Configuration](docs/configuration.md): config file schema, custom rules
+- [Output Formats](docs/output.md): console, JSON, SARIF; exit codes
+- [Detector Overview](docs/detectors.md): how the four detector families work
+  - [Taint Analysis](docs/detectors/taint.md): cross-file source-to-sink dataflow
+  - [CFG Structural](docs/detectors/cfg.md): auth gaps, unguarded sinks, resource leaks
+  - [State Model](docs/detectors/state.md): resource lifecycle, authentication state
+  - [AST Patterns](docs/detectors/patterns.md): tree-sitter structural matching
+- [Rule Reference](docs/rules/index.md): per-language rule listings with examples
 
 ---
 
@@ -390,7 +431,7 @@ Pull requests are welcome. To contribute:
 3. Add unit and/or integration tests where applicable (`cargo test` should remain green).
 4. Submit a concise, well-documented pull request.
 
-Please open an issue for any crash, panic, or suspicious result -- attach the minimal code snippet and mention the Nyx version.
+Please open an issue for any crash, panic, or suspicious result. Attach the minimal code snippet and mention the Nyx version.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full guidelines, including how to add new rules and support new languages.
 
@@ -400,6 +441,6 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full guidelines, including how to a
 
 Nyx is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
 
-This ensures that all modified versions of the scanner remain free and open-source, protecting the integrity and transparency of security tools.
+All modified versions must also be distributed under GPL-3.0.
 
 See [LICENSE](./LICENSE) for full details.

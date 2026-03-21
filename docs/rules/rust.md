@@ -33,22 +33,22 @@ Nyx detects Rust vulnerabilities through AST patterns (memory safety, code quali
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `rs.memory.transmute` | High | A | `std::mem::transmute` — unchecked type reinterpretation |
-| `rs.memory.copy_nonoverlapping` | High | A | `ptr::copy_nonoverlapping` — raw pointer memcpy |
-| `rs.memory.get_unchecked` | High | A | `get_unchecked` / `get_unchecked_mut` — unchecked indexing |
-| `rs.memory.mem_zeroed` | High | A | `std::mem::zeroed` — may be UB for non-POD types |
-| `rs.memory.ptr_read` | High | A | `ptr::read` / `ptr::read_volatile` — raw pointer dereference |
-| `rs.memory.narrow_cast` | Low | A | `as u8`/`i8`/`u16`/`i16` — possible truncation |
-| `rs.memory.mem_forget` | Low | A | `std::mem::forget` — may leak resources |
+| `rs.memory.transmute` | High | A | `std::mem::transmute` -- unchecked type reinterpretation |
+| `rs.memory.copy_nonoverlapping` | High | A | `ptr::copy_nonoverlapping` -- raw pointer memcpy |
+| `rs.memory.get_unchecked` | High | A | `get_unchecked` / `get_unchecked_mut` -- unchecked indexing |
+| `rs.memory.mem_zeroed` | High | A | `std::mem::zeroed` -- may be UB for non-POD types |
+| `rs.memory.ptr_read` | High | A | `ptr::read` / `ptr::read_volatile` -- raw pointer dereference |
+| `rs.memory.narrow_cast` | Low | A | `as u8`/`i8`/`u16`/`i16` -- possible truncation |
+| `rs.memory.mem_forget` | Low | A | `std::mem::forget` -- may leak resources |
 
 ### Code Quality
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `rs.quality.unsafe_block` | Medium | A | `unsafe { }` block — manual memory safety obligation |
+| `rs.quality.unsafe_block` | Medium | A | `unsafe { }` block -- manual memory safety obligation |
 | `rs.quality.unsafe_fn` | Medium | A | `unsafe fn` declaration |
-| `rs.quality.unwrap` | Low | A | `.unwrap()` — panics on `None`/`Err` |
-| `rs.quality.expect` | Low | A | `.expect()` — panics on `None`/`Err` |
+| `rs.quality.unwrap` | Low | A | `.unwrap()` -- panics on `None`/`Err` |
+| `rs.quality.expect` | Low | A | `.expect()` -- panics on `None`/`Err` |
 | `rs.quality.panic_macro` | Low | A | `panic!()` macro invocation |
 | `rs.quality.todo` | Low | A | `todo!()` / `unimplemented!()` placeholder |
 
@@ -56,7 +56,7 @@ Nyx detects Rust vulnerabilities through AST patterns (memory safety, code quali
 
 ## Examples
 
-### `rs.memory.transmute` — Unchecked type reinterpretation
+### `rs.memory.transmute`: Unchecked type reinterpretation
 
 **Vulnerable:**
 ```rust
@@ -70,7 +70,7 @@ let x: u32 = 42;
 let y: f32 = f32::from_bits(x);
 ```
 
-### `rs.quality.unsafe_block` — Unsafe block
+### `rs.quality.unsafe_block`: Unsafe block
 
 **Flagged:**
 ```rust

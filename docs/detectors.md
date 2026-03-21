@@ -74,8 +74,8 @@ Ranking is enabled by default. Disable with `--no-rank` or `output.attack_surfac
 
 Nyx's taint analysis requires cross-file context, achieved via two passes:
 
-1. **Pass 1 — Summary extraction**: Each file is parsed, a CFG is built, and a `FuncSummary` is extracted per function. Summaries capture source/sanitizer/sink capabilities (bitflags), taint propagation behavior, and callee lists. Summaries are persisted to SQLite.
+1. **Pass 1 -- Summary extraction**: Each file is parsed, a CFG is built, and a `FuncSummary` is extracted per function. Summaries capture source/sanitizer/sink capabilities (bitflags), taint propagation behavior, and callee lists. Summaries are persisted to SQLite.
 
-2. **Pass 2 — Analysis**: All summaries are merged into a global map. Files are re-parsed and analyzed with full cross-file context. The taint engine resolves callees against local summaries (more precise) first, then falls back to global summaries.
+2. **Pass 2 -- Analysis**: All summaries are merged into a global map. Files are re-parsed and analyzed with full cross-file context. The taint engine resolves callees against local summaries (more precise) first, then falls back to global summaries.
 
 With indexing enabled, Pass 1 skips files whose content hash hasn't changed since the last scan.

@@ -10,8 +10,8 @@ TypeScript rules mirror JavaScript patterns plus TypeScript-specific type-safety
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `ts.code_exec.eval` | High | A | `eval()` — dynamic code execution |
-| `ts.code_exec.new_function` | High | A | `new Function()` — eval equivalent |
+| `ts.code_exec.eval` | High | A | `eval()` -- dynamic code execution |
+| `ts.code_exec.new_function` | High | A | `new Function()` -- eval equivalent |
 | `ts.code_exec.settimeout_string` | Medium | A | `setTimeout`/`setInterval` with string argument |
 
 ### XSS Sinks
@@ -34,20 +34,20 @@ TypeScript rules mirror JavaScript patterns plus TypeScript-specific type-safety
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `ts.crypto.math_random` | Low | A | `Math.random()` — not cryptographically secure |
+| `ts.crypto.math_random` | Low | A | `Math.random()` -- not cryptographically secure |
 
 ### Code Quality (TypeScript-specific)
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `ts.quality.any_annotation` | Low | A | Type annotation of `any` — disables type checking |
-| `ts.quality.as_any` | Low | A | Type assertion `as any` — type-safety escape hatch |
+| `ts.quality.any_annotation` | Low | A | Type annotation of `any` -- disables type checking |
+| `ts.quality.as_any` | Low | A | Type assertion `as any` -- type-safety escape hatch |
 
 ---
 
 ## Examples
 
-### `ts.quality.any_annotation` — `any` type
+### `ts.quality.any_annotation`: `any` type
 
 **Flagged:**
 ```typescript
@@ -64,7 +64,7 @@ function process(data: UserData) {
 }
 ```
 
-### `ts.quality.as_any` — Type assertion escape
+### `ts.quality.as_any`: Type assertion escape
 
 **Flagged:**
 ```typescript

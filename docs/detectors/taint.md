@@ -4,7 +4,7 @@
 
 Nyx's taint analysis tracks the flow of untrusted data from **sources** (where data enters the program) through **assignments and function calls** to **sinks** (where dangerous operations happen). If the data reaches a sink without passing through a **sanitizer** with matching capabilities, a finding is emitted.
 
-The engine uses a monotone forward dataflow analysis over a finite lattice with guaranteed termination. Analysis is **intra-procedural with cross-file function summaries** — it does not follow calls into other functions but uses pre-computed summaries of their behavior.
+The engine uses a monotone forward dataflow analysis over a finite lattice with guaranteed termination. Analysis is **intra-procedural with cross-file function summaries** -- it does not follow calls into other functions but uses pre-computed summaries of their behavior.
 
 ## Rule ID
 
@@ -26,7 +26,7 @@ One rule ID covers all taint findings. The parenthetical identifies the specific
 
 - **Inter-procedural flows without summaries**: If a function isn't summarized (e.g. from a third-party library without source), the taint engine cannot track data through it. It conservatively treats unknown callees as neither propagating nor sanitizing.
 - **Flows through data structures**: Taint is tracked per-variable, not per-field. `obj.field = tainted; sink(obj.other_field)` may produce a false positive because taint attaches to `obj` as a whole.
-- **Aliasing**: `let y = &x; sink(*y)` — the engine tracks `y` as a fresh variable, not an alias of `x`. This can cause false negatives.
+- **Aliasing**: `let y = &x; sink(*y)` -- the engine tracks `y` as a fresh variable, not an alias of `x`. This can cause false negatives.
 - **Complex control flow**: The analysis is flow-sensitive (respects control flow within a function) but does not track taint through arbitrary loops with complex exit conditions.
 - **Implicit flows**: Taint only follows explicit data flow, not information flow through branching (e.g. `if (secret) { x = 1 } else { x = 0 }` does not taint `x`).
 
@@ -56,7 +56,7 @@ These signals in the output indicate higher-confidence findings:
 |--------|--------------|
 | **Evidence: Source + Sink** | Both endpoints identified with specific function names and locations |
 | **Source kind = user input** | Source is directly controllable by an attacker (req.body, argv, etc.) |
-| **path_validated = false** | No validation guard on the path — higher exploitability |
+| **path_validated = false** | No validation guard on the path -- higher exploitability |
 | **No guard_kind** | No dominating predicate check (null check, error check, etc.) |
 | **High rank_score** | Multiple confidence signals combined |
 
@@ -64,9 +64,9 @@ Lower-confidence:
 
 | Signal | What it means |
 |--------|--------------|
-| **path_validated = true** | A validation predicate guards the path — may not be exploitable |
+| **path_validated = true** | A validation predicate guards the path -- may not be exploitable |
 | **guard_kind = "ValidationCall"** | An explicit validation function was called before the sink |
-| **Source kind = database** | Data from DB — may already be validated at insertion time |
+| **Source kind = database** | Data from DB -- may already be validated at insertion time |
 
 ## Tuning and Noise Controls
 
@@ -151,13 +151,13 @@ Taint uses a bitflag capability system to match sources with appropriate sanitiz
 
 | Capability | Bit | Sources | Sanitizers | Sinks |
 |-----------|-----|---------|------------|-------|
-| `ENV_VAR` | 0x01 | `env::var`, `getenv` | — | — |
-| `HTML_ESCAPE` | 0x02 | — | `html_escape`, `DOMPurify.sanitize` | `innerHTML`, `document.write` |
-| `SHELL_ESCAPE` | 0x04 | — | `shell_escape` | `Command::new`, `system()`, `eval()` |
-| `URL_ENCODE` | 0x08 | — | `encodeURIComponent` | `location.href` |
-| `JSON_PARSE` | 0x10 | — | `JSON.parse` | — |
-| `FILE_IO` | 0x20 | — | `filepath.Clean`, `basename`, `os.path.realpath` | `fopen`, `open`, `send_file`, `fs::read_to_string` |
-| `FMT_STRING` | 0x40 | — | — | `printf(var)` |
+| `ENV_VAR` | 0x01 | `env::var`, `getenv` | -- | -- |
+| `HTML_ESCAPE` | 0x02 | -- | `html_escape`, `DOMPurify.sanitize` | `innerHTML`, `document.write` |
+| `SHELL_ESCAPE` | 0x04 | -- | `shell_escape` | `Command::new`, `system()`, `eval()` |
+| `URL_ENCODE` | 0x08 | -- | `encodeURIComponent` | `location.href` |
+| `JSON_PARSE` | 0x10 | -- | `JSON.parse` | -- |
+| `FILE_IO` | 0x20 | -- | `filepath.Clean`, `basename`, `os.path.realpath` | `fopen`, `open`, `send_file`, `fs::read_to_string` |
+| `FMT_STRING` | 0x40 | -- | -- | `printf(var)` |
 
 Sources typically use `Cap::all()` to match any sink. A sanitizer strips specific capability bits. A finding fires when a tainted variable reaches a sink and the taint still has the matching capability bit set.
 
@@ -185,7 +185,7 @@ The CFG builder recognizes Rust `let_condition` nodes inside `if` and `while` ex
 
 ```rust
 if let Ok(cmd) = env::var("CMD") {
-    // cmd is tainted — env::var is a source, cmd is the binding
+    // cmd is tainted -- env::var is a source, cmd is the binding
     Command::new("sh").arg("-c").arg(&cmd).output();  // taint-unsanitised-flow
 }
 ```

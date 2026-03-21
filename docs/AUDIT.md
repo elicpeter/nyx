@@ -2,11 +2,11 @@ Nyx Audit Report
 
 Executive Summary
 
-Nyx is a genuinely impressive piece of engineering — 24K lines of Rust implementing a monotone-dataflow taint engine, language-agnostic CFG construction, cross-file function summaries, and a call graph, all backed by tree-sitter and SQLite       
+Nyx is a genuinely impressive piece of engineering -- 24K lines of Rust implementing a monotone-dataflow taint engine, language-agnostic CFG construction, cross-file function summaries, and a call graph, all backed by tree-sitter and SQLite       
 incremental indexing. The theoretical foundations (bounded lattice with guaranteed convergence, two-pass architecture, conservative summary merging) are sound and well-implemented. The test suite is mature (394 tests, 160 real-world fixtures,    
 100% pass rate). This is not a toy.
 
-However, Phase 1 is not ready to build on without targeted reinforcement. The headline features — interprocedural analysis, path sensitivity, cross-language interop — are architecturally present but practically shallow. The taint engine is purely
+However, Phase 1 is not ready to build on without targeted reinforcement. The headline features -- interprocedural analysis, path sensitivity, cross-language interop -- are architecturally present but practically shallow. The taint engine is purely
 name-based with no aliasing, no per-argument propagation precision, and no exception path modeling. The rule base across 10 languages is broad but thin (88 total rules, ~6-13 per language). The call graph is computed but unused. The JS two-level
 solve has a stale-seed bug. Several correctness gaps would cause a skeptical security engineer to lose confidence quickly: try scanning a real Express app or Spring service and counting the false negatives. The 160 real-world fixtures are a     
 strong foundation, but 99 soft misses and 267 unexpected findings signal that precision and recall calibration is still early.
@@ -17,23 +17,23 @@ with 80 false positives.
 
 What Nyx Already Does Well
 
-- Mathematically grounded taint engine: Bounded lattice (height ~8,704), guaranteed convergence, two-phase worklist with iteration budget — this is real dataflow analysis, not regex
+- Mathematically grounded taint engine: Bounded lattice (height ~8,704), guaranteed convergence, two-phase worklist with iteration budget -- this is real dataflow analysis, not regex
 - Language-agnostic CFG: Single build_cfg() works for 10 languages via Kind enum dispatch + tree-sitter; genuinely elegant
 - Two-pass architecture: Parallel pass 1 (summary extraction) + correct pass 2 (cross-file context) is the right design for scalability
 - Conservative summary merging: OR-union on name collisions is the correct default for soundness
 - Deterministic ranking: Five-component scoring with stable tie-breaking; findings are reproducible regardless of parallelism
-- Test infrastructure: 394 tests, 160 real-world fixtures with .expect.json schema, env-var filtering for fast iteration — this is a mature test harness
-- Suppression system: Rock-solid — 10 languages, wildcard matching, next-line directives, taint ID canonicalization, 22 unit tests
-- SQLite incremental indexing: WAL mode, blake3 hashing, mmap — production-grade caching
+- Test infrastructure: 394 tests, 160 real-world fixtures with .expect.json schema, env-var filtering for fast iteration -- this is a mature test harness
+- Suppression system: Rock-solid -- 10 languages, wildcard matching, next-line directives, taint ID canonicalization, 22 unit tests
+- SQLite incremental indexing: WAL mode, blake3 hashing, mmap -- production-grade caching
 - SmallVec/SmallBitSet optimization: Hot-path allocations bounded; memory-efficient lattice representation
 - SARIF 2.1.0 compliance: Spec-correct output that would work with GitHub Code Scanning
 - Honest documentation: Limitations are generally acknowledged (RAII false positives, intra-procedural state analysis)
 
 Biggest Risks / Weakest Areas
 
-- Taint is purely name-based: No aliasing, no field sensitivity, no per-element collection tracking — obj.field, arr[i], and *ptr are all opaque. This causes both false positives (whole-collection taint) and false negatives (taint through        
+- Taint is purely name-based: No aliasing, no field sensitivity, no per-element collection tracking -- obj.field, arr[i], and *ptr are all opaque. This causes both false positives (whole-collection taint) and false negatives (taint through        
   dereference)
-- No exception path modeling: Try/catch/finally creates implicit control flow the CFG doesn't capture — significant for Java, Python, JS, PHP
+- No exception path modeling: Try/catch/finally creates implicit control flow the CFG doesn't capture -- significant for Java, Python, JS, PHP
 - Per-argument taint propagation is boolean: propagates_taint is all-or-nothing; a function that passes only arg 0 to return taints the result when arg 1 is tainted
 - Rule base is broad but shallow: 88 total rules across 10 languages. No SSRF sinks, no crypto vulnerability class, no XML/XXE, no deserialization for most languages, weak SQL injection coverage
 - Call graph computed but dead code: SCC topological ordering exists but is #[allow(dead_code)]; pass 2 doesn't use it
@@ -111,15 +111,15 @@ Test suite overview: 394 tests, 100% pass rate.
 ┌────────────────────────┬───────┬─────────────────────────────────────────────────────────────────────┐                                                                                                                                              
 │        Category        │ Count │                               Quality                               │                                                                                                                                            
 ├────────────────────────┼───────┼─────────────────────────────────────────────────────────────────────┤                                                                                                                                              
-│ Taint unit tests       │ 61    │ Strong — covers single-file, cross-file, cross-language, predicates │                                                                                                                                            
+│ Taint unit tests       │ 61    │ Strong -- covers single-file, cross-file, cross-language, predicates │                                                                                                                                            
 ├────────────────────────┼───────┼─────────────────────────────────────────────────────────────────────┤
-│ CFG analysis tests     │ 57    │ Strong — auth gaps, resource lifecycle, reachability                │                                                                                                                                              
+│ CFG analysis tests     │ 57    │ Strong -- auth gaps, resource lifecycle, reachability                │                                                                                                                                              
 ├────────────────────────┼───────┼─────────────────────────────────────────────────────────────────────┤                                                                                                                                              
 │ State analysis tests   │ 21    │ Good but C-only                                                     │                                                                                                                                              
 ├────────────────────────┼───────┼─────────────────────────────────────────────────────────────────────┤                                                                                                                                              
-│ Pattern validation     │ 26    │ Thorough — positive + negative for all 10 languages                 │                                                                                                                                            
+│ Pattern validation     │ 26    │ Thorough -- positive + negative for all 10 languages                 │                                                                                                                                            
 ├────────────────────────┼───────┼─────────────────────────────────────────────────────────────────────┤                                                                                                                                              
-│ Integration tests      │ 12    │ Good — multi-component fixture validation                           │                                                                                                                                            
+│ Integration tests      │ 12    │ Good -- multi-component fixture validation                           │                                                                                                                                            
 ├────────────────────────┼───────┼─────────────────────────────────────────────────────────────────────┤                                                                                                                                              
 │ Real-world fixtures    │ 160   │ Excellent infrastructure, early calibration                         │                                                                                                                                            
 ├────────────────────────┼───────┼─────────────────────────────────────────────────────────────────────┤                                                                                                                                              
@@ -187,10 +187,10 @@ Language strength ranking:
 7. C (7 rules): Basic exec/format/file sinks, weak input sources
 8. C++ (7 rules): Adds std::cin/getline over C, try/catch KINDS, but similar gaps
 9. Rust (6 rules): Fully qualified paths (good), but minimal sink coverage beyond Command/File
-10. Ruby (6 rules): Minimal — bare function names, no Rails framework coverage, no ERB template sinks
+10. Ruby (6 rules): Minimal -- bare function names, no Rails framework coverage, no ERB template sinks
 
 Key inconsistencies:
-- SQL sinks use SHELL_ESCAPE cap across languages — should be a separate cap or Cap::all()
+- SQL sinks use SHELL_ESCAPE cap across languages -- should be a separate cap or Cap::all()
 - Java's Class.forName labeled as shell sink (should be code injection)
 - C/C++ sprintf/strcpy labeled as HTML sinks (should be buffer/format string)
 - Eval sinks use SHELL_ESCAPE in some languages, Cap::all() in others
@@ -210,7 +210,7 @@ Fragile points:
 - Code duplication in ast.rs: ~200 lines of taint finding/evidence construction duplicated between run_rules_on_bytes() and analyse_file_fused(). This will diverge over time and is the highest-risk duplication.
 - build_sub() in cfg.rs is 600+ lines: A single recursive function with many match arms. Adding new control flow constructs (try/catch, async) will increase complexity significantly. Should be broken into per-construct handlers.
 - scan.rs is 1,514 lines: The two scan paths (indexed and non-indexed) have duplicated orchestration logic. The fused/non-fused paths add another dimension. Refactoring into a shared pipeline builder would reduce maintenance burden.
-- Cap bitflags are only 7 bits: Adding new vulnerability classes requires either expanding the bitfield or a redesign. The current system can't represent SSRF vs SQL injection as separate capabilities — both would use generic caps.
+- Cap bitflags are only 7 bits: Adding new vulnerability classes requires either expanding the bitfield or a redesign. The current system can't represent SSRF vs SQL injection as separate capabilities -- both would use generic caps.
 - Technical debt in summary system: propagates_taint should be per-argument. tainted_sink_params exists but isn't used at call sites. These are partially implemented features that create confusion.
 - Dual crate setup (lib.rs + main.rs): Module declarations must be mirrored. This is a minor annoyance but a regression trap.
 
@@ -260,7 +260,7 @@ Improves: Precision, trust. Before Phase 2: Yes.
 
 Why: Exception-based control flow is pervasive in Java, Python, JS, and PHP. Without it, the scanner misses all exception-path vulnerabilities and produces false negatives on finally-based cleanup.
 
-Expected impact: Enables meaningful analysis of Java/Python/JS/PHP error handling patterns — a major vulnerability class (error fallthrough, uncaught exception info leak).
+Expected impact: Enables meaningful analysis of Java/Python/JS/PHP error handling patterns -- a major vulnerability class (error fallthrough, uncaught exception info leak).
 
 Difficulty: High. Requires new CFG edges (exception edges from call nodes to catch blocks), new StmtKind variants, and updates to all 4 languages' KINDS maps.
 
@@ -268,7 +268,7 @@ Improves: Recall, correctness. Before Phase 2: Yes.
 
 3. Triple the rule depth for JS/TS and Python
 
-Why: These 3 languages represent the vast majority of web application code. Currently JS has 9 rules and Python has 13 — missing SSRF, fetch sinks, template engines, ORM query builders, session handling, authentication middleware.
+Why: These 3 languages represent the vast majority of web application code. Currently JS has 9 rules and Python has 13 -- missing SSRF, fetch sinks, template engines, ORM query builders, session handling, authentication middleware.
 
 Expected impact: Dramatically improves real-world recall for the most commercially important languages.
 
@@ -298,7 +298,7 @@ Improves: Recall, correctness. Before Phase 2: Yes.
 
 6. Add SSRF and deserialization vulnerability classes
 
-Why: SSRF is the #1 missing vulnerability class — zero coverage across all 10 languages. Deserialization is covered only for PHP. These are high-impact, frequently exploited vulnerability classes.
+Why: SSRF is the #1 missing vulnerability class -- zero coverage across all 10 languages. Deserialization is covered only for PHP. These are high-impact, frequently exploited vulnerability classes.
 
 Expected impact: Catches real vulnerabilities that the scanner currently cannot detect at all.
 
@@ -310,7 +310,7 @@ Improves: Recall, credibility. Before Phase 2: Yes.
 
 Why: global_seed is computed once and never updated. Functions that modify globals are invisible to other functions. This causes false negatives in real JS/TS codebases where global state mutation is common.
 
-Expected impact: Fixes a class of false negatives specific to JS/TS — the languages most likely to be scanned.
+Expected impact: Fixes a class of false negatives specific to JS/TS -- the languages most likely to be scanned.
 
 Difficulty: Medium. Options: (a) iterate the two-level solve to a fixed point, or (b) propagate function side effects back to the global state before seeding the next function.
 
@@ -348,25 +348,25 @@ Improves: Maintainability. Before Phase 2: Preferable.
 
 Must Do Before Phase 2
 
-1. Build an evaluation benchmark — Without measured precision/recall, dynamic analysis will be built on unvalidated assumptions about what the static engine catches
-2. Fix per-argument taint propagation — Dynamic analysis will need to know which arguments are actually tainted; the boolean propagates_taint will cause incorrect dynamic harness generation
-3. Fix JS two-level solve stale-seed — JS/TS are the most likely targets for dynamic analysis; the stale-seed bug would carry over
-4. Add negative taint tests — Dynamic analysis integration tests need a known-good baseline
-5. Model try/catch in CFG — Dynamic fuzzing that triggers exceptions will interact with the CFG; the scanner must model this
-6. Expand Cap bitflags — Dynamic analysis will need to distinguish SSRF from command injection; 7 bits aren't enough
-7. Categorize the 267 unexpected findings — Are they true positives or false positives? This directly affects whether dynamic validation targets are correct
+1. Build an evaluation benchmark -- Without measured precision/recall, dynamic analysis will be built on unvalidated assumptions about what the static engine catches
+2. Fix per-argument taint propagation -- Dynamic analysis will need to know which arguments are actually tainted; the boolean propagates_taint will cause incorrect dynamic harness generation
+3. Fix JS two-level solve stale-seed -- JS/TS are the most likely targets for dynamic analysis; the stale-seed bug would carry over
+4. Add negative taint tests -- Dynamic analysis integration tests need a known-good baseline
+5. Model try/catch in CFG -- Dynamic fuzzing that triggers exceptions will interact with the CFG; the scanner must model this
+6. Expand Cap bitflags -- Dynamic analysis will need to distinguish SSRF from command injection; 7 bits aren't enough
+7. Categorize the 267 unexpected findings -- Are they true positives or false positives? This directly affects whether dynamic validation targets are correct
 
 Quick Wins (1–2 Weeks)
 
-1. Wire call graph topo ordering into pass 2 — Infrastructure exists, just needs plumbing (~1 day)
-2. Extract shared finding construction from ast.rs — Eliminate 200-line duplication (~1 day)
-3. Add 30 negative taint fixtures (3 per language) — Assert zero findings on safe code (~2 days)
-4. Add SSRF sinks to JS, Python, Go, Java — fetch, urllib.urlopen, http.NewRequest, HttpClient.execute (~1 day)
-5. Add pickle/yaml deserialization sinks to Python, Ruby — pickle.loads, yaml.unsafe_load, Marshal.load (~1 day)
+1. Wire call graph topo ordering into pass 2 -- Infrastructure exists, just needs plumbing (~1 day)
+2. Extract shared finding construction from ast.rs -- Eliminate 200-line duplication (~1 day)
+3. Add 30 negative taint fixtures (3 per language) -- Assert zero findings on safe code (~2 days)
+4. Add SSRF sinks to JS, Python, Go, Java -- fetch, urllib.urlopen, http.NewRequest, HttpClient.execute (~1 day)
+5. Add pickle/yaml deserialization sinks to Python, Ruby -- pickle.loads, yaml.unsafe_load, Marshal.load (~1 day)
 6. Fix Cap mismatch: SQL sinks should use a distinct cap or Cap::all(), not SHELL_ESCAPE (~2 hours)
-7. Soften the "rust-lang/rust in ~1s" README claim — Change to "typically scans large codebases in seconds" or publish actual benchmark (~1 hour)
-8. Add state analysis fixtures for Python and JS — Extend beyond C-only (~2 days)
-9. Document confidence levels in pattern docs — Define what High/Medium/Low means (~1 hour)
+7. Soften the "rust-lang/rust in ~1s" README claim -- Change to "typically scans large codebases in seconds" or publish actual benchmark (~1 hour)
+8. Add state analysis fixtures for Python and JS -- Extend beyond C-only (~2 days)
+9. Document confidence levels in pattern docs -- Define what High/Medium/Low means (~1 hour)
 10. Note state analysis opt-in in README capability table (~5 minutes)
 
 Big Strategic Bets
@@ -383,7 +383,7 @@ sources/sinks/sanitizers that understand the framework's idiom. Medium difficult
 
 C. Standard library taint summaries
 
-Pre-populate function summaries for standard library functions across all 10 languages. String.format(), os.path.join(), url.parse(), Buffer.from() — these are the connective tissue of real code. Without them, taint flow breaks at every stdlib   
+Pre-populate function summaries for standard library functions across all 10 languages. String.format(), os.path.join(), url.parse(), Buffer.from() -- these are the connective tissue of real code. Without them, taint flow breaks at every stdlib   
 call boundary. Medium difficulty (~2-3 weeks for top 3 languages) with enormous recall improvement.
 
 D. Incremental cross-file invalidation
@@ -423,19 +423,19 @@ Stage D: Selective Phase 2 entry (Week 8+)
 
 - Re-run evaluation benchmark, compare to Stage A numbers
 - Design dynamic analysis integration for the language with best static precision (likely Go or Rust)
-- Prototype controlled execution for a single vulnerability class (command injection — most amenable to dynamic validation)
+- Prototype controlled execution for a single vulnerability class (command injection -- most amenable to dynamic validation)
 - Do NOT generalize dynamic analysis until single-class prototype proves value
 
 If I Were the Maintainer
 
 Weeks 1-2: I would stop all feature work and build the evaluation benchmark. I'd take 50 real CVEs from public advisory databases across the 3 most important languages (Python, JS, Java), create minimal reproducer fixtures, establish ground      
-truth, run Nyx, and publish the numbers. If precision is <50%, I'd focus the next 4 weeks entirely on false positive elimination. If recall is <30%, I'd focus on rule depth. The benchmark tells you what to do next — everything else is guessing.
+truth, run Nyx, and publish the numbers. If precision is <50%, I'd focus the next 4 weeks entirely on false positive elimination. If recall is <30%, I'd focus on rule depth. The benchmark tells you what to do next -- everything else is guessing.
 
 Week 2: In parallel, I'd fix the three cheapest correctness bugs: wire topo ordering (1 day), extract ast.rs duplication (1 day), fix Cap mismatch for SQL (2 hours). Ship a release.
 
 Weeks 3-4: Implement per-argument taint propagation and fix the JS stale-seed bug. These are the two correctness issues most likely to affect real-world scan quality. Re-run the benchmark and measure improvement.
 
-Weeks 5-6: Deep-dive on rules. I'd focus exclusively on Express.js and Flask/Django — create framework rule packs with 20+ sources/sinks/sanitizers each, informed by the OWASP Top 10. Add SSRF sinks across all languages. Expand Cap to u16. Re-run
+Weeks 5-6: Deep-dive on rules. I'd focus exclusively on Express.js and Flask/Django -- create framework rule packs with 20+ sources/sinks/sanitizers each, informed by the OWASP Top 10. Add SSRF sinks across all languages. Expand Cap to u16. Re-run
 benchmark.
 
 Week 7: Model try/catch in CFG for Java and JS. Add negative taint test suite. Categorize all unexpected findings in the real-world suite. Re-run benchmark.

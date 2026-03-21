@@ -42,26 +42,26 @@ Go has moderate taint label coverage. Sources, sinks, and sanitizers are defined
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `go.cmdi.exec_command` | High | A | `exec.Command()` — arbitrary process execution |
+| `go.cmdi.exec_command` | High | A | `exec.Command()` -- arbitrary process execution |
 
 ### Memory Safety
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `go.memory.unsafe_pointer` | Medium | A | `unsafe.Pointer` — bypasses Go type system |
+| `go.memory.unsafe_pointer` | Medium | A | `unsafe.Pointer` -- bypasses Go type system |
 
 ### Insecure Transport
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `go.transport.insecure_skip_verify` | High | A | `InsecureSkipVerify: true` — disables TLS certificate validation |
+| `go.transport.insecure_skip_verify` | High | A | `InsecureSkipVerify: true` -- disables TLS certificate validation |
 
 ### Weak Crypto
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `go.crypto.md5` | Low | A | `md5.New()` / `md5.Sum()` — weak hash algorithm |
-| `go.crypto.sha1` | Low | A | `sha1.New()` / `sha1.Sum()` — weak hash algorithm |
+| `go.crypto.md5` | Low | A | `md5.New()` / `md5.Sum()` -- weak hash algorithm |
+| `go.crypto.sha1` | Low | A | `sha1.New()` / `sha1.Sum()` -- weak hash algorithm |
 
 ### SQL Injection
 
@@ -79,13 +79,13 @@ Go has moderate taint label coverage. Sources, sinks, and sanitizers are defined
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `go.deser.gob_decode` | Medium | A | `gob.NewDecoder` — Go binary deserialization |
+| `go.deser.gob_decode` | Medium | A | `gob.NewDecoder` -- Go binary deserialization |
 
 ---
 
 ## Examples
 
-### `go.transport.insecure_skip_verify` — TLS misconfiguration
+### `go.transport.insecure_skip_verify`: TLS misconfiguration
 
 **Vulnerable:**
 ```go
@@ -106,7 +106,7 @@ tr := &http.Transport{
 }
 ```
 
-### `go.sqli.query_concat` — SQL concatenation
+### `go.sqli.query_concat`: SQL concatenation
 
 **Vulnerable:**
 ```go
@@ -118,7 +118,7 @@ rows, err := db.Query("SELECT * FROM users WHERE id=" + userID)
 rows, err := db.Query("SELECT * FROM users WHERE id=$1", userID)
 ```
 
-### `go.secrets.hardcoded_key` — Hardcoded secret
+### `go.secrets.hardcoded_key`: Hardcoded secret
 
 **Flagged:**
 ```go
@@ -132,7 +132,7 @@ apiKey := os.Getenv("API_KEY")
 password := os.Getenv("DB_PASSWORD")
 ```
 
-### `go.cmdi.exec_command` — Command execution
+### `go.cmdi.exec_command`: Command execution
 
 **Vulnerable:**
 ```go

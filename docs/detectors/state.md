@@ -4,7 +4,7 @@
 
 Nyx's state model analysis tracks **resource lifecycle** and **authentication state** through a function using monotone dataflow over bounded lattices. It detects use-after-close bugs, double-close bugs, resource leaks, and unauthenticated access to privileged operations.
 
-State analysis is **opt-in** — enable it with `scanner.enable_state_analysis = true` in config. It requires `mode = "full"` or `mode = "cfg"`.
+State analysis is **opt-in** -- enable it with `scanner.enable_state_analysis = true` in config. It requires `mode = "full"` or `mode = "cfg"`.
 
 ## Rule IDs
 
@@ -45,7 +45,7 @@ A resource is opened but never closed on any path through the function. This is 
 ```java
 FileInputStream fis = new FileInputStream("data.txt");
 process(fis);
-// function exits without fis.close() — state-resource-leak
+// function exits without fis.close() -- state-resource-leak
 ```
 
 ### Possible resource leak (`state-resource-leak-possible`)
@@ -66,7 +66,7 @@ f.Close()  // closed here
 A function identified as a web handler reaches a privileged sink (shell execution, file I/O) without any authentication check on the path.
 
 A function is identified as a web handler if:
-1. Its name starts with `handle_`, `route_`, or `api_` (strong match — sufficient on its own), OR
+1. Its name starts with `handle_`, `route_`, or `api_` (strong match -- sufficient on its own), OR
 2. Its name starts with `serve_` or `process_` AND any function in the file has web-like parameter names (`request`, `req`, `ctx`, `res`, `response`, `w`, `writer`, etc., varying by language).
 
 The function name `main` is explicitly excluded.
@@ -108,10 +108,10 @@ app.post('/admin/exec', (req, res) => {
 
 | Signal | Meaning |
 |--------|---------|
-| **Definite leak (state-resource-leak)** | Resource is never closed on any path — high confidence |
-| **Use-after-close** | Read/write operation after explicit close — high confidence |
+| **Definite leak (state-resource-leak)** | Resource is never closed on any path -- high confidence |
+| **Use-after-close** | Read/write operation after explicit close -- high confidence |
 | **Web handler detected** | Entry point matched by parameter naming convention |
-| **Possible leak (state-resource-leak-possible)** | Resource closed on some but not all paths — lower confidence |
+| **Possible leak (state-resource-leak-possible)** | Resource closed on some but not all paths -- lower confidence |
 
 ## Tuning and Noise Controls
 
@@ -191,7 +191,7 @@ States are tracked as bitflags, allowing the lattice to represent uncertainty (e
 
 ### Leak Detection Scope
 
-Resource leaks are checked at the file-level exit node and the **synthesized** function exit node (a single Return node that all early returns feed into). Early-return nodes are **not** checked individually — only the merged state at the function's synthesized exit is inspected. This prevents duplicate findings where an early-return path reports a definite leak while the merged exit correctly reports a possible leak.
+Resource leaks are checked at the file-level exit node and the **synthesized** function exit node (a single Return node that all early returns feed into). Early-return nodes are **not** checked individually -- only the merged state at the function's synthesized exit is inspected. This prevents duplicate findings where an early-return path reports a definite leak while the merged exit correctly reports a possible leak.
 
 This per-function exit inspection ensures that a variable leaked inside one function is not masked by a same-named variable that is properly closed in a subsequent function.
 

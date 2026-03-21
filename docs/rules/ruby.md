@@ -38,48 +38,48 @@ Ruby has moderate taint label coverage. Sources, sinks, and sanitizers are defin
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `rb.code_exec.eval` | High | A | `Kernel#eval` — dynamic code execution |
-| `rb.code_exec.instance_eval` | High | A | `instance_eval` — evaluates string in object context |
-| `rb.code_exec.class_eval` | High | A | `class_eval` / `module_eval` — evaluates string in class context |
+| `rb.code_exec.eval` | High | A | `Kernel#eval` -- dynamic code execution |
+| `rb.code_exec.instance_eval` | High | A | `instance_eval` -- evaluates string in object context |
+| `rb.code_exec.class_eval` | High | A | `class_eval` / `module_eval` -- evaluates string in class context |
 
 ### Command Execution
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
 | `rb.cmdi.backtick` | High | A | Backtick shell execution (`` `cmd` ``) |
-| `rb.cmdi.system_interp` | High | A | `system`/`exec` call — command execution risk |
+| `rb.cmdi.system_interp` | High | A | `system`/`exec` call -- command execution risk |
 
 ### Deserialization
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `rb.deser.yaml_load` | High | A | `YAML.load` — arbitrary object deserialization |
-| `rb.deser.marshal_load` | High | A | `Marshal.load` — arbitrary Ruby object deserialization |
+| `rb.deser.yaml_load` | High | A | `YAML.load` -- arbitrary object deserialization |
+| `rb.deser.marshal_load` | High | A | `Marshal.load` -- arbitrary Ruby object deserialization |
 
 ### Reflection
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `rb.reflection.send_dynamic` | Medium | B | `send()` with non-symbol argument — arbitrary method dispatch |
-| `rb.reflection.constantize` | Medium | A | `constantize` / `safe_constantize` — dynamic class resolution |
+| `rb.reflection.send_dynamic` | Medium | B | `send()` with non-symbol argument -- arbitrary method dispatch |
+| `rb.reflection.constantize` | Medium | A | `constantize` / `safe_constantize` -- dynamic class resolution |
 
 ### SSRF
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `rb.ssrf.open_uri` | Medium | A | `Kernel#open` with HTTP URL — SSRF via open-uri |
+| `rb.ssrf.open_uri` | Medium | A | `Kernel#open` with HTTP URL -- SSRF via open-uri |
 
 ### Weak Crypto
 
 | Rule ID | Severity | Tier | Description |
 |---------|----------|------|-------------|
-| `rb.crypto.md5` | Low | A | `Digest::MD5` — weak hash algorithm |
+| `rb.crypto.md5` | Low | A | `Digest::MD5` -- weak hash algorithm |
 
 ---
 
 ## Examples
 
-### `rb.deser.yaml_load` — Unsafe YAML deserialization
+### `rb.deser.yaml_load`: Unsafe YAML deserialization
 
 **Vulnerable:**
 ```ruby
@@ -91,7 +91,7 @@ data = YAML.load(params[:config])  # Arbitrary object instantiation
 data = YAML.safe_load(params[:config])  # Only basic Ruby types
 ```
 
-### `rb.cmdi.backtick` — Backtick shell execution
+### `rb.cmdi.backtick`: Backtick shell execution
 
 **Vulnerable:**
 ```ruby
@@ -104,7 +104,7 @@ require 'open3'
 output, status = Open3.capture2('ls', user_dir)
 ```
 
-### `rb.reflection.send_dynamic` — Dynamic method dispatch
+### `rb.reflection.send_dynamic`: Dynamic method dispatch
 
 **Vulnerable:**
 ```ruby
@@ -119,7 +119,7 @@ if allowed.include?(params[:method])
 end
 ```
 
-### `rb.deser.marshal_load` — Marshal deserialization
+### `rb.deser.marshal_load`: Marshal deserialization
 
 **Vulnerable:**
 ```ruby
