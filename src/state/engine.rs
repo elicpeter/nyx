@@ -186,6 +186,7 @@ mod tests {
             condition_negated: false,
             arg_uses: vec![],
             sink_payload_args: None,
+            all_args_literal: false,
             catch_param: false,
         }
     }

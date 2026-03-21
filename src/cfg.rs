@@ -67,6 +67,17 @@ pub struct NodeInfo {
     /// When `Some`, only variables from these `arg_uses` positions are checked
     /// for taint.  `None` = all arguments are payload (default).
     pub sink_payload_args: Option<Vec<usize>>,
+    /// True when this is a Call node whose argument list contains only
+    /// syntactic literal values (strings, numbers, booleans, null/nil,
+    /// arrays/lists/tuples of literals). Also true for zero-argument calls
+    /// (no argument-carried taint vector).
+    ///
+    /// This flag is scoped to taint-style sink suppression: it indicates
+    /// that no attacker-controlled data enters through the immediate
+    /// arguments. It does NOT mean the call is "safe" in general — other
+    /// detectors (resource lifecycle, structural analysis) may still
+    /// legitimately flag these calls.
+    pub all_args_literal: bool,
     /// True for synthetic catch-parameter nodes injected at catch clause entry.
     /// The taint transfer function uses this to conservatively taint the
     /// caught exception variable.
@@ -518,6 +529,7 @@ fn push_condition_node<'a>(
         condition_negated: negated,
         arg_uses: Vec::new(),
         sink_payload_args: None,
+        all_args_literal: false,
         catch_param: false,
     })
 }
@@ -648,6 +660,152 @@ fn extract_const_string_arg(call_node: Node, index: usize, code: &[u8]) -> Optio
         }
         _ => None,
     }
+}
+
+/// Returns true when a tree-sitter node is a syntactic literal value.
+///
+/// Intentionally conservative: if in doubt, returns false. It is better
+/// to miss a suppression opportunity than to suppress a real tainted flow.
+///
+/// NOTE: Literal-kind classification also exists in `ast.rs::is_literal_node`.
+/// The two must stay aligned across languages. TODO: consider extracting a
+/// shared literal-kind helper if a third call site appears.
+#[allow(clippy::only_used_in_recursion)]
+fn is_syntactic_literal(node: Node, code: &[u8]) -> bool {
+    match node.kind() {
+        // Scalar strings — but reject if they contain interpolation
+        // (e.g. Ruby `"hello #{name}"`, Python f-strings).
+        "string" | "string_literal" | "interpreted_string_literal"
+        | "raw_string_literal" | "string_content" | "string_fragment" => {
+            !has_string_interpolation(node)
+        }
+
+        // Numbers
+        "integer" | "integer_literal" | "int_literal"
+        | "float" | "float_literal" | "number" => true,
+
+        // Booleans / null / nil / none
+        "true" | "false" | "null" | "nil" | "none" | "null_literal"
+        | "boolean" | "boolean_literal" => true,
+
+        // PHP encapsed_string: safe only if no variable interpolation
+        "encapsed_string" => !has_interpolation_cfg(node),
+
+        // Wrapper: PHP/Go wrap each arg in an `argument` node — unwrap
+        "argument" => {
+            node.named_child_count() == 1
+                && node.named_child(0).is_some_and(|c| is_syntactic_literal(c, code))
+        }
+
+        // Unary minus on a number literal: `-42`
+        "unary_expression" | "unary_op" => {
+            node.named_child_count() == 1
+                && node.named_child(0).is_some_and(|c| is_syntactic_literal(c, code))
+        }
+
+        // String concatenation of literals: `"a" + "b"` or `"a" . "b"`
+        "binary_expression" | "concatenated_string" => {
+            let count = node.named_child_count();
+            count >= 2
+                && (0..count).all(|i| {
+                    node.named_child(i as u32).is_some_and(|c| is_syntactic_literal(c, code))
+                })
+        }
+
+        // JS/TS template string: only if no interpolation substitution
+        "template_string" => {
+            let mut c = node.walk();
+            !node.named_children(&mut c).any(|ch| ch.kind() == "template_substitution")
+        }
+
+        // Containers: all elements must be syntactic literals
+        "list" | "array" | "array_expression" | "array_creation_expression"
+        | "tuple" | "tuple_expression" => {
+            let mut c = node.walk();
+            node.named_children(&mut c).all(|ch| is_syntactic_literal(ch, code))
+        }
+
+        // Container entries: `{"key": "value"}` style pairs
+        "pair" => {
+            let mut c = node.walk();
+            node.named_children(&mut c).all(|ch| is_syntactic_literal(ch, code))
+        }
+
+        _ => false,
+    }
+}
+
+/// Check if a string node contains interpolation children
+/// (e.g. Ruby `"hello #{name}"` has `interpolation` children,
+/// Python f-strings may have `interpolation` children).
+fn has_string_interpolation(node: Node) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind().contains("interpolation") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if an encapsed_string node contains interpolation (PHP).
+fn has_interpolation_cfg(node: Node) -> bool {
+    for i in 0..node.child_count() as u32 {
+        if let Some(child) = node.child(i) {
+            let kind = child.kind();
+            if kind == "variable_name" || kind == "simple_variable" || kind.contains("interpolation") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Returns true when every argument in the call's argument list is a
+/// syntactic literal (per `is_syntactic_literal`). Returns true for calls
+/// with zero arguments (no argument-carried taint vector). Returns false
+/// when the argument list cannot be found.
+///
+/// For method chains like `a("x").b(y).c()`, the outermost call node
+/// represents the entire chain. This function walks nested call expressions
+/// to verify ALL argument lists in the chain contain only literals.
+fn has_only_literal_args(call_node: Node, code: &[u8]) -> bool {
+    let Some(args) = call_node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    for ch in args.named_children(&mut cursor) {
+        if !is_syntactic_literal(ch, code) {
+            return false;
+        }
+    }
+    // Walk nested call expressions in the callee chain.
+    check_inner_call_args(call_node, code)
+}
+
+/// Recursively check nested call expressions in a method chain for
+/// non-literal arguments.
+fn check_inner_call_args(node: Node, code: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        let kind = child.kind();
+        // Skip argument lists — those are checked by the caller.
+        if kind == "arguments" || kind == "argument_list" || kind == "actual_parameters" {
+            continue;
+        }
+        // If this child is itself a call expression, check its arguments.
+        if child.child_by_field_name("arguments").is_some() {
+            if !has_only_literal_args(child, code) {
+                return false;
+            }
+        } else {
+            // Recurse through non-call structural nodes (field_expression, etc.)
+            if !check_inner_call_args(child, code) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Extract per-argument identifiers from a call node's argument list.
@@ -1135,6 +1293,13 @@ fn push_node<'a>(
         Vec::new()
     };
 
+    // Check whether all arguments are syntactic literals (for taint sink suppression).
+    let all_args_literal = if kind == StmtKind::Call {
+        call_ast.map(|cn| has_only_literal_args(cn, code)).unwrap_or(false)
+    } else {
+        false
+    };
+
     // For CallMethod nodes, extract the receiver identifier and prepend it
     // to arg_uses at position 0. This allows `collect_propagating_uses_taint`
     // to apply an offset so that `propagating_params[0]` maps to the first
@@ -1174,6 +1339,7 @@ fn push_node<'a>(
         condition_negated,
         arg_uses,
         sink_payload_args,
+        all_args_literal,
         catch_param: false,
     });
 
@@ -1444,6 +1610,7 @@ fn build_try<'a>(
                     condition_negated: false,
                     arg_uses: Vec::new(),
                     sink_payload_args: None,
+                    all_args_literal: false,
                     catch_param: true,
                 });
 
@@ -1711,6 +1878,7 @@ fn build_sub<'a>(
                     condition_negated: false,
                     arg_uses: Vec::new(),
                     sink_payload_args: None,
+                    all_args_literal: false,
                     catch_param: false,
                 });
                 connect_all(g, else_preds, pass, else_edge);
@@ -2325,6 +2493,7 @@ fn build_sub<'a>(
                 condition_negated: false,
                 arg_uses: Vec::new(),
                 sink_payload_args: None,
+                all_args_literal: false,
                 catch_param: false,
             });
             // Wire body exits (fall-through) to the exit node.
@@ -2598,6 +2767,7 @@ pub(crate) fn build_cfg<'a>(
         condition_negated: false,
         arg_uses: Vec::new(),
         sink_payload_args: None,
+        all_args_literal: false,
         catch_param: false,
     });
     let exit = g.add_node(NodeInfo {
@@ -2615,6 +2785,7 @@ pub(crate) fn build_cfg<'a>(
         condition_negated: false,
         arg_uses: Vec::new(),
         sink_payload_args: None,
+        all_args_literal: false,
         catch_param: false,
     });
 

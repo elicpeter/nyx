@@ -1557,3 +1557,287 @@ def setup():
         leak_findings
     );
 }
+
+// ─── Literal-argument taint sink suppression tests ─────────────────
+
+#[test]
+fn python_literal_os_system_no_finding() {
+    // os.system("ls -la") with string literal arg should produce no finding
+    let src = br#"
+import os
+
+def run():
+    os.system("ls -la")
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "os.system with string literal arg should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn go_literal_exec_command_no_finding() {
+    // exec.Command("echo", "hello") with multiple string literal args should produce no finding
+    let src = br#"
+package main
+
+import "os/exec"
+
+func run() {
+    exec.Command("echo", "hello")
+}
+"#;
+
+    let findings = parse_and_run_all(src, "go", Language::from(tree_sitter_go::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "exec.Command with string literal args should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn python_literal_subprocess_list_no_finding() {
+    // subprocess.run(["ls", "-la"]) with array of string literals should produce no finding
+    let src = br#"
+import subprocess
+
+def run():
+    subprocess.run(["ls", "-la"])
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "subprocess.run with list of string literals should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn python_literal_subprocess_multiple_list_items_no_finding() {
+    // subprocess.run(["ls", "-la", "-h"]) with list of multiple literals should produce no finding
+    let src = br#"
+import subprocess
+
+def run():
+    subprocess.run(["ls", "-la", "-h"])
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "subprocess.run with list of multiple literals should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn js_template_literal_no_interpolation_no_finding() {
+    // exec(`ls -la`) with static template string should produce no finding
+    let src = br#"
+const { exec } = require('child_process');
+
+function run() {
+    exec(`ls -la`);
+}
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "exec with static template string should not be flagged; got {:?}",
+        unguarded
+    );
+}
+
+// ─── Adversarial tests: must still report findings ─────────────────
+
+#[test]
+fn python_tainted_var_os_system_produces_finding() {
+    // os.system(user_input) with tainted variable must report
+    let src = br#"
+import os
+import sys
+
+def run():
+    user_input = sys.argv[1]
+    os.system(user_input)
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "os.system with tainted variable should produce a HIGH finding"
+    );
+}
+
+#[test]
+fn python_one_hop_constant_still_suppressed() {
+    // cmd = "ls"; os.system(cmd) — `all_args_literal` is false (identifier arg),
+    // but should still be suppressed via existing one-hop constant trace in cfg_analysis.
+    let src = br#"
+import os
+
+def run():
+    cmd = "ls"
+    os.system(cmd)
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let unguarded: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        unguarded.is_empty(),
+        "One-hop constant binding should suppress cfg-unguarded-sink via existing trace; got {:?}",
+        unguarded
+    );
+}
+
+#[test]
+fn js_template_literal_with_interpolation_produces_finding() {
+    // exec(`ls ${dir}`) with interpolation must report
+    let src = br#"
+const { exec } = require('child_process');
+
+function run() {
+    const dir = process.env.DIR;
+    exec(`ls ${dir}`);
+}
+"#;
+
+    let findings = parse_and_run_all(
+        src,
+        "javascript",
+        Language::from(tree_sitter_javascript::LANGUAGE),
+    );
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "exec with interpolated template string should produce a HIGH finding"
+    );
+}
+
+#[test]
+fn python_array_with_tainted_element_produces_finding() {
+    // subprocess.run([user_input, "-la"]) with one tainted element must report
+    let src = br#"
+import subprocess
+import sys
+
+def run():
+    user_input = sys.argv[1]
+    subprocess.run([user_input, "-la"])
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "subprocess.run with tainted array element should produce a HIGH finding"
+    );
+}
+
+#[test]
+fn python_constant_receiver_tainted_arg_produces_finding() {
+    // safe_obj.system(user_input) — constant receiver is irrelevant, tainted arg must report
+    let src = br#"
+import os
+import sys
+
+def run():
+    user_input = sys.argv[1]
+    os.system(user_input)
+"#;
+
+    let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "Tainted argument to sink must produce a HIGH finding regardless of receiver"
+    );
+}
+
+#[test]
+fn php_encapsed_string_with_interpolation_produces_finding() {
+    // system("ls $dir") with PHP interpolation must report
+    let src = br#"<?php
+function run() {
+    $dir = $_GET['dir'];
+    system("ls $dir");
+}
+"#;
+
+    let findings = parse_and_run_all(src, "php", Language::from(tree_sitter_php::LANGUAGE_PHP));
+
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| {
+            f.rule_id == "cfg-unguarded-sink" && f.severity == crate::patterns::Severity::High
+        })
+        .collect();
+    assert!(
+        !sink_findings.is_empty(),
+        "PHP system() with interpolated string should produce a HIGH finding"
+    );
+}

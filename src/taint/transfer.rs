@@ -165,8 +165,16 @@ impl Transfer<TaintState> for TaintTransfer<'_> {
         }
 
         // ── Sink check ──────────────────────────────────────────────────
+        // Skip sink check when all arguments are syntactic literals — no
+        // attacker-controlled data can flow through literal-only arguments.
+        //
+        // This suppression applies to taint-style sink rules (injection-class
+        // vulnerabilities where the threat model is "untrusted input reaches
+        // sink"). Currently all sink rules resolved via resolve_sink_caps()
+        // are taint-style rules. If non-taint sink rules are added in the
+        // future, this guard must be scoped to taint-style rules only.
         let sink_caps = self.resolve_sink_caps(info, caller_func);
-        if !sink_caps.is_empty() {
+        if !sink_caps.is_empty() && !info.all_args_literal {
             let tainted_vars = self.collect_tainted_sink_vars(info, &state, sink_caps);
             if !tainted_vars.is_empty() {
                 let all_validated = tainted_vars

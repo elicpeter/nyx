@@ -14,6 +14,12 @@ pub struct UnguardedSink;
 /// empty `uses` and no Source label, the definition is treated as a constant
 /// binding (e.g. `let cmd = "git"; Command::new(cmd)`).
 fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
+    // Fast path: syntactic literal detection from CFG construction.
+    // Strictly weaker than the one-hop trace below — serves as an
+    // optimization for the common case of inline literal arguments.
+    if ctx.cfg[sink].all_args_literal {
+        return true;
+    }
     let sink_info = &ctx.cfg[sink];
     let callee_desc = sink_info.callee.as_deref().unwrap_or("");
     // Split callee description into parts and strip parenthesized arg portions.
