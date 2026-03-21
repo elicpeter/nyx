@@ -45,7 +45,7 @@ Each phase is designed to be:
 | 12   | Fix JS two-level solve stale seed | core correctness | M |
 | 13   | Add state analysis fixtures for Python and JS | evaluation | S |
 | 14   | Express.js framework rule pack | rule depth | M |
-| 14.5 | Per-rule case-sensitive matching ✅ | matcher precision | S |
+| 14.5 | Per-rule case-sensitive matching | matcher precision | S |
 | 15   | Flask/Django framework rule pack | rule depth | M |
 | 16   | Expand JS/TS DOM and browser API sinks | rule depth | S |
 | 16.5 | Argument-sensitive sink modeling | precision | M |
@@ -909,7 +909,7 @@ common middleware patterns.
 
 ---
 
-### Phase 14.5 — Per-Rule Case-Sensitive Matching ✅
+### Phase 14.5 — Per-Rule Case-Sensitive Matching
 
 **Category**: matcher precision
 
