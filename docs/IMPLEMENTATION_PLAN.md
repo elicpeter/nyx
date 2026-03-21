@@ -1584,7 +1584,70 @@ multiple labels safely and deterministically.
 
 --- 
 
-### Phase 20 — Evaluation benchmark corpus
+### Phase 20 — Short-circuit evaluation in CFG
+
+**Category**: core correctness
+
+**Why**: Boolean operators (`&&`, `||`) are parsed as single condition nodes. The CFG
+doesn't model that in `if (guard && sink(x))`, the guard prevents `sink(x)` from
+executing when guard is false. This causes false negatives where guards appear to
+cover dangerous operations but the CFG doesn't respect short-circuit semantics.
+
+**Goals**:
+- Split `&&` and `||` conditions into separate CFG nodes with short-circuit edges
+- Model: `a && b` → evaluate `a`; if false, skip `b`; if true, evaluate `b`
+- Model: `a || b` → evaluate `a`; if true, skip `b`; if false, evaluate `b`
+
+**Files to touch**:
+- `src/cfg.rs` — condition handling in `build_sub()` for `Kind::If`
+
+**Implementation tasks**:
+1. In `build_sub()` If handling, before creating the condition node:
+    - Check if the condition expression contains `&&` or `||` operators
+    - Use tree-sitter to identify `binary_expression` children with `&&`/`||` operators
+2. For `a && b`:
+    - Create node for `a` with True/False edges
+    - True edge → node for `b`
+    - False edge of `a` → False branch of the If (short-circuit)
+    - True/False edges of `b` → normal If True/False branches
+3. For `a || b`:
+    - Create node for `a`
+    - True edge of `a` → True branch (short-circuit)
+    - False edge of `a` → node for `b`
+    - True/False edges of `b` → normal If True/False branches
+4. Handle nested operators: `a && b && c` → left-to-right chaining
+5. Only apply this to the top-level condition of If/While/For — don't split
+   conditions inside assignments or other expressions
+
+**Test tasks**:
+- New test: `if (input != null && sink(input))` — `sink` should only be reachable
+  when input is not null (predicate tracked on True edge of null check)
+- New test: `if (is_safe(x) || validate(x))` — both validation paths should mark
+  the True branch as validated
+- Existing tests pass (verify that existing If conditions without `&&`/`||` are
+  unaffected)
+- `cargo test` passes
+
+**Definition of done**:
+- `&&` and `||` in conditions create separate CFG nodes with short-circuit edges
+- Predicate tracking works correctly on each sub-condition
+- All tests pass
+
+**Risks / gotchas**:
+- This changes the CFG structure for many conditions. Existing tests that assert
+  specific CFG shapes may need updating.
+- Tree-sitter's representation of `&&`/`||` varies by language. In most languages,
+  it's `binary_expression` with `&&` operator. Verify for Java, Go, Python (`and`/`or`
+  keywords), Ruby (`&&`/`and`).
+- Nested/complex conditions (`a && (b || c) && d`) should be handled recursively.
+  Start with non-nested cases and extend.
+- This is a medium-sized change but affects a critical path. Test thoroughly.
+
+**Dependencies**: None (but should be done after Phases 9-18 to minimize test churn)
+
+---
+
+### Phase 21 — Evaluation benchmark corpus
 
 **Category**: evaluation
 
@@ -1677,7 +1740,7 @@ place for meaningful measurement)
 
 ---
 
-### Phase 21 — Run benchmark and publish baseline numbers
+### Phase 22 — Run benchmark and publish baseline numbers
 
 **Category**: evaluation
 
@@ -1734,7 +1797,7 @@ numbers, and documents them for future comparison.
 
 ---
 
-### Phase 22 — README and docs claims audit
+### Phase 23 — README and docs claims audit
 
 **Category**: product credibility
 
@@ -1787,7 +1850,7 @@ evidence.
 
 ---
 
-### Phase 23 — Expand Go rule depth
+### Phase 24 — Expand Go rule depth
 
 **Category**: rule depth
 
@@ -1830,7 +1893,7 @@ is missing SSRF sinks, template security model, and crypto patterns.
 
 ---
 
-### Phase 24 — Expand Java rule depth (Spring, JPA, logging)
+### Phase 25 — Expand Java rule depth (Spring, JPA, logging)
 
 **Category**: rule depth
 
@@ -1892,7 +1955,7 @@ JNDI injection.
 
 ---
 
-### Phase 25 — Expand Ruby rule depth (Rails, ERB)
+### Phase 26 — Expand Ruby rule depth (Rails, ERB)
 
 **Category**: rule depth
 
@@ -1947,69 +2010,6 @@ bare function names). Rails is the dominant Ruby web framework.
 
 **Dependencies**: Phase 5 (receiver-qualified call fix needed for Rails patterns like
 `ActiveRecord.where`, `Net::HTTP.get`), Phase 6 (uses new cap bits)
-
----
-
-### Phase 26 — Short-circuit evaluation in CFG
-
-**Category**: core correctness
-
-**Why**: Boolean operators (`&&`, `||`) are parsed as single condition nodes. The CFG
-doesn't model that in `if (guard && sink(x))`, the guard prevents `sink(x)` from
-executing when guard is false. This causes false negatives where guards appear to
-cover dangerous operations but the CFG doesn't respect short-circuit semantics.
-
-**Goals**:
-- Split `&&` and `||` conditions into separate CFG nodes with short-circuit edges
-- Model: `a && b` → evaluate `a`; if false, skip `b`; if true, evaluate `b`
-- Model: `a || b` → evaluate `a`; if true, skip `b`; if false, evaluate `b`
-
-**Files to touch**:
-- `src/cfg.rs` — condition handling in `build_sub()` for `Kind::If`
-
-**Implementation tasks**:
-1. In `build_sub()` If handling, before creating the condition node:
-   - Check if the condition expression contains `&&` or `||` operators
-   - Use tree-sitter to identify `binary_expression` children with `&&`/`||` operators
-2. For `a && b`:
-   - Create node for `a` with True/False edges
-   - True edge → node for `b`
-   - False edge of `a` → False branch of the If (short-circuit)
-   - True/False edges of `b` → normal If True/False branches
-3. For `a || b`:
-   - Create node for `a`
-   - True edge of `a` → True branch (short-circuit)
-   - False edge of `a` → node for `b`
-   - True/False edges of `b` → normal If True/False branches
-4. Handle nested operators: `a && b && c` → left-to-right chaining
-5. Only apply this to the top-level condition of If/While/For — don't split
-   conditions inside assignments or other expressions
-
-**Test tasks**:
-- New test: `if (input != null && sink(input))` — `sink` should only be reachable
-  when input is not null (predicate tracked on True edge of null check)
-- New test: `if (is_safe(x) || validate(x))` — both validation paths should mark
-  the True branch as validated
-- Existing tests pass (verify that existing If conditions without `&&`/`||` are
-  unaffected)
-- `cargo test` passes
-
-**Definition of done**:
-- `&&` and `||` in conditions create separate CFG nodes with short-circuit edges
-- Predicate tracking works correctly on each sub-condition
-- All tests pass
-
-**Risks / gotchas**:
-- This changes the CFG structure for many conditions. Existing tests that assert
-  specific CFG shapes may need updating.
-- Tree-sitter's representation of `&&`/`||` varies by language. In most languages,
-  it's `binary_expression` with `&&` operator. Verify for Java, Go, Python (`and`/`or`
-  keywords), Ruby (`&&`/`and`).
-- Nested/complex conditions (`a && (b || c) && d`) should be handled recursively.
-  Start with non-nested cases and extend.
-- This is a medium-sized change but affects a critical path. Test thoroughly.
-
-**Dependencies**: None (but should be done after Phases 9-18 to minimize test churn)
 
 ---
 
