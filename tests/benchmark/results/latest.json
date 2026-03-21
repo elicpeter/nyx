@@ -1,0 +1,2074 @@
+{
+  "benchmark_version": "1.0",
+  "timestamp": "2026-03-21T03:58:36Z",
+  "scanner_version": "0.4.0",
+  "scanner_config": {
+    "analysis_mode": "Full",
+    "taint_enabled": true,
+    "ast_patterns_enabled": true,
+    "state_analysis_enabled": true,
+    "worker_threads": 1
+  },
+  "ground_truth_hash": "sha256:924e8d68501d0dd64701de15ac47c3d54bd1050f58c6fb62813e99eab6b1e1b9",
+  "corpus_size": 95,
+  "cases_run": 95,
+  "cases_skipped": 0,
+  "outcomes": [
+    {
+      "case_id": "go-cmdi-001",
+      "file": "go/cmdi/cmdi_direct.go",
+      "language": "go",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "go.cmdi.exec_command",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [
+        "state-unauthed-access"
+      ],
+      "all_finding_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-cmdi-002",
+      "file": "go/cmdi/cmdi_indirect.go",
+      "language": "go",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "go.cmdi.exec_command",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [
+        "state-unauthed-access"
+      ],
+      "all_finding_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-cmdi-003",
+      "file": "go/cmdi_env/cmdi_env.go",
+      "language": "go",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "go.cmdi.exec_command",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "go.cmdi.exec_command",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-fmt_string-001",
+      "file": "go/fmt_string/fmt_injection.go",
+      "language": "go",
+      "vuln_class": "fmt_string",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-path_traversal-001",
+      "file": "go/path_traversal/path_traversal.go",
+      "language": "go",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [
+        "state-unauthed-access"
+      ],
+      "all_finding_ids": [
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-001",
+      "file": "go/safe/safe_constant.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink",
+        "go.cmdi.exec_command"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "go.cmdi.exec_command"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-002",
+      "file": "go/safe/safe_dominated.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 11:2)"
+      ],
+      "all_finding_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 11:2)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-003",
+      "file": "go/safe/safe_interprocedural.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 14:2)"
+      ],
+      "all_finding_ids": [
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 14:2)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-004",
+      "file": "go/safe/safe_non_security_sink.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "taint-unsanitised-flow (source 10:2)"
+      ],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 10:2)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-005",
+      "file": "go/safe/safe_reassigned.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-006",
+      "file": "go/safe/safe_sanitized.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-unauthed-access"
+      ],
+      "all_finding_ids": [
+        "state-unauthed-access"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-007",
+      "file": "go/safe/safe_type_check.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "go.sqli.query_concat",
+        "taint-unsanitised-flow (source 10:2)"
+      ],
+      "all_finding_ids": [
+        "go.sqli.query_concat",
+        "taint-unsanitised-flow (source 10:2)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-safe-008",
+      "file": "go/safe/safe_validated.go",
+      "language": "go",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 11:2)"
+      ],
+      "all_finding_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 11:2)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-sqli-001",
+      "file": "go/sqli/sqli_concat.go",
+      "language": "go",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "go.sqli.query_concat",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "go.sqli.query_concat",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-sqli-002",
+      "file": "go/sqli/sqli_sprintf.go",
+      "language": "go",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 10:2)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 10:2)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-sqli-003",
+      "file": "go/sqli/sqli_queryrow.go",
+      "language": "go",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "go.sqli.query_concat",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "go.sqli.query_concat",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-ssrf-001",
+      "file": "go/ssrf/ssrf_http_get.go",
+      "language": "go",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 8:2)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 8:2)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-xss-001",
+      "file": "go/xss/xss_fprintf.go",
+      "language": "go",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-xss-002",
+      "file": "go/xss/xss_template_html.go",
+      "language": "go",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-cmdi-001",
+      "file": "java/cmdi/CmdiDirect.java",
+      "language": "java",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 5:9)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 5:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-cmdi-002",
+      "file": "java/cmdi/CmdiIndirect.java",
+      "language": "java",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 5:9)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 5:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-code_injection-001",
+      "file": "java/code_injection/CodeInjection.java",
+      "language": "java",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "java.reflection.class_forname",
+        "taint-unsanitised-flow (source 5:9)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "java.reflection.class_forname",
+        "taint-unsanitised-flow (source 5:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-deser-001",
+      "file": "java/deser/DeserOis.java",
+      "language": "java",
+      "vuln_class": "deser",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "java.deser.readobject",
+        "taint-unsanitised-flow (source 6:9)",
+        "taint-unsanitised-flow (source 7:9)"
+      ],
+      "unexpected_rule_ids": [
+        "java.xss.getwriter_print"
+      ],
+      "all_finding_ids": [
+        "java.deser.readobject",
+        "taint-unsanitised-flow (source 6:9)",
+        "java.xss.getwriter_print",
+        "taint-unsanitised-flow (source 7:9)"
+      ],
+      "security_finding_count": 4,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-deser-002",
+      "file": "java/deser/DeserSource.java",
+      "language": "java",
+      "vuln_class": "deser",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "java.deser.readobject",
+        "taint-unsanitised-flow (source 6:9)",
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 7:9)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "java.deser.readobject",
+        "taint-unsanitised-flow (source 6:9)",
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 7:9)"
+      ],
+      "security_finding_count": 4,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-path_traversal-001",
+      "file": "java/path_traversal/PathTraversal.java",
+      "language": "java",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-001",
+      "file": "java/safe/SafeConstant.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-002",
+      "file": "java/safe/SafeDominated.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 8:9)"
+      ],
+      "all_finding_ids": [
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 8:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-003",
+      "file": "java/safe/SafeInterprocedural.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "java.xss.getwriter_print",
+        "taint-unsanitised-flow (source 11:9)"
+      ],
+      "all_finding_ids": [
+        "java.xss.getwriter_print",
+        "taint-unsanitised-flow (source 11:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-004",
+      "file": "java/safe/SafeNonSecuritySink.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "java.xss.getwriter_print",
+        "taint-unsanitised-flow (source 8:9)"
+      ],
+      "all_finding_ids": [
+        "java.xss.getwriter_print",
+        "taint-unsanitised-flow (source 8:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-005",
+      "file": "java/safe/SafeReassigned.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink",
+        "java.xss.getwriter_print"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "java.xss.getwriter_print"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-006",
+      "file": "java/safe/SafeSanitized.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "java.xss.getwriter_print"
+      ],
+      "all_finding_ids": [
+        "java.xss.getwriter_print"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-007",
+      "file": "java/safe/SafeTypeCheck.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "java.sqli.execute_concat",
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "all_finding_ids": [
+        "java.sqli.execute_concat",
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-safe-008",
+      "file": "java/safe/SafeValidated.java",
+      "language": "java",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 8:9)"
+      ],
+      "all_finding_ids": [
+        "java.cmdi.runtime_exec",
+        "taint-unsanitised-flow (source 8:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-sqli-001",
+      "file": "java/sqli/SqliConcat.java",
+      "language": "java",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "java.sqli.execute_concat",
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "java.sqli.execute_concat",
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-sqli-002",
+      "file": "java/sqli/SqliFormat.java",
+      "language": "java",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-ssrf-001",
+      "file": "java/ssrf/SsrfRequest.java",
+      "language": "java",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 7:9)"
+      ],
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak",
+        "taint-unsanitised-flow (source 7:9)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-ssrf-002",
+      "file": "java/ssrf/SsrfHttpClient.java",
+      "language": "java",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "FN",
+      "outcome_rule_level": "FN",
+      "outcome_location_level": "FN",
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "java-xss-001",
+      "file": "java/xss/XssReflected.java",
+      "language": "java",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 6:9)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-cmdi-001",
+      "file": "javascript/cmdi/cmdi_direct.js",
+      "language": "javascript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "FN",
+      "outcome_rule_level": "FN",
+      "outcome_location_level": "FN",
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-cmdi-002",
+      "file": "javascript/cmdi/cmdi_indirect.js",
+      "language": "javascript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "FN",
+      "outcome_rule_level": "FN",
+      "outcome_location_level": "FN",
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-code_injection-001",
+      "file": "javascript/code_injection/code_injection.js",
+      "language": "javascript",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "js.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "js.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 4,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-code_injection-002",
+      "file": "javascript/code_injection/code_injection_indirect.js",
+      "language": "javascript",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink",
+        "js.code_exec.new_function"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "js.code_exec.new_function",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-path_traversal-001",
+      "file": "javascript/path_traversal/path_traversal.js",
+      "language": "javascript",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-001",
+      "file": "javascript/safe/safe_constant.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-002",
+      "file": "javascript/safe/safe_dominated.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-003",
+      "file": "javascript/safe/safe_interprocedural.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-004",
+      "file": "javascript/safe/safe_non_security_sink.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-005",
+      "file": "javascript/safe/safe_reassigned.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-006",
+      "file": "javascript/safe/safe_sanitized.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-007",
+      "file": "javascript/safe/safe_type_check.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink",
+        "js.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "js.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-safe-008",
+      "file": "javascript/safe/safe_validated.js",
+      "language": "javascript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-sqli-001",
+      "file": "javascript/sqli/sqli_concat.js",
+      "language": "javascript",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "js.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "js.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-sqli-002",
+      "file": "javascript/sqli/sqli_template.js",
+      "language": "javascript",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "js.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "js.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-ssrf-001",
+      "file": "javascript/ssrf/ssrf_fetch.js",
+      "language": "javascript",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink",
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-xss-001",
+      "file": "javascript/xss/xss_reflected.js",
+      "language": "javascript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-xss-002",
+      "file": "javascript/xss/xss_document_write.js",
+      "language": "javascript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "js.xss.document_write",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "js.xss.document_write",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "js-xss-003",
+      "file": "javascript/xss/xss_location.js",
+      "language": "javascript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "js.xss.location_assign",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "js.xss.location_assign",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-cmdi-001",
+      "file": "php/cmdi/cmdi_direct.php",
+      "language": "php",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "php.cmdi.system",
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "php.cmdi.system",
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-cmdi-002",
+      "file": "php/cmdi/cmdi_indirect.php",
+      "language": "php",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "php.cmdi.system",
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "php.cmdi.system",
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-code_injection-001",
+      "file": "php/code_injection/code_injection.php",
+      "language": "php",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "php.code_exec.eval",
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "php.code_exec.eval",
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-code_injection-002",
+      "file": "php/code_injection/code_injection_assert.php",
+      "language": "php",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-deser-001",
+      "file": "php/deser/deser_unserialize.php",
+      "language": "php",
+      "vuln_class": "deser",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "php.deser.unserialize",
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "php.deser.unserialize",
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-path_traversal-001",
+      "file": "php/path_traversal/path_traversal.php",
+      "language": "php",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-path_traversal-002",
+      "file": "php/path_traversal/path_traversal_copy.php",
+      "language": "php",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-safe-001",
+      "file": "php/safe/safe_constant.php",
+      "language": "php",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "php.cmdi.system"
+      ],
+      "all_finding_ids": [
+        "php.cmdi.system"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-safe-002",
+      "file": "php/safe/safe_dominated.php",
+      "language": "php",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "php.cmdi.system",
+        "taint-unsanitised-flow (source 3:1)"
+      ],
+      "all_finding_ids": [
+        "php.cmdi.system",
+        "taint-unsanitised-flow (source 3:1)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-safe-003",
+      "file": "php/safe/safe_interprocedural.php",
+      "language": "php",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-safe-004",
+      "file": "php/safe/safe_non_security_sink.php",
+      "language": "php",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-safe-005",
+      "file": "php/safe/safe_reassigned.php",
+      "language": "php",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-safe-006",
+      "file": "php/safe/safe_sanitized.php",
+      "language": "php",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-safe-007",
+      "file": "php/safe/safe_type_check.php",
+      "language": "php",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-safe-008",
+      "file": "php/safe/safe_validated.php",
+      "language": "php",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "php.cmdi.system",
+        "taint-unsanitised-flow (source 3:1)"
+      ],
+      "all_finding_ids": [
+        "php.cmdi.system",
+        "taint-unsanitised-flow (source 3:1)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-sqli-001",
+      "file": "php/sqli/sqli_concat.php",
+      "language": "php",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-sqli-002",
+      "file": "php/sqli/sqli_sprintf.php",
+      "language": "php",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-ssrf-001",
+      "file": "php/ssrf/ssrf_curl.php",
+      "language": "php",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:1)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "php-xss-001",
+      "file": "php/xss/xss_reflected.php",
+      "language": "php",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "FN",
+      "outcome_rule_level": "FN",
+      "outcome_location_level": "FN",
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-cmdi-001",
+      "file": "python/cmdi/cmdi_direct.py",
+      "language": "python",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-cmdi-002",
+      "file": "python/cmdi/cmdi_indirect.py",
+      "language": "python",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.cmdi.subprocess_shell",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.cmdi.subprocess_shell",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-code_injection-001",
+      "file": "python/code_injection/code_injection.py",
+      "language": "python",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.code_exec.eval",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-code_injection-002",
+      "file": "python/code_injection/code_injection_exec.py",
+      "language": "python",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.code_exec.exec",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.code_exec.exec",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-deser-001",
+      "file": "python/deser/deser_pickle.py",
+      "language": "python",
+      "vuln_class": "deser",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.deser.pickle_loads"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "py.deser.pickle_loads"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-path_traversal-001",
+      "file": "python/path_traversal/path_traversal.py",
+      "language": "python",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-safe-001",
+      "file": "python/safe/safe_constant.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "py.cmdi.os_system"
+      ],
+      "all_finding_ids": [
+        "py.cmdi.os_system"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-safe-002",
+      "file": "python/safe/safe_dominated.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "all_finding_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-safe-003",
+      "file": "python/safe/safe_interprocedural.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 9:5)"
+      ],
+      "all_finding_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 9:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-safe-004",
+      "file": "python/safe/safe_non_security_sink.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-safe-005",
+      "file": "python/safe/safe_reassigned.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink",
+        "py.cmdi.os_system"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "py.cmdi.os_system"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-safe-006",
+      "file": "python/safe/safe_sanitized.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "py.cmdi.os_system"
+      ],
+      "all_finding_ids": [
+        "py.cmdi.os_system"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-safe-007",
+      "file": "python/safe/safe_type_check.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak",
+        "py.sqli.execute_format",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak",
+        "state-resource-leak",
+        "py.sqli.execute_format",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 4,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-safe-008",
+      "file": "python/safe/safe_validated.py",
+      "language": "python",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "all_finding_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-sqli-001",
+      "file": "python/sqli/sqli_concat.py",
+      "language": "python",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak",
+        "py.sqli.execute_format"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak",
+        "state-resource-leak",
+        "py.sqli.execute_format",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 4,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-sqli-002",
+      "file": "python/sqli/sqli_format.py",
+      "language": "python",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.sqli.execute_format",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak",
+        "state-resource-leak",
+        "py.sqli.execute_format",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 4,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-ssrf-001",
+      "file": "python/ssrf/ssrf_requests.py",
+      "language": "python",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "FN",
+      "outcome_location_level": "FN",
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-xss-001",
+      "file": "python/xss/xss_reflected.py",
+      "language": "python",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-xss-002",
+      "file": "python/xss/xss_template_string.py",
+      "language": "python",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "FN",
+      "outcome_rule_level": "FN",
+      "outcome_location_level": "FN",
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    }
+  ],
+  "aggregate_file_level": {
+    "tp": 50,
+    "fp": 30,
+    "fn_": 5,
+    "tn": 10,
+    "precision": 0.625,
+    "recall": 0.9090909090909091,
+    "f1": 0.7407407407407406
+  },
+  "aggregate_rule_level": {
+    "tp": 49,
+    "fp": 30,
+    "fn_": 6,
+    "tn": 10,
+    "precision": 0.620253164556962,
+    "recall": 0.8909090909090909,
+    "f1": 0.7313432835820896
+  },
+  "by_language": {
+    "go": {
+      "tp": 11,
+      "fp": 8,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 0.5789473684210527,
+      "recall": 1.0,
+      "f1": 0.7333333333333334
+    },
+    "java": {
+      "tp": 10,
+      "fp": 7,
+      "fn_": 1,
+      "tn": 1,
+      "precision": 0.5882352941176471,
+      "recall": 0.9090909090909091,
+      "f1": 0.7142857142857143
+    },
+    "javascript": {
+      "tp": 9,
+      "fp": 4,
+      "fn_": 2,
+      "tn": 4,
+      "precision": 0.6923076923076923,
+      "recall": 0.8181818181818182,
+      "f1": 0.7500000000000001
+    },
+    "php": {
+      "tp": 10,
+      "fp": 4,
+      "fn_": 1,
+      "tn": 4,
+      "precision": 0.7142857142857143,
+      "recall": 0.9090909090909091,
+      "f1": 0.8
+    },
+    "python": {
+      "tp": 9,
+      "fp": 7,
+      "fn_": 2,
+      "tn": 1,
+      "precision": 0.5625,
+      "recall": 0.8181818181818182,
+      "f1": 0.6666666666666666
+    }
+  },
+  "by_vuln_class": {
+    "cmdi": {
+      "tp": 9,
+      "fp": 0,
+      "fn_": 2,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 0.8181818181818182,
+      "f1": 0.9
+    },
+    "code_injection": {
+      "tp": 7,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "deser": {
+      "tp": 4,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "fmt_string": {
+      "tp": 1,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "path_traversal": {
+      "tp": 6,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "safe": {
+      "tp": 0,
+      "fp": 30,
+      "fn_": 0,
+      "tn": 10,
+      "precision": 0.0,
+      "recall": 1.0,
+      "f1": 0.0
+    },
+    "sqli": {
+      "tp": 11,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "ssrf": {
+      "tp": 4,
+      "fp": 0,
+      "fn_": 2,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 0.6666666666666666,
+      "f1": 0.8
+    },
+    "xss": {
+      "tp": 7,
+      "fp": 0,
+      "fn_": 2,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 0.7777777777777778,
+      "f1": 0.8750000000000001
+    }
+  }
+}
