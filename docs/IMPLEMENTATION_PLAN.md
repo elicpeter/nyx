@@ -2301,48 +2301,7 @@ the pattern)
 
 ---
 
-### Phase 29 -- Re-run benchmark and measure improvement
-
-**Category**: evaluation
-
-**Why**: After all the correctness, precision, and rule depth improvements, measure
-the impact. This validates whether the work made a meaningful difference.
-
-**Goals**:
-- Re-run the benchmark from Phase 20
-- Compare precision, recall, F1 to the Phase 21 baseline
-- Document improvement per language and per vulnerability class
-- Identify remaining gaps
-
-**Files to touch**:
-- `tests/benchmark/RESULTS.md` -- add new measurement section
-
-**Implementation tasks**:
-1. Run `cargo test benchmark -- --ignored --nocapture`
-2. Record results alongside Phase 21 baseline
-3. Compute deltas (improvement/regression per metric)
-4. Identify remaining worst-performing areas
-5. Update test thresholds to lock in improvements (prevent regression)
-
-**Test tasks**:
-- Benchmark test passes with updated thresholds
-- `cargo test` passes
-
-**Definition of done**:
-- Updated results in `tests/benchmark/RESULTS.md` with before/after comparison
-- Test thresholds updated
-- Remaining gaps documented
-
-**Risks / gotchas**:
-- Some improvements may have unexpected side effects (fixing recall may hurt precision
-  or vice versa). Document these trade-offs.
-
-**Dependencies**: Phases 1-28 (ideally all prior phases complete, but can run at any
-point to measure incremental progress)
-
----
-
-### Phase 30 -- SSRF semantic completion
+### Phase 29 -- SSRF semantic completion
 
 **Category**: rule depth
 
@@ -2516,7 +2475,49 @@ remaining static-analysis limits.
 **Dependencies**:
 - Phase 7
 - Phase 19.5 -- multi-label classification should be complete before dual-label SSRF cases are relied on
-- Phase 20 / 21 / 29 -- benchmark infrastructure and baseline measurements should exist
+- Phase 20 / 21  -- benchmark infrastructure and baseline measurements should exist
+
+---
+
+### Phase 30 -- Re-run benchmark and measure improvement
+
+**Category**: evaluation
+
+**Why**: After all the correctness, precision, and rule depth improvements, measure
+the impact. This validates whether the work made a meaningful difference.
+
+**Goals**:
+- Re-run the benchmark from Phase 20
+- Compare precision, recall, F1 to the Phase 21 baseline
+- Document improvement per language and per vulnerability class
+- Identify remaining gaps
+
+**Files to touch**:
+- `tests/benchmark/RESULTS.md` -- add new measurement section
+
+**Implementation tasks**:
+1. Run `cargo test benchmark -- --ignored --nocapture`
+2. Record results alongside Phase 21 baseline
+3. Compute deltas (improvement/regression per metric)
+4. Identify remaining worst-performing areas
+5. Update test thresholds to lock in improvements (prevent regression)
+
+**Test tasks**:
+- Benchmark test passes with updated thresholds
+- `cargo test` passes
+
+**Definition of done**:
+- Updated results in `tests/benchmark/RESULTS.md` with before/after comparison
+- Test thresholds updated
+- Remaining gaps documented
+
+**Risks / gotchas**:
+- Some improvements may have unexpected side effects (fixing recall may hurt precision
+  or vice versa). Document these trade-offs.
+
+**Dependencies**: Phases 1-28 (ideally all prior phases complete, but can run at any
+point to measure incremental progress)
+
 ---
 
 ### Phase 31 -- Phase 2 readiness assessment

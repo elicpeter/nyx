@@ -1,0 +1,15 @@
+{
+  "description": "SSRF: environment variable flows to net.Dial() as outbound destination",
+  "tags": ["taint", "ssrf", "env"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [7, 11],
+      "evidence_contains": [],
+      "notes": "os.Getenv(\"TARGET_HOST\") flows to net.Dial() without validation"
+    }
+  ]
+}

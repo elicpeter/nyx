@@ -27,10 +27,12 @@ Go has moderate taint label coverage. Sources, sinks, and sanitizers are defined
 | Matcher | Cap |
 |---------|-----|
 | `exec.Command` | SHELL_ESCAPE |
-| `db.Query`, `db.Exec`, `db.QueryRow`, `db.Prepare` | SHELL_ESCAPE |
+| `db.Query`, `db.Exec`, `db.QueryRow`, `db.Prepare` | SQL_QUERY |
 | `fmt.Fprintf`, `fmt.Sprintf`, `fmt.Printf` | FMT_STRING |
 | `os.Open`, `os.OpenFile`, `os.Create`, `ioutil.ReadFile`, `os.ReadFile` | FILE_IO |
-| `template.HTML` | HTML_ESCAPE |
+| `template.HTML`, `template.JS`, `template.CSS` | HTML_ESCAPE |
+| `http.Get`, `http.Post`, `http.NewRequest`, `net.Dial`, `net.DialTimeout` | SSRF |
+| `md5.New`, `md5.Sum`, `sha1.New`, `sha1.Sum`, `des.NewCipher`, `rc4.NewCipher` | CRYPTO |
 
 > **Note:** Chained calls like `r.URL.Query().Get("host")` are normalized by stripping internal `()` segments before matching, so `r.URL.Query.Get` matches the source rule.
 

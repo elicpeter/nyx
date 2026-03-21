@@ -1,0 +1,23 @@
+{
+  "description": "Taint: user-controlled data flows into weak crypto APIs md5.Sum and des.NewCipher",
+  "tags": ["taint", "crypto"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [9, 12],
+      "evidence_contains": [],
+      "notes": "r.FormValue(\"data\") flows to md5.Sum() — user data hashed with weak algorithm"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [14, 17],
+      "evidence_contains": [],
+      "notes": "r.FormValue(\"key\") flows to des.NewCipher() — user data used as weak cipher key"
+    }
+  ]
+}

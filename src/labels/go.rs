@@ -67,13 +67,22 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["template.HTML"],
+        matchers: &["template.HTML", "template.JS", "template.CSS"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["http.Get", "http.Post", "http.NewRequest"],
+        matchers: &["http.Get", "http.Post", "http.NewRequest", "net.Dial", "net.DialTimeout"],
         label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &[
+            "md5.New", "md5.Sum",
+            "sha1.New", "sha1.Sum",
+            "des.NewCipher", "rc4.NewCipher",
+        ],
+        label: DataLabel::Sink(Cap::CRYPTO),
         case_sensitive: false,
     },
 ];
