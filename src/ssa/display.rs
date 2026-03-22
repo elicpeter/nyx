@@ -65,7 +65,13 @@ impl fmt::Display for SsaBody {
                         write!(f, "{})", arg_strs.join(", "))?;
                     }
                     SsaOp::Source => write!(f, "source()")?,
-                    SsaOp::Const => write!(f, "const")?,
+                    SsaOp::Const(val) => {
+                        if let Some(v) = val {
+                            write!(f, "const({v})")?;
+                        } else {
+                            write!(f, "const")?;
+                        }
+                    }
                     SsaOp::Param { index } => write!(f, "param({index})")?,
                     SsaOp::CatchParam => write!(f, "catch_param()")?,
                     SsaOp::Nop => write!(f, "nop")?,

@@ -313,6 +313,7 @@ mod tests {
             sink_payload_args: None,
             all_args_literal: false,
             catch_param: false,
+            const_text: None,
         };
 
         let (state, events) =
@@ -352,6 +353,7 @@ mod tests {
             sink_payload_args: None,
             all_args_literal: false,
             catch_param: false,
+            const_text: None,
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -390,6 +392,7 @@ mod tests {
             sink_payload_args: None,
             all_args_literal: false,
             catch_param: false,
+            const_text: None,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -429,6 +432,7 @@ mod tests {
             sink_payload_args: None,
             all_args_literal: false,
             catch_param: false,
+            const_text: None,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);

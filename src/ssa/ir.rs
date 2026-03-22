@@ -27,7 +27,8 @@ pub enum SsaOp {
     /// Taint source introduction.
     Source,
     /// Constant / literal value (no taint).
-    Const,
+    /// The optional string carries the raw source text when captured during lowering.
+    Const(Option<String>),
     /// Function parameter.
     Param { index: usize },
     /// Catch-clause exception binding.

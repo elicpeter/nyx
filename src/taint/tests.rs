@@ -30,6 +30,8 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         global_summaries: None,
         interop_edges: &[],
         global_seed: None,
+        const_values: None,
+        type_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &transfer);
     let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3270,6 +3272,8 @@ fn assert_ssa_integration(src: &[u8]) {
         global_summaries: None,
         interop_edges: &[],
         global_seed: None,
+        const_values: None,
+        type_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3371,6 +3375,8 @@ fn integ_php_echo_simple_var() {
         global_summaries: None,
         interop_edges: &[],
         global_seed: None,
+        const_values: None,
+        type_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3405,6 +3411,8 @@ fn integ_c_curl_handle_ssrf() {
         global_summaries: None,
         interop_edges: &[],
         global_seed: None,
+        const_values: None,
+        type_facts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);

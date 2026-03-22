@@ -290,6 +290,7 @@ mod tests {
             sink_payload_args: None,
             all_args_literal: false,
             catch_param: false,
+            const_text: None,
         }
     }
 

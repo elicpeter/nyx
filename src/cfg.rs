@@ -82,6 +82,9 @@ pub struct NodeInfo {
     /// The taint transfer function uses this to conservatively taint the
     /// caught exception variable.
     pub catch_param: bool,
+    /// Raw text of a constant/literal RHS when this node defines a variable
+    /// from a syntactic literal with no uses. Used by SSA constant propagation.
+    pub const_text: Option<String>,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -531,6 +534,7 @@ fn push_condition_node<'a>(
         sink_payload_args: None,
         all_args_literal: false,
         catch_param: false,
+        const_text: None,
     })
 }
 
@@ -759,6 +763,48 @@ fn has_interpolation_cfg(node: Node) -> bool {
         }
     }
     false
+}
+
+/// Extract the raw literal text from the RHS of a declaration/assignment AST node.
+///
+/// Walks the same value/right child paths as `def_use` and returns the text
+/// if the RHS is a syntactic literal. Used to populate `NodeInfo::const_text`.
+fn extract_literal_rhs(ast: Node, lang: &str, code: &[u8]) -> Option<String> {
+    use crate::labels::lookup;
+
+    // Direct value/right field (Rust let, Go short_var, etc.)
+    let val_node = ast
+        .child_by_field_name("value")
+        .or_else(|| ast.child_by_field_name("right"));
+
+    if let Some(val) = val_node {
+        if is_syntactic_literal(val, code) {
+            return text_of(val, code);
+        }
+    }
+
+    // Nested declarator pattern (JS let/const → variable_declarator, etc.)
+    if matches!(lookup(lang, ast.kind()), Kind::CallWrapper | Kind::Assignment) {
+        let mut cursor = ast.walk();
+        for child in ast.children(&mut cursor) {
+            let child_val = child
+                .child_by_field_name("value")
+                .or_else(|| {
+                    if matches!(lookup(lang, child.kind()), Kind::Assignment) {
+                        child.child_by_field_name("right")
+                    } else {
+                        None
+                    }
+                });
+            if let Some(val) = child_val {
+                if is_syntactic_literal(val, code) {
+                    return text_of(val, code);
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Returns true when every argument in the call's argument list is a
@@ -1298,6 +1344,15 @@ fn push_node<'a>(
 
     let (defines, uses) = def_use(ast, lang, code);
 
+    // Capture constant text for SSA constant propagation: when this node
+    // defines a variable from a syntactic literal (no identifier uses),
+    // extract the raw literal text from the AST.
+    let const_text = if defines.is_some() && uses.is_empty() {
+        extract_literal_rhs(ast, lang, code)
+    } else {
+        None
+    };
+
     let callee = if kind == StmtKind::Call || !labels.is_empty() {
         Some(text.clone())
     } else {
@@ -1374,6 +1429,7 @@ fn push_node<'a>(
         sink_payload_args,
         all_args_literal,
         catch_param: false,
+        const_text,
     });
 
     debug!(
@@ -1645,6 +1701,7 @@ fn build_try<'a>(
                     sink_payload_args: None,
                     all_args_literal: false,
                     catch_param: true,
+                    const_text: None,
                 });
 
                 // Wire exception edges from every exception source → synthetic node
@@ -1913,6 +1970,7 @@ fn build_sub<'a>(
                     sink_payload_args: None,
                     all_args_literal: false,
                     catch_param: false,
+                    const_text: None,
                 });
                 connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
@@ -2528,6 +2586,7 @@ fn build_sub<'a>(
                 sink_payload_args: None,
                 all_args_literal: false,
                 catch_param: false,
+                const_text: None,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -2802,6 +2861,7 @@ pub(crate) fn build_cfg<'a>(
         sink_payload_args: None,
         all_args_literal: false,
         catch_param: false,
+        const_text: None,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -2820,6 +2880,7 @@ pub(crate) fn build_cfg<'a>(
         sink_payload_args: None,
         all_args_literal: false,
         catch_param: false,
+        const_text: None,
     });
 
     // Build the body below the synthetic ENTRY.

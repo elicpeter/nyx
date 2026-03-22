@@ -77,11 +77,15 @@ pub fn analyse_file(
         }
     } else {
         match crate::ssa::lower_to_ssa(cfg, entry, None, true) {
-            Ok(ssa_body) => {
+            Ok(mut ssa_body) => {
+                let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg);
                 tracing::debug!(
                     blocks = ssa_body.blocks.len(),
                     values = ssa_body.num_values(),
-                    "SSA lowering succeeded"
+                    branches_pruned = opt.branches_pruned,
+                    copies_eliminated = opt.copies_eliminated,
+                    dead_defs = opt.dead_defs_removed,
+                    "SSA lowering + optimization succeeded"
                 );
                 let ssa_transfer = ssa_transfer::SsaTaintTransfer {
                     lang: caller_lang,
@@ -91,6 +95,8 @@ pub fn analyse_file(
                     global_summaries,
                     interop_edges,
                     global_seed: None,
+                    const_values: Some(&opt.const_values),
+                    type_facts: Some(&opt.type_facts),
                 };
                 let events =
                     ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
@@ -168,11 +174,13 @@ fn analyse_ssa_js_two_level(
     const MAX_ITERATIONS: usize = 3;
 
     // Level 1: top-level SSA (scope=None, nop for function bodies)
-    let toplevel_ssa = crate::ssa::lower_to_ssa_scoped_nop(cfg, entry, None)?;
+    let mut toplevel_ssa = crate::ssa::lower_to_ssa_scoped_nop(cfg, entry, None)?;
+    let toplevel_opt = crate::ssa::optimize_ssa(&mut toplevel_ssa, cfg);
     tracing::debug!(
         blocks = toplevel_ssa.blocks.len(),
         values = toplevel_ssa.num_values(),
-        "SSA JS two-level: top-level lowering"
+        branches_pruned = toplevel_opt.branches_pruned,
+        "SSA JS two-level: top-level lowering + optimization"
     );
     let toplevel_transfer = ssa_transfer::SsaTaintTransfer {
         lang,
@@ -182,6 +190,8 @@ fn analyse_ssa_js_two_level(
         global_summaries,
         interop_edges,
         global_seed: None,
+        const_values: Some(&toplevel_opt.const_values),
+        type_facts: Some(&toplevel_opt.type_facts),
     };
     let (toplevel_events, toplevel_block_states) =
         ssa_transfer::run_ssa_taint_full(&toplevel_ssa, cfg, &toplevel_transfer);
@@ -207,10 +217,11 @@ fn analyse_ssa_js_two_level(
         let mut combined_exit = toplevel_seed.clone();
 
         for (func_name, func_entry) in &func_entries {
-            let func_ssa = match crate::ssa::lower_to_ssa(cfg, *func_entry, Some(func_name), false) {
+            let mut func_ssa = match crate::ssa::lower_to_ssa(cfg, *func_entry, Some(func_name), false) {
                 Ok(ssa) => ssa,
                 Err(_) => continue, // empty function → skip
             };
+            let func_opt = crate::ssa::optimize_ssa(&mut func_ssa, cfg);
             let func_transfer = ssa_transfer::SsaTaintTransfer {
                 lang,
                 namespace,
@@ -219,6 +230,8 @@ fn analyse_ssa_js_two_level(
                 global_summaries,
                 interop_edges,
                 global_seed: Some(&current_seed),
+                const_values: Some(&func_opt.const_values),
+                type_facts: Some(&func_opt.type_facts),
             };
             let (func_events, func_block_states) =
                 ssa_transfer::run_ssa_taint_full(&func_ssa, cfg, &func_transfer);

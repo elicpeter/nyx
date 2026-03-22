@@ -231,6 +231,12 @@ pub struct SsaTaintTransfer<'a> {
     /// SymbolId-keyed taint from top-level scope (JS/TS two-level solve).
     /// Read-only fallback for Param ops representing external variables.
     pub global_seed: Option<&'a HashMap<SymbolId, VarTaint>>,
+    /// Per-SSA-value constant lattice from constant propagation.
+    /// Used for SSA-level literal suppression at sinks.
+    pub const_values: Option<&'a HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>>,
+    /// Type facts from type analysis.
+    /// Used for type-aware sink filtering (e.g., suppress SQL injection for int-typed values).
+    pub type_facts: Option<&'a crate::ssa::type_facts::TypeFactResult>,
 }
 
 /// Run SSA-based taint analysis, returning events AND converged block states.
@@ -838,7 +844,7 @@ fn transfer_inst(
             }
         }
 
-        SsaOp::Const | SsaOp::Nop => {
+        SsaOp::Const(_) | SsaOp::Nop => {
             // No taint
         }
 
@@ -918,6 +924,30 @@ fn collect_block_events(
         let sink_caps = resolve_sink_caps(info, transfer);
         if sink_caps.is_empty() {
             continue;
+        }
+
+        // SSA-level literal suppression: if all argument SSA values are known
+        // constants (from const propagation), skip sink detection.
+        // Only applies to non-Call instructions (Assign to a sink) — for Call
+        // instructions, the CFG-level `all_args_literal` check already handles
+        // chained calls more accurately.
+        if !matches!(inst.op, SsaOp::Call { .. }) {
+            if let Some(const_values) = transfer.const_values {
+                if all_args_const(inst, const_values) {
+                    continue;
+                }
+            }
+        }
+
+        // Type-aware sink filtering: suppress SQL injection for int-typed values.
+        // Only applies to non-Call instructions to avoid interfering with
+        // call-chain taint detection.
+        if !matches!(inst.op, SsaOp::Call { .. }) {
+            if let Some(type_facts) = transfer.type_facts {
+                if is_type_safe_for_sink(inst, sink_caps, type_facts) {
+                    continue;
+                }
+            }
         }
 
         // Collect tainted SSA values that flow into this sink
@@ -1199,10 +1229,56 @@ fn inst_use_values(inst: &SsaInst) -> Vec<SsaValue> {
             }
             vals
         }
-        SsaOp::Source | SsaOp::Const | SsaOp::Param { .. } | SsaOp::CatchParam | SsaOp::Nop => {
+        SsaOp::Source | SsaOp::Const(_) | SsaOp::Param { .. } | SsaOp::CatchParam | SsaOp::Nop => {
             Vec::new()
         }
     }
+}
+
+// ── SSA-Level Precision Helpers ──────────────────────────────────────────
+
+/// Check if all argument SSA values of a call instruction are known constants.
+fn all_args_const(
+    inst: &SsaInst,
+    const_values: &HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>,
+) -> bool {
+    let used = inst_use_values(inst);
+    if used.is_empty() {
+        return false; // no args → not a call or nothing to suppress
+    }
+    used.iter().all(|v| {
+        matches!(
+            const_values.get(v),
+            Some(
+                crate::ssa::const_prop::ConstLattice::Str(_)
+                | crate::ssa::const_prop::ConstLattice::Int(_)
+                | crate::ssa::const_prop::ConstLattice::Bool(_)
+                | crate::ssa::const_prop::ConstLattice::Null
+            )
+        )
+    })
+}
+
+/// Check if a sink is type-safe (e.g., SQL injection with int-typed argument).
+///
+/// Currently suppresses SQL injection findings when all argument values are
+/// known to be integer-typed, since integer values cannot carry SQL injection payloads.
+fn is_type_safe_for_sink(
+    inst: &SsaInst,
+    sink_caps: Cap,
+    type_facts: &crate::ssa::type_facts::TypeFactResult,
+) -> bool {
+    // Only suppress SQL injection for int-typed values
+    if !sink_caps.intersects(Cap::SQL_QUERY) {
+        return false;
+    }
+
+    let used = inst_use_values(inst);
+    if used.is_empty() {
+        return false;
+    }
+
+    used.iter().all(|v| type_facts.is_int(*v))
 }
 
 // ── Callee Resolution (mirrors TaintTransfer::resolve_callee) ───────────

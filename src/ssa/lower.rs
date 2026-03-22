@@ -701,7 +701,7 @@ fn rename_variables(
             } else if info.defines.is_some() && info.uses.is_empty()
                 && !info.labels.iter().any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
             {
-                SsaOp::Const
+                SsaOp::Const(info.const_text.clone())
             } else if info.defines.is_some() {
                 let uses: SmallVec<[SsaValue; 4]> = info
                     .uses
@@ -970,6 +970,7 @@ mod tests {
             sink_payload_args: None,
             all_args_literal: false,
             catch_param: false,
+            const_text: None,
         }
     }
 
