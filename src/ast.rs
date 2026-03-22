@@ -216,6 +216,7 @@ fn source_kind_label(sk: crate::labels::SourceKind) -> &'static str {
         SourceKind::EnvironmentConfig => "environment config",
         SourceKind::FileSystem => "file system data",
         SourceKind::Database => "database result",
+        SourceKind::CaughtException => "caught exception",
         SourceKind::Unknown => "tainted data",
     }
 }

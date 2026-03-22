@@ -242,6 +242,8 @@ pub enum SourceKind {
     FileSystem,
     /// Database query results
     Database,
+    /// Caught exception — may carry user-controlled data
+    CaughtException,
     /// Could not determine — treat conservatively
     Unknown,
 }
@@ -303,6 +305,7 @@ pub fn severity_for_source_kind(kind: SourceKind) -> crate::patterns::Severity {
         SourceKind::EnvironmentConfig => crate::patterns::Severity::High,
         SourceKind::FileSystem => crate::patterns::Severity::Medium,
         SourceKind::Database => crate::patterns::Severity::Medium,
+        SourceKind::CaughtException => crate::patterns::Severity::Medium,
         SourceKind::Unknown => crate::patterns::Severity::High,
     }
 }

@@ -76,7 +76,7 @@ impl Transfer<TaintState> for TaintTransfer<'_> {
             {
                 let origin = TaintOrigin {
                     node,
-                    source_kind: crate::labels::SourceKind::Unknown,
+                    source_kind: crate::labels::SourceKind::CaughtException,
                 };
                 state.set(
                     sym,

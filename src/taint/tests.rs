@@ -2963,3 +2963,143 @@ fn js_two_level_converges_no_mutation() {
         "top-level source to function sink should be detected"
     );
 }
+
+// ── Catch-parameter provenance tests ──────────────────────────────────────
+
+#[test]
+fn catch_param_to_sink_has_caught_exception_source_kind() {
+    // Catch param flows to a sink — the finding source_kind must be
+    // CaughtException, not Unknown.
+    let src = b"
+        const { exec } = require('child_process');
+        try {
+            doSomething();
+        } catch (err) {
+            exec(err.command);
+        }
+    ";
+
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+    );
+
+    assert!(!findings.is_empty(), "catch param to sink should produce a finding");
+    for f in &findings {
+        assert_eq!(
+            f.source_kind,
+            crate::labels::SourceKind::CaughtException,
+            "catch-param origin should have CaughtException source kind, not {:?}",
+            f.source_kind
+        );
+    }
+}
+
+#[test]
+fn catch_param_source_node_has_callee() {
+    // The source CFG node for a catch-param finding must have a non-None callee
+    // so the report renders a meaningful descriptor instead of "(unknown)".
+    let src = b"
+        try {
+            riskyOperation();
+        } catch (e) {
+            fetch(e.message);
+        }
+    ";
+
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &cfg,
+        entry,
+        &summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+    );
+
+    assert!(!findings.is_empty(), "catch param to fetch should produce a finding");
+    for f in &findings {
+        let source_info = &cfg[f.source];
+        assert!(
+            source_info.callee.is_some(),
+            "catch-param source node must have a callee for reporting, got None"
+        );
+        let callee = source_info.callee.as_deref().unwrap();
+        assert!(
+            callee.contains("catch"),
+            "catch-param callee should contain 'catch', got {:?}",
+            callee
+        );
+    }
+}
+
+#[test]
+fn taint_origin_preserved_through_assignment() {
+    // Source origin should be preserved when taint flows through variable
+    // assignments, not replaced or lost.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("CMD").unwrap();
+            let y = x;
+            let z = y;
+            Command::new("sh").arg(z).status().unwrap();
+        }"#;
+
+    let (cfg, entry, summaries) = parse_rust(src);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    assert_eq!(findings.len(), 1);
+    let f = &findings[0];
+    // The source should point to the env::var call, not the intermediate assignments
+    let source_info = &cfg[f.source];
+    assert!(
+        source_info.callee.is_some(),
+        "source node should have callee after propagation through assignments"
+    );
+    let callee = source_info.callee.as_deref().unwrap();
+    assert!(
+        callee.contains("env") || callee.contains("var"),
+        "source callee should reference env::var, got {:?}",
+        callee
+    );
+}
+
+#[test]
+fn taint_origin_preserved_through_branch_merge() {
+    // When taint flows through both branches of an if-else and merges,
+    // the origin should still point to the original source.
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("CMD").unwrap();
+            let y;
+            if true {
+                y = x;
+            } else {
+                y = x;
+            }
+            Command::new("sh").arg(y).status().unwrap();
+        }"#;
+
+    let (cfg, entry, summaries) = parse_rust(src);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    assert!(!findings.is_empty());
+    for f in &findings {
+        let source_info = &cfg[f.source];
+        assert!(
+            source_info.callee.is_some(),
+            "source callee must not be None after branch merge"
+        );
+    }
+}

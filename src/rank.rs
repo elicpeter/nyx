@@ -199,6 +199,7 @@ fn source_kind_priority(source_value: &str) -> f64 {
         "EnvironmentConfig" => return 5.0,
         "FileSystem" => return 3.0,
         "Database" => return 2.0,
+        "CaughtException" => return 2.0,
         "Unknown" => return 4.0,
         _ => {}
     }

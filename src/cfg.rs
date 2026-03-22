@@ -1629,7 +1629,7 @@ fn build_try<'a>(
                     labels: SmallVec::new(),
                     defines: Some(name.clone()),
                     uses: Vec::new(),
-                    callee: None,
+                    callee: Some(format!("catch({name})")),
                     receiver: None,
                     enclosing_func: enclosing_func.map(|s| s.to_string()),
                     call_ordinal: 0,
