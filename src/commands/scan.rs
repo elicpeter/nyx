@@ -10,6 +10,7 @@ use crate::utils::config::Config;
 use crate::utils::project::get_project_info;
 use crate::walk::spawn_file_walker;
 use console::style;
+use crate::callgraph::{CallGraph, FileBatch};
 use dashmap::DashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use r2d2::Pool;
@@ -179,7 +180,7 @@ pub fn handle(
             let idx = Indexer::from_pool(&project_name, &pool)?;
             idx.vacuum()?;
         }
-        scan_with_index_parallel(&project_name, pool, config, show_progress)?
+        scan_with_index_parallel(&project_name, pool, config, show_progress, &scan_path)?
     };
 
     tracing::debug!("Found {:?} issues (pre-filter).", diags.len());
@@ -284,6 +285,153 @@ fn build_and_analyse_call_graph(
         "call graph built"
     );
     (call_graph, cg_analysis)
+}
+
+/// Log individual unresolved/ambiguous callees at debug level, deduplicated by callee name.
+fn log_unresolved_callees(call_graph: &CallGraph) {
+    use std::collections::HashSet;
+    let mut seen_not_found: HashSet<&str> = HashSet::new();
+    for u in &call_graph.unresolved_not_found {
+        if seen_not_found.insert(&u.callee_name) {
+            tracing::debug!(caller=%u.caller.name, callee=%u.callee_name, "unresolved callee: not found");
+        }
+    }
+    let mut seen_ambiguous: HashSet<&str> = HashSet::new();
+    for a in &call_graph.unresolved_ambiguous {
+        if seen_ambiguous.insert(&a.callee_name) {
+            tracing::debug!(caller=%a.caller.name, callee=%a.callee_name, candidates=a.candidates.len(), "unresolved callee: ambiguous");
+        }
+    }
+}
+
+/// Maximum iterations for SCC fixed-point convergence.
+const MAX_SCC_FIXPOINT_ITERS: usize = 3;
+
+/// Run pass 2 analysis on a sequence of topo-ordered file batches.
+///
+/// For batches with mutual recursion, iterates until summaries converge
+/// (max [`MAX_SCC_FIXPOINT_ITERS`]).  Updates `global_summaries` between
+/// batches so later callers see refined callee context.
+fn run_topo_batches(
+    batches: &[FileBatch<'_>],
+    orphans: &[&PathBuf],
+    global_summaries: &mut GlobalSummaries,
+    cfg: &Config,
+    scan_root: Option<&Path>,
+    pb: &ProgressBar,
+) -> Vec<Diag> {
+    let root_str = scan_root.map(|r| r.to_string_lossy());
+    let root_str_ref = root_str.as_deref();
+    let mut result: Vec<Diag> = Vec::new();
+
+    for (batch_idx, batch) in batches.iter().enumerate() {
+        if batch.has_mutual_recursion {
+            // SCC fixed-point: iterate until summaries converge.
+            let mut iteration_diags = Vec::new();
+            for iter in 0..MAX_SCC_FIXPOINT_ITERS {
+                let snap_before = global_summaries.snapshot_caps();
+
+                // Intermediate iteration diags may be incomplete due to
+                // not-yet-converged summaries — only keep final iteration's.
+                iteration_diags.clear();
+
+                let batch_results: Vec<(Vec<Diag>, Vec<crate::summary::FuncSummary>)> = batch
+                    .files
+                    .par_iter()
+                    .map(|path| {
+                        let bytes = std::fs::read(path).unwrap_or_default();
+                        match analyse_file_fused(
+                            &bytes,
+                            path,
+                            cfg,
+                            Some(global_summaries),
+                            scan_root,
+                        ) {
+                            Ok(r) => {
+                                pb.inc(0); // don't double-count iterations in progress bar
+                                (r.diags, r.summaries)
+                            }
+                            Err(e) => {
+                                tracing::warn!("pass 2 (SCC iter {}): {}: {e}", iter, path.display());
+                                (vec![], vec![])
+                            }
+                        }
+                    })
+                    .collect();
+
+                for (diags, summaries) in batch_results {
+                    iteration_diags.extend(diags);
+                    for s in summaries {
+                        let key = s.func_key(root_str_ref);
+                        global_summaries.insert(key, s);
+                    }
+                }
+
+                let snap_after = global_summaries.snapshot_caps();
+                let converged = snap_before == snap_after;
+                tracing::debug!(
+                    batch = batch_idx,
+                    files = batch.files.len(),
+                    recursive = true,
+                    iteration = iter,
+                    converged,
+                    "SCC batch iteration"
+                );
+                if converged {
+                    break;
+                }
+            }
+            // Count progress for these files once.
+            pb.inc(batch.files.len() as u64);
+            result.extend(iteration_diags);
+        } else {
+            // Non-recursive batch: single pass.
+            let batch_diags: Vec<Diag> = batch
+                .files
+                .par_iter()
+                .flat_map_iter(|path| {
+                    let d = match run_rules_on_file(path, cfg, Some(global_summaries), scan_root) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::warn!("pass 2: {}: {e}", path.display());
+                            vec![]
+                        }
+                    };
+                    pb.inc(1);
+                    d
+                })
+                .collect();
+
+            tracing::debug!(
+                batch = batch_idx,
+                files = batch.files.len(),
+                recursive = false,
+                "non-recursive batch complete"
+            );
+            result.extend(batch_diags);
+        }
+    }
+
+    // Orphan files (no functions in call graph) — process last, single pass.
+    if !orphans.is_empty() {
+        let orphan_diags: Vec<Diag> = orphans
+            .par_iter()
+            .flat_map_iter(|path| {
+                let d = match run_rules_on_file(path, cfg, Some(global_summaries), scan_root) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!("pass 2: {}: {e}", path.display());
+                        vec![]
+                    }
+                };
+                pb.inc(1);
+                d
+            })
+            .collect();
+        result.extend(orphan_diags);
+    }
+
+    result
 }
 
 // --------------------------------------------------------------------------------------------
@@ -423,6 +571,7 @@ pub(crate) fn scan_filesystem(
 
     // ── Build call graph ────────────────────────────────────────────────
     let (call_graph, cg_analysis) = build_and_analyse_call_graph(&global_summaries);
+    log_unresolved_callees(&call_graph);
 
     // ── Pass 2: re-run with cross-file global summaries ──────────────────
     let mut diags: Vec<Diag> = {
@@ -433,45 +582,20 @@ pub(crate) fn scan_filesystem(
             show_progress,
         );
 
-        let analyse_file = |path: &PathBuf| -> Vec<Diag> {
-            let result = match run_rules_on_file(path, cfg, Some(&global_summaries), Some(root)) {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!("pass 2: {}: {e}", path.display());
-                    vec![]
-                }
-            };
-            pb.inc(1);
-            result
-        };
-
-        let (batches, orphans) =
-            crate::callgraph::scc_file_batches(&call_graph, &cg_analysis, &all_paths, root);
+        let (batches, orphans) = crate::callgraph::scc_file_batches_with_metadata(
+            &call_graph,
+            &cg_analysis,
+            &all_paths,
+            root,
+        );
         tracing::info!(
             batches = batches.len(),
             orphan_files = orphans.len(),
             "topo-ordered file batches computed"
         );
 
-        let mut result: Vec<Diag> = Vec::new();
-
-        // SCC batches in callee-first order
-        for batch in &batches {
-            result.extend(
-                batch
-                    .par_iter()
-                    .flat_map_iter(|path| analyse_file(path))
-                    .collect::<Vec<_>>(),
-            );
-        }
-
-        // Orphan files (no functions in call graph) — process last
-        result.extend(
-            orphans
-                .par_iter()
-                .flat_map_iter(|path| analyse_file(path))
-                .collect::<Vec<_>>(),
-        );
+        let mut gs = global_summaries;
+        let result = run_topo_batches(&batches, &orphans, &mut gs, cfg, Some(root), &pb);
 
         pb.finish_and_clear();
         result
@@ -503,6 +627,7 @@ pub fn scan_with_index_parallel(
     pool: Arc<Pool<SqliteConnectionManager>>,
     cfg: &Config,
     show_progress: bool,
+    scan_root: &Path,
 ) -> NyxResult<Vec<Diag>> {
     let files = {
         let idx = Indexer::from_pool(project, &pool)?;
@@ -549,101 +674,150 @@ pub fn scan_with_index_parallel(
     }
 
     // ── Load global summaries ────────────────────────────────────────────
+    let root_str = scan_root.to_string_lossy();
     let global_summaries: Option<GlobalSummaries> = if needs_taint {
         let _span = tracing::info_span!("load_summaries_db").entered();
         let idx = Indexer::from_pool(project, &pool)?;
         let all = idx.load_all_summaries()?;
         tracing::info!(summaries = all.len(), "loaded cross-file summaries from DB");
-        Some(summary::merge_summaries(all, None))
+        Some(summary::merge_summaries(all, Some(&root_str)))
     } else {
         None
     };
 
-    // ── Build call graph ────────────────────────────────────────────────
-    if let Some(ref gs) = global_summaries {
-        let _ = build_and_analyse_call_graph(gs);
+    if !needs_taint {
+        // ── AST-only: existing parallel scan with caching ────────────────
+        let _span = tracing::info_span!("pass2_indexed_ast_only").entered();
+        let pb2 = make_progress_bar(
+            files.len() as u64,
+            "Pass 2: Running analysis",
+            show_progress,
+        );
+        let diag_map: DashMap<String, Vec<Diag>> = DashMap::new();
+
+        files.into_par_iter().for_each_init(
+            || Indexer::from_pool(project, &pool).expect("db pool"),
+            |idx, path| {
+                let bytes_opt = std::fs::read(&path).ok();
+                let hash = bytes_opt.as_ref().map(|b| Indexer::digest_bytes(b));
+
+                let needs_scan = match (&hash, &bytes_opt) {
+                    (Some(h), _) => idx.should_scan_with_hash(&path, h).unwrap_or(true),
+                    _ => true,
+                };
+
+                let mut diags = if needs_scan {
+                    let d = match &bytes_opt {
+                        Some(bytes) => {
+                            run_rules_on_bytes(bytes, &path, cfg, None, Some(scan_root))
+                                .unwrap_or_default()
+                        }
+                        None => run_rules_on_file(&path, cfg, None, Some(scan_root))
+                            .unwrap_or_default(),
+                    };
+
+                    let file_id = match &hash {
+                        Some(h) => idx.upsert_file_with_hash(&path, h).unwrap_or_default(),
+                        None => idx.upsert_file(&path).unwrap_or_default(),
+                    };
+                    idx.replace_issues(
+                        file_id,
+                        d.iter().map(|d| IssueRow {
+                            rule_id: &d.id,
+                            severity: d.severity.as_db_str(),
+                            line: d.line as i64,
+                            col: d.col as i64,
+                        }),
+                    )
+                    .ok();
+                    d
+                } else {
+                    idx.get_issues_from_file(&path).unwrap_or_default()
+                };
+
+                // AST-only: drop taint/cfg findings
+                diags.retain(|d| !d.id.starts_with("taint") && !d.id.starts_with("cfg-"));
+
+                if !diags.is_empty() {
+                    diag_map
+                        .entry(path.to_string_lossy().to_string())
+                        .or_default()
+                        .append(&mut diags);
+                }
+                pb2.inc(1);
+            },
+        );
+        pb2.finish_and_clear();
+
+        let mut diags: Vec<Diag> = diag_map.into_iter().flat_map(|(_, v)| v).collect();
+        post_process_diags(&mut diags, cfg);
+        return Ok(diags);
     }
 
-    // ── Pass 2: full analysis ────────────────────────────────────────────
+    // ── Taint mode: build call graph + topo-ordered pass 2 ────────────
+    let mut global_summaries = global_summaries.unwrap();
+    let (call_graph, cg_analysis) = build_and_analyse_call_graph(&global_summaries);
+    log_unresolved_callees(&call_graph);
+
+    let (batches, orphans) = crate::callgraph::scc_file_batches_with_metadata(
+        &call_graph,
+        &cg_analysis,
+        &files,
+        scan_root,
+    );
+    tracing::info!(
+        batches = batches.len(),
+        orphan_files = orphans.len(),
+        "topo-ordered file batches computed (indexed)"
+    );
+
     let _span = tracing::info_span!("pass2_indexed").entered();
     let pb2 = make_progress_bar(
         files.len() as u64,
         "Pass 2: Running analysis",
         show_progress,
     );
-    let diag_map: DashMap<String, Vec<Diag>> = DashMap::new();
 
-    files.into_par_iter().for_each_init(
-        || Indexer::from_pool(project, &pool).expect("db pool"),
-        |idx, path| {
-            // Read file once for both change-detection and analysis.
-            let bytes_opt = std::fs::read(&path).ok();
-            let hash = bytes_opt.as_ref().map(|b| Indexer::digest_bytes(b));
-
-            // In pass 2 we always re-analyse when taint is enabled because
-            // global summaries may have changed even if this file didn't.
-            // For AST-only mode, we can still use the cached issues.
-            let needs_scan = if needs_taint {
-                true // conservative: always re-analyse in taint mode
-            } else {
-                match (&hash, &bytes_opt) {
-                    (Some(h), _) => idx.should_scan_with_hash(&path, h).unwrap_or(true),
-                    _ => true,
-                }
-            };
-
-            let mut diags = if needs_scan {
-                let d = match &bytes_opt {
-                    Some(bytes) => {
-                        run_rules_on_bytes(bytes, &path, cfg, global_summaries.as_ref(), None)
-                            .unwrap_or_default()
-                    }
-                    None => run_rules_on_file(&path, cfg, global_summaries.as_ref(), None)
-                        .unwrap_or_default(),
-                };
-
-                // Persist issues + update file record (use pre-computed hash)
-                let file_id = match &hash {
-                    Some(h) => idx.upsert_file_with_hash(&path, h).unwrap_or_default(),
-                    None => idx.upsert_file(&path).unwrap_or_default(),
-                };
-                idx.replace_issues(
-                    file_id,
-                    d.iter().map(|d| IssueRow {
-                        rule_id: &d.id,
-                        severity: d.severity.as_db_str(),
-                        line: d.line as i64,
-                        col: d.col as i64,
-                    }),
-                )
-                .ok();
-                d
-            } else {
-                idx.get_issues_from_file(&path).unwrap_or_default()
-            };
-
-            match cfg.scanner.mode {
-                crate::utils::config::AnalysisMode::Ast => {
-                    diags.retain(|d| !d.id.starts_with("taint") && !d.id.starts_with("cfg-"));
-                }
-                crate::utils::config::AnalysisMode::Taint => {
-                    diags.retain(|d| d.id.starts_with("taint") || d.id.starts_with("cfg-"));
-                }
-                crate::utils::config::AnalysisMode::Full => {}
-            }
-
-            if !diags.is_empty() {
-                diag_map
-                    .entry(path.to_string_lossy().to_string())
-                    .or_default()
-                    .append(&mut diags);
-            }
-            pb2.inc(1);
-        },
+    let topo_diags = run_topo_batches(
+        &batches,
+        &orphans,
+        &mut global_summaries,
+        cfg,
+        Some(scan_root),
+        &pb2,
     );
     pb2.finish_and_clear();
 
-    let mut diags: Vec<Diag> = diag_map.into_iter().flat_map(|(_, v)| v).collect();
+    // Persist issues to DB after topo analysis, grouped by file.
+    {
+        use std::collections::HashMap;
+        let mut by_file: HashMap<&str, Vec<&Diag>> = HashMap::new();
+        for d in &topo_diags {
+            by_file.entry(&d.path).or_default().push(d);
+        }
+        let mut idx = Indexer::from_pool(project, &pool)?;
+        for (path_str, file_diags) in &by_file {
+            let path = PathBuf::from(path_str);
+            let file_id = idx.upsert_file(&path).unwrap_or_default();
+            idx.replace_issues(
+                file_id,
+                file_diags.iter().map(|d| IssueRow {
+                    rule_id: &d.id,
+                    severity: d.severity.as_db_str(),
+                    line: d.line as i64,
+                    col: d.col as i64,
+                }),
+            )
+            .ok();
+        }
+    }
+
+    let mut diags = topo_diags;
+
+    // Apply mode filter for taint-only mode.
+    if cfg.scanner.mode == crate::utils::config::AnalysisMode::Taint {
+        diags.retain(|d| d.id.starts_with("taint") || d.id.starts_with("cfg-"));
+    }
 
     post_process_diags(&mut diags, cfg);
 
@@ -968,7 +1142,7 @@ fn scan_with_index_parallel_uses_existing_index_without_rescanning() {
         1
     );
 
-    let diags = scan_with_index_parallel(&project_name, Arc::clone(&pool), &cfg, false)
+    let diags = scan_with_index_parallel(&project_name, Arc::clone(&pool), &cfg, false, &project_dir)
         .expect("scan should succeed");
 
     assert!(diags.is_empty());

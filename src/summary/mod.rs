@@ -261,6 +261,28 @@ impl GlobalSummaries {
         self.by_key.iter()
     }
 
+    /// Snapshot the convergence-relevant fields of every summary.
+    ///
+    /// Returns `(source_caps, sanitizer_caps, sink_caps, propagating_params)`
+    /// per key.  Used by the SCC fixed-point loop to detect when an iteration
+    /// has not changed any summary — i.e. convergence.
+    pub fn snapshot_caps(&self) -> HashMap<FuncKey, (u16, u16, u16, Vec<usize>)> {
+        self.by_key
+            .iter()
+            .map(|(k, s)| {
+                (
+                    k.clone(),
+                    (
+                        s.source_caps,
+                        s.sanitizer_caps,
+                        s.sink_caps,
+                        s.propagating_params.clone(),
+                    ),
+                )
+            })
+            .collect()
+    }
+
     /// Resolve a bare (already-normalized) callee name to a [`FuncKey`].
     ///
     /// Resolution order:

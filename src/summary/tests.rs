@@ -382,3 +382,38 @@ fn propagating_params_round_trip_serde() {
     // propagates_taint must NOT appear in serialized output
     assert!(!json.contains("propagates_taint"));
 }
+
+#[test]
+fn snapshot_caps_detects_change() {
+    let a = FuncSummary {
+        source_caps: 0x01,
+        propagating_params: vec![0],
+        ..make("foo", 0, 0, 0)
+    };
+    let b = make("bar", 0, 0, 0x04);
+
+    let mut gs = merge_summaries(vec![a, b], None);
+
+    let snap1 = gs.snapshot_caps();
+
+    // Mutate one summary by inserting a changed version.
+    let key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "test.rs".into(),
+        name: "bar".into(),
+        arity: Some(0),
+    };
+    let updated = FuncSummary {
+        sink_caps: 0x08,
+        ..make("bar", 0, 0, 0)
+    };
+    gs.insert(key, updated);
+
+    let snap2 = gs.snapshot_caps();
+
+    assert_ne!(snap1, snap2, "snapshot should detect changed caps");
+
+    // Without further changes, snapshot should be stable.
+    let snap3 = gs.snapshot_caps();
+    assert_eq!(snap2, snap3, "snapshot should be stable without changes");
+}

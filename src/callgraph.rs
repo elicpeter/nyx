@@ -21,7 +21,6 @@ pub struct CallEdge {
 
 /// A callee that could not be resolved to any known function definition.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // fields used for future diagnostics reporting
 pub struct UnresolvedCallee {
     pub caller: FuncKey,
     pub callee_name: String,
@@ -29,7 +28,6 @@ pub struct UnresolvedCallee {
 
 /// A callee that matched multiple function definitions — ambiguous.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // fields used for future diagnostics reporting
 pub struct AmbiguousCallee {
     pub caller: FuncKey,
     pub callee_name: String,
@@ -230,6 +228,78 @@ pub fn analyse(cg: &CallGraph) -> CallGraphAnalysis {
 //  File-level batch ordering
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A batch of files at a single topological position, annotated with whether
+/// any contributing SCC contains mutual recursion (len > 1).
+pub struct FileBatch<'a> {
+    pub files: Vec<&'a PathBuf>,
+    pub has_mutual_recursion: bool,
+}
+
+/// Like [`scc_file_batches`] but annotates each batch with whether any
+/// contributing SCC has mutual recursion (`len > 1`).
+///
+/// Returns `(ordered_batches, orphan_files)`.
+pub fn scc_file_batches_with_metadata<'a>(
+    cg: &CallGraph,
+    analysis: &CallGraphAnalysis,
+    all_files: &'a [PathBuf],
+    root: &Path,
+) -> (Vec<FileBatch<'a>>, Vec<&'a PathBuf>) {
+    let root_str = root.to_string_lossy();
+
+    // 1. Map relative-path → &PathBuf for each file in all_files.
+    let mut rel_to_path: HashMap<String, &'a PathBuf> = HashMap::with_capacity(all_files.len());
+    for p in all_files {
+        let abs = p.to_string_lossy();
+        let rel = crate::symbol::normalize_namespace(&abs, Some(&root_str));
+        rel_to_path.insert(rel, p);
+    }
+
+    // 2. Build file relative-path → (min topo index, has_mutual_recursion).
+    let mut file_topo: HashMap<&str, (usize, bool)> = HashMap::new();
+    for (topo_pos, &scc_idx) in analysis.topo_scc_callee_first.iter().enumerate() {
+        let scc_recursive = analysis.sccs[scc_idx].len() > 1;
+        for &node in &analysis.sccs[scc_idx] {
+            let ns = &cg.graph[node].namespace;
+            file_topo
+                .entry(ns.as_str())
+                .and_modify(|(min_pos, recursive)| {
+                    if topo_pos < *min_pos {
+                        *min_pos = topo_pos;
+                    }
+                    *recursive |= scc_recursive;
+                })
+                .or_insert((topo_pos, scc_recursive));
+        }
+    }
+
+    // 3. Group files by min topo index, preserving order via BTreeMap.
+    //    Track mutual-recursion flag per group.
+    let mut topo_groups: BTreeMap<usize, (Vec<&'a PathBuf>, bool)> = BTreeMap::new();
+    let mut orphans: Vec<&'a PathBuf> = Vec::new();
+
+    for p in all_files {
+        let abs = p.to_string_lossy();
+        let rel = crate::symbol::normalize_namespace(&abs, Some(&root_str));
+        if let Some(&(topo_pos, recursive)) = file_topo.get(rel.as_str()) {
+            let entry = topo_groups.entry(topo_pos).or_insert_with(|| (Vec::new(), false));
+            entry.0.push(p);
+            entry.1 |= recursive;
+        } else {
+            orphans.push(p);
+        }
+    }
+
+    let batches: Vec<FileBatch<'a>> = topo_groups
+        .into_values()
+        .map(|(files, has_mutual_recursion)| FileBatch {
+            files,
+            has_mutual_recursion,
+        })
+        .collect();
+    (batches, orphans)
+}
+
 /// Map SCC topological order to an ordered sequence of file-path batches.
 ///
 /// Uses **min** topo index: a file is placed in the earliest batch where any
@@ -241,6 +311,7 @@ pub fn analyse(cg: &CallGraph) -> CallGraphAnalysis {
 ///
 /// Returns `(ordered_batches, orphan_files)` where orphan_files are paths
 /// from `all_files` that have no functions in the call graph.
+#[allow(dead_code)] // kept for tests; production callers use scc_file_batches_with_metadata
 pub fn scc_file_batches<'a>(
     cg: &CallGraph,
     analysis: &CallGraphAnalysis,
@@ -786,5 +857,68 @@ mod tests {
 
         assert!(batches.is_empty(), "empty graph → no batches");
         assert_eq!(orphans.len(), 2, "all files are orphans");
+    }
+
+    // ── scc_file_batches_with_metadata ────────────────────────────────
+
+    /// Helper: build summaries, call graph, analysis, and metadata batches.
+    fn build_metadata_batches<'a>(
+        summaries: Vec<FuncSummary>,
+        all_files: &'a [PathBuf],
+        root: &Path,
+    ) -> (Vec<FileBatch<'a>>, Vec<&'a PathBuf>) {
+        let gs = merge_summaries(summaries, Some(&root.to_string_lossy()));
+        let cg = build_call_graph(&gs, &[]);
+        let analysis = analyse(&cg);
+        scc_file_batches_with_metadata(&cg, &analysis, all_files, root)
+    }
+
+    #[test]
+    fn scc_file_batches_with_metadata_marks_recursive() {
+        // Two mutually-recursive functions → SCC with len > 1 → has_mutual_recursion = true
+        let root = Path::new("/proj");
+        let a = make_summary("ping", "/proj/a.rs", "rust", 0, vec!["pong"]);
+        let b = make_summary("pong", "/proj/b.rs", "rust", 0, vec!["ping"]);
+
+        let files: Vec<PathBuf> = vec![
+            PathBuf::from("/proj/a.rs"),
+            PathBuf::from("/proj/b.rs"),
+        ];
+
+        let (batches, orphans) = build_metadata_batches(vec![a, b], &files, root);
+
+        assert!(orphans.is_empty());
+        assert_eq!(batches.len(), 1, "mutual recursion → single batch");
+        assert!(
+            batches[0].has_mutual_recursion,
+            "batch with mutual recursion should be marked"
+        );
+        assert_eq!(batches[0].files.len(), 2);
+    }
+
+    #[test]
+    fn scc_file_batches_with_metadata_singleton_not_recursive() {
+        // Linear chain: no mutual recursion → has_mutual_recursion = false for all batches
+        let root = Path::new("/proj");
+        let c = make_summary("c_fn", "/proj/c.rs", "rust", 0, vec![]);
+        let b = make_summary("b_fn", "/proj/b.rs", "rust", 0, vec!["c_fn"]);
+        let a = make_summary("a_fn", "/proj/a.rs", "rust", 0, vec!["b_fn"]);
+
+        let files: Vec<PathBuf> = vec![
+            PathBuf::from("/proj/a.rs"),
+            PathBuf::from("/proj/b.rs"),
+            PathBuf::from("/proj/c.rs"),
+        ];
+
+        let (batches, orphans) = build_metadata_batches(vec![a, b, c], &files, root);
+
+        assert!(orphans.is_empty());
+        assert_eq!(batches.len(), 3, "3 files in linear chain → 3 batches");
+        for (i, batch) in batches.iter().enumerate() {
+            assert!(
+                !batch.has_mutual_recursion,
+                "batch {i} should not be marked as recursive"
+            );
+        }
     }
 }
