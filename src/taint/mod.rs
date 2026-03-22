@@ -82,14 +82,11 @@ pub fn analyse_file(
         scope_filter: None,
     };
 
-    // 3. Run analysis (two-level for JS/TS, SSA or legacy for others)
+    // 3. Run analysis (two-level for JS/TS, SSA for others; legacy opt-in via NYX_LEGACY=1)
     let use_ssa = !std::env::var("NYX_LEGACY").is_ok_and(|v| v == "1");
 
-    // JS/TS SSA two-level is opt-in via NYX_SSA_JS=1 until equivalence is proven
-    let use_ssa_js = std::env::var("NYX_SSA_JS").is_ok_and(|v| v == "1");
-
     let mut findings = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
-        if use_ssa_js {
+        if use_ssa {
             match analyse_ssa_js_two_level(
                 cfg, entry, &interner, caller_lang, caller_namespace,
                 local_summaries, global_summaries, interop_edges,
@@ -106,7 +103,7 @@ pub fn analyse_file(
             events_to_findings(&events, &interner)
         }
     } else if use_ssa {
-        // SSA path (opt-in via NYX_SSA=1)
+        // SSA path for non-JS/TS
         match crate::ssa::lower_to_ssa(cfg, entry, None, true) {
             Ok(ssa_body) => {
                 tracing::debug!(

@@ -1,0 +1,24 @@
+{
+  "description": "Flask XSS: request.args.get flows directly into HTML string via make_response",
+  "tags": [
+    "taint",
+    "xss",
+    "flask"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        5,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get('name') flows into make_response — may not be classified as a sink; return-value-as-response tracking requires framework modeling"
+    }
+  ]
+}

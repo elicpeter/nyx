@@ -1,0 +1,25 @@
+{
+  "description": "Go SQL injection: r.URL.Query().Get flows into db.Query via string concatenation",
+  "tags": [
+    "taint",
+    "sqli",
+    "http",
+    "go"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "r.URL.Query().Get to db.Query via string concat; must_match false because Go string concat taint propagation is a known Phase 1 gap"
+    }
+  ]
+}

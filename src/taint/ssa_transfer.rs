@@ -257,6 +257,12 @@ pub fn run_ssa_taint_full(
             worklist.push_back(bid);
         }
     }
+    if !ssa.exception_edges.is_empty() {
+        tracing::debug!(
+            count = ssa.exception_edges.len(),
+            "SSA taint: exception edges for catch-block seeding"
+        );
+    }
     let mut iterations: usize = 0;
     const BUDGET: usize = 100_000;
 
@@ -295,6 +301,36 @@ pub fn run_ssa_taint_full(
                 block_states[succ_idx] = Some(new_succ_state);
                 if !worklist.contains(&succ_idx) {
                     worklist.push_back(succ_idx);
+                }
+            }
+        }
+
+        // Propagate taint to catch blocks via exception edges.
+        // Mirrors legacy semantics: variable taint carries across exception
+        // edges but predicates are cleared (exception bypasses try conditions).
+        let bid_id = BlockId(bid as u32);
+        for &(src_blk, catch_blk) in &ssa.exception_edges {
+            if src_blk != bid_id {
+                continue;
+            }
+            let catch_idx = catch_blk.0 as usize;
+            let mut exc_state = exit_state.clone();
+            exc_state.predicates.clear();
+
+
+            let new_catch_state = match &block_states[catch_idx] {
+                Some(existing) => existing.join(&exc_state),
+                None => exc_state,
+            };
+
+            let changed = block_states[catch_idx]
+                .as_ref()
+                .is_none_or(|existing| *existing != new_catch_state);
+
+            if changed {
+                block_states[catch_idx] = Some(new_catch_state);
+                if !worklist.contains(&catch_idx) {
+                    worklist.push_back(catch_idx);
                 }
             }
         }
@@ -646,58 +682,60 @@ fn transfer_inst(
                 }
             }
 
-            // Resolve callee summary
+            // Resolve callee summary — always attempt, even when explicit
+            // labels are present. Labels take precedence for source caps, but
+            // summary propagation and sanitizer behaviour must still apply
+            // (matches legacy `apply_call()` semantics).
             let caller_func = info.enclosing_func.as_deref().unwrap_or("");
-            let has_label = info
+            let has_source_label = info
                 .labels
                 .iter()
-                .any(|l| matches!(l, DataLabel::Source(_) | DataLabel::Sanitizer(_)));
+                .any(|l| matches!(l, DataLabel::Source(_)));
 
             let mut resolved_callee = false;
-            if !has_label {
-                if let Some(resolved) =
-                    resolve_callee(transfer, callee, caller_func, info.call_ordinal)
-                {
-                    resolved_callee = true;
+            if let Some(resolved) =
+                resolve_callee(transfer, callee, caller_func, info.call_ordinal)
+            {
+                resolved_callee = true;
 
-                    if !resolved.source_caps.is_empty() {
-                        return_bits |= resolved.source_caps;
-                        let source_kind = crate::labels::infer_source_kind(
-                            resolved.source_caps,
-                            callee,
-                        );
-                        let origin = TaintOrigin {
-                            node: inst.cfg_node,
-                            source_kind,
-                        };
-                        if !return_origins.iter().any(|o| o.node == inst.cfg_node) {
-                            return_origins.push(origin);
-                        }
+                // Source caps from summary: only when no explicit Source label
+                if !has_source_label && !resolved.source_caps.is_empty() {
+                    return_bits |= resolved.source_caps;
+                    let source_kind = crate::labels::infer_source_kind(
+                        resolved.source_caps,
+                        callee,
+                    );
+                    let origin = TaintOrigin {
+                        node: inst.cfg_node,
+                        source_kind,
+                    };
+                    if !return_origins.iter().any(|o| o.node == inst.cfg_node) {
+                        return_origins.push(origin);
                     }
-
-                    // Propagation
-                    if resolved.propagates_taint {
-                        // Only use positional filtering when original arg_uses is populated
-                        let effective_params = if info.arg_uses.is_empty() {
-                            &[] as &[usize]
-                        } else {
-                            &resolved.propagating_params
-                        };
-                        let (prop_caps, prop_origins) =
-                            collect_args_taint(args, receiver, state, effective_params);
-                        return_bits |= prop_caps;
-                        for orig in &prop_origins {
-                            if return_origins.len() < MAX_ORIGINS
-                                && !return_origins.iter().any(|o| o.node == orig.node)
-                            {
-                                return_origins.push(*orig);
-                            }
-                        }
-                    }
-
-                    // Sanitizer from summary
-                    return_bits &= !resolved.sanitizer_caps;
                 }
+
+                // Propagation: ALWAYS apply
+                if resolved.propagates_taint {
+                    // Only use positional filtering when original arg_uses is populated
+                    let effective_params = if info.arg_uses.is_empty() {
+                        &[] as &[usize]
+                    } else {
+                        &resolved.propagating_params
+                    };
+                    let (prop_caps, prop_origins) =
+                        collect_args_taint(args, receiver, state, effective_params);
+                    return_bits |= prop_caps;
+                    for orig in &prop_origins {
+                        if return_origins.len() < MAX_ORIGINS
+                            && !return_origins.iter().any(|o| o.node == orig.node)
+                        {
+                            return_origins.push(*orig);
+                        }
+                    }
+                }
+
+                // Summary sanitizer: ALWAYS apply
+                return_bits &= !resolved.sanitizer_caps;
             }
 
             // Apply explicit sanitizer labels
@@ -713,7 +751,7 @@ fn transfer_inst(
                     }
                 }
                 return_bits &= !sanitizer_bits;
-            } else if !has_label && !resolved_callee {
+            } else if !resolved_callee {
                 // Curl special case: propagate URL taint to handle
                 if try_curl_url_propagation(inst, info, args, state) {
                     return;

@@ -3435,11 +3435,8 @@ fn ssa_js_two_level_global_to_function() {
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
 
-    // SSA path (opt-in)
-    // SAFETY: test-only, single-threaded
-    unsafe { std::env::set_var("NYX_SSA_JS", "1"); }
+    // SSA is now the default path for JS/TS
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
-    unsafe { std::env::remove_var("NYX_SSA_JS"); }
     assert!(
         !findings.is_empty(),
         "SSA JS two-level: top-level source should flow to function sink"
@@ -3453,10 +3450,8 @@ fn ssa_js_two_level_function_isolation() {
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
 
-    // SAFETY: test-only, single-threaded
-    unsafe { std::env::set_var("NYX_SSA_JS", "1"); }
+    // SSA is now the default path for JS/TS
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
-    unsafe { std::env::remove_var("NYX_SSA_JS"); }
     // x is local to a(), so it shouldn't flow to b()'s eval
     // Note: this depends on x being properly scoped; if the CFG treats x as global, it may still flow.
     // The test verifies that the SSA path doesn't crash and produces reasonable results.
@@ -3470,10 +3465,8 @@ fn ssa_js_two_level_convergence() {
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
 
-    // SAFETY: test-only, single-threaded
-    unsafe { std::env::set_var("NYX_SSA_JS", "1"); }
+    // SSA is now the default path for JS/TS
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
-    unsafe { std::env::remove_var("NYX_SSA_JS"); }
     assert!(
         !findings.is_empty(),
         "SSA JS two-level: function mutation of global should converge and detect taint"
@@ -3483,8 +3476,6 @@ fn ssa_js_two_level_convergence() {
 #[test]
 fn equiv_js_express_xss() {
     // Legacy vs SSA on an express XSS pattern
-    // SAFETY: test-only
-    unsafe { std::env::set_var("NYX_SSA_JS", "1"); }
     let src = b"const express = require('express');\nconst app = express();\napp.get('/test', function(req, res) {\n  let input = req.query.name;\n  res.send('<h1>' + input + '</h1>');\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
@@ -3495,7 +3486,7 @@ fn equiv_js_express_xss() {
     let legacy = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
     unsafe { std::env::remove_var("NYX_LEGACY"); }
 
-    // SSA findings
+    // SSA findings (now the default for JS/TS)
     let ssa = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
 
     let legacy_set: std::collections::HashSet<_> = legacy.iter().map(|f| (f.source.index(), f.sink.index())).collect();
@@ -3503,12 +3494,25 @@ fn equiv_js_express_xss() {
 
     // Allow SSA to find a subset of legacy findings (SSA may be more precise)
     // but SSA should not find findings legacy doesn't
-    unsafe { std::env::remove_var("NYX_SSA_JS"); }
-
     let ssa_only: Vec<_> = ssa_set.difference(&legacy_set).collect();
     assert!(
         ssa_only.is_empty(),
         "SSA found findings not in legacy: {:?}\nLegacy: {:?}\nSSA: {:?}",
         ssa_only, legacy_set, ssa_set
+    );
+}
+
+/// Verify SSA JS two-level correctly detects taint through chained method calls
+/// (e.g. fetch(url).then(fn).then(fn) in Express callbacks).
+#[test]
+fn ssa_js_chained_call_taint() {
+    let src = b"var express = require('express');\nvar app = express();\n\napp.get('/proxy', function(req, res) {\n    var url = req.query.url;\n    fetch(url).then(function(response) {\n        return response.text();\n    }).then(function(body) {\n        res.send(body);\n    });\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+    assert!(
+        !findings.is_empty(),
+        "SSA should detect taint through fetch(url).then().then() chain"
     );
 }

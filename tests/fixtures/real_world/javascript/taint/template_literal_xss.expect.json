@@ -1,0 +1,15 @@
+{
+  "description": "XSS via req.query.name flowing into res.send through string concatenation.",
+  "tags": ["taint", "xss", "express", "res.send"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 7],
+      "evidence_contains": [],
+      "notes": "req.query.name flows into res.send via string concat — XSS"
+    }
+  ]
+}

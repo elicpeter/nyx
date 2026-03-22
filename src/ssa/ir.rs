@@ -102,6 +102,10 @@ pub struct SsaBody {
     pub value_defs: Vec<ValueDef>,
     /// Map from original CFG NodeIndex to the primary SsaValue defined there.
     pub cfg_node_map: std::collections::HashMap<NodeIndex, SsaValue>,
+    /// Exception edges: (source block, catch entry block).
+    /// Recorded during lowering when exception edges are stripped from the CFG.
+    /// Used by taint analysis to seed catch blocks with try-body taint state.
+    pub exception_edges: Vec<(BlockId, BlockId)>,
 }
 
 impl SsaBody {

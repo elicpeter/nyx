@@ -52,7 +52,8 @@ fn lower_to_ssa_inner(
     let traverse_all = scope_all || scope_nop;
 
     // Collect reachable nodes in scope, stripping exception edges.
-    let (reachable, filtered_edges) = collect_reachable(cfg, entry, scope, traverse_all);
+    let (reachable, filtered_edges, raw_exception_edges) =
+        collect_reachable(cfg, entry, scope, traverse_all);
 
     // Build the set of nodes that should be treated as Nop (out-of-scope but included)
     let nop_nodes: HashSet<NodeIndex> = if scope_nop {
@@ -75,7 +76,7 @@ fn lower_to_ssa_inner(
     }
 
     // 1. Form basic blocks
-    let (blocks_nodes, _block_of_node, block_succs, block_preds) =
+    let (blocks_nodes, block_of_node, block_succs, block_preds) =
         form_blocks(cfg, entry, &reachable, &filtered_edges);
 
     let num_blocks = blocks_nodes.len();
@@ -137,24 +138,36 @@ fn lower_to_ssa_inner(
             .collect();
     }
 
+    // 8. Map exception edges from CFG node indices to SSA block IDs
+    let exception_edges: Vec<(BlockId, BlockId)> = raw_exception_edges
+        .iter()
+        .filter_map(|(src_node, catch_node)| {
+            let src_block = block_of_node.get(src_node)?;
+            let catch_block = block_of_node.get(catch_node)?;
+            Some((BlockId(*src_block as u32), BlockId(*catch_block as u32)))
+        })
+        .collect();
+
     Ok(SsaBody {
         blocks: ssa_blocks,
         entry: BlockId(0),
         value_defs,
         cfg_node_map,
+        exception_edges,
     })
 }
 
 /// Collect reachable nodes (BFS from entry), filtering by scope and stripping exception edges.
-/// Returns (reachable set, filtered edges as (src, tgt, EdgeKind)).
+/// Returns (reachable set, filtered edges, exception edges as (src_node, catch_node)).
 fn collect_reachable(
     cfg: &Cfg,
     entry: NodeIndex,
     scope: Option<&str>,
     scope_all: bool,
-) -> (HashSet<NodeIndex>, Vec<(NodeIndex, NodeIndex, EdgeKind)>) {
+) -> (HashSet<NodeIndex>, Vec<(NodeIndex, NodeIndex, EdgeKind)>, Vec<(NodeIndex, NodeIndex)>) {
     let mut reachable = HashSet::new();
     let mut edges = Vec::new();
+    let mut exception_edges = Vec::new();
     let mut queue = VecDeque::new();
 
     // Check if a node is in scope
@@ -173,7 +186,7 @@ fn collect_reachable(
         // Entry must be in scope; for top-level, Entry node often has no enclosing_func
         // Accept Entry/Exit nodes regardless of scope
         if !matches!(cfg[entry].kind, StmtKind::Entry | StmtKind::Exit) {
-            return (reachable, edges);
+            return (reachable, edges, exception_edges);
         }
     }
 
@@ -194,6 +207,8 @@ fn collect_reachable(
                 {
                     queue.push_back(target);
                 }
+                // Record exception edge for taint seeding
+                exception_edges.push((node, target));
                 continue;
             }
 
@@ -212,7 +227,7 @@ fn collect_reachable(
         }
     }
 
-    (reachable, edges)
+    (reachable, edges, exception_edges)
 }
 
 /// Form basic blocks from filtered CFG nodes.
@@ -614,7 +629,7 @@ fn rename_variables(
                     var_stacks.get(r).and_then(|s| s.last().copied())
                 });
                 let args = if !info.arg_uses.is_empty() {
-                    info.arg_uses
+                    let mut args: Vec<SmallVec<[SsaValue; 2]>> = info.arg_uses
                         .iter()
                         .map(|arg_idents| {
                             arg_idents
@@ -624,7 +639,25 @@ fn rename_variables(
                                 })
                                 .collect()
                         })
-                        .collect()
+                        .collect();
+                    // For chained calls (e.g. fetch(url).then(fn)), arg_uses only
+                    // captures the final call's args. Variables used by intermediate
+                    // calls (like `url` in fetch) are in info.uses but not arg_uses.
+                    // Add them as an extra group so sink detection can see them.
+                    let arg_uses_flat: HashSet<&str> = info.arg_uses
+                        .iter()
+                        .flat_map(|g| g.iter().map(|s| s.as_str()))
+                        .collect();
+                    let implicit: SmallVec<[SsaValue; 2]> = info
+                        .uses
+                        .iter()
+                        .filter(|u| !arg_uses_flat.contains(u.as_str()))
+                        .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
+                        .collect();
+                    if !implicit.is_empty() {
+                        args.push(implicit);
+                    }
+                    args
                 } else {
                     // Fallback: treat all uses as a single argument group
                     let all_uses: SmallVec<[SsaValue; 2]> = info
@@ -652,7 +685,10 @@ fn rename_variables(
                 SsaOp::CatchParam
             } else if info.labels.iter().any(|l| {
                 matches!(l, crate::labels::DataLabel::Source(_))
-            }) {
+            }) && info.callee.is_none() {
+                // Pure source (e.g. $_GET, env var) — no callee, so no args to track.
+                // Source-labeled calls (e.g. file_get_contents) fall through to Call
+                // so argument taint and sink detection still work.
                 SsaOp::Source
             } else if info.callee.is_some() {
                 let callee = info.callee.as_deref().unwrap_or("").to_string();
@@ -865,25 +901,44 @@ fn rename_variables(
 
     // Process orphan blocks (e.g. catch blocks disconnected after exception edge removal).
     // These blocks have no predecessors and weren't reached by the dominator tree walk.
-    for bid in 1..num_blocks {
-        if block_preds[bid].is_empty() && ssa_blocks[bid].body.is_empty() {
-            process_block(
-                bid,
-                cfg,
-                blocks_nodes,
-                block_succs,
-                block_preds,
-                phi_placements,
-                dom_tree_children,
-                filtered_edges,
-                &mut var_stacks,
-                &mut ssa_blocks,
-                &mut phi_values,
-                &mut value_defs,
-                &mut cfg_node_map,
-                &mut next_value,
-                nop_nodes,
-            );
+    //
+    // Rebuild var_stacks from already-processed instructions so that catch blocks
+    // can reference variables defined before the try block (e.g. `userInput`).
+    let has_orphans = (1..num_blocks).any(|bid| {
+        block_preds[bid].is_empty() && ssa_blocks[bid].body.is_empty()
+    });
+    if has_orphans {
+        // Rebuild var_stacks from all SSA instructions created during the main walk.
+        // This gives orphan blocks access to all variable definitions.
+        var_stacks.clear();
+        for block in &ssa_blocks {
+            for inst in block.phis.iter().chain(block.body.iter()) {
+                if let Some(ref name) = inst.var_name {
+                    var_stacks.entry(name.clone()).or_default().push(inst.value);
+                }
+            }
+        }
+
+        for bid in 1..num_blocks {
+            if block_preds[bid].is_empty() && ssa_blocks[bid].body.is_empty() {
+                process_block(
+                    bid,
+                    cfg,
+                    blocks_nodes,
+                    block_succs,
+                    block_preds,
+                    phi_placements,
+                    dom_tree_children,
+                    filtered_edges,
+                    &mut var_stacks,
+                    &mut ssa_blocks,
+                    &mut phi_values,
+                    &mut value_defs,
+                    &mut cfg_node_map,
+                    &mut next_value,
+                    nop_nodes,
+                );
+            }
         }
     }
 

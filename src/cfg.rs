@@ -1346,7 +1346,12 @@ fn push_node<'a>(
             arg_uses.insert(0, vec![recv_text.clone()]);
             Some(recv_text)
         } else {
-            None
+            // Complex receiver (e.g. chained call: name.replace(...).replace(...))
+            // Use root_receiver_text to find the root identifier so taint can
+            // flow through the chain.
+            root_receiver_text(cn, lang, code).inspect(|recv_text| {
+                arg_uses.insert(0, vec![recv_text.clone()]);
+            })
         }
     } else {
         None

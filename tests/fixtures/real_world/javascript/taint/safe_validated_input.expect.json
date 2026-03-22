@@ -1,0 +1,15 @@
+{
+  "description": "req.query.id is parsed with parseInt and validated with isNaN — taint should be suppressed.",
+  "tags": ["taint", "negative", "xss", "validation"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [3, 11],
+      "evidence_contains": [],
+      "notes": "parseInt + isNaN validation should suppress taint flow to res.send"
+    }
+  ]
+}

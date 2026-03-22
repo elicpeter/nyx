@@ -1,0 +1,15 @@
+{
+  "description": "Command injection via req.query.cmd flowing into child_process.exec with TypeScript type annotations.",
+  "tags": ["taint", "cmdi", "express", "exec", "typescript"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 10],
+      "evidence_contains": [],
+      "notes": "req.query.cmd flows into child_process.exec — command injection"
+    }
+  ]
+}

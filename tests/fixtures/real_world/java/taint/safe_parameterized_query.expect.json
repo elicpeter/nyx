@@ -1,0 +1,14 @@
+{
+  "description": "Safe parameterized SQL query: user input bound via PreparedStatement placeholder, no SQL injection",
+  "tags": [
+    "taint",
+    "sqli",
+    "servlet",
+    "safe",
+    "parameterized"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
+}

@@ -1,0 +1,6 @@
+{
+  "description": "Hardcoded string passed to child_process.exec — no taint source, no finding expected.",
+  "tags": ["taint", "negative", "cmdi"],
+  "modes": ["full"],
+  "expected": []
+}

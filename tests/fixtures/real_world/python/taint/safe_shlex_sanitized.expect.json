@@ -1,0 +1,26 @@
+{
+  "description": "Safe command execution: user input sanitized with shlex.quote before passing to os.system",
+  "tags": [
+    "taint",
+    "cmdi",
+    "flask",
+    "safe",
+    "sanitizer"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        8,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "shlex.quote sanitizes shell metacharacters; should not fire if sanitizer is recognized"
+    }
+  ]
+}

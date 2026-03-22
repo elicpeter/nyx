@@ -1,0 +1,26 @@
+{
+  "description": "Path traversal: req.query.file flows into fs.readFile filename argument",
+  "tags": [
+    "taint",
+    "path-traversal",
+    "express",
+    "fs",
+    "callback"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        10
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.file flows directly into fs.readFile as filename argument (path traversal)"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "description": "XSS through ternary expression: req.query.name flows through conditional to res.send",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "ternary"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        3,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.name flows through ternary expression to res.send; must_match false because ternary taint propagation may not be fully modeled"
+    }
+  ]
+}

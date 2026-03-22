@@ -109,10 +109,6 @@ fn scan_with_backend(fixture: &Fixture, legacy: bool) -> Vec<Diag> {
     diags
 }
 
-fn is_js_ts(lang: &str) -> bool {
-    matches!(lang, "javascript" | "typescript")
-}
-
 // ── Main test ─────────────────────────────────────────────────────────────
 
 #[test]
@@ -124,7 +120,6 @@ fn ssa_legacy_corpus_equivalence() {
     }
 
     let mut divergences: Vec<(String, String, Vec<String>, Vec<String>)> = Vec::new();
-    let mut js_warnings: Vec<String> = Vec::new();
 
     for fixture in &fixtures {
         let ssa_diags = scan_with_backend(fixture, false);
@@ -143,40 +138,19 @@ fn ssa_legacy_corpus_equivalence() {
                 .map(|(id, line)| format!("  Legacy-only: {} L{}", id, line))
                 .collect();
 
-            if is_js_ts(&fixture.lang) {
-                // JS/TS: warning only
-                js_warnings.push(format!(
-                    "JS/TS DIVERGENCE in {}:\n{}\n{}",
-                    fixture.name,
-                    ssa_only.join("\n"),
-                    legacy_only.join("\n"),
-                ));
-            } else {
-                divergences.push((
-                    fixture.name.clone(),
-                    fixture.lang.clone(),
-                    ssa_only,
-                    legacy_only,
-                ));
-            }
+            divergences.push((
+                fixture.name.clone(),
+                fixture.lang.clone(),
+                ssa_only,
+                legacy_only,
+            ));
         }
     }
 
-    // Report JS/TS warnings
-    if !js_warnings.is_empty() {
-        eprintln!(
-            "\n=== JS/TS SSA divergences ({} fixtures, warnings only) ===",
-            js_warnings.len()
-        );
-        for w in &js_warnings {
-            eprintln!("{}", w);
-        }
-    }
-
-    // Report non-JS/TS divergences (hard failures)
+    // Report all divergences
     if !divergences.is_empty() {
         eprintln!(
-            "\n=== Non-JS/TS SSA divergences ({} fixtures) ===",
+            "\n=== SSA divergences ({} fixtures) ===",
             divergences.len()
         );
         for (name, lang, ssa_only, legacy_only) in &divergences {
@@ -190,24 +164,22 @@ fn ssa_legacy_corpus_equivalence() {
         }
     }
 
-    // Track divergence count for monitoring.
-    // Current pre-existing divergences from Phase 1.5 are expected (SSA doesn't yet
-    // match legacy for all patterns). This test tracks them so regressions are visible.
-    // TODO: tighten this assertion as SSA gaps are closed.
     let total_diverged = divergences.len();
     eprintln!(
-        "\nSummary: {} non-JS/TS divergences, {} JS/TS warnings, {} total fixtures",
+        "\nSummary: {} divergences across all languages, {} total fixtures",
         total_diverged,
-        js_warnings.len(),
         fixtures.len()
     );
 
-    // Fail only if divergence count increases beyond known baseline.
-    // As of Phase 2 implementation, 11 non-JS/TS fixtures have known divergences.
-    const KNOWN_DIVERGENCE_BASELINE: usize = 11;
+    // SSA is now the default for all languages including JS/TS.
+    // Remaining divergences are either:
+    //   - Phase 1 bugs (string concat, exception paths, predicate over-suppression)
+    //   - SSA improvements: more precise cross-function isolation
+    //     (receiver_taint_resolved, multi_method_xss)
+    const KNOWN_DIVERGENCE_BASELINE: usize = 10;
     assert!(
         total_diverged <= KNOWN_DIVERGENCE_BASELINE,
-        "SSA divergence regression: {} non-JS/TS fixtures diverged (baseline: {})",
+        "SSA divergence regression: {} fixtures diverged (baseline: {})",
         total_diverged,
         KNOWN_DIVERGENCE_BASELINE,
     );

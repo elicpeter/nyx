@@ -1,0 +1,15 @@
+{
+  "description": "SSRF via req.query.url flowing into fetch through async/await.",
+  "tags": ["taint", "ssrf", "express", "fetch", "async-await"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 9],
+      "evidence_contains": [],
+      "notes": "req.query.url flows into fetch via async/await — SSRF"
+    }
+  ]
+}
