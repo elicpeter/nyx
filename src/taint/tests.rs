@@ -4,6 +4,139 @@ use crate::interop::InteropEdge;
 use crate::labels::Cap;
 use crate::symbol::FuncKey;
 
+// ── SSA-specific taint tests ─────────────────────────────────────────────
+
+/// Helper: run SSA taint analysis on Rust source.
+fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
+    use crate::cfg::build_cfg;
+    use crate::state::symbol::SymbolInterner;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter::Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src, None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let interner = SymbolInterner::from_cfg(&cfg);
+    let ssa = crate::ssa::lower_to_ssa(&cfg, entry, None, true)
+        .expect("SSA lowering should succeed");
+
+    let transfer = ssa_transfer::SsaTaintTransfer {
+        lang: Lang::Rust,
+        namespace: "test.rs",
+        interner: &interner,
+        local_summaries: &summaries,
+        global_summaries: None,
+        interop_edges: &[],
+    };
+    let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &transfer);
+    let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
+    findings.sort_by_key(|f| (f.sink.index(), f.source.index()));
+    findings.dedup_by_key(|f| (f.sink, f.source));
+    findings
+}
+
+#[test]
+fn ssa_linear_source_to_sink() {
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("DANGEROUS_ARG").unwrap();
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(findings.len(), 1, "SSA: linear source→sink should produce 1 finding");
+}
+
+#[test]
+fn ssa_linear_sanitized_no_finding() {
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let clean = shell_escape::unix::escape(&x);
+            Command::new("sh").arg(clean).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        findings.is_empty(),
+        "SSA: matching sanitizer should eliminate finding"
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint() {
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let x = "safe_constant";
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        findings.is_empty(),
+        "SSA: reassignment to constant should kill taint"
+    );
+}
+
+#[test]
+fn ssa_taint_through_branch_merge() {
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let safe = html_escape::encode_safe(&x);
+            if x.len() > 5 {
+                Command::new("sh").arg(&x).status().unwrap();
+            } else {
+                Command::new("sh").arg(&safe).status().unwrap();
+            }
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        findings.len() >= 1,
+        "SSA: taint through branch should produce at least 1 finding"
+    );
+}
+
+#[test]
+fn ssa_taint_through_loop() {
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let mut x = env::var("DANGEROUS").unwrap();
+            while x.len() < 100 {
+                x.push_str("a");
+            }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(
+        findings.len(),
+        1,
+        "SSA: taint through loop should produce 1 finding"
+    );
+}
+
+#[test]
+fn ssa_multi_variable_independence() {
+    // Independent variables should not interfere
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("TAINTED").unwrap();
+            let y = "safe";
+            Command::new("sh").arg(y).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        findings.is_empty(),
+        "SSA: untainted variable at sink should produce no finding"
+    );
+}
+
 #[test]
 fn env_to_arg_is_flagged() {
     use crate::cfg::build_cfg;
@@ -3102,4 +3235,189 @@ fn taint_origin_preserved_through_branch_merge() {
             "source callee must not be None after branch merge"
         );
     }
+}
+
+// ── SSA / Legacy Output-Equivalence Tests ─────────────────────────────────
+
+/// Run both legacy and SSA taint analysis on the same Rust source and assert
+/// that they produce the same findings (by source/sink/source_kind triple).
+fn assert_ssa_legacy_equivalence(src: &[u8]) {
+    use crate::cfg::build_cfg;
+    use crate::state::symbol::SymbolInterner;
+    use std::collections::HashSet;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter::Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src, None).unwrap();
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+
+    // Legacy
+    let legacy_findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    // SSA
+    let interner = SymbolInterner::from_cfg(&cfg);
+    let ssa = crate::ssa::lower_to_ssa(&cfg, entry, None, true)
+        .expect("SSA lowering should succeed");
+    let ssa_xfer = ssa_transfer::SsaTaintTransfer {
+        lang: Lang::Rust,
+        namespace: "test.rs",
+        interner: &interner,
+        local_summaries: &summaries,
+        global_summaries: None,
+        interop_edges: &[],
+    };
+    let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
+    ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
+    ssa_findings.dedup_by_key(|f| (f.sink, f.source));
+
+    // Compare by (source, sink)
+    let legacy_set: HashSet<_> = legacy_findings
+        .iter()
+        .map(|f| (f.source.index(), f.sink.index()))
+        .collect();
+    let ssa_set: HashSet<_> = ssa_findings
+        .iter()
+        .map(|f| (f.source.index(), f.sink.index()))
+        .collect();
+
+    assert_eq!(
+        legacy_set, ssa_set,
+        "SSA/legacy finding mismatch.\nLegacy: {legacy_set:?}\nSSA: {ssa_set:?}"
+    );
+}
+
+#[test]
+fn equiv_env_to_arg() {
+    assert_ssa_legacy_equivalence(br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("DANGEROUS_ARG").unwrap();
+            Command::new("sh").arg(x).status().unwrap();
+        }"#);
+}
+
+#[test]
+fn equiv_taint_through_if_else() {
+    assert_ssa_legacy_equivalence(br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let safe = html_escape::encode_safe(&x);
+            if x.len() > 5 {
+                Command::new("sh").arg(&x).status().unwrap();
+            } else {
+                Command::new("sh").arg(&safe).status().unwrap();
+            }
+        }"#);
+}
+
+#[test]
+fn equiv_taint_through_while_loop() {
+    assert_ssa_legacy_equivalence(br#"
+        use std::{env, process::Command};
+        fn main() {
+            let mut x = env::var("DANGEROUS").unwrap();
+            while x.len() < 100 {
+                x.push_str("a");
+            }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#);
+}
+
+#[test]
+fn equiv_killed_by_matching_sanitizer() {
+    assert_ssa_legacy_equivalence(br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let clean = shell_escape::unix::escape(&x);
+            Command::new("sh").arg(clean).status().unwrap();
+        }"#);
+}
+
+#[test]
+fn equiv_wrong_sanitizer_preserves_taint() {
+    assert_ssa_legacy_equivalence(br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            let escaped = html_escape::encode_safe(&x);
+            Command::new("sh").arg(escaped).status().unwrap();
+        }"#);
+}
+
+#[test]
+fn equiv_php_echo_simple_var() {
+    use crate::state::symbol::SymbolInterner;
+    let src = b"<?php\n$x = $_POST['data'];\necho $x;\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+
+    let legacy = analyse_file(&cfg, entry, &summaries, None, Lang::Php, "test.php", &[]);
+
+    let interner = SymbolInterner::from_cfg(&cfg);
+    let ssa = crate::ssa::lower_to_ssa(&cfg, entry, None, true).expect("SSA lowering");
+    let ssa_xfer = ssa_transfer::SsaTaintTransfer {
+        lang: Lang::Php,
+        namespace: "test.php",
+        interner: &interner,
+        local_summaries: &summaries,
+        global_summaries: None,
+        interop_edges: &[],
+    };
+    let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
+    ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
+    ssa_findings.dedup_by_key(|f| (f.sink, f.source));
+
+    let legacy_set: std::collections::HashSet<_> = legacy.iter().map(|f| (f.source.index(), f.sink.index())).collect();
+    let ssa_set: std::collections::HashSet<_> = ssa_findings.iter().map(|f| (f.source.index(), f.sink.index())).collect();
+    assert_eq!(legacy_set, ssa_set, "PHP echo SSA/legacy mismatch");
+}
+
+#[test]
+fn equiv_c_curl_handle_ssrf() {
+    use crate::state::symbol::SymbolInterner;
+    let src = b"#include <stdlib.h>\n#include <curl/curl.h>\n\
+        void fetch() {\n  char *url = getenv(\"TARGET\");\n  \
+        CURL *curl = curl_easy_init();\n  \
+        curl_easy_setopt(curl, CURLOPT_URL, url);\n  \
+        curl_easy_perform(curl);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
+
+    let legacy = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[]);
+
+    let interner = SymbolInterner::from_cfg(&cfg);
+    let ssa = crate::ssa::lower_to_ssa(&cfg, entry, None, true).expect("SSA lowering");
+    let ssa_xfer = ssa_transfer::SsaTaintTransfer {
+        lang: Lang::C,
+        namespace: "test.c",
+        interner: &interner,
+        local_summaries: &summaries,
+        global_summaries: None,
+        interop_edges: &[],
+    };
+    let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
+    ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
+    ssa_findings.dedup_by_key(|f| (f.sink, f.source));
+
+    let legacy_set: std::collections::HashSet<_> = legacy.iter().map(|f| (f.source.index(), f.sink.index())).collect();
+    let ssa_set: std::collections::HashSet<_> = ssa_findings.iter().map(|f| (f.source.index(), f.sink.index())).collect();
+    assert_eq!(legacy_set, ssa_set, "curl SSA/legacy mismatch");
+}
+
+#[test]
+fn equiv_validate_and_early_return() {
+    assert_ssa_legacy_equivalence(br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if !validate(&x) { return; }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#);
 }

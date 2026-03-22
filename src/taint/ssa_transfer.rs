@@ -1,0 +1,1172 @@
+use crate::callgraph::normalize_callee_name;
+use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
+use crate::interop::InteropEdge;
+use crate::labels::{Cap, DataLabel, SourceKind};
+use crate::ssa::ir::*;
+use crate::state::lattice::Lattice;
+use crate::summary::{CalleeResolution, GlobalSummaries};
+use crate::symbol::Lang;
+use crate::state::symbol::{SymbolId, SymbolInterner};
+use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint, predicate_kind_bit};
+use crate::taint::path_state::{PredicateKind, classify_condition};
+use petgraph::graph::NodeIndex;
+use smallvec::SmallVec;
+use std::collections::VecDeque;
+
+/// Maximum origins tracked per SSA value.
+const MAX_ORIGINS: usize = 4;
+
+// ── SSA Taint State ─────────────────────────────────────────────────────
+
+/// Taint state keyed by SsaValue instead of SymbolId.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SsaTaintState {
+    /// Per-SSA-value taint, sorted by SsaValue for O(n) merge-join.
+    pub values: SmallVec<[(SsaValue, VarTaint); 16]>,
+    /// Variables validated on ALL paths (intersection on join). Keyed by SymbolId.
+    pub validated_must: SmallBitSet,
+    /// Variables validated on ANY path (union on join). Keyed by SymbolId.
+    pub validated_may: SmallBitSet,
+    /// Per-variable predicate summary (sorted by SymbolId, intersection on join).
+    pub predicates: SmallVec<[(SymbolId, PredicateSummary); 4]>,
+}
+
+impl SsaTaintState {
+    pub fn initial() -> Self {
+        Self {
+            values: SmallVec::new(),
+            validated_must: SmallBitSet::empty(),
+            validated_may: SmallBitSet::empty(),
+            predicates: SmallVec::new(),
+        }
+    }
+
+    /// Check if any variable has contradictory predicates.
+    pub fn has_contradiction(&self) -> bool {
+        self.predicates.iter().any(|(_, s)| s.has_contradiction())
+    }
+
+    pub fn get(&self, v: SsaValue) -> Option<&VarTaint> {
+        self.values
+            .binary_search_by_key(&v, |(id, _)| *id)
+            .ok()
+            .map(|idx| &self.values[idx].1)
+    }
+
+    pub fn set(&mut self, v: SsaValue, taint: VarTaint) {
+        match self.values.binary_search_by_key(&v, |(id, _)| *id) {
+            Ok(idx) => self.values[idx].1 = taint,
+            Err(idx) => self.values.insert(idx, (v, taint)),
+        }
+    }
+
+    pub fn remove(&mut self, v: SsaValue) {
+        if let Ok(idx) = self.values.binary_search_by_key(&v, |(id, _)| *id) {
+            self.values.remove(idx);
+        }
+    }
+}
+
+impl Lattice for SsaTaintState {
+    fn bot() -> Self {
+        Self::initial()
+    }
+
+    fn join(&self, other: &Self) -> Self {
+        let values = merge_join_ssa_vars(&self.values, &other.values);
+        let validated_must = self.validated_must.intersection(other.validated_must);
+        let validated_may = self.validated_may.union(other.validated_may);
+        let predicates = merge_join_ssa_predicates(&self.predicates, &other.predicates);
+        SsaTaintState { values, validated_must, validated_may, predicates }
+    }
+
+    fn leq(&self, other: &Self) -> bool {
+        if !ssa_vars_leq(&self.values, &other.values) {
+            return false;
+        }
+        if !self.validated_must.is_superset_of(other.validated_must) {
+            return false;
+        }
+        if !self.validated_may.is_subset_of(other.validated_may) {
+            return false;
+        }
+        true
+    }
+}
+
+/// Merge-join two sorted SSA var lists.
+fn merge_join_ssa_vars(
+    a: &[(SsaValue, VarTaint)],
+    b: &[(SsaValue, VarTaint)],
+) -> SmallVec<[(SsaValue, VarTaint); 16]> {
+    let mut result = SmallVec::with_capacity(a.len().max(b.len()));
+    let (mut i, mut j) = (0, 0);
+
+    while i < a.len() && j < b.len() {
+        match a[i].0.cmp(&b[j].0) {
+            std::cmp::Ordering::Less => {
+                result.push(a[i].clone());
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                result.push(b[j].clone());
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                let caps = a[i].1.caps | b[j].1.caps;
+                let origins = merge_origins(&a[i].1.origins, &b[j].1.origins);
+                result.push((a[i].0, VarTaint { caps, origins }));
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+
+    while i < a.len() {
+        result.push(a[i].clone());
+        i += 1;
+    }
+    while j < b.len() {
+        result.push(b[j].clone());
+        j += 1;
+    }
+
+    result
+}
+
+fn merge_origins(
+    a: &SmallVec<[TaintOrigin; 2]>,
+    b: &SmallVec<[TaintOrigin; 2]>,
+) -> SmallVec<[TaintOrigin; 2]> {
+    let mut merged = a.clone();
+    for origin in b {
+        if merged.len() >= MAX_ORIGINS {
+            break;
+        }
+        if !merged.iter().any(|o| o.node == origin.node) {
+            merged.push(*origin);
+        }
+    }
+    merged
+}
+
+#[allow(dead_code)] // called by Lattice::leq
+fn ssa_vars_leq(a: &[(SsaValue, VarTaint)], b: &[(SsaValue, VarTaint)]) -> bool {
+    let (mut i, mut j) = (0, 0);
+
+    while i < a.len() {
+        if j >= b.len() {
+            return false;
+        }
+        match a[i].0.cmp(&b[j].0) {
+            std::cmp::Ordering::Less => return false,
+            std::cmp::Ordering::Greater => {
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                if a[i].1.caps & b[j].1.caps != a[i].1.caps {
+                    return false;
+                }
+                for orig in &a[i].1.origins {
+                    if !b[j].1.origins.iter().any(|o| o.node == orig.node) {
+                        return false;
+                    }
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    true
+}
+
+/// Merge-join predicate summaries with intersection semantics.
+fn merge_join_ssa_predicates(
+    a: &[(SymbolId, PredicateSummary)],
+    b: &[(SymbolId, PredicateSummary)],
+) -> SmallVec<[(SymbolId, PredicateSummary); 4]> {
+    let mut result = SmallVec::new();
+    let (mut i, mut j) = (0, 0);
+
+    while i < a.len() && j < b.len() {
+        match a[i].0.cmp(&b[j].0) {
+            std::cmp::Ordering::Less => { i += 1; }
+            std::cmp::Ordering::Greater => { j += 1; }
+            std::cmp::Ordering::Equal => {
+                let joined = a[i].1.join(b[j].1);
+                if !joined.is_empty() {
+                    result.push((a[i].0, joined));
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    result
+}
+
+// ── SSA Taint Events ────────────────────────────────────────────────────
+
+/// Event emitted when taint reaches a sink in SSA analysis.
+#[derive(Clone, Debug)]
+pub struct SsaTaintEvent {
+    pub sink_node: NodeIndex,
+    pub tainted_values: Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>,
+    #[allow(dead_code)]
+    pub sink_caps: Cap,
+    pub all_validated: bool,
+    pub guard_kind: Option<PredicateKind>,
+}
+
+// ── SSA Taint Transfer ──────────────────────────────────────────────────
+
+/// Configuration for SSA taint analysis.
+pub struct SsaTaintTransfer<'a> {
+    pub lang: Lang,
+    pub namespace: &'a str,
+    pub interner: &'a SymbolInterner,
+    pub local_summaries: &'a FuncSummaries,
+    pub global_summaries: Option<&'a GlobalSummaries>,
+    pub interop_edges: &'a [InteropEdge],
+}
+
+/// Run SSA-based taint analysis.
+///
+/// Block-level worklist: converge states, then single pass to emit events.
+pub fn run_ssa_taint(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    transfer: &SsaTaintTransfer,
+) -> Vec<SsaTaintEvent> {
+    let num_blocks = ssa.blocks.len();
+
+    // Per-block entry states
+    let mut block_states: Vec<Option<SsaTaintState>> = vec![None; num_blocks];
+    block_states[ssa.entry.0 as usize] = Some(SsaTaintState::initial());
+
+    // Phase 1: fixed-point iteration
+    let mut worklist: VecDeque<usize> = VecDeque::new();
+    worklist.push_back(ssa.entry.0 as usize);
+    let mut iterations: usize = 0;
+    const BUDGET: usize = 100_000;
+
+    while let Some(bid) = worklist.pop_front() {
+        iterations += 1;
+        if iterations > BUDGET {
+            tracing::warn!("SSA taint: worklist budget exceeded");
+            break;
+        }
+
+        let entry_state = match &block_states[bid] {
+            Some(s) => s.clone(),
+            None => continue,
+        };
+
+        let block = &ssa.blocks[bid];
+        let exit_state = transfer_block(block, cfg, ssa, transfer, entry_state);
+
+        // Build per-successor states (branch-aware for Branch terminators)
+        let succ_states = compute_succ_states(block, cfg, transfer, &exit_state);
+
+        // Propagate to successors
+        for (succ_id, succ_state) in succ_states {
+            let succ_idx = succ_id.0 as usize;
+
+            let new_succ_state = match &block_states[succ_idx] {
+                Some(existing) => existing.join(&succ_state),
+                None => succ_state,
+            };
+
+            let changed = block_states[succ_idx]
+                .as_ref()
+                .is_none_or(|existing| *existing != new_succ_state);
+
+            if changed {
+                block_states[succ_idx] = Some(new_succ_state);
+                if !worklist.contains(&succ_idx) {
+                    worklist.push_back(succ_idx);
+                }
+            }
+        }
+    }
+
+    // Phase 2: single pass over converged states to collect events
+    let mut events: Vec<SsaTaintEvent> = Vec::new();
+
+    for bid in 0..num_blocks {
+        let entry_state = match &block_states[bid] {
+            Some(s) => s.clone(),
+            None => continue,
+        };
+
+        let block = &ssa.blocks[bid];
+        collect_block_events(block, cfg, ssa, transfer, entry_state, &mut events);
+    }
+
+    events
+}
+
+/// Transfer a single block: process phis then body, return exit state.
+fn transfer_block(
+    block: &SsaBlock,
+    cfg: &Cfg,
+    ssa: &SsaBody,
+    transfer: &SsaTaintTransfer,
+    mut state: SsaTaintState,
+) -> SsaTaintState {
+    // Process phis
+    for phi in &block.phis {
+        if let SsaOp::Phi(ref operands) = phi.op {
+            let mut combined_caps = Cap::empty();
+            let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+
+            for &(_pred_blk, operand_val) in operands {
+                if let Some(taint) = state.get(operand_val) {
+                    combined_caps |= taint.caps;
+                    for orig in &taint.origins {
+                        if combined_origins.len() < MAX_ORIGINS
+                            && !combined_origins.iter().any(|o| o.node == orig.node)
+                        {
+                            combined_origins.push(*orig);
+                        }
+                    }
+                }
+            }
+
+            if combined_caps.is_empty() {
+                state.remove(phi.value);
+            } else {
+                state.set(
+                    phi.value,
+                    VarTaint {
+                        caps: combined_caps,
+                        origins: combined_origins,
+                    },
+                );
+            }
+        }
+    }
+
+    // Process body
+    for inst in &block.body {
+        transfer_inst(inst, cfg, ssa, transfer, &mut state);
+    }
+
+    state
+}
+
+/// Compute per-successor states with branch-aware predicate handling.
+///
+/// For `Branch` terminators, inspects the condition node for validation/predicate
+/// info and produces specialized true/false states. For other terminators,
+/// propagates the exit state uniformly.
+fn compute_succ_states(
+    block: &SsaBlock,
+    cfg: &Cfg,
+    transfer: &SsaTaintTransfer,
+    exit_state: &SsaTaintState,
+) -> SmallVec<[(BlockId, SsaTaintState); 2]> {
+    match &block.terminator {
+        Terminator::Branch { cond, true_blk, false_blk } => {
+            let cond_info = &cfg[*cond];
+            if cond_info.kind == crate::cfg::StmtKind::If && !cond_info.condition_vars.is_empty() {
+                let cond_text = cond_info.condition_text.as_deref().unwrap_or("");
+                let kind = classify_condition(cond_text);
+
+                let mut true_state = exit_state.clone();
+                let mut false_state = exit_state.clone();
+
+                // True edge polarity: condition_negated XOR true
+                let true_polarity = !cond_info.condition_negated;
+                let false_polarity = cond_info.condition_negated;
+
+                // Apply validation/predicate to true branch
+                apply_branch_predicates(
+                    &mut true_state,
+                    &cond_info.condition_vars,
+                    kind,
+                    true_polarity,
+                    transfer.interner,
+                );
+                // Apply validation/predicate to false branch
+                apply_branch_predicates(
+                    &mut false_state,
+                    &cond_info.condition_vars,
+                    kind,
+                    false_polarity,
+                    transfer.interner,
+                );
+
+                // Contradiction pruning
+                if true_state.has_contradiction() {
+                    true_state = SsaTaintState::bot();
+                }
+                if false_state.has_contradiction() {
+                    false_state = SsaTaintState::bot();
+                }
+
+                smallvec::smallvec![
+                    (*true_blk, true_state),
+                    (*false_blk, false_state),
+                ]
+            } else {
+                // Non-If condition or no condition vars — uniform propagation
+                smallvec::smallvec![
+                    (*true_blk, exit_state.clone()),
+                    (*false_blk, exit_state.clone()),
+                ]
+            }
+        }
+        Terminator::Goto(target) => {
+            smallvec::smallvec![(*target, exit_state.clone())]
+        }
+        Terminator::Return | Terminator::Unreachable => {
+            SmallVec::new()
+        }
+    }
+}
+
+/// Apply validation and predicate bits for a branch edge.
+fn apply_branch_predicates(
+    state: &mut SsaTaintState,
+    condition_vars: &[String],
+    kind: PredicateKind,
+    polarity: bool,
+    interner: &SymbolInterner,
+) {
+    // ValidationCall: mark condition vars as validated when polarity is true
+    if kind == PredicateKind::ValidationCall && polarity {
+        for var in condition_vars {
+            if let Some(sym) = interner.get(var) {
+                state.validated_may.insert(sym);
+                state.validated_must.insert(sym);
+            }
+        }
+    }
+
+    // Whitelisted predicate kinds: update PredicateSummary bits
+    if let Some(bit_idx) = predicate_kind_bit(kind) {
+        for var in condition_vars {
+            if let Some(sym) = interner.get(var) {
+                let mut summary = state.predicates
+                    .binary_search_by_key(&sym, |(id, _)| *id)
+                    .ok()
+                    .map(|idx| state.predicates[idx].1)
+                    .unwrap_or_else(PredicateSummary::empty);
+                if polarity {
+                    summary.known_true |= 1 << bit_idx;
+                } else {
+                    summary.known_false |= 1 << bit_idx;
+                }
+                match state.predicates.binary_search_by_key(&sym, |(id, _)| *id) {
+                    Ok(idx) => state.predicates[idx].1 = summary,
+                    Err(idx) => state.predicates.insert(idx, (sym, summary)),
+                }
+            }
+        }
+    }
+}
+
+/// Transfer a single SSA instruction.
+fn transfer_inst(
+    inst: &SsaInst,
+    cfg: &Cfg,
+    _ssa: &SsaBody,
+    transfer: &SsaTaintTransfer,
+    state: &mut SsaTaintState,
+) {
+    let info = &cfg[inst.cfg_node];
+
+    match &inst.op {
+        SsaOp::Source => {
+            // Apply source labels from NodeInfo
+            let mut source_caps = Cap::empty();
+            for lbl in &info.labels {
+                if let DataLabel::Source(bits) = lbl {
+                    source_caps |= *bits;
+                }
+            }
+            if !source_caps.is_empty() {
+                let callee = info.callee.as_deref().unwrap_or("");
+                let source_kind = crate::labels::infer_source_kind(source_caps, callee);
+                let origin = TaintOrigin {
+                    node: inst.cfg_node,
+                    source_kind,
+                };
+                state.set(
+                    inst.value,
+                    VarTaint {
+                        caps: source_caps,
+                        origins: SmallVec::from_elem(origin, 1),
+                    },
+                );
+            }
+        }
+
+        SsaOp::CatchParam => {
+            let origin = TaintOrigin {
+                node: inst.cfg_node,
+                source_kind: SourceKind::CaughtException,
+            };
+            state.set(
+                inst.value,
+                VarTaint {
+                    caps: Cap::all(),
+                    origins: SmallVec::from_elem(origin, 1),
+                },
+            );
+        }
+
+        SsaOp::Call {
+            callee,
+            args,
+            receiver,
+        } => {
+            // Check for source labels first
+            let mut return_bits = Cap::empty();
+            let mut return_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+
+            for lbl in &info.labels {
+                if let DataLabel::Source(bits) = lbl {
+                    return_bits |= *bits;
+                    let callee_str = info.callee.as_deref().unwrap_or("");
+                    let source_kind = crate::labels::infer_source_kind(*bits, callee_str);
+                    let origin = TaintOrigin {
+                        node: inst.cfg_node,
+                        source_kind,
+                    };
+                    if !return_origins.iter().any(|o| o.node == inst.cfg_node) {
+                        return_origins.push(origin);
+                    }
+                }
+            }
+
+            // Check for sanitizer labels
+            let mut sanitizer_bits = Cap::empty();
+            for lbl in &info.labels {
+                if let DataLabel::Sanitizer(bits) = lbl {
+                    sanitizer_bits |= *bits;
+                }
+            }
+
+            // Resolve callee summary
+            let caller_func = info.enclosing_func.as_deref().unwrap_or("");
+            let has_label = info
+                .labels
+                .iter()
+                .any(|l| matches!(l, DataLabel::Source(_) | DataLabel::Sanitizer(_)));
+
+            let mut resolved_callee = false;
+            if !has_label {
+                if let Some(resolved) =
+                    resolve_callee(transfer, callee, caller_func, info.call_ordinal)
+                {
+                    resolved_callee = true;
+
+                    if !resolved.source_caps.is_empty() {
+                        return_bits |= resolved.source_caps;
+                        let source_kind = crate::labels::infer_source_kind(
+                            resolved.source_caps,
+                            callee,
+                        );
+                        let origin = TaintOrigin {
+                            node: inst.cfg_node,
+                            source_kind,
+                        };
+                        if !return_origins.iter().any(|o| o.node == inst.cfg_node) {
+                            return_origins.push(origin);
+                        }
+                    }
+
+                    // Propagation
+                    if resolved.propagates_taint {
+                        // Only use positional filtering when original arg_uses is populated
+                        let effective_params = if info.arg_uses.is_empty() {
+                            &[] as &[usize]
+                        } else {
+                            &resolved.propagating_params
+                        };
+                        let (prop_caps, prop_origins) =
+                            collect_args_taint(args, receiver, state, effective_params);
+                        return_bits |= prop_caps;
+                        for orig in &prop_origins {
+                            if return_origins.len() < MAX_ORIGINS
+                                && !return_origins.iter().any(|o| o.node == orig.node)
+                            {
+                                return_origins.push(*orig);
+                            }
+                        }
+                    }
+
+                    // Sanitizer from summary
+                    return_bits &= !resolved.sanitizer_caps;
+                }
+            }
+
+            // Apply explicit sanitizer labels
+            if !sanitizer_bits.is_empty() {
+                // Collect uses taint then strip bits
+                let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
+                return_bits |= use_caps;
+                for orig in &use_origins {
+                    if return_origins.len() < MAX_ORIGINS
+                        && !return_origins.iter().any(|o| o.node == orig.node)
+                    {
+                        return_origins.push(*orig);
+                    }
+                }
+                return_bits &= !sanitizer_bits;
+            } else if !has_label && !resolved_callee {
+                // Curl special case: propagate URL taint to handle
+                if try_curl_url_propagation(inst, info, args, state) {
+                    return;
+                }
+                // No labels and no summary — default propagation (gen/kill)
+                let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
+                if return_bits.is_empty() {
+                    return_bits = use_caps;
+                    return_origins = use_origins;
+                }
+            }
+
+            // Write result
+            if return_bits.is_empty() {
+                state.remove(inst.value);
+            } else {
+                state.set(
+                    inst.value,
+                    VarTaint {
+                        caps: return_bits,
+                        origins: return_origins,
+                    },
+                );
+            }
+        }
+
+        SsaOp::Assign(uses) => {
+            // Check for sanitizer labels
+            let mut sanitizer_bits = Cap::empty();
+            for lbl in &info.labels {
+                if let DataLabel::Sanitizer(bits) = lbl {
+                    sanitizer_bits |= *bits;
+                }
+            }
+
+            // Collect taint from operands
+            let mut combined_caps = Cap::empty();
+            let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+
+            for &use_val in uses {
+                if let Some(taint) = state.get(use_val) {
+                    combined_caps |= taint.caps;
+                    for orig in &taint.origins {
+                        if combined_origins.len() < MAX_ORIGINS
+                            && !combined_origins.iter().any(|o| o.node == orig.node)
+                        {
+                            combined_origins.push(*orig);
+                        }
+                    }
+                }
+            }
+
+            // Apply sanitizer
+            combined_caps &= !sanitizer_bits;
+
+            // Check for source labels
+            for lbl in &info.labels {
+                if let DataLabel::Source(bits) = lbl {
+                    combined_caps |= *bits;
+                    let callee_str = info.callee.as_deref().unwrap_or("");
+                    let source_kind = crate::labels::infer_source_kind(*bits, callee_str);
+                    let origin = TaintOrigin {
+                        node: inst.cfg_node,
+                        source_kind,
+                    };
+                    if combined_origins.len() < MAX_ORIGINS
+                        && !combined_origins.iter().any(|o| o.node == inst.cfg_node)
+                    {
+                        combined_origins.push(origin);
+                    }
+                }
+            }
+
+            if combined_caps.is_empty() {
+                state.remove(inst.value);
+            } else {
+                state.set(
+                    inst.value,
+                    VarTaint {
+                        caps: combined_caps,
+                        origins: combined_origins,
+                    },
+                );
+            }
+        }
+
+        SsaOp::Const | SsaOp::Nop => {
+            // No taint
+        }
+
+        SsaOp::Param { .. } => {
+            // No inherent taint (conservative: could seed from caller context)
+        }
+
+        SsaOp::Phi(_) => {
+            // Phis processed separately above — shouldn't appear in body
+        }
+    }
+}
+
+/// Collect events from a block (Phase 2).
+fn collect_block_events(
+    block: &SsaBlock,
+    cfg: &Cfg,
+    ssa: &SsaBody,
+    transfer: &SsaTaintTransfer,
+    mut state: SsaTaintState,
+    events: &mut Vec<SsaTaintEvent>,
+) {
+    // Replay phis to get accurate state
+    for phi in &block.phis {
+        if let SsaOp::Phi(ref operands) = phi.op {
+            let mut combined_caps = Cap::empty();
+            let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+
+            for &(_pred_blk, operand_val) in operands {
+                if let Some(taint) = state.get(operand_val) {
+                    combined_caps |= taint.caps;
+                    for orig in &taint.origins {
+                        if combined_origins.len() < MAX_ORIGINS
+                            && !combined_origins.iter().any(|o| o.node == orig.node)
+                        {
+                            combined_origins.push(*orig);
+                        }
+                    }
+                }
+            }
+
+            if combined_caps.is_empty() {
+                state.remove(phi.value);
+            } else {
+                state.set(
+                    phi.value,
+                    VarTaint {
+                        caps: combined_caps,
+                        origins: combined_origins,
+                    },
+                );
+            }
+        }
+    }
+
+    // Process body with sink detection
+    for inst in &block.body {
+        transfer_inst(inst, cfg, ssa, transfer, &mut state);
+
+        // Check for sink
+        let info = &cfg[inst.cfg_node];
+        if info.all_args_literal {
+            continue;
+        }
+
+        let sink_caps = resolve_sink_caps(info, transfer);
+        if sink_caps.is_empty() {
+            continue;
+        }
+
+        // Collect tainted SSA values that flow into this sink
+        let tainted = collect_tainted_sink_values(inst, info, &state, sink_caps);
+        if !tainted.is_empty() {
+            // Compute all_validated: check if all tainted vars are validated
+            let all_validated = tainted.iter().all(|(val, _, _)| {
+                let var_name = ssa.value_defs.get(val.0 as usize)
+                    .and_then(|vd| vd.var_name.as_deref());
+                if let Some(name) = var_name {
+                    if let Some(sym) = transfer.interner.get(name) {
+                        return state.validated_may.contains(sym);
+                    }
+                }
+                false
+            });
+            let guard_kind = if all_validated {
+                Some(PredicateKind::ValidationCall)
+            } else {
+                None
+            };
+            events.push(SsaTaintEvent {
+                sink_node: inst.cfg_node,
+                tainted_values: tainted,
+                sink_caps,
+                all_validated,
+                guard_kind,
+            });
+        }
+    }
+}
+
+/// Collect taint from call arguments.
+fn collect_args_taint(
+    args: &[SmallVec<[SsaValue; 2]>],
+    receiver: &Option<SsaValue>,
+    state: &SsaTaintState,
+    propagating_params: &[usize],
+) -> (Cap, SmallVec<[TaintOrigin; 2]>) {
+    let mut combined_caps = Cap::empty();
+    let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+
+    if propagating_params.is_empty() {
+        // Collect from all args + receiver
+        if let Some(rv) = receiver {
+            if let Some(taint) = state.get(*rv) {
+                combined_caps |= taint.caps;
+                for orig in &taint.origins {
+                    if combined_origins.len() < MAX_ORIGINS
+                        && !combined_origins.iter().any(|o| o.node == orig.node)
+                    {
+                        combined_origins.push(*orig);
+                    }
+                }
+            }
+        }
+        for arg_vals in args {
+            for &v in arg_vals {
+                if let Some(taint) = state.get(v) {
+                    combined_caps |= taint.caps;
+                    for orig in &taint.origins {
+                        if combined_origins.len() < MAX_ORIGINS
+                            && !combined_origins.iter().any(|o| o.node == orig.node)
+                        {
+                            combined_origins.push(*orig);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Collect only from propagating param positions
+        let offset = if receiver.is_some() { 1 } else { 0 };
+        for &param_idx in propagating_params {
+            let adj = param_idx + offset;
+            if let Some(arg_vals) = args.get(adj) {
+                for &v in arg_vals {
+                    if let Some(taint) = state.get(v) {
+                        combined_caps |= taint.caps;
+                        for orig in &taint.origins {
+                            if combined_origins.len() < MAX_ORIGINS
+                                && !combined_origins.iter().any(|o| o.node == orig.node)
+                            {
+                                combined_origins.push(*orig);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (combined_caps, combined_origins)
+}
+
+/// Scoped libcurl special case: when `curl_easy_setopt(handle, CURLOPT_URL, value)`
+/// is called and `value` is tainted, propagate that taint to `handle`.
+///
+/// Mirrors `TaintTransfer::try_curl_url_propagation` from `transfer.rs`.
+fn try_curl_url_propagation(
+    inst: &SsaInst,
+    info: &NodeInfo,
+    args: &[SmallVec<[SsaValue; 2]>],
+    state: &mut SsaTaintState,
+) -> bool {
+    if info.defines.is_some() {
+        return false;
+    }
+    let callee = match info.callee.as_deref() {
+        Some(c) if c.ends_with("curl_easy_setopt") => c,
+        _ => return false,
+    };
+    if !info.uses.iter().any(|u| u == "CURLOPT_URL") {
+        return false;
+    }
+    // Identify handle and URL SSA values from args.
+    // Layout: args[0]=handle, args[1]=CURLOPT_URL, args[2]=url_value
+    // But the uses list determines which are which. We need handle = first use
+    // that isn't the callee or CURLOPT_URL.
+    // In SSA form, the args vec gives us positional access.
+    // Handle is first arg, URL value is last arg (skip CURLOPT_URL constant).
+    let handle_val = args.first().and_then(|a| a.first().copied());
+    let handle_val = match handle_val {
+        Some(v) => v,
+        None => return false,
+    };
+
+    // Collect taint from all args except the handle (args[0])
+    let mut url_caps = Cap::empty();
+    let mut url_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+    for arg_vals in args.iter().skip(1) {
+        for &v in arg_vals {
+            if let Some(taint) = state.get(v) {
+                url_caps |= taint.caps;
+                for orig in &taint.origins {
+                    if url_origins.len() < MAX_ORIGINS
+                        && !url_origins.iter().any(|o| o.node == orig.node)
+                    {
+                        url_origins.push(*orig);
+                    }
+                }
+            }
+        }
+    }
+    // Also check info.uses for identifiers that aren't callee, handle, or CURLOPT_URL
+    // in case arg_uses was empty and SSA lowering put all uses into a single group
+    if url_caps.is_empty() {
+        // Fallback: look at all used SSA values except handle
+        let used = inst_use_values(inst);
+        for v in used {
+            if v == handle_val {
+                continue;
+            }
+            if let Some(taint) = state.get(v) {
+                url_caps |= taint.caps;
+                for orig in &taint.origins {
+                    if url_origins.len() < MAX_ORIGINS
+                        && !url_origins.iter().any(|o| o.node == orig.node)
+                    {
+                        url_origins.push(*orig);
+                    }
+                }
+            }
+        }
+    }
+    if url_caps.is_empty() {
+        return false;
+    }
+    // Merge URL taint into handle (monotone: caps OR, origins union)
+    match state.get(handle_val) {
+        Some(existing) => {
+            let mut merged = existing.clone();
+            merged.caps |= url_caps;
+            for orig in &url_origins {
+                if merged.origins.len() < MAX_ORIGINS
+                    && !merged.origins.iter().any(|o| o.node == orig.node)
+                {
+                    merged.origins.push(*orig);
+                }
+            }
+            state.set(handle_val, merged);
+        }
+        None => {
+            state.set(
+                handle_val,
+                VarTaint {
+                    caps: url_caps,
+                    origins: url_origins,
+                },
+            );
+        }
+    }
+
+    // Also write the inst's own value as non-tainted (no defines on this node)
+    let _ = callee;
+    true
+}
+
+/// Resolve sink caps from labels or callee summary.
+fn resolve_sink_caps(info: &NodeInfo, transfer: &SsaTaintTransfer) -> Cap {
+    let label_sink_caps = info.labels.iter().fold(Cap::empty(), |acc, lbl| {
+        if let DataLabel::Sink(caps) = lbl {
+            acc | *caps
+        } else {
+            acc
+        }
+    });
+    if !label_sink_caps.is_empty() {
+        return label_sink_caps;
+    }
+
+    let caller_func = info.enclosing_func.as_deref().unwrap_or("");
+    info.callee
+        .as_ref()
+        .and_then(|c| resolve_callee(transfer, c, caller_func, info.call_ordinal))
+        .filter(|r| !r.sink_caps.is_empty())
+        .map(|r| r.sink_caps)
+        .unwrap_or(Cap::empty())
+}
+
+/// Collect tainted SSA values at a sink instruction.
+fn collect_tainted_sink_values(
+    inst: &SsaInst,
+    info: &NodeInfo,
+    state: &SsaTaintState,
+    sink_caps: Cap,
+) -> Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)> {
+    let mut result = Vec::new();
+
+    // Collect SSA values used by this instruction
+    let used_values = inst_use_values(inst);
+
+    // If gated sink, filter to payload arg positions
+    if let Some(ref positions) = info.sink_payload_args {
+        if let SsaOp::Call { args, receiver, .. } = &inst.op {
+            let offset = if receiver.is_some() { 1 } else { 0 };
+            for &pos in positions {
+                let adj = pos + offset;
+                if let Some(arg_vals) = args.get(adj) {
+                    for &v in arg_vals {
+                        if let Some(taint) = state.get(v) {
+                            if (taint.caps & sink_caps) != Cap::empty() {
+                                result.push((v, taint.caps, taint.origins.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+            return result;
+        }
+    }
+
+    // Check all used values
+    for v in used_values {
+        if let Some(taint) = state.get(v) {
+            if (taint.caps & sink_caps) != Cap::empty() {
+                result.push((v, taint.caps, taint.origins.clone()));
+            }
+        }
+    }
+
+    result
+}
+
+/// Get all SSA values used by an instruction.
+fn inst_use_values(inst: &SsaInst) -> Vec<SsaValue> {
+    match &inst.op {
+        SsaOp::Phi(operands) => operands.iter().map(|(_, v)| *v).collect(),
+        SsaOp::Assign(uses) => uses.to_vec(),
+        SsaOp::Call {
+            args, receiver, ..
+        } => {
+            let mut vals = Vec::new();
+            if let Some(rv) = receiver {
+                vals.push(*rv);
+            }
+            for arg in args {
+                vals.extend(arg.iter());
+            }
+            vals
+        }
+        SsaOp::Source | SsaOp::Const | SsaOp::Param { .. } | SsaOp::CatchParam | SsaOp::Nop => {
+            Vec::new()
+        }
+    }
+}
+
+// ── Callee Resolution (mirrors TaintTransfer::resolve_callee) ───────────
+
+struct ResolvedSummary {
+    source_caps: Cap,
+    sanitizer_caps: Cap,
+    sink_caps: Cap,
+    propagates_taint: bool,
+    propagating_params: Vec<usize>,
+}
+
+fn resolve_callee(
+    transfer: &SsaTaintTransfer,
+    callee: &str,
+    caller_func: &str,
+    call_ordinal: u32,
+) -> Option<ResolvedSummary> {
+    let normalized = normalize_callee_name(callee);
+
+    // 1) Local (same-file)
+    let local_matches: Vec<_> = transfer
+        .local_summaries
+        .iter()
+        .filter(|(k, _)| {
+            k.name == normalized && k.lang == transfer.lang && k.namespace == transfer.namespace
+        })
+        .collect();
+
+    if local_matches.len() == 1 {
+        let (_, ls) = local_matches[0];
+        return Some(ResolvedSummary {
+            source_caps: ls.source_caps,
+            sanitizer_caps: ls.sanitizer_caps,
+            sink_caps: ls.sink_caps,
+            propagates_taint: !ls.propagating_params.is_empty(),
+            propagating_params: ls.propagating_params.clone(),
+        });
+    }
+    if local_matches.len() > 1 {
+        return None;
+    }
+
+    // 2) Global same-language
+    if let Some(gs) = transfer.global_summaries {
+        match gs.resolve_callee_key(normalized, transfer.lang, transfer.namespace, None) {
+            CalleeResolution::Resolved(target_key) => {
+                if let Some(fs) = gs.get(&target_key) {
+                    return Some(ResolvedSummary {
+                        source_caps: fs.source_caps(),
+                        sanitizer_caps: fs.sanitizer_caps(),
+                        sink_caps: fs.sink_caps(),
+                        propagates_taint: fs.propagates_any(),
+                        propagating_params: fs.propagating_params.clone(),
+                    });
+                }
+            }
+            CalleeResolution::NotFound | CalleeResolution::Ambiguous(_) => {}
+        }
+    }
+
+    // 3) Interop edges
+    for edge in transfer.interop_edges {
+        if edge.from.caller_lang == transfer.lang
+            && edge.from.caller_namespace == transfer.namespace
+            && edge.from.callee_symbol == callee
+            && (edge.from.caller_func.is_empty() || edge.from.caller_func == caller_func)
+            && (edge.from.ordinal == 0 || edge.from.ordinal == call_ordinal)
+            && let Some(gs) = transfer.global_summaries
+            && let Some(fs) = gs.get(&edge.to)
+        {
+            return Some(ResolvedSummary {
+                source_caps: fs.source_caps(),
+                sanitizer_caps: fs.sanitizer_caps(),
+                sink_caps: fs.sink_caps(),
+                propagates_taint: fs.propagates_any(),
+                propagating_params: fs.propagating_params.clone(),
+            });
+        }
+    }
+
+    None
+}
+
+/// Convert SSA taint events to the standard Finding struct.
+pub fn ssa_events_to_findings(
+    events: &[SsaTaintEvent],
+    _ssa: &SsaBody,
+) -> Vec<crate::taint::Finding> {
+    use std::collections::HashSet;
+
+    let mut findings = Vec::new();
+    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+
+    for event in events {
+        for (_val, _caps, origins) in &event.tainted_values {
+            for origin in origins {
+                if seen.insert((origin.node.index(), event.sink_node.index())) {
+                    findings.push(crate::taint::Finding {
+                        sink: event.sink_node,
+                        source: origin.node,
+                        path: vec![origin.node, event.sink_node],
+                        source_kind: origin.source_kind,
+                        path_validated: event.all_validated,
+                        guard_kind: event.guard_kind,
+                    });
+                }
+            }
+        }
+    }
+
+    findings
+}

@@ -13,6 +13,7 @@ mod labels;
 mod output;
 mod patterns;
 mod rank;
+mod ssa;
 mod state;
 mod summary;
 mod suppress;

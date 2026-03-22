@@ -54,6 +54,7 @@ pub mod labels;
 pub mod output;
 pub mod patterns;
 pub mod rank;
+pub mod ssa;
 pub mod state;
 pub mod summary;
 pub mod suppress;

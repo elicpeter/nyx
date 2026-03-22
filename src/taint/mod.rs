@@ -1,5 +1,6 @@
 pub mod domain;
 pub mod path_state;
+pub mod ssa_transfer;
 pub mod transfer;
 
 use crate::cfg::{Cfg, FuncSummaries};
@@ -81,22 +82,57 @@ pub fn analyse_file(
         scope_filter: None,
     };
 
-    // 3. Run analysis (two-level for JS/TS, single-pass otherwise)
-    let events = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
-        analyse_js_two_level(cfg, entry, &interner, &base_transfer)
+    // 3. Run analysis (two-level for JS/TS, SSA or legacy for others)
+    let use_ssa = !std::env::var("NYX_LEGACY").is_ok_and(|v| v == "1");
+
+    let mut findings = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
+        let events = analyse_js_two_level(cfg, entry, &interner, &base_transfer);
+        events_to_findings(&events, &interner)
+    } else if use_ssa {
+        // SSA path (opt-in via NYX_SSA=1)
+        match crate::ssa::lower_to_ssa(cfg, entry, None, true) {
+            Ok(ssa_body) => {
+                tracing::debug!(
+                    blocks = ssa_body.blocks.len(),
+                    values = ssa_body.num_values(),
+                    "SSA lowering succeeded"
+                );
+                let ssa_transfer = ssa_transfer::SsaTaintTransfer {
+                    lang: caller_lang,
+                    namespace: caller_namespace,
+                    interner: &interner,
+                    local_summaries,
+                    global_summaries,
+                    interop_edges,
+                };
+                let events =
+                    ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
+                ssa_transfer::ssa_events_to_findings(&events, &ssa_body)
+            }
+            Err(e) => {
+                tracing::warn!("SSA lowering failed, falling back to legacy: {e}");
+                legacy_analyse(cfg, entry, &base_transfer)
+            }
+        }
     } else {
-        let result = engine::run_forward(cfg, entry, &base_transfer, TaintState::initial());
-        result.events
+        legacy_analyse(cfg, entry, &base_transfer)
     };
 
-    // 4. Convert events to findings
-    let mut findings = events_to_findings(&events, &interner);
-
-    // 5. Deduplicate findings by (sink, source), prefer path_validated=true
+    // 4. Deduplicate findings by (sink, source), prefer path_validated=true
     findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
     findings.dedup_by_key(|f| (f.sink, f.source));
 
     findings
+}
+
+/// Legacy (non-SSA) analysis path.
+fn legacy_analyse(
+    cfg: &Cfg,
+    entry: NodeIndex,
+    transfer: &TaintTransfer,
+) -> Vec<Finding> {
+    let result = engine::run_forward(cfg, entry, transfer, TaintState::initial());
+    events_to_findings(&result.events, transfer.interner)
 }
 
 /// Collect SymbolIds of variables defined or used at top-level scope.
