@@ -4,4 +4,4 @@ pub mod project;
 pub(crate) mod query_cache;
 
 pub use config::Config;
-pub use project::get_project_info;
+pub use project::{detect_frameworks, get_project_info};

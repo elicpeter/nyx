@@ -1,4 +1,5 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule};
+use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -36,6 +37,23 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["Shellwords.escape", "Shellwords.shellescape"],
         label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
+    },
+    // Type coercion sanitizers
+    LabelRule {
+        matchers: &["to_i", "to_f"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
+    },
+    // ActiveRecord SQL sanitizers
+    LabelRule {
+        matchers: &["sanitize_sql", "sanitize_sql_array"],
+        label: DataLabel::Sanitizer(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["URI.encode_www_form_component"],
+        label: DataLabel::Sanitizer(Cap::URL_ENCODE),
         case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
@@ -145,3 +163,19 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["name"],
 };
+
+/// Framework-conditional rules for Ruby.
+pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    let mut rules = Vec::new();
+
+    if ctx.has(DetectedFramework::Rails) {
+        // Strong parameters — permit/require sanitize user input
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["permit".into(), "require".into()],
+            label: DataLabel::Sanitizer(Cap::all()),
+            case_sensitive: false,
+        });
+    }
+
+    rules
+}

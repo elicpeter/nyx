@@ -52,6 +52,27 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
+    LabelRule {
+        matchers: &["validator.escape"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    // Type coercion sanitizers
+    LabelRule {
+        matchers: &["parseInt", "parseFloat", "Number"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: true,
+    },
+    LabelRule {
+        matchers: &["sanitizeUrl"],
+        label: DataLabel::Sanitizer(Cap::URL_ENCODE),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["shell-escape", "shellescape"],
+        label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
+    },
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["eval"],
@@ -59,7 +80,7 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["innerHTML"],
+        matchers: &["innerHTML", "dangerouslySetInnerHTML"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
@@ -148,6 +169,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
         payload_args: &[1],
+        keyword_name: None,
     },
     SinkGate {
         callee_matcher: "parseFromString",
@@ -157,6 +179,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
         payload_args: &[0],
+        keyword_name: None,
     },
 ];
 

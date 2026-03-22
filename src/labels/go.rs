@@ -1,4 +1,5 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule};
+use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -25,7 +26,7 @@ pub static RULES: &[LabelRule] = &[
     },
     // ───────── Sanitizers ──────────
     LabelRule {
-        matchers: &["html.EscapeString", "template.HTMLEscapeString"],
+        matchers: &["html.EscapeString", "template.HTMLEscapeString", "template.HTMLEscaper"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
@@ -37,6 +38,12 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["filepath.Clean", "filepath.Base"],
         label: DataLabel::Sanitizer(Cap::FILE_IO),
+        case_sensitive: false,
+    },
+    // Type conversion sanitizers
+    LabelRule {
+        matchers: &["strconv.Atoi", "strconv.ParseInt", "strconv.ParseFloat", "strconv.ParseBool"],
+        label: DataLabel::Sanitizer(Cap::all()),
         case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
@@ -139,3 +146,39 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["name"],
 };
+
+/// Framework-conditional rules for Go.
+pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    let mut rules = Vec::new();
+
+    if ctx.has(DetectedFramework::Gin) {
+        rules.push(RuntimeLabelRule {
+            matchers: vec![
+                "c.Param".into(), "c.Query".into(), "c.PostForm".into(),
+                "c.DefaultQuery".into(), "c.DefaultPostForm".into(),
+                "c.GetHeader".into(), "c.Cookie".into(),
+                "c.BindJSON".into(), "c.ShouldBindJSON".into(),
+            ],
+            label: DataLabel::Source(Cap::all()),
+            case_sensitive: false,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["c.HTML".into(), "c.String".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        });
+    }
+
+    if ctx.has(DetectedFramework::Echo) {
+        rules.push(RuntimeLabelRule {
+            matchers: vec![
+                "c.QueryParam".into(), "c.FormValue".into(),
+                "c.Param".into(), "c.Bind".into(),
+            ],
+            label: DataLabel::Source(Cap::all()),
+            case_sensitive: false,
+        });
+    }
+
+    rules
+}

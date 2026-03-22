@@ -41,6 +41,11 @@ pub struct SinkGate {
     pub label: DataLabel,
     pub case_sensitive: bool,
     pub payload_args: &'static [usize],
+    /// Optional keyword argument name for languages that support keyword args
+    /// (e.g. Python `shell=True` in `subprocess.Popen`).  When set, the
+    /// activation value is extracted from the named keyword argument instead
+    /// of the positional argument at `arg_index`.
+    pub keyword_name: Option<&'static str>,
 }
 
 bitflags! {
@@ -148,6 +153,8 @@ static GATED_REGISTRY: Lazy<HashMap<&'static str, &'static [SinkGate]>> = Lazy::
     m.insert("js", javascript::GATED_SINKS);
     m.insert("typescript", typescript::GATED_SINKS);
     m.insert("ts", typescript::GATED_SINKS);
+    m.insert("python", python::GATED_SINKS);
+    m.insert("py", python::GATED_SINKS);
     m
 });
 
@@ -355,14 +362,12 @@ pub fn build_lang_rules(
     config: &crate::utils::config::Config,
     lang_slug: &str,
 ) -> LangAnalysisRules {
-    let Some(lang_cfg) = config.analysis.languages.get(lang_slug) else {
-        return LangAnalysisRules::default();
-    };
+    let mut extra_labels: Vec<RuntimeLabelRule> = Vec::new();
+    let mut terminators = Vec::new();
+    let mut event_handlers = Vec::new();
 
-    let extra_labels = lang_cfg
-        .rules
-        .iter()
-        .map(|r| {
+    if let Some(lang_cfg) = config.analysis.languages.get(lang_slug) {
+        extra_labels.extend(lang_cfg.rules.iter().map(|r| {
             use crate::utils::config::RuleKind;
             let cap = r.cap.to_cap();
             let label = match r.kind {
@@ -375,13 +380,34 @@ pub fn build_lang_rules(
                 label,
                 case_sensitive: r.case_sensitive,
             }
-        })
-        .collect();
+        }));
+        terminators = lang_cfg.terminators.clone();
+        event_handlers = lang_cfg.event_handlers.clone();
+    }
+
+    // Append framework-conditional rules when frameworks are detected.
+    if let Some(ref fw_ctx) = config.framework_ctx {
+        extra_labels.extend(framework_rules_for_lang(lang_slug, fw_ctx));
+    }
 
     LangAnalysisRules {
         extra_labels,
-        terminators: lang_cfg.terminators.clone(),
-        event_handlers: lang_cfg.event_handlers.clone(),
+        terminators,
+        event_handlers,
+    }
+}
+
+/// Return framework-conditional label rules for a given language.
+fn framework_rules_for_lang(
+    lang_slug: &str,
+    ctx: &crate::utils::project::FrameworkContext,
+) -> Vec<RuntimeLabelRule> {
+    match lang_slug {
+        "go" => go::framework_rules(ctx),
+        "ruby" | "rb" => ruby::framework_rules(ctx),
+        "java" => java::framework_rules(ctx),
+        "php" => php::framework_rules(ctx),
+        _ => Vec::new(),
     }
 }
 
@@ -618,10 +644,14 @@ pub fn classify_all(
 ///
 /// Returns `None` if callee doesn't match any gated rule, or matches but the
 /// activation argument is a known-safe constant.
+///
+/// `const_arg_at` extracts positional argument values.
+/// `const_keyword_arg` extracts keyword argument values (for languages like Python).
 pub fn classify_gated_sink(
     lang: &str,
     callee_text: &str,
     const_arg_at: impl Fn(usize) -> Option<String>,
+    const_keyword_arg: impl Fn(&str) -> Option<String>,
 ) -> Option<(DataLabel, &'static [usize])> {
     let gates = GATED_REGISTRY.get(lang).or_else(|| {
         let key = lang.to_ascii_lowercase();
@@ -635,8 +665,15 @@ pub fn classify_gated_sink(
         if !match_suffix_cs(callee_bytes, matcher, gate.case_sensitive) {
             continue;
         }
-        // Matched a gated callee — inspect the activation argument
-        match const_arg_at(gate.arg_index) {
+        // Matched a gated callee — inspect the activation argument.
+        // Use keyword extraction if gate has keyword_name, else positional.
+        let activation_value = if let Some(kw) = gate.keyword_name {
+            const_keyword_arg(kw)
+        } else {
+            const_arg_at(gate.arg_index)
+        };
+
+        match activation_value {
             Some(value) => {
                 let lower = value.to_ascii_lowercase();
                 let is_dangerous = gate
@@ -831,11 +868,14 @@ mod tests {
         assert_eq!(parse_cap("invalid"), None);
     }
 
+    /// No-op keyword arg extractor for tests (JS/TS have no keyword gates).
+    fn no_kw(_: &str) -> Option<String> { None }
+
     #[test]
     fn gated_sink_dangerous_exact() {
         let result = classify_gated_sink("javascript", "setAttribute", |_| {
             Some("href".to_string())
-        });
+        }, no_kw);
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
@@ -846,7 +886,7 @@ mod tests {
     fn gated_sink_dangerous_prefix() {
         let result = classify_gated_sink("javascript", "setAttribute", |_| {
             Some("onclick".to_string())
-        });
+        }, no_kw);
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
@@ -857,13 +897,13 @@ mod tests {
     fn gated_sink_safe_suppressed() {
         let result = classify_gated_sink("javascript", "setAttribute", |_| {
             Some("class".to_string())
-        });
+        }, no_kw);
         assert_eq!(result, None);
     }
 
     #[test]
     fn gated_sink_dynamic_conservative() {
-        let result = classify_gated_sink("javascript", "setAttribute", |_| None);
+        let result = classify_gated_sink("javascript", "setAttribute", |_| None, no_kw);
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
@@ -874,7 +914,7 @@ mod tests {
     fn gated_sink_no_match() {
         let result = classify_gated_sink("rust", "setAttribute", |_| {
             Some("href".to_string())
-        });
+        }, no_kw);
         assert_eq!(result, None);
     }
 
@@ -883,7 +923,7 @@ mod tests {
         // setAttribute: payload is arg 1
         let result = classify_gated_sink("javascript", "setAttribute", |_| {
             Some("href".to_string())
-        });
+        }, no_kw);
         let (_, payload_args) = result.unwrap();
         assert_eq!(payload_args, &[1]);
 
@@ -894,7 +934,7 @@ mod tests {
             } else {
                 None
             }
-        });
+        }, no_kw);
         let (_, payload_args) = result.unwrap();
         assert_eq!(payload_args, &[0]);
     }
@@ -907,8 +947,41 @@ mod tests {
             } else {
                 None
             }
-        });
+        }, no_kw);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn gated_sink_python_popen_shell_true() {
+        let result = classify_gated_sink("python", "Popen",
+            |_| None,
+            |kw| if kw == "shell" { Some("True".to_string()) } else { None },
+        );
+        assert_eq!(
+            result,
+            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))
+        );
+    }
+
+    #[test]
+    fn gated_sink_python_popen_shell_false() {
+        let result = classify_gated_sink("python", "Popen",
+            |_| None,
+            |kw| if kw == "shell" { Some("False".to_string()) } else { None },
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn gated_sink_python_popen_no_shell_conservative() {
+        let result = classify_gated_sink("python", "Popen",
+            |_| None,
+            |_| None,
+        );
+        assert_eq!(
+            result,
+            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))
+        );
     }
 
     #[test]

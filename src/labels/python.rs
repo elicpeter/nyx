@@ -1,4 +1,4 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, SinkGate};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -64,7 +64,7 @@ pub static RULES: &[LabelRule] = &[
     },
     // ───────── Sanitizers ──────────
     LabelRule {
-        matchers: &["html.escape"],
+        matchers: &["html.escape", "cgi.escape"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
@@ -76,6 +76,23 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["bleach.clean", "markupsafe.escape", "django.utils.html.escape"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    // Type coercion sanitizers
+    LabelRule {
+        matchers: &["int", "float", "bool"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: true,
+    },
+    LabelRule {
+        matchers: &["urllib.parse.quote", "urllib.parse.quote_plus"],
+        label: DataLabel::Sanitizer(Cap::URL_ENCODE),
+        case_sensitive: false,
+    },
+    // Path canonicalization
+    LabelRule {
+        matchers: &["os.path.abspath", "os.path.normpath"],
+        label: DataLabel::Sanitizer(Cap::FILE_IO),
         case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
@@ -107,6 +124,12 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
+    // Flask Markup — bypasses auto-escaping
+    LabelRule {
+        matchers: &["Markup"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
+        case_sensitive: true,
+    },
     LabelRule {
         matchers: &["eval", "exec"],
         label: DataLabel::Sink(Cap::CODE_EXEC),
@@ -126,7 +149,7 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["cursor.execute", "cursor.executemany"],
+        matchers: &["cursor.execute", "cursor.executemany", "sqlalchemy.text"],
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },
@@ -156,6 +179,20 @@ pub static RULES: &[LabelRule] = &[
         ],
         label: DataLabel::Sink(Cap::DESERIALIZE),
         case_sensitive: false,
+    },
+];
+
+pub static GATED_SINKS: &[SinkGate] = &[
+    // subprocess.Popen(cmd, shell=True) — only dangerous when shell=True
+    SinkGate {
+        callee_matcher: "Popen",
+        arg_index: 0,
+        dangerous_values: &["True", "true"],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: true,
+        payload_args: &[0],
+        keyword_name: Some("shell"),
     },
 ];
 

@@ -134,6 +134,19 @@ pub fn handle(
     let scan_path = Path::new(path).canonicalize()?;
     let (project_name, db_path) = get_project_info(&scan_path, database_dir)?;
 
+    // Detect frameworks from project manifests and enrich the config.
+    let config = &{
+        let mut cfg = config.clone();
+        if cfg.framework_ctx.is_none() {
+            let fw = crate::utils::detect_frameworks(&scan_path);
+            if !fw.frameworks.is_empty() {
+                tracing::info!(frameworks = ?fw.frameworks, "detected frameworks");
+            }
+            cfg.framework_ctx = Some(fw);
+        }
+        cfg
+    };
+
     let is_machine = format == OutputFormat::Json || format == OutputFormat::Sarif;
     let suppress_status = config.output.quiet || is_machine;
     if !suppress_status {
@@ -289,6 +302,20 @@ pub(crate) fn scan_filesystem(
     cfg: &Config,
     show_progress: bool,
 ) -> NyxResult<Vec<Diag>> {
+    // Ensure framework context is available (handle sets it, but direct
+    // callers like scan_no_index may not).
+    let owned_cfg;
+    let cfg = if cfg.framework_ctx.is_some() {
+        cfg
+    } else {
+        owned_cfg = {
+            let mut c = cfg.clone();
+            c.framework_ctx = Some(crate::utils::detect_frameworks(root));
+            c
+        };
+        &owned_cfg
+    };
+
     // ── Collect file list ────────────────────────────────────────────────
     let all_paths: Vec<PathBuf> = {
         let _span = tracing::info_span!("walk_files").entered();

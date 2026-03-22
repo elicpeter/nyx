@@ -13,10 +13,28 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
         case_sensitive: false,
     },
+    // Network input sources
+    LabelRule {
+        matchers: &["recv", "recvfrom"],
+        label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
+    },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["sanitize_"],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    // Bounded formatting/string ops (vs unbounded sprintf/strcpy sinks)
+    LabelRule {
+        matchers: &["snprintf", "strncpy", "strncat"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
+    },
+    // Type conversion sanitizers
+    LabelRule {
+        matchers: &["atoi", "atol", "strtol", "strtoul"],
+        label: DataLabel::Sanitizer(Cap::all()),
         case_sensitive: false,
     },
     // ─────────── Sinks ─────────────

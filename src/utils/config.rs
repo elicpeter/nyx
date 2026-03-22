@@ -564,6 +564,10 @@ pub struct Config {
     pub server: ServerConfig,
     pub runs: RunsConfig,
     pub profiles: HashMap<String, ScanProfile>,
+    /// Detected frameworks for the current project — set by the scan pipeline,
+    /// not persisted to config files.
+    #[serde(skip)]
+    pub framework_ctx: Option<crate::utils::project::FrameworkContext>,
 }
 
 impl Config {

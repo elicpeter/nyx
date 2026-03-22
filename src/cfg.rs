@@ -706,6 +706,26 @@ fn extract_const_string_arg(call_node: Node, index: usize, code: &[u8]) -> Optio
     }
 }
 
+/// Extract the value of a keyword argument from a call node (e.g. Python `shell=True`).
+/// Walks argument children looking for `keyword_argument` nodes, matches the keyword
+/// name, and extracts the value node text for literals.
+fn extract_const_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) -> Option<String> {
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    for child in args.named_children(&mut cursor) {
+        if child.kind() == "keyword_argument" {
+            // keyword_argument has a "name" field and a "value" field in Python tree-sitter
+            let name_node = child.child_by_field_name("name")?;
+            let name_text = text_of(name_node, code)?;
+            if name_text == keyword_name {
+                let value_node = child.child_by_field_name("value")?;
+                return text_of(value_node, code).map(|s| s.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Returns true when a tree-sitter node is a syntactic literal value.
 ///
 /// Intentionally conservative: if in doubt, returns false. It is better
@@ -1471,9 +1491,12 @@ fn push_node<'a>(
     let mut sink_payload_args: Option<Vec<usize>> = None;
     if labels.is_empty() {
         if let Some(cn) = call_ast {
-            if let Some((gated_label, payload)) = classify_gated_sink(lang, &text, |idx| {
-                extract_const_string_arg(cn, idx, code)
-            }) {
+            if let Some((gated_label, payload)) = classify_gated_sink(
+                lang,
+                &text,
+                |idx| extract_const_string_arg(cn, idx, code),
+                |kw| extract_const_keyword_arg(cn, kw, code),
+            ) {
                 labels.push(gated_label);
                 if !payload.is_empty() {
                     sink_payload_args = Some(payload.to_vec());

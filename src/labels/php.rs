@@ -1,4 +1,5 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule};
+use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -41,8 +42,31 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["basename"],
+        matchers: &["basename", "realpath"],
         label: DataLabel::Sanitizer(Cap::FILE_IO),
+        case_sensitive: false,
+    },
+    // PDO parameterized queries
+    LabelRule {
+        matchers: &["prepare", "bindParam", "bindValue"],
+        label: DataLabel::Sanitizer(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    // Type-check sanitizers
+    LabelRule {
+        matchers: &["intval", "floatval", "ctype_digit", "ctype_alpha"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
+    },
+    // PHP input filtering
+    LabelRule {
+        matchers: &["filter_input", "filter_var"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["urlencode", "rawurlencode"],
+        label: DataLabel::Sanitizer(Cap::URL_ENCODE),
         case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
@@ -153,3 +177,22 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["name"],
 };
+
+/// Framework-conditional rules for PHP.
+pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    let mut rules = Vec::new();
+
+    if ctx.has(DetectedFramework::Laravel) {
+        rules.push(RuntimeLabelRule {
+            matchers: vec![
+                "Request::input".into(), "Request::get".into(),
+                "Request::query".into(), "Request::post".into(),
+                "Request::all".into(),
+            ],
+            label: DataLabel::Source(Cap::all()),
+            case_sensitive: false,
+        });
+    }
+
+    rules
+}

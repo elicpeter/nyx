@@ -1,4 +1,5 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule};
+use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -36,6 +37,29 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
+    // OWASP ESAPI encoders
+    LabelRule {
+        matchers: &["Encoder.encodeForHTML", "Encoder.encodeForJavaScript"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
+    // Type-check sanitizers — parsing to a primitive erases taint
+    LabelRule {
+        matchers: &["Integer.parseInt", "Long.parseLong", "Double.parseDouble", "Integer.valueOf", "Boolean.parseBoolean"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["URLEncoder.encode"],
+        label: DataLabel::Sanitizer(Cap::URL_ENCODE),
+        case_sensitive: false,
+    },
+    // Parameterized queries prevent SQL injection
+    LabelRule {
+        matchers: &["prepareStatement"],
+        label: DataLabel::Sanitizer(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["Runtime.exec", "ProcessBuilder"],
@@ -43,7 +67,7 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["executeQuery", "executeUpdate", "prepareStatement"],
+        matchers: &["executeQuery", "executeUpdate"],
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },
@@ -52,8 +76,10 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::CODE_EXEC),
         case_sensitive: false,
     },
+    // HTTP response sinks — println/print are broad (also match System.out)
+    // but necessary to catch response.getWriter().println() via suffix matching.
     LabelRule {
-        matchers: &["println", "print", "write"],
+        matchers: &["println", "print"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
@@ -164,3 +190,19 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["name"],
 };
+
+/// Framework-conditional rules for Java.
+pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    let mut rules = Vec::new();
+
+    if ctx.has(DetectedFramework::Spring) {
+        // When Spring is detected, bare "send" is likely HttpClient.send()
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["send".into()],
+            label: DataLabel::Sink(Cap::SSRF),
+            case_sensitive: false,
+        });
+    }
+
+    rules
+}
