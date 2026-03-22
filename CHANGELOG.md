@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SSA IR taint engine** — new `src/ssa/` module with `SsaValue`, `BlockId`, `SsaOp`, `SsaInst`, `SsaBlock`, `SsaBody` IR types. `lower_to_ssa()` converts CFG to pruned SSA form via petgraph dominance frontiers and Cytron phi insertion. `SsaTaintTransfer` runs a block-level worklist over the SSA IR and replaces the legacy `TaintTransfer`. SSA is now the sole taint engine for all 10 languages.
+- **Scoped SSA lowering for JS/TS** — `lower_to_ssa_scoped_nop()` inserts Nop placeholder nodes to preserve graph connectivity for disconnected top-level statement sequences, enabling the JS/TS two-level solve (top-level scope + per-function) without panicking on orphan blocks.
+- **Constant propagation and type facts in SSA** — `ConstFact` type tracks known literal values through SSA ops, enabling literal-argument detection at the IR level to supplement the tree-sitter-level constant suppression.
+- **SSA function summary extraction** — `FuncSummary` extracted from converged SSA exit states and integrated into the two-pass scanning pipeline, carrying cross-file interprocedural taint context through SSA analysis.
+- **Advanced SSA analysis (Phase 5)** — three enhancements layered on top of the base SSA engine:
+  - **Loop induction variable pruning** (`detect_back_edges`, `detect_induction_phis`, `is_simple_increment`) — simple loop counters excluded from taint propagation back-edges, suppressing false positives on loop index variables.
+  - **Targeted condition predicate classification** (`classify_condition_with_target`, `extract_validation_target`) — narrows validation predicates to specific target variables so `validate(x, config)` only marks `x` as validated, not all variables in scope.
+  - **Path-sensitive phi evaluation** (`PredStates`) — per-predecessor exit states stored alongside block states; phi nodes look up predecessor-specific taint for each operand, propagating `validated_may`/`validated_must` when all tainted predecessors are validated.
+- **Interprocedural sanitizer resolution** — `arg_callees` field in SSA tracks which callee functions handle each argument position. At call sites, resolved callees are checked against the sanitizer registry, enabling cross-function sanitizer matching without full inlining.
+- **Layer B suppression** — AST structural findings (e.g., `cfg-unguarded-sink`) are suppressed post-analysis when SSA taint analysis confirms the same code path is provably safe. Reduces false positives while preserving structural detection coverage for paths not reached by taint.
+- **`CaughtException` source kind** — caught exception objects (e.g., Java/PHP `catch ($e)`) are treated as user-controlled taint sources, enabling taint flows through exception handling paths.
+- **PHP `echo` as XSS sink** — `echo` statement modeled as an HTML output sink in taint analysis with corresponding test fixtures for XSS detection.
 - **Negative taint test suite** — 30 negative taint test fixtures (3 per language) containing safe code patterns that resemble vulnerable code but must not trigger taint findings. Covers constant-argument sinks, sanitized flows, and no-source-present scenarios across all 10 languages. Establishes a false-positive measurement baseline for subsequent engine changes.
 - **Categorised unexpected real-world findings** — reviewed and classified all unexpected findings from the real-world test suite. Each finding categorised as true positive, false positive, or noise and recorded in `.expect.json` files with explanatory notes. Provides a quantified precision/recall baseline for the scanner.
 - **SSRF vulnerability class** — added HTTP client sinks labelled with `Cap::SSRF` across all 10 languages (`fetch`/`axios` in JS, `urllib`/`requests` in Python, `HttpClient` in Java, `http.Get` in Go, etc.) with corresponding test fixtures.
@@ -35,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Configuration management extended** — `[server]` and `[runs]` sections added to the config file schema; profile validation and application logic added; new fields for server host/port and per-run options.
+- **Logging sink rules refined** — tightened logging sink matchers and updated benchmark regression thresholds to reflect improved accuracy.
+- **AST query handling simplified** — refactored query dispatch in `ast.rs`, reducing duplication between `run_rules_on_bytes` and `analyse_file_fused` paths.
 - **Extracted shared taint→Diag construction** — deduplicated ~100 lines of taint `Finding`→`Diag` construction that was duplicated between `run_rules_on_bytes()` and `analyse_file_fused()` in `src/ast.rs`. Both call sites now delegate to a single private `build_taint_diag()` helper. Zero behaviour change.
 - **Cap bitflags expanded to u16** — changed `Cap` from `u8` to `u16` and added new capability bits: `SQL_QUERY`, `DESERIALIZE`, `SSRF`, `CODE_EXEC`, `CRYPTO`. Updated `FuncSummary` and `LocalFuncSummary` serialisation to use `u16` for cap fields.
 - **Per-argument taint propagation: transfer wiring** — updated `apply_call()` in `taint/transfer.rs` to use per-argument propagation from resolved summaries, eliminating false positives from `func(tainted, safe)` by only propagating taint from arguments listed in `propagating_params`.
@@ -59,7 +74,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ruby receiver-qualified call classification** — changed Ruby `call` node mapping from `Kind::CallFn` to `Kind::CallMethod` in `src/labels/ruby.rs` to enable recognition of receiver-qualified sanitizers like `Shellwords.escape`, `CGI.escapeHTML`, and `ERB::Util.html_escape`.
 - **Constant-arg AST suppression** — security AST pattern rules (e.g., `py.cmdi.os_system`, `php.cmdi.system`) are now suppressed when all call arguments are provably literal constants at the tree-sitter level. Added `is_call_all_args_literal()` helper with per-language handling (PHP `argument` wrapper nodes, Go argument nodes, unary/binary constant expressions). Applied in both `run_rules_on_bytes` and `analyse_file_fused` paths.
 - **CFG constant suppression** — removed buggy `!source_derived` guard from the `is_all_args_constant` check in `guards.rs` that blocked suppression when an order-unaware source-derived check returned true (e.g., after `x = source(); x = "constant"; sink(x)`). Fixed callee-parts matching to strip parenthesized arg portions (e.g., `Command("echo")` → `Command`). Added function parameter name acceptance so wrapper function parameters don't block constant-arg suppression.
-- **Precision improvement** — benchmark precision improved from 62.4% to 65.4% (+3.0pp) with 4 FP→TN conversions (`go-safe-001`, `go-safe-005`, `php-safe-001`, `py-safe-001`). Recall unchanged at 96.4%. Regression thresholds updated to new baseline.
+- **Benchmark metrics** — 103-case corpus: P=75.3%, R=98.3%, F1=85.3% (58 TP, 19 FP, 1 FN, 25 TN). Recall at 98.3% with 1 remaining FN (SSRF). Regression thresholds updated to new baseline.
+
+### Removed
+
+- **Legacy taint analysis engine** — deleted `TaintTransfer`, `TaintState`, legacy `transfer.rs`, and `NYX_LEGACY` env var support. SSA engine is now the sole code path; no fallback.
+- **legacy report content** — outdated legacy report artifacts removed from the repository.
 
 ## [0.4.0] - 2025-02-25
 
