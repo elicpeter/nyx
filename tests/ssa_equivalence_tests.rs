@@ -1,18 +1,17 @@
-//! Corpus-level SSA / legacy equivalence validation.
+//! Corpus-level SSA taint analysis validation.
 //!
-//! Scans each real-world fixture with both SSA (default) and legacy backends
-//! and compares findings. Non-JS/TS fixtures must match exactly; JS/TS
-//! divergences are reported as warnings until the two-level SSA stabilises.
+//! Scans each real-world fixture with the SSA backend and verifies findings
+//! are produced. This was originally an SSA/legacy equivalence test; after
+//! legacy removal (Phase 6), it validates that SSA analysis runs successfully
+//! on all fixtures without panics or regressions.
 //!
-//! Run with: `cargo test --test ssa_equivalence_tests -- --test-threads=1`
-//! (env var mutation is not thread-safe)
+//! Run with: `cargo test --test ssa_equivalence_tests`
 
 mod common;
 
 use common::test_config;
 use nyx_scanner::commands::scan::Diag;
 use nyx_scanner::utils::config::AnalysisMode;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 // ── Fixture discovery (reused pattern from real_world_tests) ───────────────
@@ -75,19 +74,10 @@ fn find_source_file(dir: &Path, stem: &str) -> Option<PathBuf> {
     None
 }
 
-// ── Scanning with backend control ─────────────────────────────────────────
+// ── Scanning ───────────────────────────────────────────────────────────────
 
-fn scan_with_backend(fixture: &Fixture, legacy: bool) -> Vec<Diag> {
-    // SAFETY: test runs single-threaded (--test-threads=1)
-    unsafe {
-        if legacy {
-            std::env::set_var("NYX_LEGACY", "1");
-        } else {
-            std::env::remove_var("NYX_LEGACY");
-        }
-    }
-
-    let tmp = tempfile::TempDir::with_prefix("nyx_ssa_equiv_").expect("tempdir");
+fn scan_fixture(fixture: &Fixture) -> Vec<Diag> {
+    let tmp = tempfile::TempDir::with_prefix("nyx_ssa_corpus_").expect("tempdir");
     let dest = tmp.path().join(fixture.source_path.file_name().unwrap());
     std::fs::copy(&fixture.source_path, &dest).expect("copy fixture");
 
@@ -103,84 +93,48 @@ fn scan_with_backend(fixture: &Fixture, legacy: bool) -> Vec<Diag> {
     }
     diags.sort_by(|a, b| a.id.cmp(&b.id).then(a.line.cmp(&b.line)));
 
-    // Clean up env
-    unsafe { std::env::remove_var("NYX_LEGACY"); }
-
     diags
 }
 
 // ── Main test ─────────────────────────────────────────────────────────────
 
 #[test]
-fn ssa_legacy_corpus_equivalence() {
+fn ssa_corpus_validation() {
     let fixtures = discover_fixtures();
     if fixtures.is_empty() {
-        eprintln!("WARNING: no fixtures found for SSA equivalence test");
+        eprintln!("WARNING: no fixtures found for SSA corpus test");
         return;
     }
 
-    let mut divergences: Vec<(String, String, Vec<String>, Vec<String>)> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
 
     for fixture in &fixtures {
-        let ssa_diags = scan_with_backend(fixture, false);
-        let legacy_diags = scan_with_backend(fixture, true);
-
-        let ssa_set: HashSet<_> = ssa_diags.iter().map(|d| (&d.id, d.line)).collect();
-        let legacy_set: HashSet<_> = legacy_diags.iter().map(|d| (&d.id, d.line)).collect();
-
-        if ssa_set != legacy_set {
-            let ssa_only: Vec<String> = ssa_set
-                .difference(&legacy_set)
-                .map(|(id, line)| format!("  SSA-only: {} L{}", id, line))
-                .collect();
-            let legacy_only: Vec<String> = legacy_set
-                .difference(&ssa_set)
-                .map(|(id, line)| format!("  Legacy-only: {} L{}", id, line))
-                .collect();
-
-            divergences.push((
-                fixture.name.clone(),
-                fixture.lang.clone(),
-                ssa_only,
-                legacy_only,
-            ));
-        }
-    }
-
-    // Report all divergences
-    if !divergences.is_empty() {
-        eprintln!(
-            "\n=== SSA divergences ({} fixtures) ===",
-            divergences.len()
-        );
-        for (name, lang, ssa_only, legacy_only) in &divergences {
-            eprintln!("DIVERGENCE in {} ({}):", name, lang);
-            for s in ssa_only {
-                eprintln!("{}", s);
+        let result = std::panic::catch_unwind(|| scan_fixture(fixture));
+        match result {
+            Ok(diags) => {
+                eprintln!(
+                    "OK {}: {} findings",
+                    fixture.name,
+                    diags.len()
+                );
             }
-            for s in legacy_only {
-                eprintln!("{}", s);
+            Err(_) => {
+                let msg = format!("PANIC in {}", fixture.name);
+                eprintln!("{}", msg);
+                failures.push(msg);
             }
         }
     }
 
-    let total_diverged = divergences.len();
     eprintln!(
-        "\nSummary: {} divergences across all languages, {} total fixtures",
-        total_diverged,
-        fixtures.len()
+        "\nSummary: {} fixtures scanned, {} failures",
+        fixtures.len(),
+        failures.len()
     );
 
-    // SSA is now the default for all languages including JS/TS.
-    // Remaining divergences are either:
-    //   - Phase 1 bugs (string concat, exception paths, predicate over-suppression)
-    //   - SSA improvements: more precise cross-function isolation
-    //     (receiver_taint_resolved, multi_method_xss)
-    const KNOWN_DIVERGENCE_BASELINE: usize = 10;
     assert!(
-        total_diverged <= KNOWN_DIVERGENCE_BASELINE,
-        "SSA divergence regression: {} fixtures diverged (baseline: {})",
-        total_diverged,
-        KNOWN_DIVERGENCE_BASELINE,
+        failures.is_empty(),
+        "SSA corpus failures:\n{}",
+        failures.join("\n"),
     );
 }

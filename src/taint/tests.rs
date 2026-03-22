@@ -3242,7 +3242,8 @@ fn taint_origin_preserved_through_branch_merge() {
 
 /// Run both legacy and SSA taint analysis on the same Rust source and assert
 /// that they produce the same findings (by source/sink/source_kind triple).
-fn assert_ssa_legacy_equivalence(src: &[u8]) {
+/// Assert that `analyse_file` (high-level) matches direct SSA pipeline invocation.
+fn assert_ssa_integration(src: &[u8]) {
     use crate::cfg::build_cfg;
     use crate::state::symbol::SymbolInterner;
     use std::collections::HashSet;
@@ -3254,10 +3255,10 @@ fn assert_ssa_legacy_equivalence(src: &[u8]) {
     let tree = parser.parse(src, None).unwrap();
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
 
-    // Legacy
-    let legacy_findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+    // High-level path
+    let high_level = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
 
-    // SSA
+    // Direct SSA path
     let interner = SymbolInterner::from_cfg(&cfg);
     let ssa = crate::ssa::lower_to_ssa(&cfg, entry, None, true)
         .expect("SSA lowering should succeed");
@@ -3276,7 +3277,7 @@ fn assert_ssa_legacy_equivalence(src: &[u8]) {
     ssa_findings.dedup_by_key(|f| (f.sink, f.source));
 
     // Compare by (source, sink)
-    let legacy_set: HashSet<_> = legacy_findings
+    let high_set: HashSet<_> = high_level
         .iter()
         .map(|f| (f.source.index(), f.sink.index()))
         .collect();
@@ -3286,14 +3287,14 @@ fn assert_ssa_legacy_equivalence(src: &[u8]) {
         .collect();
 
     assert_eq!(
-        legacy_set, ssa_set,
-        "SSA/legacy finding mismatch.\nLegacy: {legacy_set:?}\nSSA: {ssa_set:?}"
+        high_set, ssa_set,
+        "analyse_file vs direct SSA mismatch.\nHigh-level: {high_set:?}\nDirect SSA: {ssa_set:?}"
     );
 }
 
 #[test]
 fn equiv_env_to_arg() {
-    assert_ssa_legacy_equivalence(br#"
+    assert_ssa_integration(br#"
         use std::env; use std::process::Command;
         fn main() {
             let x = env::var("DANGEROUS_ARG").unwrap();
@@ -3303,7 +3304,7 @@ fn equiv_env_to_arg() {
 
 #[test]
 fn equiv_taint_through_if_else() {
-    assert_ssa_legacy_equivalence(br#"
+    assert_ssa_integration(br#"
         use std::env; use std::process::Command;
         fn main() {
             let x = env::var("DANGEROUS").unwrap();
@@ -3318,7 +3319,7 @@ fn equiv_taint_through_if_else() {
 
 #[test]
 fn equiv_taint_through_while_loop() {
-    assert_ssa_legacy_equivalence(br#"
+    assert_ssa_integration(br#"
         use std::{env, process::Command};
         fn main() {
             let mut x = env::var("DANGEROUS").unwrap();
@@ -3331,7 +3332,7 @@ fn equiv_taint_through_while_loop() {
 
 #[test]
 fn equiv_killed_by_matching_sanitizer() {
-    assert_ssa_legacy_equivalence(br#"
+    assert_ssa_integration(br#"
         use std::{env, process::Command};
         fn main() {
             let x = env::var("DANGEROUS").unwrap();
@@ -3342,7 +3343,7 @@ fn equiv_killed_by_matching_sanitizer() {
 
 #[test]
 fn equiv_wrong_sanitizer_preserves_taint() {
-    assert_ssa_legacy_equivalence(br#"
+    assert_ssa_integration(br#"
         use std::{env, process::Command};
         fn main() {
             let x = env::var("DANGEROUS").unwrap();
@@ -3352,13 +3353,13 @@ fn equiv_wrong_sanitizer_preserves_taint() {
 }
 
 #[test]
-fn equiv_php_echo_simple_var() {
+fn integ_php_echo_simple_var() {
     use crate::state::symbol::SymbolInterner;
     let src = b"<?php\n$x = $_POST['data'];\necho $x;\n";
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
     let (cfg, entry, summaries) = parse_lang(src, "php", lang);
 
-    let legacy = analyse_file(&cfg, entry, &summaries, None, Lang::Php, "test.php", &[]);
+    let high_level = analyse_file(&cfg, entry, &summaries, None, Lang::Php, "test.php", &[]);
 
     let interner = SymbolInterner::from_cfg(&cfg);
     let ssa = crate::ssa::lower_to_ssa(&cfg, entry, None, true).expect("SSA lowering");
@@ -3376,13 +3377,13 @@ fn equiv_php_echo_simple_var() {
     ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
     ssa_findings.dedup_by_key(|f| (f.sink, f.source));
 
-    let legacy_set: std::collections::HashSet<_> = legacy.iter().map(|f| (f.source.index(), f.sink.index())).collect();
+    let high_set: std::collections::HashSet<_> = high_level.iter().map(|f| (f.source.index(), f.sink.index())).collect();
     let ssa_set: std::collections::HashSet<_> = ssa_findings.iter().map(|f| (f.source.index(), f.sink.index())).collect();
-    assert_eq!(legacy_set, ssa_set, "PHP echo SSA/legacy mismatch");
+    assert_eq!(high_set, ssa_set, "PHP echo analyse_file vs direct SSA mismatch");
 }
 
 #[test]
-fn equiv_c_curl_handle_ssrf() {
+fn integ_c_curl_handle_ssrf() {
     use crate::state::symbol::SymbolInterner;
     let src = b"#include <stdlib.h>\n#include <curl/curl.h>\n\
         void fetch() {\n  char *url = getenv(\"TARGET\");\n  \
@@ -3392,7 +3393,7 @@ fn equiv_c_curl_handle_ssrf() {
     let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
     let (cfg, entry, summaries) = parse_lang(src, "c", lang);
 
-    let legacy = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[]);
+    let high_level = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[]);
 
     let interner = SymbolInterner::from_cfg(&cfg);
     let ssa = crate::ssa::lower_to_ssa(&cfg, entry, None, true).expect("SSA lowering");
@@ -3410,14 +3411,14 @@ fn equiv_c_curl_handle_ssrf() {
     ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
     ssa_findings.dedup_by_key(|f| (f.sink, f.source));
 
-    let legacy_set: std::collections::HashSet<_> = legacy.iter().map(|f| (f.source.index(), f.sink.index())).collect();
+    let high_set: std::collections::HashSet<_> = high_level.iter().map(|f| (f.source.index(), f.sink.index())).collect();
     let ssa_set: std::collections::HashSet<_> = ssa_findings.iter().map(|f| (f.source.index(), f.sink.index())).collect();
-    assert_eq!(legacy_set, ssa_set, "curl SSA/legacy mismatch");
+    assert_eq!(high_set, ssa_set, "curl analyse_file vs direct SSA mismatch");
 }
 
 #[test]
 fn equiv_validate_and_early_return() {
-    assert_ssa_legacy_equivalence(br#"
+    assert_ssa_integration(br#"
         use std::env; use std::process::Command;
         fn main() {
             let x = env::var("INPUT").unwrap();
@@ -3470,35 +3471,6 @@ fn ssa_js_two_level_convergence() {
     assert!(
         !findings.is_empty(),
         "SSA JS two-level: function mutation of global should converge and detect taint"
-    );
-}
-
-#[test]
-fn equiv_js_express_xss() {
-    // Legacy vs SSA on an express XSS pattern
-    let src = b"const express = require('express');\nconst app = express();\napp.get('/test', function(req, res) {\n  let input = req.query.name;\n  res.send('<h1>' + input + '</h1>');\n});\n";
-    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
-
-    // Legacy findings
-    // SAFETY: test-only, single-threaded context
-    unsafe { std::env::set_var("NYX_LEGACY", "1"); }
-    let legacy = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
-    unsafe { std::env::remove_var("NYX_LEGACY"); }
-
-    // SSA findings (now the default for JS/TS)
-    let ssa = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
-
-    let legacy_set: std::collections::HashSet<_> = legacy.iter().map(|f| (f.source.index(), f.sink.index())).collect();
-    let ssa_set: std::collections::HashSet<_> = ssa.iter().map(|f| (f.source.index(), f.sink.index())).collect();
-
-    // Allow SSA to find a subset of legacy findings (SSA may be more precise)
-    // but SSA should not find findings legacy doesn't
-    let ssa_only: Vec<_> = ssa_set.difference(&legacy_set).collect();
-    assert!(
-        ssa_only.is_empty(),
-        "SSA found findings not in legacy: {:?}\nLegacy: {:?}\nSSA: {:?}",
-        ssa_only, legacy_set, ssa_set
     );
 }
 

@@ -12,36 +12,46 @@
 - JS two-level solve (`analyse_ssa_js_two_level` in `taint/mod.rs`): per-function SSA bodies seeded from top-level
 - Integration gate: SSA is default for non-JS/TS; JS/TS opt-in via `NYX_SSA_JS=1`
 
-**Test status:** 418 unit tests pass, 243 corpus fixtures tested.
-11 non-JS/TS divergences, 0 JS/TS divergences (with SSA JS enabled).
+**Test status:** 420+ unit tests pass, 265 corpus fixtures tested.
+10 divergences — all SSA precision improvements (0 bugs).
 
-**Divergences by root cause:**
+**Divergences (all cross-function taint leaks in legacy):**
 
-| # | Category | Fixtures | SSA behaviour |
-|---|----------|----------|---------------|
-| 1 | **Taint through string ops** (concat, format) | Go cmdi_http (L18,L20), Go sqli_sprintf (L25) | SSA loses taint across `"prefix " + var` and `Sprintf(fmt, var)` — missing findings |
-| 2 | **Exception-path taint flow** | Java deser_cmdi (L8), Java try_catch_sqli (L12), Java xss_response (L17) | Exception edges stripped; catch/multi-method taint lost — missing/wrong findings |
-| 3 | **Call with labels skips summary** | PHP ssrf_file_get_contents (L4) | Dual-label call (Source+Sink) skips `resolve_callee()` — emits `cfg-unguarded-sink` instead of `taint-unsanitised-flow` |
-| 4 | **Predicate over-suppression** | C cmdi_getenv (L14), C++ cmdi_system (L14), Rust env_to_command (L17) | `strcmp`/`contains` classified as validation → taint killed on "validated" branch; legacy correctly still reports |
-| 5 | **Argument-position taint loss** | Python cmdi_subprocess (L18), Python sqli_concat (L19) | Taint from arg position not tracked through call boundary — missing findings |
+All 10 remaining divergences are cases where legacy's flat analysis (scope_all=true)
+conflates same-named variables across function boundaries, producing false-positive
+cross-function taint flows. SSA correctly scopes variables via rename, preventing
+these leaks. Verified by `all_divergences_are_cross_function_leaks` unit test.
+
+| # | Fixture | Legacy-only finding | Root cause |
+|---|---------|-------------------|------------|
+| 1 | Go cmdi_http | source 10 (pingHandler) → L18, L20 (unsafePing) | `host` var name shared across functions |
+| 2 | Go sqli_sprintf | source 12 (getUserUnsafe) → L25 (getUserSafe) | `userId` var name shared across functions |
+| 3 | Python cmdi_subprocess | source 8 (run_cmd) → L18 (run_cmd_safe) | `cmd` var name shared across functions |
+| 4 | Python sqli_concat | source 8 (get_user) → L19 (get_user_safe) | `user_id` var name shared across functions |
+| 5 | C cmdi_getenv | source 6 (run_from_env) → L14 (run_safe) | `cmd` var name shared across functions |
+| 6 | C++ cmdi_system | source 5 (execute_user_cmd) → L14 (execute_safe) | `cmd` var name shared across functions |
+| 7 | Rust env_to_command | source 5 (run_user_command) → L17 (run_safe_command) | `cmd` var name shared across functions |
+| 8 | Java xss_response | source 7 (doGet) → L17 (doPost) | `name` var name shared across methods |
+| 9 | Java multi_method_xss | source 11 (doGet) → L13 (processInput) | Cross-method taint within class |
+| 10 | JS receiver_taint_resolved | source 13 → L24 | Cross-function receiver isolation |
 
 ---
 
-## Phase 1: Fix Critical Transfer Bugs (11 → ≤0 divergences)
+## Phase 1: Fix Critical Transfer Bugs — ✅ COMPLETE (reclassified)
 
-These are logic bugs in `ssa_transfer.rs` where the SSA path deviates from legacy semantics.
-Each fix is small, targeted, and independently testable.
+Original hypothesis was that 8 divergences were SSA bugs in categories: string
+concat taint loss, predicate over-suppression, exception-path taint, and argument
+position taint loss. Investigation revealed all 8 are actually SSA precision
+improvements — cross-function taint leaks that legacy produces as false positives.
 
-### 1.1 — Always resolve callee for calls with labels
+**Evidence:** For every divergent fixture, SSA finds all within-function flows
+that legacy finds. The only legacy-only findings have source and sink in
+*different* functions. SSA's variable renaming correctly prevents taint from
+leaking across function boundaries.
 
-**File:** `src/taint/ssa_transfer.rs` lines 649–701
+### 1.1 — Always resolve callee for calls with labels ✅
 
-**Bug:** When `has_label` (Source or Sanitizer label exists), `resolve_callee()` is skipped entirely.
-Legacy always runs `apply_call()` even when labels are present (for propagation/summary sanitizers).
-
-**Fix:** Remove the `if !has_label` guard on callee resolution. Only skip the summary's
-*source* caps when explicit Source labels are present (labels take precedence for source behaviour).
-Always apply summary propagation and summary sanitizer caps.
+Fixed in Phase 2 implementation (callee resolution now always runs).
 
 ```
 // Pseudocode of correct logic:
@@ -72,121 +82,30 @@ if has_sanitizer_label {
     return_bits |= use_caps;
     return_bits &= !sanitizer_bits;
 }
-```
+### 1.2–1.5 — Reclassified as SSA improvements
 
-**Expected impact:** Fixes PHP `ssrf_file_get_contents` divergence (dual-label Source+Sink).
+**Original hypotheses:**
+- 1.2: String concat/format taint loss (Go cmdi_http, sqli_sprintf)
+- 1.3: Predicate over-suppression (C, C++, Rust)
+- 1.4: Argument-position taint loss (Python)
+- 1.5: Exception-path taint loss (Java xss_response)
 
-**Verification:** Add test with dual-label function. Run equivalence test.
+**Investigation result:** All 8 divergences are cross-function taint leaks in legacy,
+not SSA bugs. Legacy's flat analysis (`scope_all=true`) conflates same-named variables
+across function boundaries. SSA's variable renaming correctly scopes them.
 
----
+For example, Go cmdi_http: `host` in `pingHandler` and `host` in `unsafePing` are
+different variables. Legacy treats them as the same (both are `host` in the symbol table),
+so taint from pingHandler's source leaks into unsafePing's sinks. SSA gives them different
+SsaValues (v2 and v8), preventing the leak.
 
-### 1.2 — String concatenation and format taint propagation
+The concat/format/predicate hypotheses were wrong — within-function flows work correctly.
+SSA finds `exec.Command("sh", "-c", "ping -c 1 "+host)` as a sink with tainted `host`
+from the same function's source.
 
-**Files:** `src/ssa/lower.rs`, `src/taint/ssa_transfer.rs`
-
-**Bug:** Binary expressions like `"prefix " + tainted_var` produce an `SsaOp::Assign` with the
-tainted variable in `uses`, but the SSA value for the concatenation result may not carry taint
-to the call site because the concatenation node's `defines` doesn't map to the call's `arg_uses`.
-
-**Investigation steps:**
-1. Add `NYX_SSA_DEBUG=1` env var to dump SSA body + per-block taint state for a given file
-2. Trace Go `exec.Command("sh", "-c", "ping -c 1 "+host)`:
-   - Does the concat node define a temp variable?
-   - Does that temp flow into the call's `arg_uses`?
-   - If `arg_uses` contains only the direct identifier (not the temp), taint is lost
-3. Trace Go `fmt.Sprintf("SELECT ... '%s'", userId)`:
-   - Does Sprintf's return value carry taint from `userId`?
-   - Is the Sprintf node labeled with `propagates_taint` in the summary?
-
-**Fix approach (depends on investigation):**
-- If the CFG correctly captures the data flow but SSA lowering loses it: fix lowering
-- If the CFG doesn't capture temp variables from string ops: fix `push_node()` in `cfg.rs`
-- If the summary for Sprintf is missing `propagating_params`: fix Go label rules
-
-**Expected impact:** Fixes Go cmdi_http (L18, L20), Go sqli_sprintf (L25).
-
----
-
-### 1.3 — Predicate classification precision
-
-**Files:** `src/taint/path_state.rs` (`classify_condition`), `src/taint/ssa_transfer.rs`
-
-**Bug:** `classify_condition()` may classify `strcmp(cmd, "ls") == 0` and `allowed.contains(&cmd)`
-as `ValidationCall` because the function name matches a comparison/check pattern. This causes
-`apply_branch_predicates` to mark the tainted variable as `validated_may` on the true branch,
-and subsequent sink checks see `all_validated=true` → finding suppressed.
-
-**Investigation steps:**
-1. Check what `classify_condition` returns for these condition texts
-2. Trace the SSA taint state at the sink node for C/C++/Rust fixtures
-3. Check if `validated_may` actually contains the tainted var's SymbolId
-4. Compare with legacy state at same node — legacy uses the same `classify_condition`,
-   so why doesn't it suppress?
-
-**Hypothesis:** The difference may not be in predicate classification but in how SSA's
-block-level phi merging preserves or loses validation state compared to legacy's per-node
-join. Legacy may merge validated and non-validated paths, while SSA's precise phi tracking
-keeps validation on the "validated" branch only.
-
-**Fix approaches (depending on investigation):**
-- If `classify_condition` over-matches: narrow to explicit validation function names
-- If the issue is phi merging semantics: adjust SSA predicate join behaviour
-- If SSA correctly identifies validated code as safe: update the expect files
-  (SSA is *more precise* than legacy — this is an improvement, not a bug)
-
-**Expected impact:** Fixes or reclassifies C, C++, Rust divergences (3 fixtures).
-
----
-
-### 1.4 — Argument-position taint through calls
-
-**Files:** `src/taint/ssa_transfer.rs`, potentially `src/ssa/lower.rs`
-
-**Bug:** Python subprocess and SQL query calls lose taint from argument positions.
-
-**Investigation steps:**
-1. Trace Python `subprocess.run(cmd, shell=True, capture_output=True)` through SSA
-2. Check if `cmd` reaches the Call's `args[0]` as an SsaValue
-3. Check if the Call's `arg_uses` and `propagating_params` are correctly mapped
-4. For `cursor.execute("SELECT ... " + user_id)`: verify concat flows to arg
-
-**Fix (depends on investigation):** Likely same root cause as 1.2 (string concat) or
-a positional offset issue in `collect_args_taint()`.
-
-**Expected impact:** Fixes Python cmdi_subprocess (L18), Python sqli_concat (L19).
-
----
-
-### 1.5 — Exception-path taint seeding
-
-**Files:** `src/taint/ssa_transfer.rs`, `src/ssa/lower.rs`
-
-**Bug:** Exception edges are stripped during SSA lowering. Catch blocks become orphan blocks
-initialized with `SsaTaintState::initial()` (empty). This means taint from the try body
-doesn't flow into catch handlers.
-
-**Impact:** Java deser_cmdi (L8), Java try_catch_sqli (L12), Java xss_response (L17).
-
-**Fix approach — seed catch blocks from try-body state:**
-
-Rather than modifying the SSA IR to add exception edge terminators (complex, risks destabilizing
-the phi/dominator structure), seed orphan catch blocks with taint from their associated try body.
-
-1. During `collect_reachable()`, record which exception edges exist: `(source_node, catch_entry)`
-2. Store this mapping in `SsaBody` as `exception_edges: Vec<(NodeIndex, BlockId)>`
-3. In `run_ssa_taint_full()`, after Phase 1 convergence:
-   - For each exception edge, find the block containing `source_node`
-   - Get the converged exit state of that block
-   - Clear predicates (matches legacy exception edge semantics)
-   - Join this state into the catch block's entry state
-   - Re-add the catch block to the worklist
-4. Iterate until catch blocks also converge
-
-**Alternative (simpler):** During Phase 1 iteration, when processing a block that contains
-a node with an exception edge, proactively push the current taint state (minus predicates)
-to the catch block entry. This integrates naturally into the existing worklist.
-
-**Expected impact:** Fixes all 3 Java divergences.
+**Exception-path taint (1.5):** Previously tracked 3 Java fixtures as exception-path bugs.
+Two (deser_cmdi, try_catch_sqli) were fixed earlier. The remaining one (xss_response L17)
+is a cross-method leak from doGet to doPost, not an exception-path issue.
 
 ---
 
@@ -226,18 +145,18 @@ argument group so sink detection and taint propagation can see them.
    - Go: HTTP SQL injection
 2. Updated equivalence test: JS/TS divergences now tracked as hard failures
    (not warnings). Removed `is_js_ts` special-casing.
-3. Equivalence baseline: 10 divergences across all languages (8 pre-existing
-   Phase 1 bugs + 1 JS receiver precision improvement + 1 Java cross-method
-   precision improvement)
+3. Equivalence baseline: 10 divergences across all languages — all are SSA
+   precision improvements (cross-function taint leak elimination)
 
-**Divergence breakdown (10 total):**
+**Divergence breakdown (10 total — all SSA improvements):**
 | Category | Count | Fixtures |
 |----------|-------|----------|
-| String concat/format (Phase 1.2) | 3 | Go cmdi_http, Go sqli_sprintf, Python sqli_concat |
-| Predicate over-suppression (Phase 1.3) | 3 | C cmdi_getenv, C++ cmdi_system, Rust env_to_command |
-| Argument-position taint (Phase 1.4) | 1 | Python cmdi_subprocess |
-| Exception-path taint (Phase 1.5) | 1 | Java xss_response |
-| SSA improvements (not bugs) | 2 | JS receiver_taint_resolved, Java multi_method_xss |
+| Cross-function var name leak | 7 | Go cmdi_http (2), sqli_sprintf, Python cmdi_subprocess, sqli_concat, C cmdi_getenv, C++ cmdi_system |
+| Cross-method var name leak | 2 | Rust env_to_command, Java xss_response |
+| Cross-function receiver isolation | 1 | JS receiver_taint_resolved |
+| Cross-method taint isolation | 1 | Java multi_method_xss |
+
+Note: Go cmdi_http has 2 divergent findings (L18 and L20), total is still 10 fixture-level divergences.
 
 ---
 
@@ -413,36 +332,52 @@ Enables per-condition predicate tracking.
 
 ---
 
-## Phase 6: Legacy Removal
+## Phase 6: Legacy Removal — ✅ COMPLETE
 
-### 6.1 — Remove legacy code
+### 6.1 — Remove legacy code ✅
 
-Once divergence count is 0 and SSA is default for all languages:
-1. Remove `TaintTransfer` struct and `impl Transfer<TaintState>` from `transfer.rs`
-2. Remove `TaintState` lattice (keep `VarTaint` — shared with SSA)
-3. Remove `analyse_js_two_level()` legacy function
-4. Remove `run_forward()` engine (check if `DefaultTransfer` still needs it)
-5. Remove `NYX_LEGACY` env var gate
-6. Simplify `analyse_file()` to single SSA path
+All divergences are SSA improvements (0 bugs). SSA is the sole taint engine:
 
-### 6.2 — Clean up SSA tech debt
+**What was done:**
+1. Deleted `src/taint/transfer.rs` entirely — `TaintTransfer`, `TaintEvent`, `ResolvedSummary`,
+   all helper methods (`apply_source`, `apply_sanitizer`, `apply_call`, `apply_assignment`,
+   `collect_uses_taint`, `resolve_callee`, `try_curl_url_propagation`, etc.)
+2. Removed `TaintState` lattice from `domain.rs` — struct, `Lattice` impl, all merge helpers
+   (`merge_join_vars`, `merge_origins`, `vars_leq`, `merge_join_predicates`, `predicates_leq`),
+   and legacy lattice property tests. Kept: `VarTaint`, `TaintOrigin`, `SmallBitSet`,
+   `PredicateSummary`, `predicate_kind_bit()`
+3. Removed legacy functions from `mod.rs`: `legacy_analyse()`, `analyse_js_two_level()`,
+   `extract_exit_state()`, `filter_to_toplevel()`, `events_to_findings()`
+4. `run_forward()` engine kept — still used by `DefaultTransfer` (resource lifecycle analysis)
+5. Removed `NYX_LEGACY` env var gate — SSA is now the only path, no opt-out
+6. Simplified `analyse_file()`: SSA-only, returns empty Vec on lowering failure instead of
+   falling back to legacy. JS/TS still uses `analyse_ssa_js_two_level()`.
+7. Updated `tests/ssa_equivalence_tests.rs`: converted from SSA/legacy comparison to
+   pure SSA corpus validation test (no longer needs `--test-threads=1`)
+8. Removed legacy-dependent tests from `src/taint/tests.rs`: `equiv_js_express_xss`,
+   `all_divergences_are_cross_function_leaks`. Renamed `assert_ssa_legacy_equivalence`
+   → `assert_ssa_integration` (verifies `analyse_file` matches direct SSA pipeline)
+9. Updated `go/taint/cmdi_http.expect.json`: removed cross-function taint leak entry
+   that only legacy produced (SSA correctly scopes variables by function)
 
+**Verification:** 408 lib tests pass, real_world_tests pass, ssa_corpus_validation passes.
+
+### 6.2 — SSA tech debt cleanup (deferred)
+
+Remaining cleanup items for future work:
 - Embed needed NodeInfo fields directly in SSA ops (remove cfg_node backreference dependency)
-- Unify `SsaTaintEvent` and `TaintEvent` into single type
+- Unify `SsaTaintEvent` naming (now the only taint event type, "Ssa" prefix is redundant)
 - Remove `extract_ssa_exit_state()` projection (make SSA state canonical)
-- Inline `ssa_events_to_findings()` into `events_to_findings()`
+- Inline `ssa_events_to_findings()` naming (now the only events-to-findings path)
 
 ---
 
 ## Implementation Order & Dependencies
 
 ```
-Phase 1 (no deps, highest ROI — target: 11 → 0 divergences)
-  1.1 Fix callee resolution for labeled calls     ← 1 fixture
-  1.2 String concat taint propagation              ← 4 fixtures
-  1.3 Predicate classification precision           ← 3 fixtures (may be reclassified as SSA improvements)
-  1.4 Argument-position taint through calls        ← 2 fixtures (likely same root cause as 1.2)
-  1.5 Exception-path taint seeding                 ← 3 fixtures
+Phase 1 ✅ COMPLETE (reclassified — all 10 divergences are SSA improvements)
+  1.1 Fix callee resolution for labeled calls     ← fixed in Phase 2
+  1.2–1.5 Originally thought to be bugs            ← all cross-function taint leaks in legacy
 
 Phase 2 ✅ COMPLETE (SSA default for all languages, 265 fixtures)
   2.1 Enable SSA JS/TS by default                  ← done + chained call fix
@@ -463,9 +398,9 @@ Phase 5 (depends on Phase 3+4)
   5.2 Loop induction optimization
   5.3 Short-circuit boolean SSA
 
-Phase 6 (after Phase 1+2, 0 divergences confirmed)
-  6.1 Remove legacy code
-  6.2 SSA tech debt cleanup
+Phase 6 ✅ COMPLETE (legacy code removed, SSA is sole taint engine)
+  6.1 Remove legacy code                          ← done (transfer.rs deleted, TaintState removed)
+  6.2 SSA tech debt cleanup                       ← deferred (naming cleanup, not blocking)
 ```
 
 ## Verification Strategy
@@ -473,11 +408,11 @@ Phase 6 (after Phase 1+2, 0 divergences confirmed)
 Each phase must:
 
 1. **Unit tests:** Add targeted tests for each fix/feature in `src/taint/tests.rs`
-2. **Equivalence test:** Run `cargo test --test ssa_equivalence_tests -- --test-threads=1`
-   — divergence count must decrease (never increase)
+2. **Corpus test:** Run `cargo test --test ssa_equivalence_tests` — all fixtures must pass
 3. **Expect files:** Update `.expect.json` if SSA produces *better* results (document in commit)
 4. **Benchmark:** Run `cargo bench` to check for performance regression
-5. **Full suite:** All 418+ unit tests must pass before merge
+5. **Full suite:** All 408+ unit tests must pass before merge
 
-Target: Phase 1 brings divergences from 11 → 0. Phase 2 confirms production readiness.
+Status: Phases 1–2 and 6 complete. SSA is the sole taint analysis engine.
+Legacy code has been removed. All 10 divergences were SSA precision improvements.
 Phase 3+ improves detection beyond what legacy could achieve.
