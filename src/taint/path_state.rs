@@ -125,6 +125,78 @@ pub fn classify_condition(text: &str) -> PredicateKind {
     PredicateKind::Unknown
 }
 
+/// Classify a condition AND extract the specific validated variable target.
+///
+/// For `ValidationCall`/`SanitizerCall`, tries to extract the first argument
+/// or method receiver as the validated variable:
+/// - `validate(x, ...)` → target = `"x"`
+/// - `x.validate(...)` → target = `"x"`
+///
+/// Returns `(kind, None)` when the target cannot be determined (falls back
+/// to existing behavior of marking all condition_vars).
+pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<String>) {
+    let kind = classify_condition(text);
+
+    match kind {
+        PredicateKind::ValidationCall | PredicateKind::SanitizerCall => {
+            if let Some(target) = extract_validation_target(text) {
+                (kind, Some(target))
+            } else {
+                (kind, None)
+            }
+        }
+        _ => (kind, None),
+    }
+}
+
+/// Extract the validated variable from a condition text.
+///
+/// Handles two patterns:
+/// - Function call: `validate(x, ...)` → `"x"`
+/// - Method call: `x.validate(...)` → `"x"`
+fn extract_validation_target(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+
+    // Check for negation prefix
+    let trimmed = trimmed.strip_prefix('!').unwrap_or(trimmed).trim();
+
+    // Find the first `(` which separates callee from args
+    let paren_pos = trimmed.find('(')?;
+    let callee_part = &trimmed[..paren_pos];
+    let args_part = &trimmed[paren_pos + 1..];
+
+    // Check for method call pattern: `x.method(...)` or `x.method_name(...)`
+    if let Some(dot_pos) = callee_part.rfind('.') {
+        let receiver = callee_part[..dot_pos].trim();
+        if !receiver.is_empty() && is_identifier(receiver) {
+            return Some(receiver.to_string());
+        }
+    }
+
+    // Function call pattern: `func(x, ...)` — extract first argument
+    // Strip closing paren if present
+    let args_inner = args_part.trim_end().strip_suffix(')').unwrap_or(args_part);
+    // Take text up to first comma (first argument)
+    let first_arg = args_inner.split(',').next()?.trim();
+
+    // Strip reference operators (e.g. `&x` → `x`)
+    let first_arg = first_arg.strip_prefix('&').unwrap_or(first_arg).trim();
+
+    if !first_arg.is_empty() && is_identifier(first_arg) {
+        Some(first_arg.to_string())
+    } else {
+        None
+    }
+}
+
+/// Check if a string is a simple identifier (letters, digits, underscores, dots).
+fn is_identifier(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        && !s.starts_with(|c: char| c.is_ascii_digit())
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -230,5 +302,56 @@ mod tests {
     fn classify_unknown_fallback() {
         assert_eq!(classify_condition("flag"), PredicateKind::Unknown);
         assert_eq!(classify_condition("a && b"), PredicateKind::Unknown);
+    }
+
+    // ── classify_condition_with_target ──────────────────────────────────
+
+    #[test]
+    fn target_function_call_first_arg() {
+        let (kind, target) = classify_condition_with_target("validate(x, config)");
+        assert_eq!(kind, PredicateKind::ValidationCall);
+        assert_eq!(target.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn target_method_call_receiver() {
+        let (kind, target) = classify_condition_with_target("x.isValid()");
+        assert_eq!(kind, PredicateKind::ValidationCall);
+        assert_eq!(target.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn target_sanitizer_first_arg() {
+        let (kind, target) = classify_condition_with_target("sanitize(input)");
+        assert_eq!(kind, PredicateKind::SanitizerCall);
+        assert_eq!(target.as_deref(), Some("input"));
+    }
+
+    #[test]
+    fn target_negated_validation() {
+        let (kind, target) = classify_condition_with_target("!validate(&x)");
+        assert_eq!(kind, PredicateKind::ValidationCall);
+        assert_eq!(target.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn target_non_validation_returns_none() {
+        let (kind, target) = classify_condition_with_target("x == 5");
+        assert_eq!(kind, PredicateKind::Comparison);
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn target_check_auth_first_arg() {
+        let (kind, target) = classify_condition_with_target("check_auth(req)");
+        assert_eq!(kind, PredicateKind::ValidationCall);
+        assert_eq!(target.as_deref(), Some("req"));
+    }
+
+    #[test]
+    fn target_method_with_args() {
+        let (kind, target) = classify_condition_with_target("input.verify(sig)");
+        assert_eq!(kind, PredicateKind::ValidationCall);
+        assert_eq!(target.as_deref(), Some("input"));
     }
 }

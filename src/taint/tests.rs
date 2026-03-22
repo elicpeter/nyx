@@ -3759,3 +3759,179 @@ fn ssa_cross_function_taint_with_sanitizer_wrapper() {
         "cleanHtml should propagate param to return"
     );
 }
+
+// ── Phase 5.2: Loop Induction Variable Optimization ──────────────────────
+
+#[test]
+fn ssa_induction_var_no_taint() {
+    // Counter in loop with tainted source elsewhere: counter should not gain taint.
+    // The loop counter `i` is a simple induction variable (i = i + 1).
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let data = env::var("INPUT").unwrap();
+            let mut i = 0;
+            while i < 10 {
+                i = i + 1;
+            }
+            Command::new("sh").arg(data).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    // Should still find the data→sink flow but `i` should not gain taint
+    assert_eq!(
+        findings.len(),
+        1,
+        "induction var optimization: tainted source should still produce 1 finding"
+    );
+}
+
+#[test]
+fn ssa_loop_tainted_var_not_induction() {
+    // `x` is tainted and transformed in a loop — NOT an induction variable
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let mut x = env::var("DANGEROUS").unwrap();
+            while x.len() < 100 {
+                x.push_str("a");
+            }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(
+        findings.len(),
+        1,
+        "tainted var in loop (not induction) should still propagate"
+    );
+}
+
+#[test]
+fn ssa_taint_through_loop_still_works() {
+    // Existing test ported: taint through a loop body should work
+    let src = br#"
+        use std::{env, process::Command};
+        fn main() {
+            let x = env::var("DANGEROUS").unwrap();
+            for _i in 0..10 {
+                let _unused = 1;
+            }
+            Command::new("sh").arg(x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(
+        findings.len(),
+        1,
+        "taint through loop should still produce 1 finding"
+    );
+}
+
+// ── Phase 5.3: Enhanced Condition Predicate Classification ───────────────
+
+#[test]
+fn ssa_validation_targets_specific_var() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // `validate(x, config)` should only validate `x`, not `config`
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            let config = env::var("CONFIG").unwrap();
+            if validate(x, config) {
+                Command::new("sh").arg(config).status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    // config flows to a sink; only x was validated, so config should NOT be validated
+    assert!(!findings.is_empty(), "should detect taint flow for config");
+    // The finding for config should NOT be path_validated since validate() targets x, not config
+    let config_finding = findings.iter().find(|f| !f.path_validated);
+    assert!(
+        config_finding.is_some(),
+        "config should NOT be marked as path_validated (only x is validated)"
+    );
+}
+
+#[test]
+fn ssa_method_validation_target() {
+    use crate::taint::path_state::classify_condition_with_target;
+    // Method call: `x.isValid()` should target `x`
+    let (kind, target) = classify_condition_with_target("x.isValid()");
+    assert_eq!(kind, PredicateKind::ValidationCall);
+    assert_eq!(target.as_deref(), Some("x"));
+}
+
+// ── Phase 5.1: Path Sensitivity via Phi Structure ────────────────────────
+
+#[test]
+fn ssa_phi_path_sensitive_both_branches_validated() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Variable validated on both branches → phi result should be fully validated
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if validate(&x) {
+                Command::new("sh").arg(&x).status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    // There should be a finding but it should be path_validated
+    assert_eq!(findings.len(), 1, "should detect taint flow");
+    assert!(
+        findings[0].path_validated,
+        "finding should be path_validated (sink in validated branch)"
+    );
+}
+
+#[test]
+fn ssa_phi_path_sensitive_one_branch_not_validated() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Sink is in the unvalidated branch → should NOT be path_validated
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if !validate(&x) {
+                Command::new("sh").arg(&x).status().unwrap();
+            }
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
+
+    assert_eq!(findings.len(), 1, "should detect taint flow");
+    assert!(
+        !findings[0].path_validated,
+        "finding should NOT be path_validated (sink in failed-validation branch)"
+    );
+}

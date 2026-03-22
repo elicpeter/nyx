@@ -8,10 +8,10 @@ use crate::summary::{CalleeResolution, GlobalSummaries};
 use crate::symbol::Lang;
 use crate::state::symbol::{SymbolId, SymbolInterner};
 use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint, predicate_kind_bit};
-use crate::taint::path_state::{PredicateKind, classify_condition};
+use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Maximum origins tracked per SSA value.
 const MAX_ORIGINS: usize = 4;
@@ -242,6 +242,10 @@ pub struct SsaTaintTransfer<'a> {
     pub ssa_summaries: Option<&'a HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>>,
 }
 
+/// Per-predecessor state tracking for path-sensitive phi evaluation.
+/// Maps (successor_block_idx, predecessor_block_idx) → predecessor's exit state.
+type PredStates = HashMap<(usize, usize), SsaTaintState>;
+
 /// Run SSA-based taint analysis, returning events AND converged block states.
 pub fn run_ssa_taint_full(
     ssa: &SsaBody,
@@ -250,9 +254,16 @@ pub fn run_ssa_taint_full(
 ) -> (Vec<SsaTaintEvent>, Vec<Option<SsaTaintState>>) {
     let num_blocks = ssa.blocks.len();
 
+    // Detect induction variables before analysis
+    let back_edges = detect_back_edges(ssa);
+    let induction_vars = detect_induction_phis(ssa, &back_edges);
+
     // Per-block entry states
     let mut block_states: Vec<Option<SsaTaintState>> = vec![None; num_blocks];
     block_states[ssa.entry.0 as usize] = Some(SsaTaintState::initial());
+
+    // Per-predecessor exit states for path-sensitive phi evaluation
+    let mut pred_states: PredStates = HashMap::new();
 
     // Phase 1: fixed-point iteration
     let mut worklist: VecDeque<usize> = VecDeque::new();
@@ -288,10 +299,19 @@ pub fn run_ssa_taint_full(
         };
 
         let block = &ssa.blocks[bid];
-        let exit_state = transfer_block(block, cfg, ssa, transfer, entry_state);
+        let exit_state = transfer_block(
+            block, cfg, ssa, transfer, entry_state,
+            &induction_vars, Some(&pred_states),
+        );
 
         // Build per-successor states (branch-aware for Branch terminators)
         let succ_states = compute_succ_states(block, cfg, transfer, &exit_state);
+
+        // Store predecessor-specific states before joining
+        for &(succ_id, ref succ_state) in &succ_states {
+            let succ_idx = succ_id.0 as usize;
+            pred_states.insert((succ_idx, bid), succ_state.clone());
+        }
 
         // Propagate to successors
         for (succ_id, succ_state) in succ_states {
@@ -355,7 +375,10 @@ pub fn run_ssa_taint_full(
         };
 
         let block = &ssa.blocks[bid];
-        collect_block_events(block, cfg, ssa, transfer, entry_state, &mut events);
+        collect_block_events(
+            block, cfg, ssa, transfer, entry_state, &mut events,
+            &induction_vars, Some(&pred_states),
+        );
     }
 
     (events, block_states)
@@ -380,10 +403,14 @@ pub fn extract_ssa_exit_state(
     interner: &SymbolInterner,
 ) -> HashMap<SymbolId, VarTaint> {
     // Compute exit states by replaying transfer on converged entry states
+    let empty_induction = HashSet::new();
     let mut joined = SsaTaintState::initial();
     for (bid, entry_state) in block_states.iter().enumerate() {
         if let Some(state) = entry_state {
-            let exit_state = transfer_block(&ssa.blocks[bid], cfg, ssa, transfer, state.clone());
+            let exit_state = transfer_block(
+                &ssa.blocks[bid], cfg, ssa, transfer, state.clone(),
+                &empty_induction, None,
+            );
             joined = joined.join(&exit_state);
         }
     }
@@ -448,6 +475,86 @@ pub fn filter_seed_to_toplevel(
         .collect()
 }
 
+// ── Loop Induction Variable Detection ────────────────────────────────────
+
+/// Detect back edges using block numbering heuristic.
+/// A back edge is (pred, block) where pred.0 >= block.0, valid because
+/// `form_blocks()` builds blocks in BFS order.
+fn detect_back_edges(ssa: &SsaBody) -> HashSet<(BlockId, BlockId)> {
+    let mut back_edges = HashSet::new();
+    for block in &ssa.blocks {
+        for &pred in &block.preds {
+            if pred.0 >= block.id.0 {
+                back_edges.insert((pred, block.id));
+            }
+        }
+    }
+    back_edges
+}
+
+/// Check if `inc_val` is defined as a simple increment of `phi_val`:
+/// `inc_val = phi_val + const` or `inc_val = phi_val - const`.
+fn is_simple_increment(ssa: &SsaBody, inc_val: SsaValue, phi_val: SsaValue) -> bool {
+    let def = ssa.def_of(inc_val);
+    let block = ssa.block(def.block);
+    // Look in the block body for the defining instruction
+    for inst in &block.body {
+        if inst.value == inc_val {
+            if let SsaOp::Assign(ref uses) = inst.op {
+                // Pattern: assign([phi_val, const_val]) — simple binary op
+                if uses.len() == 2 && uses.contains(&phi_val) {
+                    let other = if uses[0] == phi_val { uses[1] } else { uses[0] };
+                    // Check if the other operand is a constant
+                    let other_def = ssa.def_of(other);
+                    let other_block = ssa.block(other_def.block);
+                    for other_inst in other_block.phis.iter().chain(other_block.body.iter()) {
+                        if other_inst.value == other && matches!(other_inst.op, SsaOp::Const(_)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+    false
+}
+
+/// Detect phi nodes that represent loop induction variables.
+/// Returns the set of SsaValues (phi results) that are simple induction variables.
+fn detect_induction_phis(ssa: &SsaBody, back_edges: &HashSet<(BlockId, BlockId)>) -> HashSet<SsaValue> {
+    let mut induction_vars = HashSet::new();
+
+    for block in &ssa.blocks {
+        for phi in &block.phis {
+            if let SsaOp::Phi(ref operands) = phi.op {
+                if operands.len() != 2 {
+                    continue;
+                }
+
+                // Identify which operand comes via back edge
+                let mut back_edge_op = None;
+                let mut init_op = None;
+                for &(pred_blk, operand_val) in operands {
+                    if back_edges.contains(&(pred_blk, block.id)) {
+                        back_edge_op = Some(operand_val);
+                    } else {
+                        init_op = Some(operand_val);
+                    }
+                }
+
+                if let (Some(back_val), Some(_init_val)) = (back_edge_op, init_op) {
+                    if is_simple_increment(ssa, back_val, phi.value) {
+                        induction_vars.insert(phi.value);
+                    }
+                }
+            }
+        }
+    }
+
+    induction_vars
+}
+
 /// Transfer a single block: process phis then body, return exit state.
 fn transfer_block(
     block: &SsaBlock,
@@ -455,15 +562,39 @@ fn transfer_block(
     ssa: &SsaBody,
     transfer: &SsaTaintTransfer,
     mut state: SsaTaintState,
+    induction_vars: &HashSet<SsaValue>,
+    pred_states: Option<&PredStates>,
 ) -> SsaTaintState {
     // Process phis
+    let block_idx = block.id.0 as usize;
     for phi in &block.phis {
         if let SsaOp::Phi(ref operands) = phi.op {
+            // Induction variable optimization: skip back-edge operands
+            let is_induction = induction_vars.contains(&phi.value);
+
             let mut combined_caps = Cap::empty();
             let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+            let mut all_tainted_validated = true;
+            let mut any_tainted = false;
 
-            for &(_pred_blk, operand_val) in operands {
-                if let Some(taint) = state.get(operand_val) {
+            for &(pred_blk, operand_val) in operands {
+                // Skip back-edge operands for induction vars
+                if is_induction && pred_blk.0 >= block.id.0 {
+                    continue;
+                }
+
+                // Use predecessor-specific state when available (path sensitivity)
+                let operand_taint = if let Some(ps) = pred_states {
+                    ps.get(&(block_idx, pred_blk.0 as usize))
+                        .and_then(|pred_st| pred_st.get(operand_val))
+                } else {
+                    None
+                };
+                // Fall back to joined entry state
+                let operand_taint = operand_taint.or_else(|| state.get(operand_val));
+
+                if let Some(taint) = operand_taint {
+                    any_tainted = true;
                     combined_caps |= taint.caps;
                     for orig in &taint.origins {
                         if combined_origins.len() < MAX_ORIGINS
@@ -471,6 +602,29 @@ fn transfer_block(
                         {
                             combined_origins.push(*orig);
                         }
+                    }
+
+                    // Path sensitivity: check if this operand is validated in its predecessor
+                    if let Some(ps) = pred_states {
+                        if let Some(pred_st) = ps.get(&(block_idx, pred_blk.0 as usize)) {
+                            let var_name = ssa.value_defs.get(operand_val.0 as usize)
+                                .and_then(|vd| vd.var_name.as_deref());
+                            if let Some(name) = var_name {
+                                if let Some(sym) = transfer.interner.get(name) {
+                                    if !pred_st.validated_may.contains(sym) {
+                                        all_tainted_validated = false;
+                                    }
+                                } else {
+                                    all_tainted_validated = false;
+                                }
+                            } else {
+                                all_tainted_validated = false;
+                            }
+                        } else {
+                            all_tainted_validated = false;
+                        }
+                    } else {
+                        all_tainted_validated = false;
                     }
                 }
             }
@@ -485,6 +639,18 @@ fn transfer_block(
                         origins: combined_origins,
                     },
                 );
+
+                // Path sensitivity: if all tainted predecessors validated, propagate to phi result
+                if any_tainted && all_tainted_validated {
+                    if let Some(name) = ssa.value_defs.get(phi.value.0 as usize)
+                        .and_then(|vd| vd.var_name.as_deref())
+                    {
+                        if let Some(sym) = transfer.interner.get(name) {
+                            state.validated_may.insert(sym);
+                            state.validated_must.insert(sym);
+                        }
+                    }
+                }
             }
         }
     }
@@ -513,7 +679,20 @@ fn compute_succ_states(
             let cond_info = &cfg[*cond];
             if cond_info.kind == crate::cfg::StmtKind::If && !cond_info.condition_vars.is_empty() {
                 let cond_text = cond_info.condition_text.as_deref().unwrap_or("");
-                let kind = classify_condition(cond_text);
+                let (kind, target_var) = classify_condition_with_target(cond_text);
+
+                // Determine which vars to apply validation to:
+                // If we extracted a specific target, narrow to just that var
+                // (if it's in condition_vars). Otherwise use all condition_vars.
+                let effective_vars: Vec<String> = if let Some(ref target) = target_var {
+                    if cond_info.condition_vars.iter().any(|v| v == target) {
+                        vec![target.clone()]
+                    } else {
+                        cond_info.condition_vars.clone()
+                    }
+                } else {
+                    cond_info.condition_vars.clone()
+                };
 
                 let mut true_state = exit_state.clone();
                 let mut false_state = exit_state.clone();
@@ -525,7 +704,7 @@ fn compute_succ_states(
                 // Apply validation/predicate to true branch
                 apply_branch_predicates(
                     &mut true_state,
-                    &cond_info.condition_vars,
+                    &effective_vars,
                     kind,
                     true_polarity,
                     transfer.interner,
@@ -533,7 +712,7 @@ fn compute_succ_states(
                 // Apply validation/predicate to false branch
                 apply_branch_predicates(
                     &mut false_state,
-                    &cond_info.condition_vars,
+                    &effective_vars,
                     kind,
                     false_polarity,
                     transfer.interner,
@@ -880,15 +1059,37 @@ fn collect_block_events(
     transfer: &SsaTaintTransfer,
     mut state: SsaTaintState,
     events: &mut Vec<SsaTaintEvent>,
+    induction_vars: &HashSet<SsaValue>,
+    pred_states: Option<&PredStates>,
 ) {
-    // Replay phis to get accurate state
+    // Replay phis to get accurate state (mirrors transfer_block phi handling)
+    let block_idx = block.id.0 as usize;
     for phi in &block.phis {
         if let SsaOp::Phi(ref operands) = phi.op {
+            let is_induction = induction_vars.contains(&phi.value);
+
             let mut combined_caps = Cap::empty();
             let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+            let mut all_tainted_validated = true;
+            let mut any_tainted = false;
 
-            for &(_pred_blk, operand_val) in operands {
-                if let Some(taint) = state.get(operand_val) {
+            for &(pred_blk, operand_val) in operands {
+                // Skip back-edge operands for induction vars
+                if is_induction && pred_blk.0 >= block.id.0 {
+                    continue;
+                }
+
+                // Use predecessor-specific state when available
+                let operand_taint = if let Some(ps) = pred_states {
+                    ps.get(&(block_idx, pred_blk.0 as usize))
+                        .and_then(|pred_st| pred_st.get(operand_val))
+                } else {
+                    None
+                };
+                let operand_taint = operand_taint.or_else(|| state.get(operand_val));
+
+                if let Some(taint) = operand_taint {
+                    any_tainted = true;
                     combined_caps |= taint.caps;
                     for orig in &taint.origins {
                         if combined_origins.len() < MAX_ORIGINS
@@ -896,6 +1097,29 @@ fn collect_block_events(
                         {
                             combined_origins.push(*orig);
                         }
+                    }
+
+                    // Path sensitivity: check if this operand is validated in predecessor
+                    if let Some(ps) = pred_states {
+                        if let Some(pred_st) = ps.get(&(block_idx, pred_blk.0 as usize)) {
+                            let var_name = ssa.value_defs.get(operand_val.0 as usize)
+                                .and_then(|vd| vd.var_name.as_deref());
+                            if let Some(name) = var_name {
+                                if let Some(sym) = transfer.interner.get(name) {
+                                    if !pred_st.validated_may.contains(sym) {
+                                        all_tainted_validated = false;
+                                    }
+                                } else {
+                                    all_tainted_validated = false;
+                                }
+                            } else {
+                                all_tainted_validated = false;
+                            }
+                        } else {
+                            all_tainted_validated = false;
+                        }
+                    } else {
+                        all_tainted_validated = false;
                     }
                 }
             }
@@ -910,6 +1134,18 @@ fn collect_block_events(
                         origins: combined_origins,
                     },
                 );
+
+                // Path sensitivity: if all tainted predecessors validated, propagate
+                if any_tainted && all_tainted_validated {
+                    if let Some(name) = ssa.value_defs.get(phi.value.0 as usize)
+                        .and_then(|vd| vd.var_name.as_deref())
+                    {
+                        if let Some(sym) = transfer.interner.get(name) {
+                            state.validated_may.insert(sym);
+                            state.validated_must.insert(sym);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1519,7 +1755,11 @@ pub fn extract_ssa_func_summary(
         let mut param_caps = Cap::empty();
         for &bid in &return_blocks {
             if let Some(entry) = &block_states[bid] {
-                let exit = transfer_block(&ssa.blocks[bid], cfg, ssa, &transfer, entry.clone());
+                let empty_induction = HashSet::new();
+                let exit = transfer_block(
+                    &ssa.blocks[bid], cfg, ssa, &transfer, entry.clone(),
+                    &empty_induction, None,
+                );
                 for (val, taint) in &exit.values {
                     if all_param_values.contains(val) {
                         param_caps |= taint.caps;
