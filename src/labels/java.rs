@@ -91,22 +91,10 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: true,
     },
-    // ─── Logging format injection sinks ───
-    LabelRule {
-        matchers: &[
-            "logger.info", "logger.warn", "logger.error",
-            "logger.debug", "logger.trace", "logger.fatal",
-            "log.info", "log.warn", "log.error",
-            "log.debug", "log.trace", "log.fatal",
-        ],
-        label: DataLabel::Sink(Cap::FMT_STRING),
-        case_sensitive: false,
-    },
-    LabelRule {
-        matchers: &["String.format"],
-        label: DataLabel::Sink(Cap::FMT_STRING),
-        case_sensitive: true,
-    },
+    // NOTE: Java logging (logger.info, log.warn, etc.) removed as sinks —
+    // logging format injection is not a real security vulnerability in Java.
+    // String.format also removed — it builds strings in memory (not a sink);
+    // the real sink is wherever the formatted string is used (SQL, HTTP, etc.).
     // ─── JNDI injection sinks ───
     LabelRule {
         matchers: &[

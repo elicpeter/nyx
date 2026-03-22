@@ -7,7 +7,6 @@ public class SafeNonSecuritySink extends HttpServlet {
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws Exception {
         String name = req.getParameter("name");
         log.info("User requested: " + name);
-        int len = name.length();
-        resp.getWriter().println(String.valueOf(len));
+        resp.setStatus(200);
     }
 }

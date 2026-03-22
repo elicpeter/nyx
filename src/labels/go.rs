@@ -50,9 +50,12 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },
+    // fmt.Printf/Sprintf write to stdout or build strings in memory — not
+    // security sinks.  fmt.Fprintf writes to an io.Writer (often http.ResponseWriter)
+    // so it IS a security sink for XSS.
     LabelRule {
-        matchers: &["fmt.Fprintf", "fmt.Sprintf", "fmt.Printf"],
-        label: DataLabel::Sink(Cap::FMT_STRING),
+        matchers: &["fmt.Fprintf"],
+        label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
     LabelRule {
