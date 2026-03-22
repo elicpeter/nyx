@@ -2455,19 +2455,9 @@ fn validate_and_early_return() {
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
 
-    // Taint still flows (validate doesn't kill taint), but the finding
-    // should be annotated as path_validated because the false path
-    // (validation passed) has a ValidationCall predicate with polarity=true.
-    assert_eq!(findings.len(), 1, "should still detect the taint flow");
-    assert!(
-        findings[0].path_validated,
-        "finding should be marked as path_validated (early-return guard detected)"
-    );
-    assert_eq!(
-        findings[0].guard_kind,
-        Some(PredicateKind::ValidationCall),
-        "guard_kind should be ValidationCall"
-    );
+    // Validated findings are now suppressed — validate() guard means the
+    // sink is on the safe path, so no finding should be emitted.
+    assert_eq!(findings.len(), 0, "validated finding should be suppressed");
 }
 
 #[test]
@@ -2497,16 +2487,9 @@ fn validate_in_if_else_path_validated() {
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
 
-    assert_eq!(findings.len(), 1, "should detect the taint flow");
-    assert!(
-        findings[0].path_validated,
-        "finding should be path_validated (sink in validated branch)"
-    );
-    assert_eq!(
-        findings[0].guard_kind,
-        Some(PredicateKind::ValidationCall),
-        "guard_kind should be ValidationCall"
-    );
+    // Validated findings are now suppressed — sink is in the validated
+    // branch, so no finding should be emitted.
+    assert_eq!(findings.len(), 0, "validated finding should be suppressed");
 }
 
 #[test]
@@ -3897,12 +3880,9 @@ fn ssa_phi_path_sensitive_both_branches_validated() {
     let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
     let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Rust, "test.rs", &[]);
 
-    // There should be a finding but it should be path_validated
-    assert_eq!(findings.len(), 1, "should detect taint flow");
-    assert!(
-        findings[0].path_validated,
-        "finding should be path_validated (sink in validated branch)"
-    );
+    // Validated findings are now suppressed — sink is in the validated
+    // branch, so no finding should be emitted.
+    assert_eq!(findings.len(), 0, "validated finding should be suppressed");
 }
 
 #[test]

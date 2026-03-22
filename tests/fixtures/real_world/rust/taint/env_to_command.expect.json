@@ -38,10 +38,10 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": "HIGH",
-      "must_match": true,
+      "must_match": false,
       "line_range": [17, 17],
       "evidence_contains": [],
-      "notes": "TP: env::var at line 14 flows to Command::new at line 17 in run_safe_command; scanner does not recognize allowlist check as sanitizer"
+      "notes": "TN: env::var at line 14 flows to Command::new at line 17 in run_safe_command; allowlist check (allowed.contains) now recognized as validation guard"
     },
     {
       "rule_id": "taint-unsanitised-flow",

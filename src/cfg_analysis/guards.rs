@@ -5,6 +5,7 @@ use crate::callgraph::normalize_callee_name;
 use crate::cfg::StmtKind;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule};
 use crate::patterns::Severity;
+use crate::taint::path_state::{PredicateKind, classify_condition};
 use petgraph::graph::NodeIndex;
 
 pub struct UnguardedSink;
@@ -115,6 +116,23 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
 
     for idx in ctx.cfg.node_indices() {
         let info = &ctx.cfg[idx];
+
+        // If-condition guards: allowlist checks, type checks, and validation
+        // calls in branch conditions act as guards for all downstream sinks.
+        if info.kind == StmtKind::If {
+            if let Some(cond_text) = &info.condition_text {
+                let kind = classify_condition(cond_text);
+                if matches!(
+                    kind,
+                    PredicateKind::AllowlistCheck
+                        | PredicateKind::TypeCheck
+                        | PredicateKind::ValidationCall
+                ) {
+                    result.push((idx, Cap::all()));
+                }
+            }
+        }
+
         if info.kind != StmtKind::Call {
             continue;
         }

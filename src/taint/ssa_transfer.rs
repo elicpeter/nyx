@@ -697,9 +697,26 @@ fn compute_succ_states(
                 let mut true_state = exit_state.clone();
                 let mut false_state = exit_state.clone();
 
-                // True edge polarity: condition_negated XOR true
-                let true_polarity = !cond_info.condition_negated;
-                let false_polarity = cond_info.condition_negated;
+                // Detect semantic negation that isn't captured by AST-level
+                // `condition_negated` (which only detects unary `!`/`not`).
+                //
+                // - Python `not in`: comparison operator, not unary negation
+                // - TypeCheck with `!==`/`!=`: "typeof x !== 'number'" means
+                //   the true branch is the REJECT path (type mismatch)
+                let cond_lower = cond_text.to_ascii_lowercase();
+                let has_semantic_negation =
+                    (kind == PredicateKind::AllowlistCheck && cond_lower.contains(" not in "))
+                    || (kind == PredicateKind::TypeCheck
+                        && (cond_lower.contains("!==") || cond_lower.contains("!=")));
+                let effective_negated = if has_semantic_negation {
+                    !cond_info.condition_negated
+                } else {
+                    cond_info.condition_negated
+                };
+
+                // True edge polarity: effective_negated XOR true
+                let true_polarity = !effective_negated;
+                let false_polarity = effective_negated;
 
                 // Apply validation/predicate to true branch
                 apply_branch_predicates(
@@ -755,8 +772,8 @@ fn apply_branch_predicates(
     polarity: bool,
     interner: &SymbolInterner,
 ) {
-    // ValidationCall: mark condition vars as validated when polarity is true
-    if kind == PredicateKind::ValidationCall && polarity {
+    // Validation-like predicates: mark condition vars as validated when polarity is true
+    if matches!(kind, PredicateKind::ValidationCall | PredicateKind::AllowlistCheck | PredicateKind::TypeCheck) && polarity {
         for var in condition_vars {
             if let Some(sym) = interner.get(var) {
                 state.validated_may.insert(sym);
@@ -1671,6 +1688,11 @@ pub fn ssa_events_to_findings(
     let mut seen: HashSet<(usize, usize)> = HashSet::new();
 
     for event in events {
+        // Suppress findings where all tainted variables were validated
+        // (passed through an allowlist, type-check, or validation branch).
+        if event.all_validated {
+            continue;
+        }
         for (_val, _caps, origins) in &event.tainted_values {
             for origin in origins {
                 if seen.insert((origin.node.index(), event.sink_node.index())) {

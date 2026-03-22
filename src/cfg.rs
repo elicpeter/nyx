@@ -1226,6 +1226,20 @@ fn detect_negation<'a>(cond: Node<'a>, if_ast: Node<'a>, _lang: &str) -> (Node<'
         return (cond, true);
     }
 
+    // Unwrap parenthesized_expression — JS/Java/PHP wrap if-conditions in parens.
+    // This lets us detect negation inside: `if (!expr)` → cond is `(!expr)`.
+    let cond = if cond.kind() == "parenthesized_expression" {
+        cond.child_by_field_name("expression")
+            .or_else(|| {
+                let mut cursor = cond.walk();
+                cond.children(&mut cursor)
+                    .find(|c| c.kind() != "(" && c.kind() != ")")
+            })
+            .unwrap_or(cond)
+    } else {
+        cond
+    };
+
     // `!expr` appears as unary_expression, not_operator, or prefix_unary_expression
     // with a `!` or `not` operator child.
     let is_negation_wrapper = matches!(

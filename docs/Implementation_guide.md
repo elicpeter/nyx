@@ -190,6 +190,43 @@ Phases 1-2. Sanitizer resolution should be solid before adding predicate-based s
 
 ---
 
+Phase 3.5: Confidence Model Rework
+
+Category: Precision — Ranking correctness
+
+Why now:
+Engine internals changed (SSA, summaries, sanitizer resolution, path pruning).
+Confidence scoring may no longer reflect actual reliability of findings.
+
+Goals:
+- Redesign confidence derivation
+- Use path evidence strength
+- Use sanitizer/guard distance
+- Use interprocedural depth
+- Use type certainty
+- Use summary vs direct flow
+- Prepare for later alias/points-to/constraint integration
+
+Tasks:
+- Audit rank.rs
+- Audit Diag.confidence assignment
+- Add evidence-based scoring
+- Add path-length / hop-count scoring
+- Add guard dominance scoring
+- Add sanitizer proximity scoring
+- Add interprocedural penalty
+- Add unknown-type penalty
+
+Validation:
+- Benchmark results unchanged
+- Confidence distribution reasonable
+- No High confidence for weak paths
+
+Exit:
+Confidence reflects actual analysis strength
+
+---
+
 ## Phase 4: Confidence-Based Filtering and Report Quality
 
 **Category:** Precision — Output Quality

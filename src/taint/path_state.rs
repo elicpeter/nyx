@@ -17,6 +17,10 @@ pub enum PredicateKind {
     ValidationCall,
     /// Call to a sanitizer function: `sanitize(x)`, `escape(x)`
     SanitizerCall,
+    /// Allowlist/membership check: `.includes(x)`, `x in ALLOWED`, `in_array(x, ...)`
+    AllowlistCheck,
+    /// Type-check guard: `typeof x`, `isinstance(x, int)`, `is_numeric(x)`
+    TypeCheck,
     /// Comparison operators: `x == 5`, `x > threshold`
     Comparison,
     /// Generic boolean test — cannot classify further.
@@ -82,6 +86,31 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         return PredicateKind::EmptyCheck;
     }
 
+    // ── Allowlist / membership checks ────────────────────────────────────
+    if lower.contains(".includes(")
+        || lower.contains(".contains(")
+        || lower.contains(".indexof(")
+        || lower.contains(".has(")
+        || lower.contains("in_array(")
+        || lower.contains(" in ")
+        || (lower.contains('[') && !lower.contains('('))
+    {
+        return PredicateKind::AllowlistCheck;
+    }
+
+    // ── Type-check guards ──────────────────────────────────────────────
+    if lower.contains("typeof ")
+        || lower.contains("isinstance(")
+        || lower.contains(".matches(")
+        || lower.contains("is_numeric(")
+        || lower.contains("is_int(")
+        || lower.contains("is_string(")
+        || lower.contains("is_float(")
+        || lower.contains("ctype_")
+    {
+        return PredicateKind::TypeCheck;
+    }
+
     // ── Call-based kinds (require `(` to be present) ─────────────────────
     if lower.contains('(') {
         // Extract a rough callee token: everything before the first `(`
@@ -145,6 +174,14 @@ pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<Stri
                 (kind, None)
             }
         }
+        PredicateKind::AllowlistCheck => {
+            let target = extract_allowlist_target(text);
+            (kind, target)
+        }
+        PredicateKind::TypeCheck => {
+            let target = extract_type_check_target(text);
+            (kind, target)
+        }
         _ => (kind, None),
     }
 }
@@ -187,6 +224,154 @@ fn extract_validation_target(text: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Extract the target variable from an allowlist/membership check.
+///
+/// Handles:
+/// - `.includes(cmd)` → `cmd` (first argument)
+/// - `in_array($cmd, $allowed)` → `cmd` (first arg, strip `$`)
+/// - `cmd not in ALLOWED` / `cmd in ALLOWED` → `cmd` (left of ` in `)
+/// - `allowed[cmd]` → `cmd` (inside brackets)
+fn extract_allowlist_target(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let lower = trimmed.to_ascii_lowercase();
+
+    // Method call pattern: something.includes(arg) / .contains(arg) / .has(arg) / .indexof(arg)
+    for method in &[".includes(", ".contains(", ".indexof(", ".has("] {
+        if let Some(pos) = lower.find(method) {
+            let args_start = pos + method.len();
+            let args_part = &trimmed[args_start..];
+            let inner = args_part.strip_suffix(')').unwrap_or(args_part);
+            let first_arg = inner.split(',').next()?.trim();
+            let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
+            if !first_arg.is_empty() && is_identifier(first_arg) {
+                return Some(first_arg.to_string());
+            }
+        }
+    }
+
+    // in_array($cmd, $allowed) → cmd
+    if let Some(pos) = lower.find("in_array(") {
+        let args_start = pos + "in_array(".len();
+        let args_part = &trimmed[args_start..];
+        let inner = args_part.strip_suffix(')').unwrap_or(args_part);
+        let first_arg = inner.split(',').next()?.trim();
+        let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
+        if !first_arg.is_empty() && is_identifier(first_arg) {
+            return Some(first_arg.to_string());
+        }
+    }
+
+    // Python `in` operator: `cmd in ALLOWED` / `cmd not in ALLOWED`
+    if lower.contains(" in ") {
+        // Find the leftmost ` in ` — everything before it is the target expression
+        // Handle `not in` by looking for ` not in ` first
+        let target_part = if let Some(pos) = lower.find(" not in ") {
+            &trimmed[..pos]
+        } else if let Some(pos) = lower.find(" in ") {
+            &trimmed[..pos]
+        } else {
+            return None;
+        };
+        let target = target_part.trim();
+        let target = target.strip_prefix('!').unwrap_or(target).trim();
+        let target = target.strip_prefix('$').unwrap_or(target);
+        if !target.is_empty() && is_identifier(target) {
+            return Some(target.to_string());
+        }
+    }
+
+    // Go map lookup: `allowed[cmd]`
+    if let Some(open) = trimmed.find('[') {
+        if let Some(close) = trimmed.find(']') {
+            if close > open + 1 {
+                let inner = trimmed[open + 1..close].trim();
+                let inner = inner.strip_prefix('$').unwrap_or(inner);
+                if !inner.is_empty() && is_identifier(inner) {
+                    return Some(inner.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract the target variable from a type-check guard.
+///
+/// Handles:
+/// - `typeof input !== 'number'` → `input` (word after `typeof`)
+/// - `isinstance(user_id, int)` → `user_id` (first arg)
+/// - `input.matches("\\d+")` → `input` (receiver)
+/// - `is_numeric($id)` → `id` (first arg, strip `$`)
+fn extract_type_check_target(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let lower = trimmed.to_ascii_lowercase();
+
+    // typeof: `typeof input !== 'number'`
+    if let Some(pos) = lower.find("typeof ") {
+        let after = &trimmed[pos + "typeof ".len()..];
+        // The target is the next identifier-like word
+        let target: String = after.chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !target.is_empty() {
+            return Some(target);
+        }
+    }
+
+    // isinstance(user_id, int) → user_id
+    if let Some(pos) = lower.find("isinstance(") {
+        let args_start = pos + "isinstance(".len();
+        let args_part = &trimmed[args_start..];
+        let inner = args_part.strip_suffix(')').unwrap_or(args_part);
+        let first_arg = inner.split(',').next()?.trim();
+        let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
+        if !first_arg.is_empty() && is_identifier(first_arg) {
+            return Some(first_arg.to_string());
+        }
+    }
+
+    // .matches("...") → receiver
+    if let Some(pos) = lower.find(".matches(") {
+        let receiver = trimmed[..pos].trim();
+        let receiver = receiver.strip_prefix('!').unwrap_or(receiver).trim();
+        if !receiver.is_empty() && is_identifier(receiver) {
+            return Some(receiver.to_string());
+        }
+    }
+
+    // PHP type checks: is_numeric($id), is_int($x), is_string($x), is_float($x)
+    for func in &["is_numeric(", "is_int(", "is_string(", "is_float("] {
+        if let Some(pos) = lower.find(func) {
+            let args_start = pos + func.len();
+            let args_part = &trimmed[args_start..];
+            let inner = args_part.strip_suffix(')').unwrap_or(args_part);
+            let first_arg = inner.split(',').next()?.trim();
+            let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
+            if !first_arg.is_empty() && is_identifier(first_arg) {
+                return Some(first_arg.to_string());
+            }
+        }
+    }
+
+    // ctype_ functions: ctype_digit($x)
+    if let Some(pos) = lower.find("ctype_") {
+        // Find the `(` after ctype_xxx
+        if let Some(paren_pos) = trimmed[pos..].find('(') {
+            let args_start = pos + paren_pos + 1;
+            let args_part = &trimmed[args_start..];
+            let inner = args_part.strip_suffix(')').unwrap_or(args_part);
+            let first_arg = inner.split(',').next()?.trim();
+            let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
+            if !first_arg.is_empty() && is_identifier(first_arg) {
+                return Some(first_arg.to_string());
+            }
+        }
+    }
+
+    None
 }
 
 /// Check if a string is a simple identifier (letters, digits, underscores, dots).
@@ -353,5 +538,187 @@ mod tests {
         let (kind, target) = classify_condition_with_target("input.verify(sig)");
         assert_eq!(kind, PredicateKind::ValidationCall);
         assert_eq!(target.as_deref(), Some("input"));
+    }
+
+    // ── AllowlistCheck classification ─────────────────────────────────
+
+    #[test]
+    fn classify_allowlist_includes() {
+        assert_eq!(
+            classify_condition("ALLOWED.includes(cmd)"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    #[test]
+    fn classify_allowlist_in_array() {
+        assert_eq!(
+            classify_condition("in_array($cmd, $allowed)"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    #[test]
+    fn classify_allowlist_python_not_in() {
+        assert_eq!(
+            classify_condition("cmd not in ALLOWED"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    #[test]
+    fn classify_allowlist_python_in() {
+        assert_eq!(
+            classify_condition("cmd in ALLOWED"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    #[test]
+    fn classify_allowlist_map_lookup() {
+        assert_eq!(
+            classify_condition("allowed[cmd]"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    #[test]
+    fn classify_allowlist_contains() {
+        assert_eq!(
+            classify_condition("whitelist.contains(value)"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    #[test]
+    fn classify_allowlist_has() {
+        assert_eq!(
+            classify_condition("allowedSet.has(key)"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    // ── TypeCheck classification ──────────────────────────────────────
+
+    #[test]
+    fn classify_type_check_typeof() {
+        assert_eq!(
+            classify_condition("typeof input !== 'number'"),
+            PredicateKind::TypeCheck
+        );
+    }
+
+    #[test]
+    fn classify_type_check_isinstance() {
+        assert_eq!(
+            classify_condition("isinstance(user_id, int)"),
+            PredicateKind::TypeCheck
+        );
+    }
+
+    #[test]
+    fn classify_type_check_matches() {
+        assert_eq!(
+            classify_condition("input.matches(\"\\\\d+\")"),
+            PredicateKind::TypeCheck
+        );
+    }
+
+    #[test]
+    fn classify_type_check_is_numeric() {
+        assert_eq!(
+            classify_condition("is_numeric($id)"),
+            PredicateKind::TypeCheck
+        );
+    }
+
+    #[test]
+    fn classify_type_check_is_int() {
+        assert_eq!(
+            classify_condition("is_int($x)"),
+            PredicateKind::TypeCheck
+        );
+    }
+
+    #[test]
+    fn classify_type_check_ctype() {
+        assert_eq!(
+            classify_condition("ctype_digit($x)"),
+            PredicateKind::TypeCheck
+        );
+    }
+
+    // ── Allowlist target extraction ───────────────────────────────────
+
+    #[test]
+    fn target_allowlist_includes() {
+        let (kind, target) = classify_condition_with_target("ALLOWED.includes(cmd)");
+        assert_eq!(kind, PredicateKind::AllowlistCheck);
+        assert_eq!(target.as_deref(), Some("cmd"));
+    }
+
+    #[test]
+    fn target_allowlist_in_array() {
+        let (kind, target) = classify_condition_with_target("in_array($cmd, $allowed)");
+        assert_eq!(kind, PredicateKind::AllowlistCheck);
+        assert_eq!(target.as_deref(), Some("cmd"));
+    }
+
+    #[test]
+    fn target_allowlist_python_in() {
+        let (kind, target) = classify_condition_with_target("cmd in ALLOWED");
+        assert_eq!(kind, PredicateKind::AllowlistCheck);
+        assert_eq!(target.as_deref(), Some("cmd"));
+    }
+
+    #[test]
+    fn target_allowlist_python_not_in() {
+        let (kind, target) = classify_condition_with_target("cmd not in ALLOWED");
+        assert_eq!(kind, PredicateKind::AllowlistCheck);
+        assert_eq!(target.as_deref(), Some("cmd"));
+    }
+
+    #[test]
+    fn target_allowlist_map_lookup() {
+        let (kind, target) = classify_condition_with_target("allowed[cmd]");
+        assert_eq!(kind, PredicateKind::AllowlistCheck);
+        assert_eq!(target.as_deref(), Some("cmd"));
+    }
+
+    // ── TypeCheck target extraction ───────────────────────────────────
+
+    #[test]
+    fn target_type_check_typeof() {
+        let (kind, target) = classify_condition_with_target("typeof input !== 'number'");
+        assert_eq!(kind, PredicateKind::TypeCheck);
+        assert_eq!(target.as_deref(), Some("input"));
+    }
+
+    #[test]
+    fn target_type_check_isinstance() {
+        let (kind, target) = classify_condition_with_target("isinstance(user_id, int)");
+        assert_eq!(kind, PredicateKind::TypeCheck);
+        assert_eq!(target.as_deref(), Some("user_id"));
+    }
+
+    #[test]
+    fn target_type_check_matches() {
+        let (kind, target) = classify_condition_with_target("input.matches(\"\\\\d+\")");
+        assert_eq!(kind, PredicateKind::TypeCheck);
+        assert_eq!(target.as_deref(), Some("input"));
+    }
+
+    #[test]
+    fn target_type_check_is_numeric() {
+        let (kind, target) = classify_condition_with_target("is_numeric($id)");
+        assert_eq!(kind, PredicateKind::TypeCheck);
+        assert_eq!(target.as_deref(), Some("id"));
+    }
+
+    #[test]
+    fn target_type_check_ctype() {
+        let (kind, target) = classify_condition_with_target("ctype_digit($x)");
+        assert_eq!(kind, PredicateKind::TypeCheck);
+        assert_eq!(target.as_deref(), Some("x"));
     }
 }
