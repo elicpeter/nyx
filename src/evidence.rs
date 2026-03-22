@@ -141,19 +141,7 @@ pub fn compute_confidence(diag: &Diag) -> Confidence {
     let id = &diag.id;
 
     if id.starts_with("taint-") {
-        if let Some(ev) = &diag.evidence
-            && ev.notes.iter().any(|n| n == "path_validated")
-        {
-            return Confidence::Medium;
-        }
-        // source+sink present = High
-        if let Some(ev) = &diag.evidence
-            && ev.source.is_some()
-            && ev.sink.is_some()
-        {
-            return Confidence::High;
-        }
-        return Confidence::High; // default for taint
+        return compute_taint_confidence(diag);
     }
 
     if id.starts_with("state-") {
@@ -178,6 +166,107 @@ pub fn compute_confidence(diag: &Diag) -> Confidence {
     } else {
         Confidence::Low
     }
+}
+
+/// Points-based confidence scoring for taint findings.
+///
+/// Uses evidence metadata (source kind, path length, validation, cap
+/// specificity, summary resolution) to produce a nuanced confidence level
+/// instead of the previous flat High assignment.
+fn compute_taint_confidence(diag: &Diag) -> Confidence {
+    let ev = match &diag.evidence {
+        Some(e) => e,
+        None => return Confidence::High, // no evidence struct → conservative High
+    };
+
+    let mut score: i32 = 0;
+
+    // Source kind
+    score += source_kind_score(&ev.notes);
+
+    // Evidence completeness
+    let has_source = ev.source.is_some();
+    let has_sink = ev.sink.is_some();
+    let has_snippet = ev.source.as_ref().is_some_and(|s| s.snippet.is_some())
+        || ev.sink.as_ref().is_some_and(|s| s.snippet.is_some());
+    score += if has_source && has_sink && has_snippet {
+        3
+    } else if has_source && has_sink {
+        2
+    } else {
+        1
+    };
+
+    // Hop count penalty
+    score += hop_count_score(&ev.notes);
+
+    // Path validation penalty
+    if ev.notes.iter().any(|n| n == "path_validated") {
+        score -= 3;
+    }
+
+    // Cap specificity bonus
+    score += cap_specificity_score(&ev.notes);
+
+    // Summary resolution penalty
+    if ev.notes.iter().any(|n| n == "uses_summary") {
+        score -= 1;
+    }
+
+    match score {
+        5.. => Confidence::High,
+        2..=4 => Confidence::Medium,
+        _ => Confidence::Low,
+    }
+}
+
+/// Extract source_kind from evidence notes and return points.
+///
+/// UserInput=+3, EnvironmentConfig=+2, Unknown/FileSystem=+1, Database/CaughtException=0.
+fn source_kind_score(notes: &[String]) -> i32 {
+    for note in notes {
+        if let Some(kind) = note.strip_prefix("source_kind:") {
+            return match kind {
+                "UserInput" => 3,
+                "EnvironmentConfig" => 2,
+                "Unknown" | "FileSystem" => 1,
+                _ => 0, // Database, CaughtException, etc.
+            };
+        }
+    }
+    1 // conservative default if missing
+}
+
+/// Extract hop_count from evidence notes and return penalty.
+///
+/// 0–3 blocks = 0, 4–8 = −1, 9+ = −2.
+fn hop_count_score(notes: &[String]) -> i32 {
+    for note in notes {
+        if let Some(count_str) = note.strip_prefix("hop_count:") {
+            if let Ok(count) = count_str.parse::<u16>() {
+                return match count {
+                    0..=3 => 0,
+                    4..=8 => -1,
+                    _ => -2,
+                };
+            }
+        }
+    }
+    0 // no hop info → no penalty
+}
+
+/// Extract cap_specificity from evidence notes and return bonus.
+///
+/// 1 bit (exact match) = +1, otherwise 0.
+fn cap_specificity_score(notes: &[String]) -> i32 {
+    for note in notes {
+        if let Some(count_str) = note.strip_prefix("cap_specificity:") {
+            if let Ok(count) = count_str.parse::<u8>() {
+                return if count == 1 { 1 } else { 0 };
+            }
+        }
+    }
+    0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -211,7 +300,8 @@ mod tests {
     }
 
     #[test]
-    fn compute_confidence_taint_high() {
+    fn compute_confidence_taint_strong_path() {
+        // UserInput(+3) + source+sink+snippet(+3) + short path(0) + cap_specificity:1(+1) = 7 → High
         let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
         d.evidence = Some(Evidence {
             source: Some(SpanEvidence {
@@ -231,13 +321,18 @@ mod tests {
             guards: vec![],
             sanitizers: vec![],
             state: None,
-            notes: vec![],
+            notes: vec![
+                "source_kind:UserInput".into(),
+                "hop_count:1".into(),
+                "cap_specificity:1".into(),
+            ],
         });
         assert_eq!(compute_confidence(&d), Confidence::High);
     }
 
     #[test]
-    fn compute_confidence_taint_validated() {
+    fn compute_confidence_taint_medium_path() {
+        // EnvironmentConfig(+2) + source+sink no snippet(+2) + hop_count:5(−1) = 3 → Medium
         let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
         d.evidence = Some(Evidence {
             source: Some(SpanEvidence {
@@ -257,9 +352,80 @@ mod tests {
             guards: vec![],
             sanitizers: vec![],
             state: None,
-            notes: vec!["path_validated".into()],
+            notes: vec![
+                "source_kind:EnvironmentConfig".into(),
+                "hop_count:5".into(),
+            ],
         });
         assert_eq!(compute_confidence(&d), Confidence::Medium);
+    }
+
+    #[test]
+    fn compute_confidence_taint_weak_path() {
+        // Database(0) + source+sink no snippet(+2) + hop_count:12(−2) + uses_summary(−1) = −1 → Low
+        let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
+        d.evidence = Some(Evidence {
+            source: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 1,
+                col: 1,
+                kind: "source".into(),
+                snippet: None,
+            }),
+            sink: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 20,
+                col: 5,
+                kind: "sink".into(),
+                snippet: None,
+            }),
+            guards: vec![],
+            sanitizers: vec![],
+            state: None,
+            notes: vec![
+                "source_kind:Database".into(),
+                "hop_count:12".into(),
+                "uses_summary".into(),
+            ],
+        });
+        assert_eq!(compute_confidence(&d), Confidence::Low);
+    }
+
+    #[test]
+    fn compute_confidence_taint_validated_with_source() {
+        // UserInput(+3) + source+sink+snippet(+3) + path_validated(−3) = 3 → Medium
+        let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
+        d.evidence = Some(Evidence {
+            source: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 1,
+                col: 1,
+                kind: "source".into(),
+                snippet: Some("req.query".into()),
+            }),
+            sink: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 10,
+                col: 5,
+                kind: "sink".into(),
+                snippet: Some("exec()".into()),
+            }),
+            guards: vec![],
+            sanitizers: vec![],
+            state: None,
+            notes: vec![
+                "path_validated".into(),
+                "source_kind:UserInput".into(),
+            ],
+        });
+        assert_eq!(compute_confidence(&d), Confidence::Medium);
+    }
+
+    #[test]
+    fn compute_confidence_taint_no_evidence() {
+        // No Evidence struct → conservative High
+        let d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
+        assert_eq!(compute_confidence(&d), Confidence::High);
     }
 
     #[test]

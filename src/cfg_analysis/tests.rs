@@ -683,6 +683,9 @@ fn taint_and_unguarded_sink_deduped() {
         source_kind: crate::labels::SourceKind::UserInput,
         path_validated: false,
         guard_kind: None,
+        hop_count: 0,
+        cap_specificity: 1,
+        uses_summary: false,
     }];
 
     let findings = parse_and_run_all_with_taint(

@@ -238,15 +238,17 @@ pub fn handle(
 // Shared post-processing helpers
 // --------------------------------------------------------------------------------------------
 
-/// Rank, assign confidence, and truncate diagnostics.
+/// Assign confidence, rank, and truncate diagnostics.
 fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
-    if cfg.output.attack_surface_ranking {
-        crate::rank::rank_diags(diags);
-    }
+    // 1. Compute confidence first (needed by ranking).
     for d in diags.iter_mut() {
         if d.confidence.is_none() {
             d.confidence = Some(crate::evidence::compute_confidence(d));
         }
+    }
+    // 2. Rank (now has access to confidence).
+    if cfg.output.attack_surface_ranking {
+        crate::rank::rank_diags(diags);
     }
     if let Some(max) = cfg.output.max_results {
         diags.truncate(max as usize);

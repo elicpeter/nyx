@@ -9,6 +9,8 @@ pub struct VarTaint {
     pub caps: Cap,
     /// Up to N origins that contributed taint (bounded).
     pub origins: SmallVec<[TaintOrigin; 2]>,
+    /// Whether taint propagated through a function summary (cross-function).
+    pub uses_summary: bool,
 }
 
 /// A single taint origin — the node and classification of where taint came from.

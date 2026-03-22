@@ -6,7 +6,7 @@
 //! exploitable / important results.
 
 use crate::commands::scan::Diag;
-use crate::evidence::Evidence;
+use crate::evidence::{Confidence, Evidence};
 use crate::patterns::Severity;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -15,7 +15,6 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 pub struct AttackRank {
     pub score: f64,
     /// Breakdown of score components (for debug/display purposes).
-    #[allow(dead_code)]
     pub components: Vec<(String, String)>,
 }
 
@@ -77,6 +76,19 @@ pub fn compute_attack_rank(diag: &Diag) -> AttackRank {
         components.push(("path_validated_penalty".into(), "-5".into()));
     }
 
+    // ── 6. Confidence adjustment ─────────────────────────────────────
+    if let Some(conf) = diag.confidence {
+        let conf_adj = match conf {
+            Confidence::High => 3.0,
+            Confidence::Medium => 0.0,
+            Confidence::Low => -5.0,
+        };
+        score += conf_adj;
+        if conf_adj != 0.0 {
+            components.push(("confidence".into(), format!("{conf_adj}")));
+        }
+    }
+
     AttackRank { score, components }
 }
 
@@ -111,19 +123,16 @@ pub fn sort_key(diag: &Diag) -> impl Ord {
 /// Sort diagnostics in-place by descending attack-surface score, then by
 /// deterministic tie-breaker.  Populates `rank_score` on each `Diag`.
 pub fn rank_diags(diags: &mut [Diag]) {
-    // Compute scores
-    let scores: Vec<f64> = diags.iter().map(|d| compute_attack_rank(d).score).collect();
-
-    // Attach scores to diags
-    for (d, s) in diags.iter_mut().zip(scores.iter()) {
-        d.rank_score = Some(*s);
+    let ranks: Vec<AttackRank> = diags.iter().map(|d| compute_attack_rank(d)).collect();
+    for (d, rank) in diags.iter_mut().zip(ranks.iter()) {
+        d.rank_score = Some(rank.score);
+        if !rank.components.is_empty() {
+            d.rank_reason = Some(rank.components.clone());
+        }
     }
-
-    // Sort descending by score, then ascending by tie-breaker
     diags.sort_by(|a, b| {
         let sa = a.rank_score.unwrap_or(0.0);
         let sb = b.rank_score.unwrap_or(0.0);
-        // Descending score (higher first)
         sb.partial_cmp(&sa)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| sort_key(a).cmp(&sort_key(b)))
@@ -643,5 +652,92 @@ mod tests {
                 .any(|(k, _)| k == "path_validated_penalty"),
             "path_validated note in evidence should trigger penalty"
         );
+    }
+
+    // ── Confidence tests ────────────────────────────────────────────
+
+    #[test]
+    fn confidence_high_boosts_score() {
+        let mut d_none = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "x.rs",
+            1,
+            vec![("Source".into(), "stdin at 1:1".into())],
+            false,
+        );
+        let mut d_high = d_none.clone();
+        d_high.confidence = Some(crate::evidence::Confidence::High);
+
+        let score_none = compute_attack_rank(&d_none).score;
+        let score_high = compute_attack_rank(&d_high).score;
+        assert!(
+            score_high > score_none,
+            "High confidence ({score_high}) should score above None ({score_none})"
+        );
+    }
+
+    #[test]
+    fn confidence_low_demotes_score() {
+        let mut d_none = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "x.rs",
+            1,
+            vec![("Source".into(), "stdin at 1:1".into())],
+            false,
+        );
+        let mut d_low = d_none.clone();
+        d_low.confidence = Some(crate::evidence::Confidence::Low);
+
+        let score_none = compute_attack_rank(&d_none).score;
+        let score_low = compute_attack_rank(&d_low).score;
+        assert!(
+            score_low < score_none,
+            "Low confidence ({score_low}) should score below None ({score_none})"
+        );
+    }
+
+    #[test]
+    fn confidence_does_not_override_severity_tier() {
+        // High-severity + Low-confidence should still beat Medium-severity + High-confidence.
+        let mut high_sev_low_conf = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "x.rs",
+            1,
+            vec![("Source".into(), "stdin at 1:1".into())],
+            false,
+        );
+        high_sev_low_conf.confidence = Some(crate::evidence::Confidence::Low);
+
+        let mut med_sev_high_conf = make_diag(
+            Severity::Medium,
+            "taint-unsanitised-flow (source 2:1)",
+            "x.rs",
+            2,
+            vec![("Source".into(), "stdin at 2:1".into())],
+            false,
+        );
+        med_sev_high_conf.confidence = Some(crate::evidence::Confidence::High);
+
+        let score_high_sev = compute_attack_rank(&high_sev_low_conf).score;
+        let score_med_sev = compute_attack_rank(&med_sev_high_conf).score;
+        assert!(
+            score_high_sev > score_med_sev,
+            "High-sev/Low-conf ({score_high_sev}) should still beat Med-sev/High-conf ({score_med_sev})"
+        );
+    }
+
+    #[test]
+    fn rank_reason_populated() {
+        let d1 = make_diag(Severity::High, "taint-unsanitised-flow (source 1:1)", "a.rs", 1, vec![], false);
+        let d2 = make_diag(Severity::Medium, "cfg-unguarded-sink", "b.rs", 2, vec![], false);
+        let mut diags = vec![d1, d2];
+        rank_diags(&mut diags);
+        for d in &diags {
+            assert!(d.rank_reason.is_some(), "rank_reason should be populated after rank_diags()");
+            assert!(!d.rank_reason.as_ref().unwrap().is_empty(), "rank_reason should not be empty");
+        }
     }
 }

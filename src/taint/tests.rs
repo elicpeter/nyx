@@ -35,7 +35,7 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         ssa_summaries: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &transfer);
-    let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
+    let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
     findings.sort_by_key(|f| (f.sink.index(), f.source.index()));
     findings.dedup_by_key(|f| (f.sink, f.source));
     findings
@@ -3261,7 +3261,7 @@ fn assert_ssa_integration(src: &[u8]) {
         ssa_summaries: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
-    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
     ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
     ssa_findings.dedup_by_key(|f| (f.sink, f.source));
 
@@ -3365,7 +3365,7 @@ fn integ_php_echo_simple_var() {
         ssa_summaries: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
-    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
     ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
     ssa_findings.dedup_by_key(|f| (f.sink, f.source));
 
@@ -3402,7 +3402,7 @@ fn integ_c_curl_handle_ssrf() {
         ssa_summaries: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
-    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
     ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
     ssa_findings.dedup_by_key(|f| (f.sink, f.source));
 

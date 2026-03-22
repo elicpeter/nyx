@@ -115,7 +115,8 @@ fn merge_join_ssa_vars(
             std::cmp::Ordering::Equal => {
                 let caps = a[i].1.caps | b[j].1.caps;
                 let origins = merge_origins(&a[i].1.origins, &b[j].1.origins);
-                result.push((a[i].0, VarTaint { caps, origins }));
+                let uses_summary = a[i].1.uses_summary || b[j].1.uses_summary;
+                result.push((a[i].0, VarTaint { caps, origins, uses_summary }));
                 i += 1;
                 j += 1;
             }
@@ -167,6 +168,10 @@ fn ssa_vars_leq(a: &[(SsaValue, VarTaint)], b: &[(SsaValue, VarTaint)]) -> bool 
                 if a[i].1.caps & b[j].1.caps != a[i].1.caps {
                     return false;
                 }
+                // uses_summary is monotone: a.uses_summary ≤ b.uses_summary
+                if a[i].1.uses_summary && !b[j].1.uses_summary {
+                    return false;
+                }
                 for orig in &a[i].1.origins {
                     if !b[j].1.origins.iter().any(|o| o.node == orig.node) {
                         return false;
@@ -212,10 +217,12 @@ fn merge_join_ssa_predicates(
 pub struct SsaTaintEvent {
     pub sink_node: NodeIndex,
     pub tainted_values: Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>,
-    #[allow(dead_code)]
     pub sink_caps: Cap,
     pub all_validated: bool,
     pub guard_kind: Option<PredicateKind>,
+    /// Whether any callee in this event's taint path was resolved via a
+    /// function summary (SSA, local, or global) rather than direct label.
+    pub uses_summary: bool,
 }
 
 // ── SSA Taint Transfer ──────────────────────────────────────────────────
@@ -637,6 +644,7 @@ fn transfer_block(
                     VarTaint {
                         caps: combined_caps,
                         origins: combined_origins,
+                        uses_summary: false,
                     },
                 );
 
@@ -836,6 +844,7 @@ fn transfer_inst(
                     VarTaint {
                         caps: source_caps,
                         origins: SmallVec::from_elem(origin, 1),
+                        uses_summary: false,
                     },
                 );
             }
@@ -851,6 +860,7 @@ fn transfer_inst(
                 VarTaint {
                     caps: Cap::all(),
                     origins: SmallVec::from_elem(origin, 1),
+                    uses_summary: false,
                 },
             );
         }
@@ -978,6 +988,7 @@ fn transfer_inst(
                     VarTaint {
                         caps: return_bits,
                         origins: return_origins,
+                        uses_summary: resolved_callee,
                     },
                 );
             }
@@ -995,10 +1006,12 @@ fn transfer_inst(
             // Collect taint from operands
             let mut combined_caps = Cap::empty();
             let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+            let mut inherited_summary = false;
 
             for &use_val in uses {
                 if let Some(taint) = state.get(use_val) {
                     combined_caps |= taint.caps;
+                    inherited_summary |= taint.uses_summary;
                     for orig in &taint.origins {
                         if combined_origins.len() < MAX_ORIGINS
                             && !combined_origins.iter().any(|o| o.node == orig.node)
@@ -1038,6 +1051,7 @@ fn transfer_inst(
                     VarTaint {
                         caps: combined_caps,
                         origins: combined_origins,
+                        uses_summary: inherited_summary,
                     },
                 );
             }
@@ -1149,6 +1163,7 @@ fn collect_block_events(
                     VarTaint {
                         caps: combined_caps,
                         origins: combined_origins,
+                        uses_summary: false,
                     },
                 );
 
@@ -1241,12 +1256,17 @@ fn collect_block_events(
             } else {
                 None
             };
+            // Check if any tainted value's taint chain used summary resolution
+            let any_uses_summary = tainted.iter().any(|(val, _, _)| {
+                state.get(*val).is_some_and(|t| t.uses_summary)
+            });
             events.push(SsaTaintEvent {
                 sink_node: inst.cfg_node,
                 tainted_values: tainted,
                 sink_caps,
                 all_validated,
                 guard_kind,
+                uses_summary: any_uses_summary,
             });
         }
     }
@@ -1408,6 +1428,7 @@ fn try_curl_url_propagation(
                 VarTaint {
                     caps: url_caps,
                     origins: url_origins,
+                    uses_summary: false,
                 },
             );
         }
@@ -1677,10 +1698,45 @@ fn convert_ssa_to_resolved(
     }
 }
 
+/// BFS distance (in SSA blocks) from the source node's block to the sink
+/// node's block.  Returns 0 if same block or if lookup fails.  Capped at 255.
+fn block_distance(ssa: &SsaBody, source_node: NodeIndex, sink_node: NodeIndex) -> u16 {
+    let src_block = match ssa.cfg_node_map.get(&source_node) {
+        Some(v) => ssa.def_of(*v).block,
+        None => return 0,
+    };
+    let sink_block = match ssa.cfg_node_map.get(&sink_node) {
+        Some(v) => ssa.def_of(*v).block,
+        None => return 0,
+    };
+    if src_block == sink_block {
+        return 0;
+    }
+
+    // BFS from src_block to sink_block
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+    visited.insert(src_block);
+    queue.push_back((src_block, 0u16));
+
+    while let Some((blk, dist)) = queue.pop_front() {
+        for &succ in &ssa.block(blk).succs {
+            if succ == sink_block {
+                return (dist + 1).min(255);
+            }
+            if visited.insert(succ) && dist + 1 < 255 {
+                queue.push_back((succ, dist + 1));
+            }
+        }
+    }
+    0 // unreachable or not connected — conservative default
+}
+
 /// Convert SSA taint events to the standard Finding struct.
 pub fn ssa_events_to_findings(
     events: &[SsaTaintEvent],
-    _ssa: &SsaBody,
+    ssa: &SsaBody,
+    _cfg: &Cfg,
 ) -> Vec<crate::taint::Finding> {
     use std::collections::HashSet;
 
@@ -1693,9 +1749,11 @@ pub fn ssa_events_to_findings(
         if event.all_validated {
             continue;
         }
-        for (_val, _caps, origins) in &event.tainted_values {
+        for (_val, caps, origins) in &event.tainted_values {
+            let cap_specificity = (*caps & event.sink_caps).bits().count_ones() as u8;
             for origin in origins {
                 if seen.insert((origin.node.index(), event.sink_node.index())) {
+                    let hop_count = block_distance(ssa, origin.node, event.sink_node);
                     findings.push(crate::taint::Finding {
                         sink: event.sink_node,
                         source: origin.node,
@@ -1703,6 +1761,9 @@ pub fn ssa_events_to_findings(
                         source_kind: origin.source_kind,
                         path_validated: event.all_validated,
                         guard_kind: event.guard_kind,
+                        hop_count,
+                        cap_specificity,
+                        uses_summary: event.uses_summary,
                     });
                 }
             }
@@ -1840,6 +1901,7 @@ pub fn extract_ssa_func_summary(
         seed.insert(sym, VarTaint {
             caps: Cap::all(),
             origins: SmallVec::from_elem(origin, 1),
+            uses_summary: false,
         });
 
         let (return_caps, events) = run_probe(seed);

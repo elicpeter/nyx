@@ -34,6 +34,14 @@ pub struct Finding {
     /// The kind of validation guard protecting this path, if any.
     #[allow(dead_code)] // surfaced in Diag output (task 4)
     pub guard_kind: Option<PredicateKind>,
+    /// Number of SSA blocks between source and sink (0 = same block).
+    pub hop_count: u16,
+    /// Capability specificity: number of matching cap bits between source and sink.
+    /// Higher = more specific match (e.g. SQL_QUERY→SQL_QUERY vs broad Cap::all()).
+    pub cap_specificity: u8,
+    /// Whether this finding was resolved via a function summary (cross-function)
+    /// rather than direct intra-function flow.
+    pub uses_summary: bool,
 }
 
 /// Run taint analysis on a single file's CFG.
@@ -108,7 +116,7 @@ pub fn analyse_file(
                 };
                 let events =
                     ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
-                ssa_transfer::ssa_events_to_findings(&events, &ssa_body)
+                ssa_transfer::ssa_events_to_findings(&events, &ssa_body, cfg)
             }
             Err(e) => {
                 tracing::warn!("SSA lowering failed: {e}");
@@ -269,7 +277,7 @@ fn analyse_ssa_js_two_level(
     );
 
     // Collect top-level findings
-    let mut all_findings = ssa_transfer::ssa_events_to_findings(&toplevel_events, &toplevel_ssa);
+    let mut all_findings = ssa_transfer::ssa_events_to_findings(&toplevel_events, &toplevel_ssa, cfg);
 
     let func_entries = find_function_entries(cfg);
     let toplevel_syms = collect_toplevel_symbols(cfg, interner);
@@ -302,7 +310,7 @@ fn analyse_ssa_js_two_level(
             let (func_events, func_block_states) =
                 ssa_transfer::run_ssa_taint_full(&func_ssa, cfg, &func_transfer);
             round_findings.extend(
-                ssa_transfer::ssa_events_to_findings(&func_events, &func_ssa),
+                ssa_transfer::ssa_events_to_findings(&func_events, &func_ssa, cfg),
             );
 
             // Extract exit state, filter to globals, join into combined

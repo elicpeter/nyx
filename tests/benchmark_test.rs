@@ -14,6 +14,7 @@ mod common;
 
 use common::test_config;
 use nyx_scanner::commands::scan::Diag;
+use nyx_scanner::evidence::Confidence;
 use nyx_scanner::patterns::FindingCategory;
 use nyx_scanner::utils::config::AnalysisMode;
 use serde::{Deserialize, Serialize};
@@ -110,6 +111,8 @@ struct CaseOutcome {
     all_finding_ids: Vec<String>,
     security_finding_count: usize,
     non_security_finding_count: usize,
+    #[serde(skip)]
+    diags: Vec<Diag>,
 }
 
 #[derive(Serialize)]
@@ -176,6 +179,7 @@ struct BenchmarkResults {
     aggregate_rule_level: Metrics,
     by_language: BTreeMap<String, Metrics>,
     by_vuln_class: BTreeMap<String, Metrics>,
+    by_confidence: BTreeMap<String, Metrics>,
 }
 
 // ── Scanning ─────────────────────────────────────────────────────────
@@ -539,6 +543,7 @@ fn benchmark_evaluation() {
             all_finding_ids,
             security_finding_count: security_count,
             non_security_finding_count: non_security_count,
+            diags,
         });
     }
 
@@ -554,12 +559,16 @@ fn benchmark_evaluation() {
     let by_language = aggregate_by_key(&outcomes, |o| &o.language);
     let by_class = aggregate_by_key(&outcomes, |o| &o.vuln_class);
 
+    // Score at each confidence threshold.
+    let by_confidence = score_by_confidence(&outcomes, &cases_to_run);
+
     // Print summary.
     println!("\n=== Aggregate Metrics ===");
     print_metrics_table("File-level", &agg_file);
     print_metrics_table("Rule-level", &agg_rule);
     print_map_table("By language (rule-level)", &by_language);
     print_map_table("By vuln class (rule-level)", &by_class);
+    print_map_table("By confidence threshold (rule-level)", &by_confidence);
 
     // Write results JSON.
     std::fs::create_dir_all(&results_dir).ok();
@@ -583,6 +592,7 @@ fn benchmark_evaluation() {
         aggregate_rule_level: agg_rule,
         by_language,
         by_vuln_class: by_class,
+        by_confidence,
     };
 
     let results_path = results_dir.join("latest.json");
@@ -610,6 +620,89 @@ fn benchmark_evaluation() {
         "Rule-level F1 {:.3} fell below threshold 0.767 (baseline 0.817)",
         rule.f1,
     );
+}
+
+// ── Confidence-threshold scoring ─────────────────────────────────────
+
+fn score_by_confidence(
+    outcomes: &[CaseOutcome],
+    cases: &[&Case],
+) -> BTreeMap<String, Metrics> {
+    let mut result = BTreeMap::new();
+    for (label, min_conf) in [
+        (">=Low", Confidence::Low),
+        (">=Medium", Confidence::Medium),
+        (">=High", Confidence::High),
+    ] {
+        let (mut tp, mut fp, mut fn_, mut tn) = (0, 0, 0, 0);
+        for (outcome, case) in outcomes.iter().zip(cases.iter()) {
+            let filtered: Vec<&Diag> = outcome
+                .diags
+                .iter()
+                .filter(|d| d.confidence.is_some_and(|c| c >= min_conf))
+                .collect();
+            let (rule_outcome, _, _) = score_rule_level_with_diags(case, &filtered);
+            match rule_outcome {
+                Outcome::TP => tp += 1,
+                Outcome::FP => fp += 1,
+                Outcome::FN => fn_ += 1,
+                Outcome::TN => tn += 1,
+            }
+        }
+        result.insert(label.to_string(), Metrics::compute(tp, fp, fn_, tn));
+    }
+    result
+}
+
+fn score_rule_level_with_diags(case: &Case, security_diags: &[&Diag]) -> (Outcome, Vec<String>, Vec<String>) {
+    if case.is_vulnerable {
+        for d in security_diags {
+            if !is_security(d) {
+                continue;
+            }
+            for forbidden in &case.forbidden_rule_ids {
+                if rule_matches(&d.id, forbidden) {
+                    let unexpected = security_diags.iter().filter(|d| is_security(d)).map(|d| d.id.clone()).collect();
+                    return (Outcome::FP, vec![], unexpected);
+                }
+            }
+        }
+    }
+
+    let sec_diags: Vec<&&Diag> = security_diags.iter().filter(|d| is_security(d)).collect();
+
+    if !case.is_vulnerable {
+        if sec_diags.is_empty() {
+            return (Outcome::TN, vec![], vec![]);
+        } else {
+            let unexpected = sec_diags.iter().map(|d| d.id.clone()).collect();
+            return (Outcome::FP, vec![], unexpected);
+        }
+    }
+
+    let all_acceptable: Vec<&str> = case
+        .expected_rule_ids
+        .iter()
+        .chain(case.allowed_alternative_rule_ids.iter())
+        .map(|s| s.as_str())
+        .collect();
+
+    let mut matched = Vec::new();
+    let mut unexpected = Vec::new();
+    for d in &sec_diags {
+        let is_expected = all_acceptable.iter().any(|exp| rule_matches(&d.id, exp));
+        if is_expected {
+            matched.push(d.id.clone());
+        } else {
+            unexpected.push(d.id.clone());
+        }
+    }
+
+    if matched.is_empty() {
+        (Outcome::FN, matched, unexpected)
+    } else {
+        (Outcome::TP, matched, unexpected)
+    }
 }
 
 // ── Utilities ────────────────────────────────────────────────────────

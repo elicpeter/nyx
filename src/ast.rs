@@ -80,6 +80,11 @@ fn build_taint_diag(
         evidence_notes.push("path_validated".into());
     }
     evidence_notes.push(format!("source_kind:{:?}", finding.source_kind));
+    evidence_notes.push(format!("hop_count:{}", finding.hop_count));
+    evidence_notes.push(format!("cap_specificity:{}", finding.cap_specificity));
+    if finding.uses_summary {
+        evidence_notes.push("uses_summary".into());
+    }
 
     Diag {
         path: file_path_owned.clone(),
