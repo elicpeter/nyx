@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-22T18:52:09Z",
+  "timestamp": "2026-03-22T19:25:54Z",
   "scanner_version": "0.4.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -597,17 +597,13 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "java.xss.getwriter_print"
-      ],
-      "all_finding_ids": [
-        "java.xss.getwriter_print"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -636,14 +632,12 @@
       "outcome_location_level": null,
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
-        "cfg-unguarded-sink",
-        "java.xss.getwriter_print"
+        "cfg-unguarded-sink"
       ],
       "all_finding_ids": [
-        "cfg-unguarded-sink",
-        "java.xss.getwriter_print"
+        "cfg-unguarded-sink"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -652,17 +646,13 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "java.xss.getwriter_print"
-      ],
-      "all_finding_ids": [
-        "java.xss.getwriter_print"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1759,17 +1749,13 @@
       "language": "python",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "py.cmdi.os_system"
-      ],
-      "all_finding_ids": [
-        "py.cmdi.os_system"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1793,17 +1779,13 @@
       "language": "python",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "py.cmdi.os_system"
-      ],
-      "all_finding_ids": [
-        "py.cmdi.os_system"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1812,17 +1794,13 @@
       "language": "python",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "py.cmdi.os_system"
-      ],
-      "all_finding_ids": [
-        "py.cmdi.os_system"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -2036,21 +2014,21 @@
   ],
   "aggregate_file_level": {
     "tp": 58,
-    "fp": 24,
+    "fp": 19,
     "fn_": 1,
-    "tn": 20,
-    "precision": 0.7073170731707317,
+    "tn": 25,
+    "precision": 0.7532467532467533,
     "recall": 0.9830508474576272,
-    "f1": 0.8226950354609929
+    "f1": 0.8529411764705883
   },
   "aggregate_rule_level": {
     "tp": 58,
-    "fp": 24,
+    "fp": 19,
     "fn_": 1,
-    "tn": 20,
-    "precision": 0.7073170731707317,
+    "tn": 25,
+    "precision": 0.7532467532467533,
     "recall": 0.9830508474576272,
-    "f1": 0.8226950354609929
+    "f1": 0.8529411764705883
   },
   "by_language": {
     "go": {
@@ -2064,12 +2042,12 @@
     },
     "java": {
       "tp": 10,
-      "fp": 6,
+      "fp": 4,
       "fn_": 1,
-      "tn": 2,
-      "precision": 0.625,
+      "tn": 4,
+      "precision": 0.7142857142857143,
       "recall": 0.9090909090909091,
-      "f1": 0.7407407407407406
+      "f1": 0.8
     },
     "javascript": {
       "tp": 12,
@@ -2091,12 +2069,12 @@
     },
     "python": {
       "tp": 12,
-      "fp": 6,
+      "fp": 3,
       "fn_": 0,
-      "tn": 3,
-      "precision": 0.6666666666666666,
+      "tn": 6,
+      "precision": 0.8,
       "recall": 1.0,
-      "f1": 0.8
+      "f1": 0.888888888888889
     },
     "ruby": {
       "tp": 1,
@@ -2156,9 +2134,9 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 24,
+      "fp": 19,
       "fn_": 0,
-      "tn": 20,
+      "tn": 25,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0

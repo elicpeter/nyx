@@ -82,13 +82,13 @@
     {
       "rule_id": "java.xss.getwriter_print",
       "severity": "MEDIUM",
-      "must_match": true,
+      "must_match": false,
       "line_range": [
         26,
         26
       ],
       "evidence_contains": [],
-      "notes": "response.getWriter().println(new String(data)) in read branch; AST pattern correctly matches getWriter().println call"
+      "notes": "response.getWriter().println(new String(data)) — file-read data, not user input; Layer B correctly suppresses because taint found no unsafe flow to this sink"
     }
   ]
 }

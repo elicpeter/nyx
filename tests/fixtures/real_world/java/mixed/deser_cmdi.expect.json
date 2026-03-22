@@ -47,13 +47,13 @@
     {
       "rule_id": "java.xss.getwriter_print",
       "severity": "MEDIUM",
-      "must_match": true,
+      "must_match": false,
       "line_range": [
         11,
         11
       ],
       "evidence_contains": [],
-      "notes": "response.getWriter().println(\"Done\") matched by AST pattern; constant string so low security value but pattern match is correct"
+      "notes": "response.getWriter().println(\"Done\") — constant string; Layer B correctly suppresses because taint confirmed no unsafe flow to this sink"
     },
     {
       "rule_id": "taint-unsanitised-flow",

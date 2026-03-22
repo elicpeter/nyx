@@ -3,7 +3,7 @@ use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
 use crate::evidence::{Evidence, SpanEvidence, StateEvidence};
-use crate::labels::{build_lang_rules, severity_for_source_kind, LangAnalysisRules};
+use crate::labels::{build_lang_rules, severity_for_source_kind, Cap, DataLabel, LangAnalysisRules};
 use crate::patterns::{FindingCategory, Severity};
 use crate::state;
 use crate::summary::{FuncSummary, GlobalSummaries};
@@ -15,6 +15,7 @@ use crate::utils::{Config, query_cache};
 use petgraph::graph::NodeIndex;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::{Language, QueryCursor, StreamingIterator};
 
@@ -742,6 +743,112 @@ fn has_interpolation(node: tree_sitter::Node) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Layer B: AST pattern suppression when taint confirms safety
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Map the second segment of a pattern ID (e.g. "cmdi" from "py.cmdi.os_system")
+/// to the `Cap` that taint analysis models. Returns `None` for categories taint
+/// cannot subsume (memory safety, crypto, etc.), so those patterns are never suppressed.
+fn pattern_category_cap(pattern_id: &str) -> Option<Cap> {
+    let category = pattern_id.split('.').nth(1)?;
+    match category {
+        "cmdi" => Some(Cap::SHELL_ESCAPE),
+        "xss" => Some(Cap::HTML_ESCAPE),
+        "sqli" => Some(Cap::SQL_QUERY),
+        "code_exec" => Some(Cap::CODE_EXEC),
+        "ssrf" => Some(Cap::SSRF),
+        "path" => Some(Cap::FILE_IO),
+        // deser/memory/crypto: taint cannot fully subsume these structural patterns
+        _ => None,
+    }
+}
+
+/// Suppression context built from CFG + taint results. Used to decide whether
+/// an AST pattern finding can be safely suppressed because taint analysis
+/// evaluated the data flow and found it safe.
+struct TaintSuppressionCtx {
+    /// For each function scope, the set of lines containing Source-labeled nodes.
+    source_lines_by_func: HashMap<Option<String>, HashSet<usize>>,
+    /// For each sink node line, its enclosing function scope.
+    sink_func_at_line: HashMap<usize, Option<String>>,
+    /// Lines where taint emitted a `taint-unsanitised-flow` finding.
+    taint_finding_lines: HashSet<usize>,
+}
+
+impl TaintSuppressionCtx {
+    /// Build suppression context from a CFG graph, tree (for byte→line mapping),
+    /// and existing taint findings.
+    fn build(cfg_graph: &Cfg, tree: &tree_sitter::Tree, taint_diags: &[Diag]) -> Self {
+        let mut source_lines_by_func: HashMap<Option<String>, HashSet<usize>> = HashMap::new();
+        let mut sink_func_at_line: HashMap<usize, Option<String>> = HashMap::new();
+
+        for idx in cfg_graph.node_indices() {
+            let info = &cfg_graph[idx];
+            let mut has_source = false;
+            let mut has_sink = false;
+            for label in &info.labels {
+                match label {
+                    DataLabel::Source(_) => has_source = true,
+                    DataLabel::Sink(_) => has_sink = true,
+                    _ => {}
+                }
+            }
+            let byte = info.span.0;
+            let point = byte_offset_to_point(tree, byte);
+            let line = point.row + 1;
+            if has_source {
+                source_lines_by_func
+                    .entry(info.enclosing_func.clone())
+                    .or_default()
+                    .insert(line);
+            }
+            if has_sink {
+                sink_func_at_line.insert(line, info.enclosing_func.clone());
+            }
+        }
+
+        let taint_finding_lines: HashSet<usize> = taint_diags
+            .iter()
+            .filter(|d| d.id.starts_with("taint-unsanitised-flow"))
+            .map(|d| d.line)
+            .collect();
+
+        Self {
+            source_lines_by_func,
+            sink_func_at_line,
+            taint_finding_lines,
+        }
+    }
+
+    /// Returns `true` if this AST pattern finding should be suppressed.
+    fn should_suppress(&self, pattern_id: &str, line: usize) -> bool {
+        // Condition 1: pattern category maps to a Cap taint models
+        if pattern_category_cap(pattern_id).is_none() {
+            return false;
+        }
+        // Condition 2: at least one Source exists in the same function scope
+        // at an EARLIER line (upstream in control flow). This prevents suppression
+        // when the only Source is co-located (dual-label) or downstream from the
+        // sink, since taint couldn't have evaluated a flow that doesn't exist.
+        if let Some(func) = self.sink_func_at_line.get(&line) {
+            match self.source_lines_by_func.get(func) {
+                Some(source_lines) => {
+                    if !source_lines.iter().any(|&sl| sl < line) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        } else {
+            // No CFG sink at this line — taint had no opportunity to evaluate
+            return false;
+        }
+        // Condition 3: no taint finding at this line (taint found it safe)
+        !self.taint_finding_lines.contains(&line)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Pass 2 / single‑file: Full rule execution (AST queries + taint)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -772,7 +879,16 @@ pub fn run_rules_on_bytes(
         let parsed = ParsedFile::from_source(source, cfg);
         out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
         if cfg.scanner.mode == AnalysisMode::Full {
-            out.extend(parsed.source.run_ast_queries(cfg));
+            // Layer B: suppress AST findings where taint confirmed safety
+            let suppression = TaintSuppressionCtx::build(
+                &parsed.cfg_graph,
+                &parsed.source.tree,
+                &out,
+            );
+            let ast_findings = parsed.source.run_ast_queries(cfg);
+            out.extend(ast_findings.into_iter().filter(|d| {
+                !suppression.should_suppress(&d.id, d.line)
+            }));
         }
         parsed.source.finalize_diags(&mut out, cfg);
     } else {
@@ -841,7 +957,20 @@ pub fn analyse_file_fused(
         out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
     }
     if cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Ast {
-        out.extend(parsed.source.run_ast_queries(cfg));
+        let ast_findings = parsed.source.run_ast_queries(cfg);
+        // Layer B only applies when taint had the opportunity to evaluate
+        if needs_cfg && cfg.scanner.mode == AnalysisMode::Full {
+            let suppression = TaintSuppressionCtx::build(
+                &parsed.cfg_graph,
+                &parsed.source.tree,
+                &out,
+            );
+            out.extend(ast_findings.into_iter().filter(|d| {
+                !suppression.should_suppress(&d.id, d.line)
+            }));
+        } else {
+            out.extend(ast_findings);
+        }
     }
     parsed.source.finalize_diags(&mut out, cfg);
 
