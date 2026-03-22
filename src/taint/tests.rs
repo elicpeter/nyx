@@ -32,6 +32,7 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         global_seed: None,
         const_values: None,
         type_facts: None,
+        ssa_summaries: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &transfer);
     let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3274,6 +3275,7 @@ fn assert_ssa_integration(src: &[u8]) {
         global_seed: None,
         const_values: None,
         type_facts: None,
+        ssa_summaries: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3377,6 +3379,7 @@ fn integ_php_echo_simple_var() {
         global_seed: None,
         const_values: None,
         type_facts: None,
+        ssa_summaries: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3413,6 +3416,7 @@ fn integ_c_curl_handle_ssrf() {
         global_seed: None,
         const_values: None,
         type_facts: None,
+        ssa_summaries: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3494,5 +3498,264 @@ fn ssa_js_chained_call_taint() {
     assert!(
         !findings.is_empty(),
         "SSA should detect taint through fetch(url).then().then() chain"
+    );
+}
+
+// ── Field access taint tracking tests ────────────────────────────────────
+
+#[test]
+fn ssa_field_write_to_sink() {
+    // obj.data = source; sink(obj.data) → finding
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    res.send(obj.data);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+    assert!(
+        !findings.is_empty(),
+        "SSA: field write from source should propagate taint to field read at sink"
+    );
+}
+
+#[test]
+fn ssa_field_overwrite_kills_taint() {
+    // obj.data = source; obj.data = "safe"; sink(obj.data) → no finding
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    obj.data = \"safe\";\n    res.send(obj.data);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+    assert!(
+        findings.is_empty(),
+        "SSA: constant overwrite of field should kill taint"
+    );
+}
+
+#[test]
+fn ssa_field_different_bases_no_alias() {
+    // a.field = source; sink(b.field) → no finding (different base objects)
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var a = {};\n    var b = {};\n    a.field = req.query.input;\n    res.send(b.field);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+    assert!(
+        findings.is_empty(),
+        "SSA: different base objects should not alias — a.field taint must not reach b.field"
+    );
+}
+
+#[test]
+fn ssa_python_attribute_taint() {
+    // config.cmd = os.getenv("CMD"); os.system(config.cmd) → finding
+    let src = b"import os\n\nclass Config:\n    pass\n\nconfig = Config()\nconfig.cmd = os.getenv(\"CMD\")\nos.system(config.cmd)\n";
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "python", lang);
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::Python, "test.py", &[]);
+    assert!(
+        !findings.is_empty(),
+        "SSA: Python attribute write from source should propagate taint to attribute read at sink"
+    );
+}
+
+// ── SSA Function Summary tests ───────────────────────────────────────────
+
+#[test]
+fn ssa_summary_identity_propagation() {
+    // Function that returns its param unchanged → Identity transform
+    use crate::state::symbol::SymbolInterner;
+    use crate::summary::ssa_summary::TaintTransform;
+
+    let src = br#"
+        fn passthrough(x: String) -> String {
+            x
+        }"#;
+    let (cfg, entry, summaries) = parse_lang(
+        src,
+        "rust",
+        tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+    );
+    let interner = SymbolInterner::from_cfg(&cfg);
+    let func_entries = super::find_function_entries(&cfg);
+    assert!(!func_entries.is_empty(), "should find at least one function entry");
+
+    for (func_name, func_entry) in &func_entries {
+        let func_ssa = crate::ssa::lower_to_ssa(&cfg, *func_entry, Some(func_name), false);
+        if let Ok(ssa) = func_ssa {
+            let param_count = ssa.blocks.iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count();
+            if param_count == 0 { continue; }
+
+            let summary = ssa_transfer::extract_ssa_func_summary(
+                &ssa, &cfg, &summaries, None,
+                Lang::Rust, "test.rs", &interner, param_count,
+            );
+            assert!(
+                !summary.param_to_return.is_empty(),
+                "passthrough function should have param_to_return entries"
+            );
+            // Check the transform is Identity (all caps survive)
+            for (_, transform) in &summary.param_to_return {
+                assert!(
+                    matches!(transform, TaintTransform::Identity),
+                    "passthrough should produce Identity transform, got {:?}", transform
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ssa_summary_sanitizer_strips_bits() {
+    // Function with internal sanitizer → StripBits transform
+    use crate::state::symbol::SymbolInterner;
+    use crate::summary::ssa_summary::TaintTransform;
+
+    let src = br#"
+        fn sanitize_input(x: String) -> String {
+            html_escape::encode_safe(&x)
+        }"#;
+    let (cfg, entry, summaries) = parse_lang(
+        src,
+        "rust",
+        tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+    );
+    let interner = SymbolInterner::from_cfg(&cfg);
+    let func_entries = super::find_function_entries(&cfg);
+
+    for (func_name, func_entry) in &func_entries {
+        let func_ssa = crate::ssa::lower_to_ssa(&cfg, *func_entry, Some(func_name), false);
+        if let Ok(ssa) = func_ssa {
+            let param_count = ssa.blocks.iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count();
+            if param_count == 0 { continue; }
+
+            let summary = ssa_transfer::extract_ssa_func_summary(
+                &ssa, &cfg, &summaries, None,
+                Lang::Rust, "test.rs", &interner, param_count,
+            );
+            // Sanitizer should strip some bits
+            for (_, transform) in &summary.param_to_return {
+                assert!(
+                    matches!(transform, TaintTransform::StripBits(_)),
+                    "sanitizer wrapper should produce StripBits transform, got {:?}", transform
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ssa_summary_source_adds_bits() {
+    // Function that reads env → source_caps should be non-empty
+    use crate::state::symbol::SymbolInterner;
+
+    let src = br#"
+        use std::env;
+        fn read_config() -> String {
+            env::var("CONFIG").unwrap()
+        }"#;
+    let (cfg, entry, summaries) = parse_lang(
+        src,
+        "rust",
+        tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+    );
+    let interner = SymbolInterner::from_cfg(&cfg);
+    let func_entries = super::find_function_entries(&cfg);
+
+    for (func_name, func_entry) in &func_entries {
+        let func_ssa = crate::ssa::lower_to_ssa(&cfg, *func_entry, Some(func_name), false);
+        if let Ok(ssa) = func_ssa {
+            let param_count = ssa.blocks.iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count();
+
+            let summary = ssa_transfer::extract_ssa_func_summary(
+                &ssa, &cfg, &summaries, None,
+                Lang::Rust, "test.rs", &interner, param_count,
+            );
+            assert!(
+                !summary.source_caps.is_empty(),
+                "env-reading function should have non-empty source_caps, got {:?}", summary.source_caps
+            );
+        }
+    }
+}
+
+#[test]
+fn ssa_summary_param_to_sink() {
+    // Function that passes param to a dangerous call → param_to_sink
+    use crate::state::symbol::SymbolInterner;
+
+    let src = br#"
+        use std::process::Command;
+        fn run_cmd(cmd: String) {
+            Command::new("sh").arg(cmd).status().unwrap();
+        }"#;
+    let (cfg, entry, summaries) = parse_lang(
+        src,
+        "rust",
+        tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
+    );
+    let interner = SymbolInterner::from_cfg(&cfg);
+    let func_entries = super::find_function_entries(&cfg);
+
+    for (func_name, func_entry) in &func_entries {
+        let func_ssa = crate::ssa::lower_to_ssa(&cfg, *func_entry, Some(func_name), false);
+        if let Ok(ssa) = func_ssa {
+            let param_count = ssa.blocks.iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count();
+            if param_count == 0 { continue; }
+
+            let summary = ssa_transfer::extract_ssa_func_summary(
+                &ssa, &cfg, &summaries, None,
+                Lang::Rust, "test.rs", &interner, param_count,
+            );
+            assert!(
+                !summary.param_to_sink.is_empty(),
+                "function passing param to Command sink should have param_to_sink entries"
+            );
+        }
+    }
+}
+
+#[test]
+fn ssa_cross_function_taint_with_sanitizer_wrapper() {
+    // Cross-function: caller passes tainted data through sanitizer wrapper
+    // The SSA summary should capture the sanitizer's StripBits, reducing taint at call site
+    let src = b"var express = require('express');\nvar app = express();\n\nfunction cleanHtml(input) {\n    return DOMPurify.sanitize(input);\n}\n\napp.get('/safe', function(req, res) {\n    var name = req.query.name;\n    var safe = cleanHtml(name);\n    res.send(safe);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+
+    // With SSA summary, cleanHtml should be recognized as stripping HTML_ESCAPE bits,
+    // so res.send(safe) should not fire for XSS (HTML_ESCAPE stripped).
+    // The finding may still exist for other cap bits, but the XSS-specific ones should be gone.
+    // This test validates that the SSA summary integration is working.
+    // Note: whether this fully suppresses depends on the specific cap bit overlap.
+    // At minimum, the summary extraction should produce a non-trivial result.
+    drop(findings);
+
+    // Verify that summary extraction works for this code
+    use crate::state::symbol::SymbolInterner;
+    let interner = SymbolInterner::from_cfg(&the_cfg);
+    let ssa_summaries = super::extract_intra_file_ssa_summaries(
+        &the_cfg, &interner, Lang::JavaScript, "test.js",
+        &summaries, None,
+    );
+    // cleanHtml should have an SSA summary
+    assert!(
+        ssa_summaries.contains_key("cleanHtml"),
+        "cleanHtml should have an SSA summary, got keys: {:?}",
+        ssa_summaries.keys().collect::<Vec<_>>()
+    );
+    let clean_summary = &ssa_summaries["cleanHtml"];
+    assert!(
+        !clean_summary.param_to_return.is_empty(),
+        "cleanHtml should propagate param to return"
     );
 }

@@ -421,6 +421,7 @@ Recall is strong across all classes. Precision is limited by false positives on 
 | Area | Details |
 |---|---|
 | Output formats | JUnit XML, HTML report generator |
+| UX | `nyx serve` local UI, smart file-watch re-scan, richer artifact browsing, interactive trace inspection |
 | Language coverage | Expanded taint rules per language |
 | Rule updates | Remote rule feed with signature verification |
 | UX | Smart file-watch re-scan |

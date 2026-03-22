@@ -1,0 +1,15 @@
+{
+  "description": "Field taint killed by constant overwrite — no finding expected.",
+  "tags": ["taint", "field-access", "safe"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [4, 9],
+      "evidence_contains": [],
+      "notes": "obj.data overwritten with constant before sink — taint killed"
+    }
+  ]
+}

@@ -63,11 +63,18 @@ pub fn analyse_file(
         );
     }
 
-    // 2. Run SSA analysis (two-level for JS/TS, single-pass for others)
+    // 2a. Extract SSA function summaries for intra-file callee precision
+    let ssa_summaries = extract_intra_file_ssa_summaries(
+        cfg, &interner, caller_lang, caller_namespace,
+        local_summaries, global_summaries,
+    );
+    let ssa_sums_ref = if ssa_summaries.is_empty() { None } else { Some(&ssa_summaries) };
+
+    // 2b. Run SSA analysis (two-level for JS/TS, single-pass for others)
     let mut findings = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
         match analyse_ssa_js_two_level(
             cfg, entry, &interner, caller_lang, caller_namespace,
-            local_summaries, global_summaries, interop_edges,
+            local_summaries, global_summaries, interop_edges, ssa_sums_ref,
         ) {
             Ok(f) => f,
             Err(e) => {
@@ -97,6 +104,7 @@ pub fn analyse_file(
                     global_seed: None,
                     const_values: Some(&opt.const_values),
                     type_facts: Some(&opt.type_facts),
+                    ssa_summaries: ssa_sums_ref,
                 };
                 let events =
                     ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
@@ -155,6 +163,61 @@ fn find_function_entries(cfg: &Cfg) -> Vec<(String, NodeIndex)> {
     entries
 }
 
+/// Extract precise SSA function summaries for all functions in a file.
+///
+/// Lowers each function to SSA individually and runs per-parameter probing
+/// to produce an `SsaFuncSummary`. The resulting map is keyed by function name.
+fn extract_intra_file_ssa_summaries(
+    cfg: &Cfg,
+    interner: &SymbolInterner,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+) -> std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary> {
+    let func_entries = find_function_entries(cfg);
+    let mut summaries = std::collections::HashMap::new();
+
+    for (func_name, func_entry) in &func_entries {
+        let func_ssa = match crate::ssa::lower_to_ssa(cfg, *func_entry, Some(func_name), false) {
+            Ok(ssa) => ssa,
+            Err(_) => continue,
+        };
+
+        // Count params from SSA body
+        let param_count = func_ssa.blocks.iter()
+            .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+            .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+            .count();
+
+        if param_count == 0 {
+            continue; // No params → no per-parameter summary needed
+        }
+
+        let summary = ssa_transfer::extract_ssa_func_summary(
+            &func_ssa, cfg, local_summaries, global_summaries,
+            lang, namespace, interner, param_count,
+        );
+
+        // Only store if the summary has observable effects
+        if !summary.param_to_return.is_empty()
+            || !summary.param_to_sink.is_empty()
+            || !summary.source_caps.is_empty()
+        {
+            summaries.insert(func_name.clone(), summary);
+        }
+    }
+
+    if !summaries.is_empty() {
+        tracing::debug!(
+            count = summaries.len(),
+            "SSA summary extraction: produced intra-file summaries"
+        );
+    }
+
+    summaries
+}
+
 /// JS/TS two-level SSA solve: top-level scope + per-function, with global seed.
 ///
 /// Level 1: Solve top-level code (scope=None, nop for function bodies).
@@ -170,6 +233,7 @@ fn analyse_ssa_js_two_level(
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
     interop_edges: &[InteropEdge],
+    ssa_summaries: Option<&std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>>,
 ) -> Result<Vec<Finding>, crate::ssa::ir::SsaError> {
     const MAX_ITERATIONS: usize = 3;
 
@@ -192,6 +256,7 @@ fn analyse_ssa_js_two_level(
         global_seed: None,
         const_values: Some(&toplevel_opt.const_values),
         type_facts: Some(&toplevel_opt.type_facts),
+        ssa_summaries,
     };
     let (toplevel_events, toplevel_block_states) =
         ssa_transfer::run_ssa_taint_full(&toplevel_ssa, cfg, &toplevel_transfer);
@@ -232,6 +297,7 @@ fn analyse_ssa_js_two_level(
                 global_seed: Some(&current_seed),
                 const_values: Some(&func_opt.const_values),
                 type_facts: Some(&func_opt.type_facts),
+                ssa_summaries,
             };
             let (func_events, func_block_states) =
                 ssa_transfer::run_ssa_taint_full(&func_ssa, cfg, &func_transfer);

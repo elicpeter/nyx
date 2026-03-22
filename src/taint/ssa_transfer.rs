@@ -237,6 +237,9 @@ pub struct SsaTaintTransfer<'a> {
     /// Type facts from type analysis.
     /// Used for type-aware sink filtering (e.g., suppress SQL injection for int-typed values).
     pub type_facts: Option<&'a crate::ssa::type_facts::TypeFactResult>,
+    /// Precise per-function SSA summaries for intra-file callee resolution.
+    /// Checked before legacy FuncSummary resolution.
+    pub ssa_summaries: Option<&'a HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>>,
 }
 
 /// Run SSA-based taint analysis, returning events AND converged block states.
@@ -1299,6 +1302,13 @@ fn resolve_callee(
 ) -> Option<ResolvedSummary> {
     let normalized = normalize_callee_name(callee);
 
+    // 0) Precise SSA summaries (intra-file, per-parameter transforms)
+    if let Some(ssa_sums) = transfer.ssa_summaries {
+        if let Some(ssa_sum) = ssa_sums.get(normalized) {
+            return Some(convert_ssa_to_resolved(ssa_sum));
+        }
+    }
+
     // 1) Local (same-file)
     let local_matches: Vec<_> = transfer
         .local_summaries
@@ -1363,6 +1373,41 @@ fn resolve_callee(
     None
 }
 
+/// Convert an `SsaFuncSummary` to the existing `ResolvedSummary` format.
+fn convert_ssa_to_resolved(
+    ssa_sum: &crate::summary::ssa_summary::SsaFuncSummary,
+) -> ResolvedSummary {
+    use crate::summary::ssa_summary::TaintTransform;
+
+    let propagating_params: Vec<usize> = ssa_sum
+        .param_to_return
+        .iter()
+        .map(|(idx, _)| *idx)
+        .collect();
+
+    // Compute effective sanitizer caps: union of StripBits across all params
+    let mut sanitizer_caps = Cap::empty();
+    for (_, transform) in &ssa_sum.param_to_return {
+        if let TaintTransform::StripBits(bits) = transform {
+            sanitizer_caps |= *bits;
+        }
+    }
+
+    // Compute effective sink caps: union across all params
+    let mut sink_caps = Cap::empty();
+    for (_, caps) in &ssa_sum.param_to_sink {
+        sink_caps |= *caps;
+    }
+
+    ResolvedSummary {
+        source_caps: ssa_sum.source_caps,
+        sanitizer_caps,
+        sink_caps,
+        propagates_taint: !propagating_params.is_empty(),
+        propagating_params,
+    }
+}
+
 /// Convert SSA taint events to the standard Finding struct.
 pub fn ssa_events_to_findings(
     events: &[SsaTaintEvent],
@@ -1391,4 +1436,162 @@ pub fn ssa_events_to_findings(
     }
 
     findings
+}
+
+// ── SSA Function Summary Extraction ──────────────────────────────────────
+
+/// Maximum number of parameters to probe for summary extraction.
+/// Functions with more params fall back to legacy `FuncSummary`.
+const MAX_PROBE_PARAMS: usize = 8;
+
+/// Extract a precise per-parameter `SsaFuncSummary` from an already-lowered SSA body.
+///
+/// For each parameter (up to [`MAX_PROBE_PARAMS`]), runs a taint probe by seeding
+/// that parameter with `Cap::all()` via `global_seed` and observing what caps
+/// survive to return positions and which sinks fire.  A final probe with no params
+/// tainted detects intrinsic source caps.
+pub fn extract_ssa_func_summary(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    local_summaries: &crate::cfg::FuncSummaries,
+    global_summaries: Option<&crate::summary::GlobalSummaries>,
+    lang: Lang,
+    namespace: &str,
+    interner: &crate::state::symbol::SymbolInterner,
+    param_count: usize,
+) -> crate::summary::ssa_summary::SsaFuncSummary {
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+
+    let effective_params = param_count.min(MAX_PROBE_PARAMS);
+
+    // Collect (param_index, var_name, ssa_value) from the SSA body
+    let mut param_info: Vec<(usize, String, SsaValue)> = Vec::new();
+    for block in &ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            if let SsaOp::Param { index } = &inst.op {
+                if *index < effective_params {
+                    if let Some(name) = inst.var_name.as_ref() {
+                        param_info.push((*index, name.clone(), inst.value));
+                    }
+                }
+            }
+        }
+    }
+
+    // Identify return-reaching blocks
+    let return_blocks: Vec<usize> = ssa.blocks.iter().enumerate()
+        .filter(|(_, b)| matches!(b.terminator, Terminator::Return))
+        .map(|(i, _)| i)
+        .collect();
+
+    // Collect all param SSA values to exclude from return cap collection.
+    // Param values persist with their seeded taint throughout the function —
+    // we only want caps on derived values (call results, assigns) at return.
+    let all_param_values: std::collections::HashSet<SsaValue> = param_info
+        .iter()
+        .map(|(_, _, v)| *v)
+        .collect();
+
+    // Helper: run a taint probe with a given global_seed and return
+    // (surviving_return_caps, sink_events).
+    let run_probe = |seed: HashMap<SymbolId, VarTaint>| -> (Cap, Vec<SsaTaintEvent>) {
+        let seed_ref = if seed.is_empty() { None } else { Some(&seed) };
+        let transfer = SsaTaintTransfer {
+            lang,
+            namespace,
+            interner,
+            local_summaries,
+            global_summaries,
+            interop_edges: &[],
+            global_seed: seed_ref,
+            const_values: None,
+            type_facts: None,
+            ssa_summaries: None,
+        };
+
+        let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);
+
+        // Collect surviving caps at return blocks.
+        // Separate param values from derived values: derived values give
+        // more precise transforms (they reflect function-internal sanitization).
+        // If only param values reach return → pure passthrough (Identity).
+        let mut derived_caps = Cap::empty();
+        let mut param_caps = Cap::empty();
+        for &bid in &return_blocks {
+            if let Some(entry) = &block_states[bid] {
+                let exit = transfer_block(&ssa.blocks[bid], cfg, ssa, &transfer, entry.clone());
+                for (val, taint) in &exit.values {
+                    if all_param_values.contains(val) {
+                        param_caps |= taint.caps;
+                    } else {
+                        derived_caps |= taint.caps;
+                    }
+                }
+            }
+        }
+
+        // Prefer derived caps; fall back to param caps for passthrough functions
+        let return_caps = if !derived_caps.is_empty() {
+            derived_caps
+        } else {
+            param_caps
+        };
+
+        (return_caps, events)
+    };
+
+    // Probe with no params tainted → detect source_caps
+    let (baseline_return_caps, _baseline_events) = run_probe(HashMap::new());
+    let source_caps = baseline_return_caps;
+
+    // Probe each param
+    let mut param_to_return = Vec::new();
+    let mut param_to_sink = Vec::new();
+
+    for &(idx, ref var_name, _ssa_val) in &param_info {
+        let sym = match interner.get(var_name) {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let mut seed = HashMap::new();
+        let origin = TaintOrigin {
+            node: NodeIndex::new(0), // synthetic origin for probing
+            source_kind: SourceKind::UserInput,
+        };
+        seed.insert(sym, VarTaint {
+            caps: Cap::all(),
+            origins: SmallVec::from_elem(origin, 1),
+        });
+
+        let (return_caps, events) = run_probe(seed);
+
+        // Subtract baseline source_caps — we only want param-contributed caps
+        let param_return_caps = return_caps & !source_caps;
+
+        if !param_return_caps.is_empty() {
+            let stripped = Cap::all() & !param_return_caps;
+            let transform = if stripped.is_empty() {
+                TaintTransform::Identity
+            } else {
+                TaintTransform::StripBits(stripped)
+            };
+            param_to_return.push((idx, transform));
+        }
+
+        // Collect sink caps from events
+        let mut sink_caps = Cap::empty();
+        for event in &events {
+            sink_caps |= event.sink_caps;
+        }
+        if !sink_caps.is_empty() {
+            param_to_sink.push((idx, sink_caps));
+        }
+    }
+
+    SsaFuncSummary {
+        param_to_return,
+        param_to_sink,
+        source_caps,
+    }
 }

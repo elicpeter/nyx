@@ -1,3 +1,5 @@
+pub mod ssa_summary;
+
 use crate::labels::{Cap, DataLabel};
 use crate::symbol::{FuncKey, Lang, normalize_namespace};
 use serde::{Deserialize, Serialize};

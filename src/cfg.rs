@@ -412,6 +412,40 @@ fn has_call_descendant(n: Node, lang: &str) -> bool {
     false
 }
 
+/// Recursively collect identifiers AND full dotted member-expression paths.
+///
+/// For `member_expression` / `attribute` / `selector_expression` / `field_expression`
+/// nodes the full dotted path (via `member_expr_text`) is pushed into `paths`,
+/// and the individual leaf identifiers are pushed into `idents` as a fallback.
+/// Plain identifiers go only into `idents`.
+fn collect_idents_with_paths(n: Node, code: &[u8], idents: &mut Vec<String>, paths: &mut Vec<String>) {
+    match n.kind() {
+        "member_expression" | "attribute" | "selector_expression" | "field_expression" => {
+            if let Some(path) = member_expr_text(n, code) {
+                paths.push(path);
+            }
+            // Also collect individual idents as fallback
+            collect_idents(n, code, idents);
+        }
+        "identifier" | "field_identifier" | "property_identifier" => {
+            if let Some(txt) = text_of(n, code) {
+                idents.push(txt);
+            }
+        }
+        "variable_name" => {
+            if let Some(txt) = text_of(n, code) {
+                idents.push(txt.trim_start_matches('$').to_string());
+            }
+        }
+        _ => {
+            let mut c = n.walk();
+            for ch in n.children(&mut c) {
+                collect_idents_with_paths(ch, code, idents, paths);
+            }
+        }
+    }
+}
+
 /// Recursively collect every identifier that occurs inside `n`.
 ///
 /// Recognises `identifier` (most languages), `variable_name` (PHP),
@@ -878,8 +912,12 @@ fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>> {
             return Vec::new();
         }
         let mut idents = Vec::new();
-        collect_idents(child, code, &mut idents);
-        result.push(idents);
+        let mut paths = Vec::new();
+        collect_idents_with_paths(child, code, &mut idents, &mut paths);
+        // Dotted paths first, then individual idents as fallback
+        let mut combined = paths;
+        combined.extend(idents);
+        result.push(combined);
     }
     result
 }
@@ -909,12 +947,17 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
 
             if def_node.is_some() || val_node.is_some() {
                 if let Some(pat) = def_node {
-                    let mut tmp = Vec::<String>::new();
-                    collect_idents(pat, code, &mut tmp);
-                    defs = tmp.into_iter().next();
+                    let mut idents = Vec::new();
+                    let mut paths = Vec::new();
+                    collect_idents_with_paths(pat, code, &mut idents, &mut paths);
+                    defs = paths.pop().or_else(|| idents.into_iter().next());
                 }
                 if let Some(val) = val_node {
-                    collect_idents(val, code, &mut uses);
+                    let mut idents = Vec::new();
+                    let mut paths = Vec::new();
+                    collect_idents_with_paths(val, code, &mut idents, &mut paths);
+                    uses.extend(paths);
+                    uses.extend(idents);
                 }
             } else {
                 // Try nested declarator pattern (JS/TS `lexical_declaration` → `variable_declarator`,
@@ -953,12 +996,17 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
                         if let Some(name_node) = child_name
                             && defs.is_none()
                         {
-                            let mut tmp = Vec::<String>::new();
-                            collect_idents(name_node, code, &mut tmp);
-                            defs = tmp.into_iter().next();
+                            let mut idents = Vec::new();
+                            let mut paths = Vec::new();
+                            collect_idents_with_paths(name_node, code, &mut idents, &mut paths);
+                            defs = paths.pop().or_else(|| idents.into_iter().next());
                         }
                         if let Some(val_node) = child_value {
-                            collect_idents(val_node, code, &mut uses);
+                            let mut idents = Vec::new();
+                            let mut paths = Vec::new();
+                            collect_idents_with_paths(val_node, code, &mut idents, &mut paths);
+                            uses.extend(paths);
+                            uses.extend(idents);
                         }
                     }
                 }
@@ -966,7 +1014,11 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
                 // Fallback: if still nothing found, collect all idents as uses.
                 // This handles expression_statement wrappers.
                 if defs.is_none() && uses.is_empty() {
-                    collect_idents(ast, code, &mut uses);
+                    let mut idents = Vec::new();
+                    let mut paths = Vec::new();
+                    collect_idents_with_paths(ast, code, &mut idents, &mut paths);
+                    uses.extend(paths);
+                    uses.extend(idents);
                 }
             }
             (defs, uses)
@@ -977,12 +1029,18 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
             let mut defs = None;
             let mut uses = Vec::new();
             if let Some(lhs) = ast.child_by_field_name("left") {
-                let mut tmp = Vec::<String>::new();
-                collect_idents(lhs, code, &mut tmp);
-                defs = tmp.pop();
+                let mut idents = Vec::new();
+                let mut paths = Vec::new();
+                collect_idents_with_paths(lhs, code, &mut idents, &mut paths);
+                // Prefer dotted path (member expression) over last ident
+                defs = paths.pop().or_else(|| idents.pop());
             }
             if let Some(rhs) = ast.child_by_field_name("right") {
-                collect_idents(rhs, code, &mut uses);
+                let mut idents = Vec::new();
+                let mut paths = Vec::new();
+                collect_idents_with_paths(rhs, code, &mut idents, &mut paths);
+                uses.extend(paths);
+                uses.extend(idents);
             }
             (defs, uses)
         }
@@ -1012,15 +1070,21 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
                 return (defs, uses);
             }
 
-            let mut uses = Vec::new();
-            collect_idents(ast, code, &mut uses);
+            let mut idents = Vec::new();
+            let mut paths = Vec::new();
+            collect_idents_with_paths(ast, code, &mut idents, &mut paths);
+            let mut uses = paths;
+            uses.extend(idents);
             (None, uses)
         }
 
         // everything else – no definition, but may read vars
         _ => {
-            let mut uses = Vec::new();
-            collect_idents(ast, code, &mut uses);
+            let mut idents = Vec::new();
+            let mut paths = Vec::new();
+            collect_idents_with_paths(ast, code, &mut idents, &mut paths);
+            let mut uses = paths;
+            uses.extend(idents);
             (None, uses)
         }
     }

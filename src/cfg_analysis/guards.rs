@@ -42,7 +42,8 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
 
     sink_info.uses.iter().all(|u| {
         // Part of the callee name itself → constant
-        if callee_parts.contains(&u.as_str()) {
+        // Check both individual parts and the full dotted callee path
+        if callee_parts.contains(&u.as_str()) || u == callee_desc {
             return true;
         }
         // Function parameter → not externally tainted
