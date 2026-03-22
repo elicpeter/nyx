@@ -877,13 +877,28 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
                 // Python/Ruby `expression_statement` → `assignment`)
                 let mut cursor = ast.walk();
                 for child in ast.children(&mut cursor) {
+                    // Only use left/right fields for actual assignment nodes — binary
+                    // expressions also have left/right but are not definitions.
+                    let is_assign = matches!(lookup(lang, child.kind()), Kind::Assignment);
                     let child_name = child
                         .child_by_field_name("name")
                         .or_else(|| child.child_by_field_name("declarator"))
-                        .or_else(|| child.child_by_field_name("left"));
+                        .or_else(|| {
+                            if is_assign {
+                                child.child_by_field_name("left")
+                            } else {
+                                None
+                            }
+                        });
                     let child_value = child
                         .child_by_field_name("value")
-                        .or_else(|| child.child_by_field_name("right"));
+                        .or_else(|| {
+                            if is_assign {
+                                child.child_by_field_name("right")
+                            } else {
+                                None
+                            }
+                        });
 
                     // Only treat this child as a declarator if it has BOTH a name
                     // and a value (or at least a value). This prevents method_invocation
@@ -1137,9 +1152,22 @@ fn push_node<'a>(
     if matches!(
         lookup(lang, ast.kind()),
         Kind::CallWrapper | Kind::Assignment | Kind::Return
-    ) && let Some(inner) = first_call_ident(ast, lang, code)
-    {
-        text = inner;
+    ) {
+        if let Some(inner) = first_call_ident(ast, lang, code) {
+            text = inner;
+        } else if matches!(lookup(lang, ast.kind()), Kind::CallWrapper) {
+            // Fallback for language-construct "calls" (e.g. PHP `echo_statement`,
+            // `print` expression):  the first child is a keyword leaf (e.g. "echo")
+            // that acts as a callee but is not a function_call_expression.
+            let mut cursor = ast.walk();
+            if let Some(first) = ast.children(&mut cursor).next()
+                && first.child_count() == 0
+                && let Some(kw) = text_of(first, code)
+                && kw.len() <= 16
+            {
+                text = kw;
+            }
+        }
     }
 
     /* ── 2.  LABEL LOOK-UP  ───────────────────────────────────────────── */

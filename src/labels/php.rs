@@ -132,6 +132,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "member_call_expression"        => Kind::CallMethod,
     "assignment_expression"         => Kind::Assignment,
     "expression_statement"          => Kind::CallWrapper,
+    "echo_statement"                => Kind::CallWrapper,
 
     // trivia
     "comment"                       => Kind::Trivia,

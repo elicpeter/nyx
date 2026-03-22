@@ -1226,6 +1226,49 @@ fn php_source_to_sink() {
 }
 
 #[test]
+fn php_echo_xss() {
+    // PHP `echo` is a language construct (echo_statement), not a function call.
+    // Tainted data flowing through echo should be detected as an XSS sink.
+    let src = b"<?php\n$name = $_GET['name'];\necho \"<h1>Hello \" . $name . \"</h1>\";\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Php, "test.php", &[]);
+    assert_eq!(
+        findings.len(),
+        1,
+        "PHP echo with tainted var should produce 1 XSS finding"
+    );
+}
+
+#[test]
+fn php_echo_simple_var() {
+    // Simple `echo $var;` with a tainted variable.
+    let src = b"<?php\n$x = $_POST['data'];\necho $x;\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Php, "test.php", &[]);
+    assert_eq!(
+        findings.len(),
+        1,
+        "PHP echo with simple tainted var should produce 1 finding"
+    );
+}
+
+#[test]
+fn php_echo_safe_literal() {
+    // `echo "hello";` with no tainted data should produce no finding.
+    let src = b"<?php\necho \"hello world\";\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Php, "test.php", &[]);
+    assert_eq!(
+        findings.len(),
+        0,
+        "PHP echo with literal string should produce 0 findings"
+    );
+}
+
+#[test]
 fn ruby_source_to_sink() {
     let src = b"def main\n  x = gets()\n  system(x)\nend\n";
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
