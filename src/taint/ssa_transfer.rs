@@ -1160,7 +1160,23 @@ fn collect_block_events(
             continue;
         }
 
-        let sink_caps = resolve_sink_caps(info, transfer);
+        let mut sink_caps = resolve_sink_caps(info, transfer);
+        if sink_caps.is_empty() {
+            continue;
+        }
+
+        // Interprocedural sanitizer: subtract sanitizer caps from inner arg callees.
+        // If an argument is wrapped in a call to a known sanitizer (e.g.
+        // `os.system(sanitize(cmd))`), the sanitizer's caps reduce the effective
+        // sink sensitivity so tainted data stripped by the inner call isn't flagged.
+        for maybe_callee in &info.arg_callees {
+            if let Some(inner_callee) = maybe_callee {
+                let caller_func = info.enclosing_func.as_deref().unwrap_or("");
+                if let Some(resolved) = resolve_callee(transfer, inner_callee, caller_func, 0) {
+                    sink_caps &= !resolved.sanitizer_caps;
+                }
+            }
+        }
         if sink_caps.is_empty() {
             continue;
         }

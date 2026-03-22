@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-22T17:31:46Z",
+  "timestamp": "2026-03-22T18:30:55Z",
   "scanner_version": "0.4.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -173,14 +173,12 @@
       "outcome_location_level": null,
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
-        "state-unauthed-access",
-        "taint-unsanitised-flow (source 14:2)"
+        "state-unauthed-access"
       ],
       "all_finding_ids": [
-        "state-unauthed-access",
-        "taint-unsanitised-flow (source 14:2)"
+        "state-unauthed-access"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -501,18 +499,16 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
-        "java.deser.readobject",
         "taint-unsanitised-flow (source 7:9)"
       ],
       "unexpected_rule_ids": [
         "java.xss.getwriter_print"
       ],
       "all_finding_ids": [
-        "java.deser.readobject",
         "java.xss.getwriter_print",
         "taint-unsanitised-flow (source 7:9)"
       ],
-      "security_finding_count": 3,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -525,17 +521,15 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
-        "java.deser.readobject",
         "java.cmdi.runtime_exec",
         "taint-unsanitised-flow (source 7:9)"
       ],
       "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "java.deser.readobject",
         "java.cmdi.runtime_exec",
         "taint-unsanitised-flow (source 7:9)"
       ],
-      "security_finding_count": 3,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -599,19 +593,13 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "java.xss.getwriter_print",
-        "taint-unsanitised-flow (source 11:9)"
-      ],
-      "all_finding_ids": [
-        "java.xss.getwriter_print",
-        "taint-unsanitised-flow (source 11:9)"
-      ],
-      "security_finding_count": 2,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -640,14 +628,12 @@
       "outcome_location_level": null,
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
-        "cfg-unguarded-sink",
-        "java.xss.getwriter_print"
+        "cfg-unguarded-sink"
       ],
       "all_finding_ids": [
-        "cfg-unguarded-sink",
-        "java.xss.getwriter_print"
+        "cfg-unguarded-sink"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -656,17 +642,13 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "java.xss.getwriter_print"
-      ],
-      "all_finding_ids": [
-        "java.xss.getwriter_print"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -960,17 +942,13 @@
       "language": "javascript",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "taint-unsanitised-flow (source 8:5)"
-      ],
-      "all_finding_ids": [
-        "taint-unsanitised-flow (source 8:5)"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1691,19 +1669,16 @@
       "vuln_class": "deser",
       "is_vulnerable": true,
       "outcome_file_level": "TP",
-      "outcome_rule_level": "TP",
-      "outcome_location_level": "TP",
-      "matched_rule_ids": [
-        "py.deser.pickle_loads"
-      ],
+      "outcome_rule_level": "FN",
+      "outcome_location_level": "FN",
+      "matched_rule_ids": [],
       "unexpected_rule_ids": [
         "cfg-unguarded-sink"
       ],
       "all_finding_ids": [
-        "cfg-unguarded-sink",
-        "py.deser.pickle_loads"
+        "cfg-unguarded-sink"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -1767,19 +1742,13 @@
       "language": "python",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "py.cmdi.os_system",
-        "taint-unsanitised-flow (source 9:5)"
-      ],
-      "all_finding_ids": [
-        "py.cmdi.os_system",
-        "taint-unsanitised-flow (source 9:5)"
-      ],
-      "security_finding_count": 2,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1803,17 +1772,13 @@
       "language": "python",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "py.cmdi.os_system"
-      ],
-      "all_finding_ids": [
-        "py.cmdi.os_system"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1822,17 +1787,13 @@
       "language": "python",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "py.cmdi.os_system"
-      ],
-      "all_finding_ids": [
-        "py.cmdi.os_system"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -2046,21 +2007,21 @@
   ],
   "aggregate_file_level": {
     "tp": 58,
-    "fp": 25,
+    "fp": 19,
     "fn_": 1,
-    "tn": 19,
-    "precision": 0.6987951807228916,
+    "tn": 25,
+    "precision": 0.7532467532467533,
     "recall": 0.9830508474576272,
-    "f1": 0.8169014084507042
+    "f1": 0.8529411764705883
   },
   "aggregate_rule_level": {
-    "tp": 58,
-    "fp": 25,
-    "fn_": 1,
-    "tn": 19,
-    "precision": 0.6987951807228916,
-    "recall": 0.9830508474576272,
-    "f1": 0.8169014084507042
+    "tp": 57,
+    "fp": 19,
+    "fn_": 2,
+    "tn": 25,
+    "precision": 0.75,
+    "recall": 0.9661016949152542,
+    "f1": 0.8444444444444443
   },
   "by_language": {
     "go": {
@@ -2074,21 +2035,21 @@
     },
     "java": {
       "tp": 10,
-      "fp": 6,
+      "fp": 4,
       "fn_": 1,
-      "tn": 2,
-      "precision": 0.625,
+      "tn": 4,
+      "precision": 0.7142857142857143,
       "recall": 0.9090909090909091,
-      "f1": 0.7407407407407406
+      "f1": 0.8
     },
     "javascript": {
       "tp": 12,
-      "fp": 4,
+      "fp": 3,
       "fn_": 0,
-      "tn": 5,
-      "precision": 0.75,
+      "tn": 6,
+      "precision": 0.8,
       "recall": 1.0,
-      "f1": 0.8571428571428571
+      "f1": 0.888888888888889
     },
     "php": {
       "tp": 11,
@@ -2100,13 +2061,13 @@
       "f1": 0.846153846153846
     },
     "python": {
-      "tp": 12,
-      "fp": 6,
-      "fn_": 0,
-      "tn": 3,
-      "precision": 0.6666666666666666,
-      "recall": 1.0,
-      "f1": 0.8
+      "tp": 11,
+      "fp": 3,
+      "fn_": 1,
+      "tn": 6,
+      "precision": 0.7857142857142857,
+      "recall": 0.9166666666666666,
+      "f1": 0.8461538461538461
     },
     "ruby": {
       "tp": 1,
@@ -2138,13 +2099,13 @@
       "f1": 1.0
     },
     "deser": {
-      "tp": 4,
+      "tp": 3,
       "fp": 0,
-      "fn_": 0,
+      "fn_": 1,
       "tn": 0,
       "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0
+      "recall": 0.75,
+      "f1": 0.8571428571428571
     },
     "fmt_string": {
       "tp": 1,
@@ -2166,9 +2127,9 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 25,
+      "fp": 19,
       "fn_": 0,
-      "tn": 19,
+      "tn": 25,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0

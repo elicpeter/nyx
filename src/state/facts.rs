@@ -291,6 +291,7 @@ mod tests {
             all_args_literal: false,
             catch_param: false,
             const_text: None,
+            arg_callees: Vec::new(),
         }
     }
 

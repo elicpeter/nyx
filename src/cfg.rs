@@ -85,6 +85,11 @@ pub struct NodeInfo {
     /// Raw text of a constant/literal RHS when this node defines a variable
     /// from a syntactic literal with no uses. Used by SSA constant propagation.
     pub const_text: Option<String>,
+    /// For Call nodes: the callee name of the call expression wrapping each
+    /// argument (per-position, matching arg_uses). For Assignment sink nodes:
+    /// the RHS call callee at position 0 (if the RHS is a call expression).
+    /// Used by SSA sink detection for interprocedural sanitizer resolution.
+    pub arg_callees: Vec<Option<String>>,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -569,6 +574,7 @@ fn push_condition_node<'a>(
         all_args_literal: false,
         catch_param: false,
         const_text: None,
+        arg_callees: Vec::new(),
     })
 }
 
@@ -918,6 +924,66 @@ fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>> {
         let mut combined = paths;
         combined.extend(idents);
         result.push(combined);
+    }
+    result
+}
+
+/// Like `first_call_ident`, but also checks if `n` itself is a call node.
+/// `first_call_ident` only searches children, so when `n` IS the call
+/// expression (e.g. the argument `sanitize(cmd)`), this function catches it.
+fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
+    match lookup(lang, n.kind()) {
+        Kind::CallFn => n
+            .child_by_field_name("function")
+            .or_else(|| n.child_by_field_name("method"))
+            .or_else(|| n.child_by_field_name("name"))
+            .or_else(|| n.child_by_field_name("type"))
+            .and_then(|f| text_of(f, code)),
+        Kind::CallMethod => {
+            let func = n
+                .child_by_field_name("method")
+                .or_else(|| n.child_by_field_name("name"))
+                .and_then(|f| text_of(f, code));
+            let recv = n
+                .child_by_field_name("object")
+                .or_else(|| n.child_by_field_name("receiver"))
+                .and_then(|f| root_receiver_text(f, lang, code));
+            match (recv, func) {
+                (Some(r), Some(f)) => Some(format!("{r}.{f}")),
+                (_, Some(f)) => Some(f),
+                _ => None,
+            }
+        }
+        Kind::CallMacro => n
+            .child_by_field_name("macro")
+            .and_then(|f| text_of(f, code)),
+        _ => first_call_ident(n, lang, code),
+    }
+}
+
+/// For each argument of `call_node`, find the callee name if that argument
+/// is itself a call expression (e.g. `sanitize(x)` in `os.system(sanitize(x))`).
+/// Returns a `Vec<Option<String>>` parallel to `extract_arg_uses` output.
+fn extract_arg_callees(call_node: Node, lang: &str, code: &[u8]) -> Vec<Option<String>> {
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        // Bail on spread/splat like extract_arg_uses does
+        let kind = child.kind();
+        if kind == "spread_element"
+            || kind == "dictionary_splat"
+            || kind == "list_splat"
+            || kind == "keyword_argument"
+            || kind == "splat_argument"
+            || kind == "hash_splat_argument"
+            || kind == "named_argument"
+        {
+            return Vec::new();
+        }
+        result.push(call_ident_of(child, lang, code));
     }
     result
 }
@@ -1447,6 +1513,38 @@ fn push_node<'a>(
         false
     };
 
+    // Extract per-argument inner call callees for interprocedural sanitizer resolution.
+    let mut arg_callees = if kind == StmtKind::Call {
+        call_ast
+            .map(|cn| extract_arg_callees(cn, lang, code))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // For assignment sinks (including CallWrapper-wrapped assignments like
+    // `element.innerHTML = clean(name)`), also extract the RHS callee.
+    // This runs regardless of kind because a CallWrapper node may have
+    // kind=Call (for the contained getElementById call) yet the actual
+    // sink is the assignment to innerHTML.
+    if !labels.is_empty() {
+        let assign_node = if matches!(lookup(lang, ast.kind()), Kind::Assignment) {
+            Some(ast)
+        } else if matches!(lookup(lang, ast.kind()), Kind::CallWrapper) {
+            let mut cursor = ast.walk();
+            ast.children(&mut cursor)
+                .find(|c| matches!(lookup(lang, c.kind()), Kind::Assignment))
+        } else {
+            None
+        };
+        if let Some(asgn) = assign_node
+            && let Some(rhs) = asgn.child_by_field_name("right")
+            && let Some(callee_name) = call_ident_of(rhs, lang, code)
+        {
+            arg_callees.push(Some(callee_name));
+        }
+    }
+
     // For CallMethod nodes, extract the receiver identifier and prepend it
     // to arg_uses at position 0. This allows `collect_propagating_uses_taint`
     // to apply an offset so that `propagating_params[0]` maps to the first
@@ -1494,6 +1592,7 @@ fn push_node<'a>(
         all_args_literal,
         catch_param: false,
         const_text,
+        arg_callees,
     });
 
     debug!(
@@ -1766,6 +1865,7 @@ fn build_try<'a>(
                     all_args_literal: false,
                     catch_param: true,
                     const_text: None,
+                    arg_callees: Vec::new(),
                 });
 
                 // Wire exception edges from every exception source → synthetic node
@@ -2035,6 +2135,7 @@ fn build_sub<'a>(
                     all_args_literal: false,
                     catch_param: false,
                     const_text: None,
+                    arg_callees: Vec::new(),
                 });
                 connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
@@ -2651,6 +2752,7 @@ fn build_sub<'a>(
                 all_args_literal: false,
                 catch_param: false,
                 const_text: None,
+                arg_callees: Vec::new(),
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -2926,6 +3028,7 @@ pub(crate) fn build_cfg<'a>(
         all_args_literal: false,
         catch_param: false,
         const_text: None,
+        arg_callees: Vec::new(),
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -2945,6 +3048,7 @@ pub(crate) fn build_cfg<'a>(
         all_args_literal: false,
         catch_param: false,
         const_text: None,
+        arg_callees: Vec::new(),
     });
 
     // Build the body below the synthetic ENTRY.
