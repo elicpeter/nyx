@@ -11,7 +11,7 @@ use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint,
 use crate::taint::path_state::{PredicateKind, classify_condition};
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 /// Maximum origins tracked per SSA value.
 const MAX_ORIGINS: usize = 4;
@@ -228,16 +228,17 @@ pub struct SsaTaintTransfer<'a> {
     pub local_summaries: &'a FuncSummaries,
     pub global_summaries: Option<&'a GlobalSummaries>,
     pub interop_edges: &'a [InteropEdge],
+    /// SymbolId-keyed taint from top-level scope (JS/TS two-level solve).
+    /// Read-only fallback for Param ops representing external variables.
+    pub global_seed: Option<&'a HashMap<SymbolId, VarTaint>>,
 }
 
-/// Run SSA-based taint analysis.
-///
-/// Block-level worklist: converge states, then single pass to emit events.
-pub fn run_ssa_taint(
+/// Run SSA-based taint analysis, returning events AND converged block states.
+pub fn run_ssa_taint_full(
     ssa: &SsaBody,
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
-) -> Vec<SsaTaintEvent> {
+) -> (Vec<SsaTaintEvent>, Vec<Option<SsaTaintState>>) {
     let num_blocks = ssa.blocks.len();
 
     // Per-block entry states
@@ -247,6 +248,15 @@ pub fn run_ssa_taint(
     // Phase 1: fixed-point iteration
     let mut worklist: VecDeque<usize> = VecDeque::new();
     worklist.push_back(ssa.entry.0 as usize);
+
+    // Initialize orphan blocks (no predecessors, not entry) with initial state.
+    // This handles catch blocks that are disconnected after exception edge stripping.
+    for (bid, block) in ssa.blocks.iter().enumerate() {
+        if bid != ssa.entry.0 as usize && block.preds.is_empty() {
+            block_states[bid] = Some(SsaTaintState::initial());
+            worklist.push_back(bid);
+        }
+    }
     let mut iterations: usize = 0;
     const BUDGET: usize = 100_000;
 
@@ -303,7 +313,94 @@ pub fn run_ssa_taint(
         collect_block_events(block, cfg, ssa, transfer, entry_state, &mut events);
     }
 
-    events
+    (events, block_states)
+}
+
+/// Convenience wrapper: returns only events (existing signature).
+pub fn run_ssa_taint(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    transfer: &SsaTaintTransfer,
+) -> Vec<SsaTaintEvent> {
+    run_ssa_taint_full(ssa, cfg, transfer).0
+}
+
+/// Project SsaValue-keyed taint back to SymbolId-keyed taint via var_name lookup.
+/// Recomputes exit states from converged entry states, then maps SsaValue → var_name → SymbolId.
+pub fn extract_ssa_exit_state(
+    block_states: &[Option<SsaTaintState>],
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    transfer: &SsaTaintTransfer,
+    interner: &SymbolInterner,
+) -> HashMap<SymbolId, VarTaint> {
+    // Compute exit states by replaying transfer on converged entry states
+    let mut joined = SsaTaintState::initial();
+    for (bid, entry_state) in block_states.iter().enumerate() {
+        if let Some(state) = entry_state {
+            let exit_state = transfer_block(&ssa.blocks[bid], cfg, ssa, transfer, state.clone());
+            joined = joined.join(&exit_state);
+        }
+    }
+
+    // Map SsaValue → var_name → SymbolId
+    let mut result: HashMap<SymbolId, VarTaint> = HashMap::new();
+    for (val, taint) in &joined.values {
+        let var_name = ssa.value_defs.get(val.0 as usize)
+            .and_then(|vd| vd.var_name.as_deref());
+        if let Some(name) = var_name {
+            if let Some(sym) = interner.get(name) {
+                result.entry(sym)
+                    .and_modify(|existing| {
+                        existing.caps |= taint.caps;
+                        for orig in &taint.origins {
+                            if existing.origins.len() < MAX_ORIGINS
+                                && !existing.origins.iter().any(|o| o.node == orig.node)
+                            {
+                                existing.origins.push(*orig);
+                            }
+                        }
+                    })
+                    .or_insert_with(|| taint.clone());
+            }
+        }
+    }
+
+    result
+}
+
+/// Join two SymbolId-keyed seed maps (OR caps, merge origins).
+pub fn join_seed_maps(
+    a: &HashMap<SymbolId, VarTaint>,
+    b: &HashMap<SymbolId, VarTaint>,
+) -> HashMap<SymbolId, VarTaint> {
+    let mut result = a.clone();
+    for (sym, taint) in b {
+        result.entry(*sym)
+            .and_modify(|existing| {
+                existing.caps |= taint.caps;
+                for orig in &taint.origins {
+                    if existing.origins.len() < MAX_ORIGINS
+                        && !existing.origins.iter().any(|o| o.node == orig.node)
+                    {
+                        existing.origins.push(*orig);
+                    }
+                }
+            })
+            .or_insert_with(|| taint.clone());
+    }
+    result
+}
+
+/// Filter seed map to only include symbols in the given set.
+pub fn filter_seed_to_toplevel(
+    seed: &HashMap<SymbolId, VarTaint>,
+    toplevel: &std::collections::HashSet<SymbolId>,
+) -> HashMap<SymbolId, VarTaint> {
+    seed.iter()
+        .filter(|(sym, _)| toplevel.contains(sym))
+        .map(|(sym, taint)| (*sym, taint.clone()))
+        .collect()
 }
 
 /// Transfer a single block: process phis then body, return exit state.
@@ -471,7 +568,7 @@ fn apply_branch_predicates(
 fn transfer_inst(
     inst: &SsaInst,
     cfg: &Cfg,
-    _ssa: &SsaBody,
+    ssa: &SsaBody,
     transfer: &SsaTaintTransfer,
     state: &mut SsaTaintState,
 ) {
@@ -708,7 +805,18 @@ fn transfer_inst(
         }
 
         SsaOp::Param { .. } => {
-            // No inherent taint (conservative: could seed from caller context)
+            // Seed from global scope (JS/TS two-level solve)
+            if let Some(seed) = &transfer.global_seed {
+                if let Some(var_name) = ssa.value_defs.get(inst.value.0 as usize)
+                    .and_then(|vd| vd.var_name.as_deref())
+                {
+                    if let Some(sym) = transfer.interner.get(var_name) {
+                        if let Some(taint) = seed.get(&sym) {
+                            state.set(inst.value, taint.clone());
+                        }
+                    }
+                }
+            }
         }
 
         SsaOp::Phi(_) => {

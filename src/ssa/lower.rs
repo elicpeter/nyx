@@ -22,12 +22,54 @@ pub fn lower_to_ssa(
     scope: Option<&str>,
     scope_all: bool,
 ) -> Result<SsaBody, SsaError> {
+    lower_to_ssa_inner(cfg, entry, scope, scope_all, false)
+}
+
+/// Like `lower_to_ssa` but with `scope_nop`: when true, all nodes are included
+/// in the SSA body for graph connectivity, but out-of-scope nodes become Nop
+/// (their defines/uses are ignored). This is used for the JS two-level solve
+/// where the CFG linearizes function bodies inline.
+pub fn lower_to_ssa_scoped_nop(
+    cfg: &Cfg,
+    entry: NodeIndex,
+    scope: Option<&str>,
+) -> Result<SsaBody, SsaError> {
+    lower_to_ssa_inner(cfg, entry, scope, false, true)
+}
+
+fn lower_to_ssa_inner(
+    cfg: &Cfg,
+    entry: NodeIndex,
+    scope: Option<&str>,
+    scope_all: bool,
+    scope_nop: bool,
+) -> Result<SsaBody, SsaError> {
     if cfg.node_count() == 0 {
         return Err(SsaError::EmptyCfg);
     }
 
+    // When scope_nop is set, traverse all nodes (scope_all=true) for graph connectivity
+    let traverse_all = scope_all || scope_nop;
+
     // Collect reachable nodes in scope, stripping exception edges.
-    let (reachable, filtered_edges) = collect_reachable(cfg, entry, scope, scope_all);
+    let (reachable, filtered_edges) = collect_reachable(cfg, entry, scope, traverse_all);
+
+    // Build the set of nodes that should be treated as Nop (out-of-scope but included)
+    let nop_nodes: HashSet<NodeIndex> = if scope_nop {
+        let in_scope = |node: NodeIndex| -> bool {
+            let info = &cfg[node];
+            match scope {
+                None => info.enclosing_func.is_none(),
+                Some(name) => info.enclosing_func.as_deref() == Some(name),
+            }
+        };
+        reachable.iter()
+            .filter(|&&n| !in_scope(n) && !matches!(cfg[n].kind, StmtKind::Entry | StmtKind::Exit))
+            .copied()
+            .collect()
+    } else {
+        HashSet::new()
+    };
     if reachable.is_empty() {
         return Err(SsaError::EmptyCfg);
     }
@@ -49,8 +91,20 @@ pub fn lower_to_ssa(
     // 3. Compute dominance frontiers
     let dom_frontiers = compute_dominance_frontiers(num_blocks, &block_preds, &doms, &block_graph);
 
-    // 4. Collect variable definitions per block
-    let var_defs = collect_var_defs(cfg, &blocks_nodes);
+    // 4. Collect variable definitions per block (skip nop nodes)
+    let mut var_defs = collect_var_defs(cfg, &blocks_nodes, &nop_nodes);
+
+    // 4b. For per-function scope: identify external variables (used but not defined)
+    //     and inject synthetic Param defs at entry block so rename can find them.
+    let external_vars = if scope.is_some() && !scope_all && !scope_nop {
+        identify_external_uses(cfg, &blocks_nodes, &var_defs)
+    } else {
+        vec![]
+    };
+    // Register external vars as defined in block 0 so phi insertion considers them
+    for var in &external_vars {
+        var_defs.entry(var.clone()).or_default().insert(0);
+    }
 
     // 5. Phi insertion (Cytron algorithm)
     let phi_placements = insert_phis(&var_defs, &dom_frontiers, num_blocks);
@@ -65,6 +119,8 @@ pub fn lower_to_ssa(
         &phi_placements,
         &dom_tree_children,
         &filtered_edges,
+        &external_vars,
+        &nop_nodes,
     );
 
     // 7. Fill in preds/succs on SsaBlocks
@@ -129,8 +185,15 @@ fn collect_reachable(
             let kind = *edge.weight();
             let target = edge.target();
 
-            // Strip exception edges
+            // Strip exception edges from the graph, but still visit targets
+            // so catch-block nodes are included in the SSA body.
             if matches!(kind, EdgeKind::Exception) {
+                if (in_scope(target)
+                    || matches!(cfg[target].kind, StmtKind::Entry | StmtKind::Exit))
+                    && reachable.insert(target)
+                {
+                    queue.push_back(target);
+                }
                 continue;
             }
 
@@ -195,6 +258,11 @@ fn form_blocks(
     for &node in reachable {
         let in_deg = in_degree.get(&node).copied().unwrap_or(0);
         if in_deg > 1 || has_branching_in.get(&node).copied().unwrap_or(false) {
+            is_leader.insert(node);
+        }
+        // Orphan nodes (reachable via exception edges but no filtered predecessors)
+        // must be leaders so they get their own block (e.g. catch block entries).
+        if in_deg == 0 && node != entry {
             is_leader.insert(node);
         }
         // Node following a multi-exit node
@@ -342,15 +410,45 @@ fn compute_dominance_frontiers(
     df
 }
 
+/// Identify variables used but not defined within the scoped blocks.
+/// These represent external (e.g. global/top-level) variables that need
+/// synthetic Param instructions so the SSA rename phase can reference them.
+fn identify_external_uses(
+    cfg: &Cfg,
+    blocks_nodes: &[Vec<NodeIndex>],
+    var_defs: &HashMap<String, HashSet<usize>>,
+) -> Vec<String> {
+    let mut used: HashSet<String> = HashSet::new();
+    for nodes in blocks_nodes {
+        for &node in nodes {
+            for u in &cfg[node].uses {
+                used.insert(u.clone());
+            }
+        }
+    }
+    // External = used but never defined in any block
+    let mut external: Vec<String> = used
+        .into_iter()
+        .filter(|u| !var_defs.contains_key(u))
+        .collect();
+    external.sort(); // deterministic order
+    external
+}
+
 /// Collect variable definitions per block: var_name → set of block indices.
+/// Nodes in `nop_nodes` are skipped (they won't define variables in SSA).
 fn collect_var_defs(
     cfg: &Cfg,
     blocks_nodes: &[Vec<NodeIndex>],
+    nop_nodes: &HashSet<NodeIndex>,
 ) -> HashMap<String, HashSet<usize>> {
     let mut defs: HashMap<String, HashSet<usize>> = HashMap::new();
 
     for (block_idx, nodes) in blocks_nodes.iter().enumerate() {
         for &node in nodes {
+            if nop_nodes.contains(&node) {
+                continue;
+            }
             if let Some(ref d) = cfg[node].defines {
                 defs.entry(d.clone()).or_default().insert(block_idx);
             }
@@ -421,6 +519,8 @@ fn rename_variables(
     phi_placements: &[HashSet<String>],
     dom_tree_children: &[Vec<usize>],
     filtered_edges: &[(NodeIndex, NodeIndex, EdgeKind)],
+    external_vars: &[String],
+    nop_nodes: &HashSet<NodeIndex>,
 ) -> (Vec<SsaBlock>, Vec<ValueDef>, HashMap<NodeIndex, SsaValue>) {
     let num_blocks = blocks_nodes.len();
     let mut next_value: u32 = 0;
@@ -487,6 +587,7 @@ fn rename_variables(
         value_defs: &mut Vec<ValueDef>,
         cfg_node_map: &mut HashMap<NodeIndex, SsaValue>,
         next_value: &mut u32,
+        nop_nodes: &HashSet<NodeIndex>,
     ) {
         let block_id = BlockId(block_idx as u32);
 
@@ -543,7 +644,11 @@ fn rename_variables(
             };
 
             // Determine operation and collect uses
-            let op = if info.catch_param {
+            // Out-of-scope nodes (nop_nodes) become Nop: they preserve graph
+            // connectivity but don't participate in taint flow.
+            let op = if nop_nodes.contains(&node) {
+                SsaOp::Nop
+            } else if info.catch_param {
                 SsaOp::CatchParam
             } else if info.labels.iter().any(|l| {
                 matches!(l, crate::labels::DataLabel::Source(_))
@@ -585,14 +690,15 @@ fn rename_variables(
             // Allocate SSA value
             let v = SsaValue(*next_value);
             *next_value += 1;
+            let var_name_for_ssa = if nop_nodes.contains(&node) { None } else { info.defines.clone() };
             value_defs.push(ValueDef {
-                var_name: info.defines.clone(),
+                var_name: var_name_for_ssa.clone(),
                 cfg_node: node,
                 block: block_id,
             });
 
-            // Push defined variable onto stack
-            if let Some(ref d) = info.defines {
+            // Push defined variable onto stack (skip nop nodes)
+            if let Some(ref d) = var_name_for_ssa {
                 var_stacks.entry(d.clone()).or_default().push(v);
             }
 
@@ -602,7 +708,7 @@ fn rename_variables(
                 value: v,
                 op,
                 cfg_node: node,
-                var_name: info.defines.clone(),
+                var_name: var_name_for_ssa,
                 span: info.span,
             });
         }
@@ -696,6 +802,7 @@ fn rename_variables(
                 value_defs,
                 cfg_node_map,
                 next_value,
+                nop_nodes,
             );
         }
 
@@ -708,6 +815,34 @@ fn rename_variables(
         // Remove any new variables that weren't in saved
         let saved_vars: HashSet<&String> = saved.iter().map(|(k, _)| k).collect();
         var_stacks.retain(|k, _| saved_vars.contains(k));
+    }
+
+    // Inject synthetic Param instructions at START of block 0 for external variables.
+    // These create SSA definitions so the rename phase can reference them.
+    // Pre-seed var_stacks so process_block sees them.
+    if !external_vars.is_empty() {
+        let entry_cfg_node = blocks_nodes[0][0];
+        let mut synthetic_body = Vec::with_capacity(external_vars.len());
+        for (i, var) in external_vars.iter().enumerate() {
+            let v = SsaValue(next_value);
+            next_value += 1;
+            value_defs.push(ValueDef {
+                var_name: Some(var.clone()),
+                cfg_node: entry_cfg_node,
+                block: BlockId(0),
+            });
+            synthetic_body.push(SsaInst {
+                value: v,
+                op: SsaOp::Param { index: i },
+                cfg_node: entry_cfg_node,
+                var_name: Some(var.clone()),
+                span: (0, 0),
+            });
+            var_stacks.entry(var.clone()).or_default().push(v);
+        }
+        // Prepend synthetic params before any existing body instructions
+        synthetic_body.append(&mut ssa_blocks[0].body);
+        ssa_blocks[0].body = synthetic_body;
     }
 
     process_block(
@@ -725,7 +860,32 @@ fn rename_variables(
         &mut value_defs,
         &mut cfg_node_map,
         &mut next_value,
+        nop_nodes,
     );
+
+    // Process orphan blocks (e.g. catch blocks disconnected after exception edge removal).
+    // These blocks have no predecessors and weren't reached by the dominator tree walk.
+    for bid in 1..num_blocks {
+        if block_preds[bid].is_empty() && ssa_blocks[bid].body.is_empty() {
+            process_block(
+                bid,
+                cfg,
+                blocks_nodes,
+                block_succs,
+                block_preds,
+                phi_placements,
+                dom_tree_children,
+                filtered_edges,
+                &mut var_stacks,
+                &mut ssa_blocks,
+                &mut phi_values,
+                &mut value_defs,
+                &mut cfg_node_map,
+                &mut next_value,
+                nop_nodes,
+            );
+        }
+    }
 
     (ssa_blocks, value_defs, cfg_node_map)
 }

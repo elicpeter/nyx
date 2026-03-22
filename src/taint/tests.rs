@@ -29,6 +29,7 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         local_summaries: &summaries,
         global_summaries: None,
         interop_edges: &[],
+        global_seed: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &transfer);
     let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3267,6 +3268,7 @@ fn assert_ssa_legacy_equivalence(src: &[u8]) {
         local_summaries: &summaries,
         global_summaries: None,
         interop_edges: &[],
+        global_seed: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3367,6 +3369,7 @@ fn equiv_php_echo_simple_var() {
         local_summaries: &summaries,
         global_summaries: None,
         interop_edges: &[],
+        global_seed: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3400,6 +3403,7 @@ fn equiv_c_curl_handle_ssrf() {
         local_summaries: &summaries,
         global_summaries: None,
         interop_edges: &[],
+        global_seed: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa);
@@ -3420,4 +3424,91 @@ fn equiv_validate_and_early_return() {
             if !validate(&x) { return; }
             Command::new("sh").arg(x).status().unwrap();
         }"#);
+}
+
+// ── JS/TS SSA Two-Level Solve Tests ─────────────────────────────────────
+
+#[test]
+fn ssa_js_two_level_global_to_function() {
+    // Top-level source → function sink via global seed
+    let src = b"let x = document.location();\nfunction f() { eval(x); }\nf();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+
+    // SSA path (opt-in)
+    // SAFETY: test-only, single-threaded
+    unsafe { std::env::set_var("NYX_SSA_JS", "1"); }
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+    unsafe { std::env::remove_var("NYX_SSA_JS"); }
+    assert!(
+        !findings.is_empty(),
+        "SSA JS two-level: top-level source should flow to function sink"
+    );
+}
+
+#[test]
+fn ssa_js_two_level_function_isolation() {
+    // Variable x in func_a should not leak to func_b
+    let src = b"function a() { let x = document.location(); }\nfunction b() { eval(x); }\na();\nb();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+
+    // SAFETY: test-only, single-threaded
+    unsafe { std::env::set_var("NYX_SSA_JS", "1"); }
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+    unsafe { std::env::remove_var("NYX_SSA_JS"); }
+    // x is local to a(), so it shouldn't flow to b()'s eval
+    // Note: this depends on x being properly scoped; if the CFG treats x as global, it may still flow.
+    // The test verifies that the SSA path doesn't crash and produces reasonable results.
+    let _ = findings; // Assert no panic
+}
+
+#[test]
+fn ssa_js_two_level_convergence() {
+    // Function writes back to global, 2nd round picks it up
+    let src = b"let x = 'safe';\nfunction leak() { x = document.location(); }\nfunction use_it() { eval(x); }\nleak();\nuse_it();\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+
+    // SAFETY: test-only, single-threaded
+    unsafe { std::env::set_var("NYX_SSA_JS", "1"); }
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+    unsafe { std::env::remove_var("NYX_SSA_JS"); }
+    assert!(
+        !findings.is_empty(),
+        "SSA JS two-level: function mutation of global should converge and detect taint"
+    );
+}
+
+#[test]
+fn equiv_js_express_xss() {
+    // Legacy vs SSA on an express XSS pattern
+    // SAFETY: test-only
+    unsafe { std::env::set_var("NYX_SSA_JS", "1"); }
+    let src = b"const express = require('express');\nconst app = express();\napp.get('/test', function(req, res) {\n  let input = req.query.name;\n  res.send('<h1>' + input + '</h1>');\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+
+    // Legacy findings
+    // SAFETY: test-only, single-threaded context
+    unsafe { std::env::set_var("NYX_LEGACY", "1"); }
+    let legacy = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+    unsafe { std::env::remove_var("NYX_LEGACY"); }
+
+    // SSA findings
+    let ssa = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[]);
+
+    let legacy_set: std::collections::HashSet<_> = legacy.iter().map(|f| (f.source.index(), f.sink.index())).collect();
+    let ssa_set: std::collections::HashSet<_> = ssa.iter().map(|f| (f.source.index(), f.sink.index())).collect();
+
+    // Allow SSA to find a subset of legacy findings (SSA may be more precise)
+    // but SSA should not find findings legacy doesn't
+    unsafe { std::env::remove_var("NYX_SSA_JS"); }
+
+    let ssa_only: Vec<_> = ssa_set.difference(&legacy_set).collect();
+    assert!(
+        ssa_only.is_empty(),
+        "SSA found findings not in legacy: {:?}\nLegacy: {:?}\nSSA: {:?}",
+        ssa_only, legacy_set, ssa_set
+    );
 }

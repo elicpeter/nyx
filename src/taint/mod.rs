@@ -85,9 +85,26 @@ pub fn analyse_file(
     // 3. Run analysis (two-level for JS/TS, SSA or legacy for others)
     let use_ssa = !std::env::var("NYX_LEGACY").is_ok_and(|v| v == "1");
 
+    // JS/TS SSA two-level is opt-in via NYX_SSA_JS=1 until equivalence is proven
+    let use_ssa_js = std::env::var("NYX_SSA_JS").is_ok_and(|v| v == "1");
+
     let mut findings = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
-        let events = analyse_js_two_level(cfg, entry, &interner, &base_transfer);
-        events_to_findings(&events, &interner)
+        if use_ssa_js {
+            match analyse_ssa_js_two_level(
+                cfg, entry, &interner, caller_lang, caller_namespace,
+                local_summaries, global_summaries, interop_edges,
+            ) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!("SSA JS two-level failed, falling back to legacy: {e}");
+                    let events = analyse_js_two_level(cfg, entry, &interner, &base_transfer);
+                    events_to_findings(&events, &interner)
+                }
+            }
+        } else {
+            let events = analyse_js_two_level(cfg, entry, &interner, &base_transfer);
+            events_to_findings(&events, &interner)
+        }
     } else if use_ssa {
         // SSA path (opt-in via NYX_SSA=1)
         match crate::ssa::lower_to_ssa(cfg, entry, None, true) {
@@ -104,6 +121,7 @@ pub fn analyse_file(
                     local_summaries,
                     global_summaries,
                     interop_edges,
+                    global_seed: None,
                 };
                 let events =
                     ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
@@ -323,6 +341,104 @@ fn events_to_findings(events: &[TaintEvent], _interner: &SymbolInterner) -> Vec<
     }
 
     findings
+}
+
+/// JS/TS two-level SSA solve: top-level scope + per-function, with global seed.
+///
+/// Mirrors the legacy `analyse_js_two_level` but uses per-function SSA lowering
+/// with synthetic Param instructions for external variables.
+fn analyse_ssa_js_two_level(
+    cfg: &Cfg,
+    entry: NodeIndex,
+    interner: &SymbolInterner,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    interop_edges: &[InteropEdge],
+) -> Result<Vec<Finding>, crate::ssa::ir::SsaError> {
+    const MAX_ITERATIONS: usize = 3;
+
+    // Level 1: top-level SSA (scope=None, nop for function bodies)
+    let toplevel_ssa = crate::ssa::lower_to_ssa_scoped_nop(cfg, entry, None)?;
+    tracing::debug!(
+        blocks = toplevel_ssa.blocks.len(),
+        values = toplevel_ssa.num_values(),
+        "SSA JS two-level: top-level lowering"
+    );
+    let toplevel_transfer = ssa_transfer::SsaTaintTransfer {
+        lang,
+        namespace,
+        interner,
+        local_summaries,
+        global_summaries,
+        interop_edges,
+        global_seed: None,
+    };
+    let (toplevel_events, toplevel_block_states) =
+        ssa_transfer::run_ssa_taint_full(&toplevel_ssa, cfg, &toplevel_transfer);
+    let toplevel_seed =
+        ssa_transfer::extract_ssa_exit_state(&toplevel_block_states, &toplevel_ssa, cfg, &toplevel_transfer, interner);
+    tracing::debug!(
+        events = toplevel_events.len(),
+        seed_entries = toplevel_seed.len(),
+        "SSA JS two-level: top-level result"
+    );
+
+    // Collect top-level findings
+    let mut all_findings = ssa_transfer::ssa_events_to_findings(&toplevel_events, &toplevel_ssa);
+
+    let func_entries = find_function_entries(cfg);
+    let toplevel_syms = collect_toplevel_symbols(cfg, interner);
+
+    // Iterative Level 2: per-function solve until seed stabilises
+    let mut current_seed = toplevel_seed.clone();
+
+    for _round in 0..MAX_ITERATIONS {
+        let mut round_findings: Vec<Finding> = Vec::new();
+        let mut combined_exit = toplevel_seed.clone();
+
+        for (func_name, func_entry) in &func_entries {
+            let func_ssa = match crate::ssa::lower_to_ssa(cfg, *func_entry, Some(func_name), false) {
+                Ok(ssa) => ssa,
+                Err(_) => continue, // empty function → skip
+            };
+            let func_transfer = ssa_transfer::SsaTaintTransfer {
+                lang,
+                namespace,
+                interner,
+                local_summaries,
+                global_summaries,
+                interop_edges,
+                global_seed: Some(&current_seed),
+            };
+            let (func_events, func_block_states) =
+                ssa_transfer::run_ssa_taint_full(&func_ssa, cfg, &func_transfer);
+            round_findings.extend(
+                ssa_transfer::ssa_events_to_findings(&func_events, &func_ssa),
+            );
+
+            // Extract exit state, filter to globals, join into combined
+            let func_exit =
+                ssa_transfer::extract_ssa_exit_state(&func_block_states, &func_ssa, cfg, &func_transfer, interner);
+            let filtered = ssa_transfer::filter_seed_to_toplevel(&func_exit, &toplevel_syms);
+            combined_exit = ssa_transfer::join_seed_maps(&combined_exit, &filtered);
+        }
+
+        all_findings.extend(round_findings);
+
+        // Converged: seed didn't change
+        if combined_exit == current_seed {
+            break;
+        }
+        current_seed = combined_exit;
+    }
+
+    // Dedup findings
+    all_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
+    all_findings.dedup_by_key(|f| (f.sink, f.source));
+
+    Ok(all_findings)
 }
 
 #[cfg(test)]

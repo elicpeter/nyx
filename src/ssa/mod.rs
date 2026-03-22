@@ -7,3 +7,4 @@ pub mod lower;
 #[allow(unused_imports)]
 pub use ir::*;
 pub use lower::lower_to_ssa;
+pub use lower::lower_to_ssa_scoped_nop;
