@@ -106,7 +106,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "do_statement"                  => Kind::While,
 
     "return_statement"              => Kind::Return,
-    "throw_expression"              => Kind::Return,
+    "throw_expression"              => Kind::Throw,
     "break_statement"               => Kind::Break,
     "continue_statement"            => Kind::Continue,
 
@@ -125,6 +125,8 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "catch_clause"                  => Kind::Block,
     "finally_clause"                => Kind::Block,
     "colon_block"                   => Kind::Block,
+    "anonymous_function_creation_expression" => Kind::Function,
+    "arrow_function"                => Kind::Function,
     "class_declaration"             => Kind::Block,
 
     // data-flow

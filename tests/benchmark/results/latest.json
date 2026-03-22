@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-22T20:21:21Z",
+  "timestamp": "2026-03-22T22:47:23Z",
   "scanner_version": "0.4.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:901c5d8d8ece37ade3f501b3203088b930020873ed891da5ad94320dc309bb2a",
-  "corpus_size": 103,
-  "cases_run": 103,
+  "ground_truth_hash": "sha256:f872780fa9cfb47a1bc705664ad07e5e2b61c1badb30764bba034bb9f9990e22",
+  "corpus_size": 123,
+  "cases_run": 123,
   "cases_skipped": 0,
   "outcomes": [
     {
@@ -1927,6 +1927,308 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "ruby-cmdi-001",
+      "file": "ruby/cmdi/cmdi_system.rb",
+      "language": "ruby",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rb.cmdi.system_interp",
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rb.cmdi.system_interp",
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-cmdi-002",
+      "file": "ruby/cmdi/cmdi_backtick.rb",
+      "language": "ruby",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rb.cmdi.backtick"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rb.cmdi.backtick"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-code_injection-001",
+      "file": "ruby/code_injection/code_injection_eval.rb",
+      "language": "ruby",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rb.code_exec.eval",
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rb.code_exec.eval",
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-deser-001",
+      "file": "ruby/deser/deser_marshal.rb",
+      "language": "ruby",
+      "vuln_class": "deser",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rb.deser.marshal_load",
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rb.deser.marshal_load",
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-deser-002",
+      "file": "ruby/deser/deser_yaml.rb",
+      "language": "ruby",
+      "vuln_class": "deser",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rb.deser.yaml_load",
+        "taint-unsanitised-flow (source 4:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rb.deser.yaml_load",
+        "taint-unsanitised-flow (source 4:3)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-path_traversal-001",
+      "file": "ruby/path_traversal/path_traversal_send_file.rb",
+      "language": "ruby",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-safe-001",
+      "file": "ruby/safe/safe_constant.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-safe-002",
+      "file": "ruby/safe/safe_dominated.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "rb.cmdi.system_interp",
+        "taint-unsanitised-flow (source 4:3)"
+      ],
+      "all_finding_ids": [
+        "rb.cmdi.system_interp",
+        "taint-unsanitised-flow (source 4:3)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-safe-003",
+      "file": "ruby/safe/safe_interprocedural.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "rb.cmdi.system_interp",
+        "taint-unsanitised-flow (source 8:3)"
+      ],
+      "all_finding_ids": [
+        "rb.cmdi.system_interp",
+        "taint-unsanitised-flow (source 8:3)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-safe-004",
+      "file": "ruby/safe/safe_non_security_sink.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-safe-005",
+      "file": "ruby/safe/safe_reassigned.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-safe-006",
+      "file": "ruby/safe/safe_sanitized.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-safe-007",
+      "file": "ruby/safe/safe_type_check.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-safe-008",
+      "file": "ruby/safe/safe_validated.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "rb.cmdi.system_interp",
+        "taint-unsanitised-flow (source 4:3)"
+      ],
+      "all_finding_ids": [
+        "rb.cmdi.system_interp",
+        "taint-unsanitised-flow (source 4:3)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-sqli-001",
+      "file": "ruby/sqli/sqli_find_by_sql.rb",
+      "language": "ruby",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-sqli-002",
+      "file": "ruby/sqli/sqli_execute.rb",
+      "language": "ruby",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "ruby-ssrf-001",
       "file": "ruby/ssrf/ssrf_httparty.rb",
       "language": "ruby",
@@ -1944,25 +2246,97 @@
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-ssrf-002",
+      "file": "ruby/ssrf/ssrf_net_http.rb",
+      "language": "ruby",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 4:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 4:3)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-ssrf-safe-001",
+      "file": "ruby/ssrf/safe_ssrf_hardcoded.rb",
+      "language": "ruby",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-xss-001",
+      "file": "ruby/xss/xss_html_safe.rb",
+      "language": "ruby",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ruby-xss-002",
+      "file": "ruby/xss/xss_raw.rb",
+      "language": "ruby",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 2:3)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
     }
   ],
   "aggregate_file_level": {
-    "tp": 58,
-    "fp": 11,
+    "tp": 69,
+    "fp": 15,
     "fn_": 1,
-    "tn": 33,
-    "precision": 0.8405797101449275,
-    "recall": 0.9830508474576272,
-    "f1": 0.9062499999999999
+    "tn": 38,
+    "precision": 0.8214285714285714,
+    "recall": 0.9857142857142858,
+    "f1": 0.8961038961038961
   },
   "aggregate_rule_level": {
-    "tp": 58,
-    "fp": 11,
+    "tp": 69,
+    "fp": 15,
     "fn_": 1,
-    "tn": 33,
-    "precision": 0.8405797101449275,
-    "recall": 0.9830508474576272,
-    "f1": 0.9062499999999999
+    "tn": 38,
+    "precision": 0.8214285714285714,
+    "recall": 0.9857142857142858,
+    "f1": 0.8961038961038961
   },
   "by_language": {
     "go": {
@@ -2011,18 +2385,18 @@
       "f1": 0.9600000000000001
     },
     "ruby": {
-      "tp": 1,
-      "fp": 0,
+      "tp": 12,
+      "fp": 4,
       "fn_": 0,
-      "tn": 0,
-      "precision": 1.0,
+      "tn": 5,
+      "precision": 0.75,
       "recall": 1.0,
-      "f1": 1.0
+      "f1": 0.8571428571428571
     }
   },
   "by_vuln_class": {
     "cmdi": {
-      "tp": 11,
+      "tp": 13,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -2031,7 +2405,7 @@
       "f1": 1.0
     },
     "code_injection": {
-      "tp": 7,
+      "tp": 8,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -2040,7 +2414,7 @@
       "f1": 1.0
     },
     "deser": {
-      "tp": 4,
+      "tp": 6,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -2058,7 +2432,7 @@
       "f1": 1.0
     },
     "path_traversal": {
-      "tp": 6,
+      "tp": 7,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -2068,15 +2442,15 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 11,
+      "fp": 15,
       "fn_": 0,
-      "tn": 33,
+      "tn": 38,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
     },
     "sqli": {
-      "tp": 11,
+      "tp": 13,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -2085,22 +2459,51 @@
       "f1": 1.0
     },
     "ssrf": {
-      "tp": 9,
+      "tp": 10,
       "fp": 0,
       "fn_": 1,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9,
-      "f1": 0.9473684210526316
+      "recall": 0.9090909090909091,
+      "f1": 0.9523809523809523
     },
     "xss": {
-      "tp": 9,
+      "tp": 11,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
+    }
+  },
+  "by_confidence": {
+    ">=High": {
+      "tp": 51,
+      "fp": 25,
+      "fn_": 19,
+      "tn": 28,
+      "precision": 0.6710526315789473,
+      "recall": 0.7285714285714285,
+      "f1": 0.6986301369863013
+    },
+    ">=Low": {
+      "tp": 51,
+      "fp": 28,
+      "fn_": 19,
+      "tn": 25,
+      "precision": 0.6455696202531646,
+      "recall": 0.7285714285714285,
+      "f1": 0.6845637583892618
+    },
+    ">=Medium": {
+      "tp": 51,
+      "fp": 28,
+      "fn_": 19,
+      "tn": 25,
+      "precision": 0.6455696202531646,
+      "recall": 0.7285714285714285,
+      "f1": 0.6845637583892618
     }
   }
 }

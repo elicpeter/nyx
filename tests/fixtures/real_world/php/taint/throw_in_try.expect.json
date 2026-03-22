@@ -1,0 +1,49 @@
+{
+  "description": "PHP throw→catch exception edges: taint flows to sinks in both try body and catch block",
+  "tags": [
+    "taint",
+    "cmdi",
+    "xss",
+    "throw",
+    "try_catch",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "$_GET['q'] flows to system($input) in try body"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "$_GET['q'] flows to echo $input in catch block"
+    },
+    {
+      "rule_id": "php.cmdi.system",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "noise: AST pattern match suppressed by Layer B — taint finding at same sink confirms the vulnerability"
+    }
+  ]
+}

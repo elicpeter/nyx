@@ -1,5 +1,133 @@
 # Nyx Benchmark Results
 
+## Ruby Parity — Benchmark Corpus Expansion (2026-03-22)
+
+Scanner version: 0.5.0
+Analysis mode: Full (taint + AST patterns + state analysis)
+Corpus: 123 cases (70 vulnerable, 53 safe)
+
+### Changes from Phase 5
+- **Ruby corpus expansion**: 1 → 21 cases (8 safe + 1 SSRF-safe + 11 vulnerable + existing ssrf-001)
+- **Vuln class coverage**: cmdi(2), code_injection(1), deser(2), path_traversal(1), sqli(2), ssrf(2+1safe), xss(2), safe(8)
+- **No label rule changes** — all Ruby rules already covered the new vuln classes
+
+### Overall Metrics
+
+| Level | TP | FP | FN | TN | Precision | Recall | F1 |
+|-------|----|----|----|----|-----------|--------|----|
+| File-level | 69 | 15 | 1 | 38 | 82.1% | 98.6% | 89.6% |
+| Rule-level | 69 | 15 | 1 | 38 | 82.1% | 98.6% | 89.6% |
+
+Delta vs Phase 5: TP +11 (new Ruby vuln cases), FP +4 (new Ruby safe FPs), TN +5 (new Ruby safe TNs). Precision -2.0pp, Recall +0.3pp, F1 -1.0pp.
+
+### Per Language (rule-level)
+
+| Language | TP | FP | FN | TN | Precision | Recall | F1 |
+|----------|----|----|----|----|-----------|--------|----|
+| Go | 12 | 5 | 0 | 4 | 70.6% | 100.0% | 82.8% |
+| Java | 10 | 1 | 1 | 7 | 90.9% | 90.9% | 90.9% |
+| JavaScript | 12 | 3 | 0 | 6 | 80.0% | 100.0% | 88.9% |
+| PHP | 11 | 1 | 0 | 8 | 91.7% | 100.0% | 95.7% |
+| Python | 12 | 1 | 0 | 8 | 92.3% | 100.0% | 96.0% |
+| Ruby | 12 | 4 | 0 | 5 | 75.0% | 100.0% | 85.7% |
+
+### Per Vulnerability Class (rule-level)
+
+| Class | TP | FP | FN | Precision | Recall | F1 |
+|-------|----|----|----|-----------|---------|----|
+| cmdi | 13 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| code_injection | 8 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| deser | 6 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| fmt_string | 1 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| path_traversal | 7 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| sqli | 13 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| ssrf | 10 | 0 | 1 | 100.0% | 90.9% | 95.2% |
+| xss | 11 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+
+### Ruby False Positives (4 safe cases flagged)
+
+| Case | File | Pattern |
+|------|------|---------|
+| ruby-safe-002 | safe_dominated.rb | Allowlist guard not recognized |
+| ruby-safe-003 | safe_interprocedural.rb | Interprocedural sanitization not tracked |
+| ruby-safe-007 | safe_type_check.rb | `is_a?` type guard not recognized |
+| ruby-safe-008 | safe_validated.rb | Allowlist validation not recognized |
+
+### False Negatives (missed vulnerabilities)
+
+| Case | File | Notes |
+|------|------|-------|
+| java-ssrf-002 | java/ssrf/SsrfHttpClient.java | `client.send(...)` — variable receiver doesn't suffix-match `HttpClient.send`; requires type resolution |
+
+### Thresholds
+
+| Metric | Baseline | Threshold |
+|--------|----------|-----------|
+| Rule-level Precision | 82.1% | 60.4% |
+| Rule-level Recall | 98.6% | 91.4% |
+| Rule-level F1 | 89.6% | 72.9% |
+
+## Phase 5 — SSA Lowering Cross-Language Hardening (2026-03-22)
+
+Scanner version: 0.5.0
+Analysis mode: Full (taint + AST patterns + state analysis)
+Corpus: 103 cases (59 vulnerable, 44 safe)
+
+### Changes from Phase 30
+- **PHP anonymous functions**: `anonymous_function_creation_expression` and `arrow_function` → `Kind::Function` (scope isolation for closures)
+- **PHP throw**: `throw_expression` → `Kind::Throw` (exception edges wired to catch handlers)
+- **Python try/except**: `try_statement` → `Kind::Try`, `raise_statement` → `Kind::Throw` (exception edges and handler wiring)
+- **Python except_clause**: `build_try()` now collects `except_clause` children; `extract_catch_param_name()` handles Python `alias` field
+- **Ruby TODO**: Documented deferred begin/rescue/ensure gap (structurally incompatible with `build_try()`)
+- **New fixtures**: 4 (php/closure_taint, php/throw_in_try, python/try_except_taint, python/raise_in_try)
+
+### Overall Metrics
+
+| Level | TP | FP | FN | TN | Precision | Recall | F1 |
+|-------|----|----|----|----|-----------|--------|----|
+| File-level | 58 | 11 | 1 | 33 | 84.1% | 98.3% | 90.6% |
+| Rule-level | 58 | 11 | 1 | 33 | 84.1% | 98.3% | 90.6% |
+
+Delta vs Phase 30: TP +1 (php-xss-001 now TP), FP -17 (confidence scoring, allowlist, type-check guards), TN +17. Precision +17.0pp, Recall +1.7pp, F1 +11.4pp.
+
+### Per Language (rule-level)
+
+| Language | TP | FP | FN | TN | Precision | Recall | F1 |
+|----------|----|----|----|----|-----------|--------|----|
+| Go | 12 | 5 | 0 | 4 | 70.6% | 100.0% | 82.8% |
+| Java | 10 | 1 | 1 | 7 | 90.9% | 90.9% | 90.9% |
+| JavaScript | 12 | 3 | 0 | 6 | 80.0% | 100.0% | 88.9% |
+| PHP | 11 | 1 | 0 | 8 | 91.7% | 100.0% | 95.7% |
+| Python | 12 | 1 | 0 | 8 | 92.3% | 100.0% | 96.0% |
+| Ruby | 1 | 0 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+
+### Per Vulnerability Class (rule-level)
+
+| Class | TP | FP | FN | Precision | Recall | F1 |
+|-------|----|----|----|-----------|---------|----|
+| cmdi | 11 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| code_injection | 7 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| deser | 4 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| fmt_string | 1 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| path_traversal | 6 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| sqli | 11 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| ssrf | 9 | 0 | 1 | 100.0% | 90.0% | 94.7% |
+| xss | 9 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+
+### False Negatives (missed vulnerabilities)
+
+| Case | File | Notes |
+|------|------|-------|
+| java-ssrf-002 | java/ssrf/SsrfHttpClient.java | `client.send(...)` — variable receiver doesn't suffix-match `HttpClient.send`; requires type resolution |
+
+### Thresholds
+
+| Metric | Baseline | Threshold |
+|--------|----------|-----------|
+| Rule-level Precision | 84.1% | 60.4% |
+| Rule-level Recall | 98.3% | 91.4% |
+| Rule-level F1 | 90.6% | 72.9% |
+
 ## Phase 30 — SSRF Semantic Completion (2026-03-21)
 
 Scanner version: 0.4.0

@@ -1,0 +1,26 @@
+{
+  "description": "PHP closure scope boundary: taint in outer scope reaches outer echo, but does not leak into closure parameters",
+  "tags": [
+    "taint",
+    "xss",
+    "closure",
+    "scope",
+    "php"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "$_GET['name'] flows to echo $input in outer scope (line 7) — taint correctly reaches outer sink"
+    }
+  ]
+}

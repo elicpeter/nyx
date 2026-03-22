@@ -1742,6 +1742,11 @@ fn extract_catch_param_name<'a>(catch_node: Node<'a>, lang: &str, code: &'a [u8]
             collect_idents(params, code, &mut idents);
             idents.pop()
         }
+        "python" | "py" => {
+            // Python: except_clause has an "alias" field for `except Exception as e`
+            let alias = catch_node.child_by_field_name("alias")?;
+            text_of(alias, code)
+        }
         _ => None,
     }
 }
@@ -1778,7 +1783,9 @@ fn build_try<'a>(
         // Also collect positional catch_clause children (Java, PHP, C++)
         let mut cursor = ast.walk();
         for child in ast.children(&mut cursor) {
-            if child.kind() == "catch_clause" && !clauses.iter().any(|c| c.id() == child.id()) {
+            if (child.kind() == "catch_clause" || child.kind() == "except_clause")
+                && !clauses.iter().any(|c| c.id() == child.id())
+            {
                 clauses.push(child);
             }
         }
