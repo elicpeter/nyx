@@ -80,7 +80,7 @@ fn main() -> NyxResult<()> {
         .build_global()
         .expect("set rayon stack size");
 
-    let quiet = config.output.quiet || cli.command.is_structured_output();
+    let quiet = config.output.quiet || cli.command.is_structured_output(&config);
 
     // Print config note before scanning (human-readable mode only).
     if let Some(note) = config_note.filter(|_| !quiet) {

@@ -772,7 +772,43 @@ pub fn run_rules_on_bytes(
         let parsed = ParsedFile::from_source(source, cfg);
         out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
         if cfg.scanner.mode == AnalysisMode::Full {
-            out.extend(parsed.source.run_ast_queries(cfg));
+            // Collect sink node lines from CFG for AST pattern suppression.
+            // When taint analysis covers a sink, AST pattern findings at that
+            // line are redundant (taint is more precise: it knows whether the
+            // flow is sanitized).
+            let sink_lines: std::collections::HashSet<usize> = {
+                use petgraph::visit::IntoNodeReferences;
+                parsed
+                    .cfg_graph
+                    .node_references()
+                    .filter(|(_, info)| {
+                        info.labels
+                            .iter()
+                            .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
+                    })
+                    .map(|(_, info)| {
+                        byte_offset_to_point(&parsed.source.tree, info.span.0).row + 1
+                    })
+                    .collect()
+            };
+            let taint_finding_lines: std::collections::HashSet<usize> = out
+                .iter()
+                .filter(|d| d.id.starts_with("taint-"))
+                .map(|d| d.line)
+                .collect();
+            let ast_diags = parsed.source.run_ast_queries(cfg);
+            for d in ast_diags {
+                // Suppress AST pattern findings at sink lines that taint
+                // analysis covers, UNLESS taint also produced a finding there
+                // (in which case the taint finding is already in `out`).
+                if d.category == FindingCategory::Security
+                    && sink_lines.contains(&d.line)
+                    && !taint_finding_lines.contains(&d.line)
+                {
+                    continue;
+                }
+                out.push(d);
+            }
         }
         parsed.source.finalize_diags(&mut out, cfg);
     } else {

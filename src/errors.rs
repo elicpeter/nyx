@@ -1,9 +1,36 @@
 use serde::de::StdError;
+use serde::Serialize;
 use std::fmt;
 use std::sync::PoisonError;
 use thiserror::Error;
 
 pub type NyxResult<T, E = NyxError> = Result<T, E>;
+
+// ─── Config validation ──────────────────────────────────────────────────────
+
+/// A single config validation error with structured metadata.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigError {
+    pub section: String,
+    pub field: String,
+    pub message: String,
+    pub kind: ConfigErrorKind,
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}.{}] {}", self.section, self.field, self.message)
+    }
+}
+
+/// Category of config validation error.
+#[derive(Debug, Clone, Serialize)]
+pub enum ConfigErrorKind {
+    OutOfRange,
+    InvalidValue,
+    EmptyRequired,
+    Conflict,
+}
 
 #[derive(Debug, Error)]
 pub enum NyxError {
@@ -33,6 +60,9 @@ pub enum NyxError {
 
     #[error("{0}")]
     Msg(String),
+
+    #[error("config validation failed:\n{}", .0.iter().map(|e| format!("  - {e}")).collect::<Vec<_>>().join("\n"))]
+    ConfigValidation(Vec<ConfigError>),
 }
 
 impl<T> From<PoisonError<T>> for NyxError

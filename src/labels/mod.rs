@@ -319,6 +319,9 @@ pub struct RuntimeLabelRule {
 }
 
 /// Parse a capability name string into a `Cap` bitflag.
+///
+/// Prefer `CapName` enum for config values; this remains for ad-hoc string parsing.
+#[allow(dead_code)]
 pub fn parse_cap(s: &str) -> Option<Cap> {
     match s.to_ascii_lowercase().as_str() {
         "env_var" => Some(Cap::ENV_VAR),
@@ -359,19 +362,19 @@ pub fn build_lang_rules(
     let extra_labels = lang_cfg
         .rules
         .iter()
-        .filter_map(|r| {
-            let cap = parse_cap(&r.cap)?;
-            let label = match r.kind.as_str() {
-                "source" => DataLabel::Source(cap),
-                "sanitizer" => DataLabel::Sanitizer(cap),
-                "sink" => DataLabel::Sink(cap),
-                _ => return None,
+        .map(|r| {
+            use crate::utils::config::RuleKind;
+            let cap = r.cap.to_cap();
+            let label = match r.kind {
+                RuleKind::Source => DataLabel::Source(cap),
+                RuleKind::Sanitizer => DataLabel::Sanitizer(cap),
+                RuleKind::Sink => DataLabel::Sink(cap),
             };
-            Some(RuntimeLabelRule {
+            RuntimeLabelRule {
                 matchers: r.matchers.clone(),
                 label,
                 case_sensitive: r.case_sensitive,
-            })
+            }
         })
         .collect();
 

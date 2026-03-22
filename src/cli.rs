@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 
 #[derive(Parser)]
 #[command(name = "nyx")]
@@ -10,15 +11,26 @@ pub struct Cli {
 }
 
 impl Commands {
+    /// Resolve the effective output format, using the config default when the
+    /// CLI flag is omitted.
+    pub fn effective_format(&self, config: &crate::utils::config::Config) -> OutputFormat {
+        match self {
+            Commands::Scan { format, .. } => format.unwrap_or(config.output.default_format),
+            _ => OutputFormat::Console,
+        }
+    }
+
     /// Whether this command produces structured (machine-readable) output on
     /// stdout, meaning human status messages must be suppressed entirely.
-    pub fn is_structured_output(&self) -> bool {
-        matches!(self, Commands::Scan { format, .. } if *format == OutputFormat::Json || *format == OutputFormat::Sarif)
+    pub fn is_structured_output(&self, config: &crate::utils::config::Config) -> bool {
+        let fmt = self.effective_format(config);
+        matches!(self, Commands::Scan { .. }) && (fmt == OutputFormat::Json || fmt == OutputFormat::Sarif)
     }
 }
 
 /// Output format for scan results.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     #[default]
     Console,
@@ -74,9 +86,9 @@ pub enum Commands {
         #[arg(long, value_enum, default_value_t = IndexMode::Auto)]
         index: IndexMode,
 
-        /// Output format
-        #[arg(short, long, value_enum, default_value_t = OutputFormat::Console)]
-        format: OutputFormat,
+        /// Output format (defaults to config's default_format, or "console")
+        #[arg(short, long, value_enum)]
+        format: Option<OutputFormat>,
 
         /// Severity filter expression: HIGH, HIGH,MEDIUM, or >=MEDIUM
         ///
@@ -89,6 +101,13 @@ pub enum Commands {
         /// Analysis mode: full (default), ast, cfg, taint
         #[arg(long, value_enum, default_value_t = ScanMode::Full)]
         mode: ScanMode,
+
+        /// Named scan profile to apply (e.g. quick, full, ci, taint_only, conservative_large_repo)
+        ///
+        /// Profiles override scan-related config settings. CLI flags still
+        /// take precedence over profile values.
+        #[arg(long)]
+        profile: Option<String>,
 
         /// Scan all targets (alias for --mode full)
         #[arg(long, hide = true)]

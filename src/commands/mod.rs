@@ -23,6 +23,7 @@ pub fn handle_command(
             format,
             severity,
             mode,
+            profile,
             all_targets,
             keep_nonprod_severity,
             quiet,
@@ -45,6 +46,11 @@ pub fn handle_command(
             ast_only,
             cfg_only,
         } => {
+            // ── Apply profile first (CLI flags override after) ──────────
+            if let Some(ref name) = profile {
+                config.apply_profile(name)?;
+            }
+
             // ── Resolve deprecated aliases ──────────────────────────────
 
             // Index mode: explicit --index wins, then deprecated flags
@@ -132,10 +138,12 @@ pub fn handle_command(
             config.output.max_low_per_rule = max_low_per_rule;
             config.output.rollup_examples = rollup_examples;
 
+            let effective_format = format.unwrap_or(config.output.default_format);
+
             scan::handle(
                 &path,
                 effective_index,
-                format,
+                effective_format,
                 severity_filter,
                 fail_on_sev,
                 show_suppressed,
