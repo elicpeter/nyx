@@ -1103,6 +1103,7 @@ mod tests {
             const_text: None,
             arg_callees: Vec::new(),
             outer_callee: None,
+            cast_target_type: None,
         }
     }
 

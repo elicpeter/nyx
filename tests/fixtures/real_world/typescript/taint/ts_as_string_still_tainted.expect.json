@@ -1,0 +1,15 @@
+{
+  "description": "TypeScript 'as string' type assertion does not sanitize user input — eval finding must still be reported (negative regression test for type-flow)",
+  "tags": ["taint", "type-flow", "as-assertion", "eval", "negative-regression"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 6],
+      "evidence_contains": [],
+      "notes": "req.query.cmd asserted as string still flows into eval — TypeScript 'as' assertion must not suppress taint"
+    }
+  ]
+}

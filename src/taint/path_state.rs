@@ -102,6 +102,7 @@ pub fn classify_condition(text: &str) -> PredicateKind {
     // ── Type-check guards ──────────────────────────────────────────────
     if lower.contains("typeof ")
         || lower.contains("isinstance(")
+        || lower.contains(" instanceof ")
         || lower.contains(".matches(")
         || lower.contains("is_numeric(")
         || lower.contains("is_int(")
@@ -333,6 +334,14 @@ fn extract_type_check_target(text: &str) -> Option<String> {
         let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
         if !first_arg.is_empty() && is_identifier(first_arg) {
             return Some(first_arg.to_string());
+        }
+    }
+
+    // Java/TS instanceof: "x instanceof String" → "x"
+    if let Some(pos) = lower.find(" instanceof ") {
+        let var_part = trimmed[..pos].trim();
+        if !var_part.is_empty() && is_identifier(var_part) {
+            return Some(var_part.to_string());
         }
     }
 
@@ -764,5 +773,29 @@ mod tests {
         let (kind, target) = classify_condition_with_target("ALLOWED.include?(cmd)");
         assert_eq!(kind, PredicateKind::AllowlistCheck);
         assert_eq!(target.as_deref(), Some("cmd"));
+    }
+
+    // ── instanceof classification and target ─────────────────────────────
+
+    #[test]
+    fn classify_instanceof_is_type_check() {
+        assert_eq!(
+            classify_condition("x instanceof String"),
+            PredicateKind::TypeCheck
+        );
+    }
+
+    #[test]
+    fn target_instanceof_x_string() {
+        let (kind, target) = classify_condition_with_target("x instanceof String");
+        assert_eq!(kind, PredicateKind::TypeCheck);
+        assert_eq!(target.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn target_instanceof_obj_integer() {
+        let (kind, target) = classify_condition_with_target("obj instanceof Integer");
+        assert_eq!(kind, PredicateKind::TypeCheck);
+        assert_eq!(target.as_deref(), Some("obj"));
     }
 }

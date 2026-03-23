@@ -136,6 +136,20 @@ impl TypeSet {
     pub fn complement(self) -> Self {
         Self(!self.0 & Self::TOP.0)
     }
+
+    /// Check if this set contains exactly one type matching the given kind.
+    pub fn is_singleton_of(&self, kind: &TypeKind) -> bool {
+        self.0 != 0 && self.0 == (1u16 << type_kind_index(kind))
+    }
+
+    /// Return the TypeKind if this is a singleton set (exactly one type).
+    pub fn as_singleton(&self) -> Option<TypeKind> {
+        if self.0 != 0 && self.0.count_ones() == 1 {
+            type_kind_from_index(self.0.trailing_zeros())
+        } else {
+            None
+        }
+    }
 }
 
 fn type_kind_index(kind: &TypeKind) -> u32 {
@@ -152,6 +166,24 @@ fn type_kind_index(kind: &TypeKind) -> u32 {
         TypeKind::FileHandle => 9,
         TypeKind::Url => 10,
         TypeKind::HttpClient => 11,
+    }
+}
+
+fn type_kind_from_index(idx: u32) -> Option<TypeKind> {
+    match idx {
+        0 => Some(TypeKind::String),
+        1 => Some(TypeKind::Int),
+        2 => Some(TypeKind::Bool),
+        3 => Some(TypeKind::Object),
+        4 => Some(TypeKind::Array),
+        5 => Some(TypeKind::Null),
+        6 => Some(TypeKind::Unknown),
+        7 => Some(TypeKind::HttpResponse),
+        8 => Some(TypeKind::DatabaseConnection),
+        9 => Some(TypeKind::FileHandle),
+        10 => Some(TypeKind::Url),
+        11 => Some(TypeKind::HttpClient),
+        _ => None,
     }
 }
 
@@ -1044,5 +1076,158 @@ impl PathEnv {
     /// Number of facts currently tracked.
     pub fn fact_count(&self) -> usize {
         self.facts.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── TypeSet::is_singleton_of ─────────────────────────────────────────
+
+    #[test]
+    fn is_singleton_of_matching() {
+        let ts = TypeSet::singleton(&TypeKind::Int);
+        assert!(ts.is_singleton_of(&TypeKind::Int));
+    }
+
+    #[test]
+    fn is_singleton_of_non_matching() {
+        let ts = TypeSet::singleton(&TypeKind::Int);
+        assert!(!ts.is_singleton_of(&TypeKind::String));
+    }
+
+    #[test]
+    fn is_singleton_of_multi_type() {
+        let ts = TypeSet::singleton(&TypeKind::Int).join(TypeSet::singleton(&TypeKind::String));
+        assert!(!ts.is_singleton_of(&TypeKind::Int));
+        assert!(!ts.is_singleton_of(&TypeKind::String));
+    }
+
+    #[test]
+    fn is_singleton_of_empty() {
+        assert!(!TypeSet::BOTTOM.is_singleton_of(&TypeKind::Int));
+    }
+
+    // ── TypeSet::as_singleton ────────────────────────────────────────────
+
+    #[test]
+    fn as_singleton_returns_kind_for_singleton() {
+        let ts = TypeSet::singleton(&TypeKind::HttpResponse);
+        assert_eq!(ts.as_singleton(), Some(TypeKind::HttpResponse));
+    }
+
+    #[test]
+    fn as_singleton_none_for_multi_type() {
+        let ts = TypeSet::singleton(&TypeKind::Int).join(TypeSet::singleton(&TypeKind::Bool));
+        assert_eq!(ts.as_singleton(), None);
+    }
+
+    #[test]
+    fn as_singleton_none_for_empty() {
+        assert_eq!(TypeSet::BOTTOM.as_singleton(), None);
+    }
+
+    // ── type_kind_from_index round-trip ──────────────────────────────────
+
+    #[test]
+    fn type_kind_index_round_trip() {
+        let all_kinds = [
+            TypeKind::String,
+            TypeKind::Int,
+            TypeKind::Bool,
+            TypeKind::Object,
+            TypeKind::Array,
+            TypeKind::Null,
+            TypeKind::Unknown,
+            TypeKind::HttpResponse,
+            TypeKind::DatabaseConnection,
+            TypeKind::FileHandle,
+            TypeKind::Url,
+            TypeKind::HttpClient,
+        ];
+        for kind in &all_kinds {
+            let idx = type_kind_index(kind);
+            let recovered = type_kind_from_index(idx);
+            assert_eq!(
+                recovered.as_ref(),
+                Some(kind),
+                "round-trip failed for {:?} at index {}",
+                kind,
+                idx
+            );
+        }
+    }
+
+    // ── PathEnv join semantics ───────────────────────────────────────────
+
+    #[test]
+    fn join_both_narrow_same_type() {
+        // Both paths narrow x to Int → joined has x as Int
+        let v = SsaValue(0);
+
+        let mut env1 = PathEnv::empty();
+        let mut fact1 = ValueFact::top();
+        fact1.types = TypeSet::singleton(&TypeKind::Int);
+        env1.refine(v, &fact1);
+
+        let mut env2 = PathEnv::empty();
+        let mut fact2 = ValueFact::top();
+        fact2.types = TypeSet::singleton(&TypeKind::Int);
+        env2.refine(v, &fact2);
+
+        let joined = env1.join(&env2);
+        let result = joined.get(v);
+        assert!(
+            result.types.is_singleton_of(&TypeKind::Int),
+            "expected singleton Int, got {:?}",
+            result.types
+        );
+    }
+
+    #[test]
+    fn join_different_types_produces_union() {
+        // One path narrows x to Int, other to String → joined has both
+        let v = SsaValue(0);
+
+        let mut env1 = PathEnv::empty();
+        let mut fact1 = ValueFact::top();
+        fact1.types = TypeSet::singleton(&TypeKind::Int);
+        env1.refine(v, &fact1);
+
+        let mut env2 = PathEnv::empty();
+        let mut fact2 = ValueFact::top();
+        fact2.types = TypeSet::singleton(&TypeKind::String);
+        env2.refine(v, &fact2);
+
+        let joined = env1.join(&env2);
+        let result = joined.get(v);
+        assert!(result.types.contains(&TypeKind::Int));
+        assert!(result.types.contains(&TypeKind::String));
+        // Should not be a singleton
+        assert!(result.types.as_singleton().is_none());
+    }
+
+    #[test]
+    fn join_one_side_missing_drops_entry() {
+        // One path narrows x to Int, other has no entry for x →
+        // joined drops x (absent = Top)
+        let v = SsaValue(0);
+
+        let mut env1 = PathEnv::empty();
+        let mut fact1 = ValueFact::top();
+        fact1.types = TypeSet::singleton(&TypeKind::Int);
+        env1.refine(v, &fact1);
+
+        let env2 = PathEnv::empty();
+
+        let joined = env1.join(&env2);
+        let result = joined.get(v);
+        // Absent key → Top; get() returns ValueFact::top()
+        assert!(
+            result.is_top(),
+            "expected Top for key absent on one side, got {:?}",
+            result
+        );
     }
 }

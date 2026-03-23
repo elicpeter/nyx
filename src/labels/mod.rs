@@ -100,6 +100,10 @@ pub enum Kind {
     Try,
     Throw,
     Trivia,
+    /// Simple sequential expression (e.g. cast/type-assertion) — treated like
+    /// any other sequential statement in the CFG but explicitly classified so
+    /// code that inspects `Kind` can recognise it.
+    Seq,
     Other,
 }
 

@@ -358,6 +358,37 @@ fn try_lower_type_check(
         }
     }
 
+    // Pattern: "x instanceof String" (Java/TypeScript)
+    if let Some(pos) = lower.find(" instanceof ") {
+        let var_part = text[..pos].trim();
+        let type_part = text[pos + " instanceof ".len()..].trim();
+        if let Some(ssa_val) = var_lookup.get(var_part) {
+            return Some(ConditionExpr::TypeCheck {
+                var: *ssa_val,
+                type_name: type_part.to_string(),
+                positive: true,
+            });
+        }
+    }
+
+    // Pattern: "x.is_a?(Integer)" / "x.kind_of?(Integer)" (Ruby)
+    for method in &[".is_a?(", ".kind_of?("] {
+        if let Some(dot_pos) = lower.find(method) {
+            let var_part = text[..dot_pos].trim();
+            let after = dot_pos + method.len();
+            if let Some(close) = text[after..].find(')') {
+                let type_part = text[after..after + close].trim();
+                if let Some(ssa_val) = var_lookup.get(var_part) {
+                    return Some(ConditionExpr::TypeCheck {
+                        var: *ssa_val,
+                        type_name: type_part.to_string(),
+                        positive: true,
+                    });
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -486,4 +517,132 @@ fn strip_quotes(text: &str) -> Option<&str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cfg::{NodeInfo, StmtKind};
+    use crate::ssa::ir::{BlockId, SsaBlock, SsaBody, SsaValue, Terminator, ValueDef};
+    use petgraph::graph::NodeIndex;
+    use smallvec::SmallVec;
+
+    /// Helper: build a minimal SsaBody with value_defs for the given variable
+    /// names, all assigned to block 0.
+    fn make_ssa_body(var_names: &[&str]) -> SsaBody {
+        let value_defs: Vec<ValueDef> = var_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| ValueDef {
+                var_name: Some(name.to_string()),
+                cfg_node: NodeIndex::new(i),
+                block: BlockId(0),
+            })
+            .collect();
+
+        SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![],
+                terminator: Terminator::Return,
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs,
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        }
+    }
+
+    /// Helper: build a minimal NodeInfo for a condition.
+    fn make_cond_info(text: &str, vars: &[&str]) -> NodeInfo {
+        NodeInfo {
+            kind: StmtKind::If,
+            span: (0, 0),
+            labels: SmallVec::new(),
+            defines: None,
+            extra_defines: vec![],
+            uses: vec![],
+            callee: None,
+            receiver: None,
+            enclosing_func: None,
+            call_ordinal: 0,
+            condition_text: Some(text.to_string()),
+            condition_vars: vars.iter().map(|s| s.to_string()).collect(),
+            condition_negated: false,
+            arg_uses: vec![],
+            sink_payload_args: None,
+            all_args_literal: false,
+            catch_param: false,
+            const_text: None,
+            arg_callees: vec![],
+            outer_callee: None,
+            cast_target_type: None,
+        }
+    }
+
+    // ── instanceof pattern ───────────────────────────────────────────────
+
+    #[test]
+    fn lower_instanceof_string() {
+        let ssa = make_ssa_body(&["x"]);
+        let info = make_cond_info("x instanceof String", &["x"]);
+        let expr = lower_condition(&info, &ssa, BlockId(0), None);
+        match expr {
+            ConditionExpr::TypeCheck {
+                var,
+                type_name,
+                positive,
+            } => {
+                assert_eq!(var, SsaValue(0));
+                assert_eq!(type_name, "String");
+                assert!(positive);
+            }
+            other => panic!("expected TypeCheck, got {:?}", other),
+        }
+    }
+
+    // ── .is_a? pattern (Ruby) ────────────────────────────────────────────
+
+    #[test]
+    fn lower_is_a_integer() {
+        let ssa = make_ssa_body(&["user_id"]);
+        let info = make_cond_info("user_id.is_a?(Integer)", &["user_id"]);
+        let expr = lower_condition(&info, &ssa, BlockId(0), None);
+        match expr {
+            ConditionExpr::TypeCheck {
+                var,
+                type_name,
+                positive,
+            } => {
+                assert_eq!(var, SsaValue(0));
+                assert_eq!(type_name, "Integer");
+                assert!(positive);
+            }
+            other => panic!("expected TypeCheck, got {:?}", other),
+        }
+    }
+
+    // ── .kind_of? pattern (Ruby) ─────────────────────────────────────────
+
+    #[test]
+    fn lower_kind_of_float() {
+        let ssa = make_ssa_body(&["x"]);
+        let info = make_cond_info("x.kind_of?(Float)", &["x"]);
+        let expr = lower_condition(&info, &ssa, BlockId(0), None);
+        match expr {
+            ConditionExpr::TypeCheck {
+                var,
+                type_name,
+                positive,
+            } => {
+                assert_eq!(var, SsaValue(0));
+                assert_eq!(type_name, "Float");
+                assert!(positive);
+            }
+            other => panic!("expected TypeCheck, got {:?}", other),
+        }
+    }
 }

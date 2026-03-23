@@ -1,0 +1,6 @@
+{
+  "description": "typeof guard narrows input to number before eval — type-flow constraint solving should suppress taint finding",
+  "tags": ["taint", "type-flow", "typeof", "eval", "safe"],
+  "modes": ["full"],
+  "expected": []
+}

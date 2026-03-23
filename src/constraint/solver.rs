@@ -197,16 +197,109 @@ fn apply_value_const(env: &mut PathEnv, v: crate::ssa::ir::SsaValue, op: CompOp,
 }
 
 /// Map typeof / type-name strings to [`TypeKind`].
+///
+/// Resolution order:
+/// 1. Cross-language primitive aliases (case-insensitive)
+/// 2. Java/Ruby/Go class and framework names (case-sensitive)
+/// 3. Java type hierarchy fallback (case-sensitive, via [`TypeHierarchy`])
 pub fn parse_type_name(name: &str) -> Option<TypeKind> {
+    use crate::ssa::type_facts::TypeHierarchy;
+
+    primitive_type_alias(name)
+        .or_else(|| class_name_to_type_kind(name))
+        .or_else(|| TypeHierarchy::resolve_kind(name))
+}
+
+/// Tier 1: Cross-language primitive type aliases (case-insensitive).
+fn primitive_type_alias(name: &str) -> Option<TypeKind> {
     match name.to_ascii_lowercase().as_str() {
         "string" | "str" => Some(TypeKind::String),
-        "number" | "int" | "integer" | "i32" | "i64" | "u32" | "u64" | "float" | "double" => {
-            Some(TypeKind::Int)
-        }
+        "number" | "int" | "integer" | "i32" | "i64" | "u32" | "u64" | "float" | "double"
+        | "numeric" => Some(TypeKind::Int),
         "boolean" | "bool" => Some(TypeKind::Bool),
         "object" => Some(TypeKind::Object),
         "array" | "list" => Some(TypeKind::Array),
         "null" | "nil" | "none" | "undefined" => Some(TypeKind::Null),
         _ => None,
+    }
+}
+
+/// Tier 2: Java/Ruby/Go class and framework type names (case-sensitive).
+pub fn class_name_to_type_kind(name: &str) -> Option<TypeKind> {
+    match name {
+        "String" | "CharSequence" | "StringBuilder" | "StringBuffer" => Some(TypeKind::String),
+        "Integer" | "Long" | "Short" | "Byte" | "Number" | "BigInteger" | "BigDecimal"
+        | "Double" | "Float" => Some(TypeKind::Int),
+        "Boolean" => Some(TypeKind::Bool),
+        "List" | "ArrayList" | "Collection" | "Set" | "HashSet" => Some(TypeKind::Array),
+        "URL" | "URI" => Some(TypeKind::Url),
+        "HttpClient" | "CloseableHttpClient" => Some(TypeKind::HttpClient),
+        "HttpServletResponse" | "HttpResponse" | "ServletResponse" => {
+            Some(TypeKind::HttpResponse)
+        }
+        "Connection" | "DataSource" => Some(TypeKind::DatabaseConnection),
+        "File" | "Path" => Some(TypeKind::FileHandle),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_type_name tier 1 (primitive aliases) ───────────────────────
+
+    #[test]
+    fn parse_numeric_to_int() {
+        // PHP-style "numeric" → Int via tier 1 primitive alias
+        assert_eq!(parse_type_name("numeric"), Some(TypeKind::Int));
+    }
+
+    #[test]
+    fn parse_string_case_insensitive() {
+        // Tier 1 lowercase "string" matches "String" via case-insensitive
+        assert_eq!(parse_type_name("String"), Some(TypeKind::String));
+    }
+
+    // ── parse_type_name tier 2 (class names) ────────────────────────────
+
+    #[test]
+    fn parse_integer_class_name() {
+        // Java boxed class "Integer" → Int via tier 2
+        assert_eq!(parse_type_name("Integer"), Some(TypeKind::Int));
+    }
+
+    #[test]
+    fn parse_http_servlet_response() {
+        // Java framework class → HttpResponse via tier 2
+        assert_eq!(
+            parse_type_name("HttpServletResponse"),
+            Some(TypeKind::HttpResponse)
+        );
+    }
+
+    // ── parse_type_name tier 3 (hierarchy fallback) ─────────────────────
+
+    #[test]
+    fn parse_closeable_http_client_via_hierarchy() {
+        // CloseableHttpClient is in tier 2 class_name_to_type_kind directly
+        assert_eq!(
+            parse_type_name("CloseableHttpClient"),
+            Some(TypeKind::HttpClient)
+        );
+    }
+
+    #[test]
+    fn parse_file_input_stream_not_resolved() {
+        // FileInputStream: tier 2 has "File" but not "FileInputStream".
+        // Tier 3 hierarchy: FileInputStream → supertypes ["InputStream"].
+        // "InputStream" is NOT in tier 2, so hierarchy fallback yields None.
+        // However, FileInputStream IS NOT in class_name_to_type_kind tier 2 directly.
+        // Let's verify the actual behavior:
+        let result = parse_type_name("FileInputStream");
+        // FileInputStream is not in tier 1 or tier 2. Tier 3 checks
+        // JAVA_HIERARCHY: ("FileInputStream", &["InputStream"]).
+        // "InputStream" is not in class_name_to_type_kind, so → None.
+        assert_eq!(result, None);
     }
 }

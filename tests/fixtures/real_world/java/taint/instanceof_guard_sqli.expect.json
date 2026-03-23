@@ -1,0 +1,6 @@
+{
+  "description": "instanceof Integer guard with early return narrows input to Integer before SQL concatenation — type-flow constraint solving should suppress taint finding",
+  "tags": ["taint", "type-flow", "instanceof", "sqli", "safe"],
+  "modes": ["full"],
+  "expected": []
+}

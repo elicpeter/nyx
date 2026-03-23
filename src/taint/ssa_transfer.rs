@@ -862,14 +862,22 @@ fn compute_succ_states(
                     transfer.interner,
                 );
 
-                // Phase 15: Constraint refinement
+                // Phase 15/16: Constraint refinement
+                //
+                // `lower_condition` returns a ConditionExpr that represents the
+                // full semantic condition (it already applies `condition_negated`
+                // internally). The true branch is where the condition holds
+                // (polarity=true), the false branch is where it doesn't
+                // (polarity=false). We do NOT reuse `effective_negated` here —
+                // that variable incorporates `has_semantic_negation` which is a
+                // predicate-system concern, not a constraint-system concern.
                 if true_state.path_env.is_some() || false_state.path_env.is_some() {
                     let cond_expr = constraint::lower_condition(
                         cond_info, ssa, block.id, transfer.const_values,
                     );
                     if !matches!(cond_expr, constraint::ConditionExpr::Unknown) {
                         if let Some(ref mut env) = true_state.path_env {
-                            *env = constraint::refine_env(env, &cond_expr, !effective_negated);
+                            *env = constraint::refine_env(env, &cond_expr, true);
                             if env.is_unsat() {
                                 tracing::debug!(
                                     block = ?block.id,
@@ -879,7 +887,7 @@ fn compute_succ_states(
                             }
                         }
                         if let Some(ref mut env) = false_state.path_env {
-                            *env = constraint::refine_env(env, &cond_expr, effective_negated);
+                            *env = constraint::refine_env(env, &cond_expr, false);
                             if env.is_unsat() {
                                 tracing::debug!(
                                     block = ?block.id,
@@ -1436,9 +1444,10 @@ fn transfer_inst(
             // HttpClient.send when client is typed as HttpClient).
             if !resolved_callee && info.labels.is_empty() {
                 if let Some(rv) = receiver {
-                    if let Some(type_facts) = transfer.type_facts {
+                    if transfer.type_facts.is_some() || state.path_env.is_some() {
                         let tq_labels = resolve_type_qualified_labels(
-                            callee, *rv, type_facts, transfer.lang, transfer.extra_labels,
+                            callee, *rv, transfer.type_facts, state.path_env.as_ref(),
+                            transfer.lang, transfer.extra_labels,
                         );
                         for lbl in &tq_labels {
                             match lbl {
@@ -1738,7 +1747,7 @@ fn transfer_inst(
         }
     }
 
-    // Phase 15: Constraint propagation through instructions
+    // Phase 15/16: Constraint propagation through instructions
     if let Some(ref mut env) = state.path_env {
         match &inst.op {
             SsaOp::Assign(uses) if uses.len() == 1 => {
@@ -1747,6 +1756,30 @@ fn transfer_inst(
                 if !src_fact.is_top() {
                     env.refine(inst.value, &src_fact);
                     env.assert_equal(inst.value, uses[0]);
+                }
+                // Phase 16: Cast/assertion type narrowing.
+                //
+                // If this Assign's CFG node is a cast/type-assertion expression,
+                // narrow the destination value's type in PathEnv.
+                //
+                // Semantics vary by language:
+                // - Java casts: runtime-checked — type is reliably narrowed
+                // - TypeScript `as`: compile-time assertion only, not runtime proof
+                // - Go type assertions: runtime-checked (direct form)
+                //
+                // In ALL cases: taint is preserved. Narrowing the type does NOT
+                // erase taint — a tainted value cast to String is still tainted.
+                let node_info = &cfg[inst.cfg_node];
+                if let Some(ref cast_type) = node_info.cast_target_type {
+                    if let Some(kind) =
+                        crate::constraint::solver::parse_type_name(cast_type)
+                    {
+                        let mut fact = constraint::ValueFact::top();
+                        fact.types =
+                            constraint::TypeSet::singleton(&kind);
+                        fact.null = constraint::Nullability::NonNull;
+                        env.refine(inst.value, &fact);
+                    }
                 }
             }
             SsaOp::Const(Some(text)) => {
@@ -1913,9 +1946,10 @@ fn collect_block_events(
         // try using the receiver's inferred type to construct a qualified callee name.
         if sink_caps.is_empty() {
             if let SsaOp::Call { callee, receiver: Some(rv), .. } = &inst.op {
-                if let Some(type_facts) = transfer.type_facts {
+                if transfer.type_facts.is_some() || state.path_env.is_some() {
                     let tq_labels = resolve_type_qualified_labels(
-                        callee, *rv, type_facts, transfer.lang, transfer.extra_labels,
+                        callee, *rv, transfer.type_facts, state.path_env.as_ref(),
+                        transfer.lang, transfer.extra_labels,
                     );
                     for lbl in &tq_labels {
                         if let DataLabel::Sink(bits) = lbl {
@@ -1926,6 +1960,47 @@ fn collect_block_events(
             }
         }
 
+        if sink_caps.is_empty() {
+            continue;
+        }
+
+        // Phase 16: Receiver type incompatibility check.
+        // If the receiver's flow-sensitive type proves it cannot be the kind
+        // of object the sink expects (e.g., Int receiver → not an HTTP response
+        // sink), strip those sink caps.
+        if let Some(ref env) = state.path_env {
+            if let SsaOp::Call { receiver: Some(rv), .. } = &inst.op {
+                if let Some(kind) = env.get(*rv).types.as_singleton() {
+                    sink_caps &= !receiver_incompatible_sink_caps(&kind, sink_caps);
+                }
+            }
+        }
+        if sink_caps.is_empty() {
+            continue;
+        }
+
+        // Phase 16: Go interface satisfaction check.
+        // For Go sinks that require http.ResponseWriter (e.g., fmt.Fprintf),
+        // skip if the first argument's type is known to NOT satisfy the interface.
+        if transfer.lang == Lang::Go {
+            if let Some(ref env) = state.path_env {
+                if let SsaOp::Call { args, .. } = &inst.op {
+                    if let Some(first_arg_vals) = args.first() {
+                        if let Some(&first_val) = first_arg_vals.first() {
+                            if let Some(kind) = env.get(first_val).types.as_singleton() {
+                                if crate::ssa::type_facts::GoInterfaceTable::definitely_not(
+                                    &kind,
+                                    "http.ResponseWriter",
+                                ) && sink_caps.intersects(Cap::HTML_ESCAPE)
+                                {
+                                    sink_caps &= !Cap::HTML_ESCAPE;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if sink_caps.is_empty() {
             continue;
         }
@@ -1988,6 +2063,18 @@ fn collect_block_events(
         if !matches!(inst.op, SsaOp::Call { .. }) {
             if let Some(type_facts) = transfer.type_facts {
                 if is_type_safe_for_sink(inst, sink_caps, type_facts) {
+                    continue;
+                }
+            }
+        }
+
+        // Phase 16: Path-sensitive type-safe sink filtering.
+        // Uses flow-sensitive type constraints from PathEnv (branch narrowing,
+        // casts) to suppress sinks when all argument values are proven to have
+        // non-injectable types (Int, Bool).
+        if !matches!(inst.op, SsaOp::Call { .. }) {
+            if let Some(ref env) = state.path_env {
+                if is_path_type_safe_for_sink(inst, sink_caps, env) {
                     continue;
                 }
             }
@@ -2737,25 +2824,50 @@ fn all_args_const(
 /// When the callee string is `"client.send"` and the receiver SSA value is typed
 /// as `HttpClient`, constructs `"HttpClient.send"` and checks label rules.
 /// Returns the matched labels (source/sanitizer/sink) if any.
+///
+/// Resolution order:
+/// 1. Static type from [`TypeFactResult`] (constructor/const inference)
+/// 2. Flow-sensitive type from [`PathEnv`] (branch narrowing, casts)
 fn resolve_type_qualified_labels(
     callee: &str,
     receiver: SsaValue,
-    type_facts: &crate::ssa::type_facts::TypeFactResult,
+    type_facts: Option<&crate::ssa::type_facts::TypeFactResult>,
+    path_env: Option<&constraint::PathEnv>,
     lang: Lang,
     extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
 ) -> SmallVec<[DataLabel; 2]> {
-    let receiver_type = match type_facts.get_type(receiver) {
-        Some(tk) => tk,
-        None => return SmallVec::new(),
-    };
-    let prefix = match receiver_type.label_prefix() {
-        Some(p) => p,
-        None => return SmallVec::new(),
-    };
-    // Extract the method part: last segment after '.'
-    let method = callee.rsplit('.').next().unwrap_or(callee);
-    let qualified = format!("{}.{}", prefix, method);
-    crate::labels::classify_all(lang.as_str(), &qualified, extra_labels)
+    // 1. Try static type first (existing behavior)
+    if let Some(tf) = type_facts {
+        if let Some(receiver_type) = tf.get_type(receiver) {
+            if let Some(prefix) = receiver_type.label_prefix() {
+                let method = callee.rsplit('.').next().unwrap_or(callee);
+                let qualified = format!("{}.{}", prefix, method);
+                let labels =
+                    crate::labels::classify_all(lang.as_str(), &qualified, extra_labels);
+                if !labels.is_empty() {
+                    return labels;
+                }
+            }
+        }
+    }
+
+    // 2. Try flow-sensitive type from PathEnv (Phase 16)
+    if let Some(env) = path_env {
+        let types = env.get(receiver).types;
+        if let Some(kind) = types.as_singleton() {
+            if let Some(prefix) = kind.label_prefix() {
+                let method = callee.rsplit('.').next().unwrap_or(callee);
+                let qualified = format!("{}.{}", prefix, method);
+                return crate::labels::classify_all(
+                    lang.as_str(),
+                    &qualified,
+                    extra_labels,
+                );
+            }
+        }
+    }
+
+    SmallVec::new()
 }
 
 /// Suppress sinks from known non-sink callees (e.g., `System.out.println` in Java).
@@ -2796,6 +2908,74 @@ fn is_type_safe_for_sink(
     }
 
     used.iter().all(|v| type_facts.is_int(*v))
+}
+
+// ── Phase 16: Centralized Type-Sink Compatibility Helpers ────────────────
+
+/// Check if a [`TypeKind`] is safe for a given sink capability.
+///
+/// Returns `true` if the type cannot carry the payload required by the sink.
+/// Policy: Int/Bool values cannot carry injection payloads (SQL, code, path).
+/// String-typed values CAN carry injection payloads — casts to String do NOT
+/// make a value safe.
+fn type_safe_for_taint_sink(kind: &crate::ssa::type_facts::TypeKind, cap: Cap) -> bool {
+    use crate::ssa::type_facts::TypeKind;
+    match kind {
+        TypeKind::Int | TypeKind::Bool => {
+            cap.intersects(Cap::SQL_QUERY | Cap::FILE_IO | Cap::CODE_EXEC)
+        }
+        _ => false,
+    }
+}
+
+/// Check if a receiver type is incompatible with a sink label's requirements.
+///
+/// Returns the Cap bits that should be REMOVED because the receiver type
+/// proves the sink doesn't apply. For example, `HTML_ESCAPE` sinks require
+/// an HTTP-response-like receiver — if the receiver is known to be
+/// Int/Bool/String, `HTML_ESCAPE` doesn't apply.
+fn receiver_incompatible_sink_caps(
+    kind: &crate::ssa::type_facts::TypeKind,
+    sink_caps: Cap,
+) -> Cap {
+    use crate::ssa::type_facts::TypeKind;
+    let mut remove = Cap::empty();
+    // HTML_ESCAPE requires HTTP response-like receiver
+    if sink_caps.intersects(Cap::HTML_ESCAPE) {
+        match kind {
+            TypeKind::HttpResponse => {} // compatible
+            TypeKind::Unknown | TypeKind::Object => {} // could be response
+            _ => {
+                remove |= Cap::HTML_ESCAPE;
+            }
+        }
+    }
+    // Injection sinks require string-like payload
+    if type_safe_for_taint_sink(kind, sink_caps) {
+        remove |= sink_caps & (Cap::SQL_QUERY | Cap::FILE_IO | Cap::CODE_EXEC);
+    }
+    remove
+}
+
+/// Check if all argument values of an instruction have types that are safe
+/// for the given sink (path-sensitive, via [`PathEnv`]).
+fn is_path_type_safe_for_sink(
+    inst: &SsaInst,
+    sink_caps: Cap,
+    env: &constraint::PathEnv,
+) -> bool {
+    let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO | Cap::CODE_EXEC;
+    if !sink_caps.intersects(type_suppressible) {
+        return false;
+    }
+    let used = inst_use_values(inst);
+    if used.is_empty() {
+        return false;
+    }
+    used.iter().all(|v| match env.get(*v).types.as_singleton() {
+        Some(ref kind) => type_safe_for_taint_sink(kind, sink_caps),
+        None => false, // Multiple possible types → not safe
+    })
 }
 
 // ── Callee Resolution (mirrors TaintTransfer::resolve_callee) ───────────

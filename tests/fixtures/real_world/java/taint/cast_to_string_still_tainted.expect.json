@@ -1,0 +1,15 @@
+{
+  "description": "Casting user input to String does not sanitize it — SQL injection finding must still be reported (negative regression test for type-flow)",
+  "tags": ["taint", "type-flow", "cast", "sqli", "negative-regression"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [6, 10],
+      "evidence_contains": [],
+      "notes": "req.getParameter(\"name\") cast to String still flows into stmt.executeQuery — String cast must not suppress taint"
+    }
+  ]
+}

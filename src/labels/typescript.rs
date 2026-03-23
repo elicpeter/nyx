@@ -216,6 +216,8 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "variable_declaration"  => Kind::CallWrapper,
     "lexical_declaration"   => Kind::CallWrapper,
     "expression_statement"  => Kind::CallWrapper,
+    "as_expression"         => Kind::Seq,
+    "type_assertion"        => Kind::Seq,
 
     // trivia
     "comment"               => Kind::Trivia,

@@ -252,6 +252,112 @@ pub fn analyze_types(
     TypeFactResult { facts }
 }
 
+// ── Java Type Hierarchy (bounded, sink-relevant) ─────────────────────────
+
+/// Minimal Java type hierarchy for subtype queries.
+///
+/// Scope: **sink-relevant framework types only** (Servlet API, JDBC, HTTP
+/// clients, I/O streams). NOT a general Java class hierarchy.
+/// Used for `instanceof` resolution and type-qualified method dispatch.
+pub struct TypeHierarchy;
+
+/// (subtype, &[supertypes]) — sink-relevant framework types only.
+static JAVA_HIERARCHY: &[(&str, &[&str])] = &[
+    ("HttpServletResponse", &["ServletResponse"]),
+    ("HttpServletRequest", &["ServletRequest"]),
+    ("HttpURLConnection", &["URLConnection"]),
+    ("CloseableHttpClient", &["HttpClient"]),
+    ("FileInputStream", &["InputStream"]),
+    ("FileOutputStream", &["OutputStream"]),
+    ("BufferedReader", &["Reader"]),
+    ("BufferedWriter", &["Writer"]),
+    ("PreparedStatement", &["Statement"]),
+    ("ArrayList", &["List", "Collection"]),
+    ("HashMap", &["Map"]),
+    ("StringBuilder", &["CharSequence"]),
+    ("StringBuffer", &["CharSequence"]),
+];
+
+impl TypeHierarchy {
+    /// Check if `sub` is a subtype of `super_type` in the bounded Java
+    /// framework hierarchy. Returns `true` for identity (`sub == super_type`).
+    pub fn is_subtype_of(sub: &str, super_type: &str) -> bool {
+        if sub == super_type {
+            return true;
+        }
+        JAVA_HIERARCHY
+            .iter()
+            .any(|(s, supers)| *s == sub && supers.contains(&super_type))
+    }
+
+    /// Resolve a class name through the hierarchy to a [`TypeKind`].
+    ///
+    /// Tries the class name directly first (via `class_name_to_type_kind`
+    /// in the constraint solver), then checks if any registered supertype
+    /// maps to a `TypeKind`.
+    pub fn resolve_kind(class_name: &str) -> Option<TypeKind> {
+        // Direct resolution via the class-name table in solver.rs
+        crate::constraint::solver::class_name_to_type_kind(class_name).or_else(|| {
+            // Hierarchy fallback: check supertypes
+            for (sub, supers) in JAVA_HIERARCHY.iter() {
+                if *sub == class_name {
+                    for s in *supers {
+                        if let Some(k) = crate::constraint::solver::class_name_to_type_kind(s) {
+                            return Some(k);
+                        }
+                    }
+                }
+            }
+            None
+        })
+    }
+}
+
+// ── Go Interface Satisfaction (bounded, conservative) ────────────────────
+
+/// Go interface satisfaction table for **sink-relevant interfaces only**.
+///
+/// Conservative: unknown interfaces → `true` (could satisfy).
+/// Only [`definitely_not`](GoInterfaceTable::definitely_not) is used for
+/// suppression — it returns `true` only when the type provably cannot
+/// implement the interface.
+pub struct GoInterfaceTable;
+
+impl GoInterfaceTable {
+    /// Check if a [`TypeKind`] is known to satisfy a Go interface.
+    pub fn satisfies(kind: &TypeKind, interface: &str) -> bool {
+        match interface {
+            "http.ResponseWriter" | "ResponseWriter" => {
+                matches!(kind, TypeKind::HttpResponse)
+            }
+            "io.Writer" | "Writer" => {
+                matches!(kind, TypeKind::HttpResponse | TypeKind::FileHandle)
+            }
+            "io.Reader" | "Reader" => matches!(kind, TypeKind::FileHandle),
+            _ => true, // Unknown interface → conservative (could satisfy)
+        }
+    }
+
+    /// Check if a [`TypeKind`] is known to NOT satisfy a specific interface.
+    ///
+    /// Returns `true` only when we are confident the type cannot implement
+    /// the interface. Used for sink suppression.
+    pub fn definitely_not(kind: &TypeKind, interface: &str) -> bool {
+        match interface {
+            "http.ResponseWriter" | "ResponseWriter" => matches!(
+                kind,
+                TypeKind::Int
+                    | TypeKind::Bool
+                    | TypeKind::String
+                    | TypeKind::FileHandle
+                    | TypeKind::DatabaseConnection
+                    | TypeKind::Url
+            ),
+            _ => false, // Unknown interface → conservative
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +541,90 @@ mod tests {
         assert!(!result.is_type(SsaValue(0), &TypeKind::Url));
         assert!(result.is_int(SsaValue(1)));
         assert_eq!(result.get_type(SsaValue(99)), None);
+    }
+
+    // ── TypeHierarchy::is_subtype_of ─────────────────────────────────────
+
+    #[test]
+    fn hierarchy_http_servlet_response_is_servlet_response() {
+        assert!(TypeHierarchy::is_subtype_of(
+            "HttpServletResponse",
+            "ServletResponse"
+        ));
+    }
+
+    #[test]
+    fn hierarchy_string_is_not_servlet_response() {
+        assert!(!TypeHierarchy::is_subtype_of("String", "ServletResponse"));
+    }
+
+    #[test]
+    fn hierarchy_identity_subtype() {
+        assert!(TypeHierarchy::is_subtype_of(
+            "HttpServletResponse",
+            "HttpServletResponse"
+        ));
+    }
+
+    // ── TypeHierarchy::resolve_kind ──────────────────────────────────────
+
+    #[test]
+    fn resolve_closeable_http_client() {
+        assert_eq!(
+            TypeHierarchy::resolve_kind("CloseableHttpClient"),
+            Some(TypeKind::HttpClient)
+        );
+    }
+
+    #[test]
+    fn resolve_string_builder() {
+        assert_eq!(
+            TypeHierarchy::resolve_kind("StringBuilder"),
+            Some(TypeKind::String)
+        );
+    }
+
+    // ── GoInterfaceTable::definitely_not ─────────────────────────────────
+
+    #[test]
+    fn go_file_handle_definitely_not_response_writer() {
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::FileHandle,
+            "http.ResponseWriter"
+        ));
+    }
+
+    #[test]
+    fn go_http_response_not_definitely_not_response_writer() {
+        assert!(!GoInterfaceTable::definitely_not(
+            &TypeKind::HttpResponse,
+            "http.ResponseWriter"
+        ));
+    }
+
+    // ── GoInterfaceTable::satisfies ──────────────────────────────────────
+
+    #[test]
+    fn go_http_response_satisfies_response_writer() {
+        assert!(GoInterfaceTable::satisfies(
+            &TypeKind::HttpResponse,
+            "http.ResponseWriter"
+        ));
+    }
+
+    #[test]
+    fn go_file_handle_does_not_satisfy_response_writer() {
+        assert!(!GoInterfaceTable::satisfies(
+            &TypeKind::FileHandle,
+            "http.ResponseWriter"
+        ));
+    }
+
+    #[test]
+    fn go_http_response_satisfies_io_writer() {
+        assert!(GoInterfaceTable::satisfies(
+            &TypeKind::HttpResponse,
+            "io.Writer"
+        ));
     }
 }

@@ -98,6 +98,11 @@ pub struct NodeInfo {
     /// "req.getParameter"), this field preserves the original outer callee
     /// ("parts.add") so container propagation can still recognise it.
     pub outer_callee: Option<String>,
+    /// For cast/type-assertion expressions: the target type name extracted
+    /// from the AST.  E.g. `(String) x` → `"String"`, `x as number` → `"number"`,
+    /// `x.(io.Reader)` → `"io.Reader"`.  Used by type-flow constraint solving
+    /// to refine the type environment at the SSA level.
+    pub cast_target_type: Option<String>,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -601,6 +606,7 @@ fn push_condition_node<'a>(
         const_text: None,
         arg_callees: Vec::new(),
         outer_callee: None,
+        cast_target_type: None,
     })
 }
 
@@ -1665,6 +1671,31 @@ fn push_node<'a>(
         None
     };
 
+    // Extract cast/type-assertion target type from AST node.
+    let cast_target_type = match ast.kind() {
+        // Java: (Type) expr
+        "cast_expression" => ast
+            .child_by_field_name("type")
+            .filter(|n| matches!(n.kind(), "type_identifier" | "scoped_type_identifier"))
+            .and_then(|n| text_of(n, code)),
+        // TypeScript: expr as Type
+        "as_expression" => ast
+            .child_by_field_name("type")
+            .filter(|n| matches!(n.kind(), "type_identifier" | "predefined_type"))
+            .and_then(|n| text_of(n, code)),
+        // TypeScript: <Type>expr (angle-bracket syntax)
+        "type_assertion" => ast
+            .child(0)
+            .filter(|n| matches!(n.kind(), "type_identifier" | "predefined_type"))
+            .and_then(|n| text_of(n, code)),
+        // Go: expr.(Type)
+        "type_assertion_expression" => ast
+            .child_by_field_name("type")
+            .filter(|n| matches!(n.kind(), "type_identifier" | "qualified_type"))
+            .and_then(|n| text_of(n, code)),
+        _ => None,
+    };
+
     let idx = g.add_node(NodeInfo {
         kind,
         span,
@@ -1686,6 +1717,7 @@ fn push_node<'a>(
         const_text,
         arg_callees,
         outer_callee,
+        cast_target_type,
     });
 
     debug!(
@@ -1968,6 +2000,7 @@ fn build_try<'a>(
                     const_text: None,
                     arg_callees: Vec::new(),
                     outer_callee: None,
+                    cast_target_type: None,
                 });
 
                 // Wire exception edges from every exception source → synthetic node
@@ -2240,6 +2273,7 @@ fn build_sub<'a>(
                     const_text: None,
                     arg_callees: Vec::new(),
                     outer_callee: None,
+                    cast_target_type: None,
                 });
                 connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
@@ -2859,6 +2893,7 @@ fn build_sub<'a>(
                 const_text: None,
                 arg_callees: Vec::new(),
                 outer_callee: None,
+                cast_target_type: None,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -3137,6 +3172,7 @@ pub(crate) fn build_cfg<'a>(
         const_text: None,
         arg_callees: Vec::new(),
         outer_callee: None,
+        cast_target_type: None,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -3159,6 +3195,7 @@ pub(crate) fn build_cfg<'a>(
         const_text: None,
         arg_callees: Vec::new(),
         outer_callee: None,
+        cast_target_type: None,
     });
 
     // Build the body below the synthetic ENTRY.
