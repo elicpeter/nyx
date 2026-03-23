@@ -15,6 +15,7 @@ interface CodeViewerProps {
   findings?: ExplorerFinding[];
   highlights?: LineHighlights;
   highlightLine?: number;
+  flowLines?: Set<number>;
   language?: string;
   className?: string;
 }
@@ -24,6 +25,7 @@ export function CodeViewer({
   findings,
   highlights,
   highlightLine,
+  flowLines,
   language,
   className,
 }: CodeViewerProps) {
@@ -106,9 +108,10 @@ export function CodeViewer({
           else if (l.number === highlights.sinkLine) cls += ' highlight-sink';
           else if (l.number === highlights.findingLine)
             cls += ' highlight-finding';
-        }
-        if (highlightLine && l.number === highlightLine)
+          else if (flowLines?.has(l.number)) cls += ' highlight-flow';
+        } else if (highlightLine && l.number === highlightLine) {
           cls += ' highlight-finding';
+        }
 
         const gutterFinding = findingsByLine.get(l.number);
 

@@ -1,13 +1,30 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useExplorerTree, useExplorerSymbols, useExplorerFindings } from '../api/queries/explorer';
+import { useFinding } from '../api/queries/findings';
 import { FileTree } from '../components/data-display/FileTree';
 import { CodeViewer } from '../components/data-display/CodeViewer';
 import { LoadingState } from '../components/ui/LoadingState';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ExplorerIcon } from '../components/icons/Icons';
-import type { TreeEntry } from '../api/types';
+import type { TreeEntry, FlowStep } from '../api/types';
 
 type ExplorerMode = 'tree' | 'symbols' | 'hotspots';
+
+const FLOW_KIND_COLORS: Record<string, string> = {
+  source: 'var(--success)',
+  assignment: 'var(--accent)',
+  call: 'var(--sev-medium)',
+  phi: 'var(--text-tertiary)',
+  sink: 'var(--sev-high)',
+};
+
+const FLOW_KIND_LABELS: Record<string, string> = {
+  source: 'Source',
+  assignment: 'Assign',
+  call: 'Call',
+  phi: 'Phi',
+  sink: 'Sink',
+};
 
 export function ExplorerPage() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -16,11 +33,13 @@ export function ExplorerPage() {
   const [explorerMode, setExplorerMode] = useState<ExplorerMode>('tree');
   const [highlightLine, setHighlightLine] = useState<number | undefined>();
   const [expandQueue, setExpandQueue] = useState<string | null>(null);
+  const [selectedFindingIndex, setSelectedFindingIndex] = useState<number | null>(null);
 
   const { data: rootEntries, isLoading: treeLoading } = useExplorerTree();
   const { data: childEntries } = useExplorerTree(expandQueue || undefined);
   const { data: symbols } = useExplorerSymbols(selectedPath);
   const { data: findings } = useExplorerFindings(selectedPath);
+  const { data: fullFinding } = useFinding(selectedFindingIndex ?? '');
 
   // When child entries arrive for an expanded directory, store them
   useEffect(() => {
@@ -42,7 +61,6 @@ export function ExplorerPage() {
           next.delete(path);
         } else {
           next.add(path);
-          // Fetch children if not already loaded
           if (!loadedChildren.has(path)) {
             setExpandQueue(path);
           }
@@ -56,6 +74,12 @@ export function ExplorerPage() {
   const handleSelectFile = useCallback((path: string) => {
     setSelectedPath(path);
     setHighlightLine(undefined);
+    setSelectedFindingIndex(null);
+  }, []);
+
+  const handleSelectFinding = useCallback((index: number, line: number) => {
+    setSelectedFindingIndex(index);
+    setHighlightLine(line);
   }, []);
 
   // Detect language from selected file
@@ -76,6 +100,26 @@ export function ExplorerPage() {
         {} as Record<string, number>,
       )
     : {};
+
+  // Build highlights and flow lines from full finding evidence
+  const evidence = fullFinding?.evidence;
+  const flowSteps = evidence?.flow_steps;
+  const hasFlow = flowSteps && flowSteps.length > 0;
+
+  const codeHighlights = selectedFindingIndex != null && evidence
+    ? {
+        sourceLine: evidence.source?.line,
+        sinkLine: evidence.sink?.line,
+        findingLine: fullFinding?.line,
+      }
+    : undefined;
+
+  const flowLineSet = new Set<number>();
+  if (hasFlow) {
+    for (const step of flowSteps) {
+      if (step.line) flowLineSet.add(step.line);
+    }
+  }
 
   return (
     <div className="explorer-page">
@@ -183,7 +227,9 @@ export function ExplorerPage() {
             <CodeViewer
               filePath={selectedPath}
               findings={findings || undefined}
+              highlights={codeHighlights}
               highlightLine={highlightLine}
+              flowLines={flowLineSet.size > 0 ? flowLineSet : undefined}
               language={language}
             />
           )}
@@ -253,8 +299,8 @@ export function ExplorerPage() {
                   findings.map((f) => (
                     <div
                       key={`${f.line}-${f.rule_id}`}
-                      className={`explorer-finding-item${highlightLine === f.line ? ' active' : ''}`}
-                      onClick={() => setHighlightLine(f.line)}
+                      className={`explorer-finding-item${selectedFindingIndex === f.index ? ' active' : ''}`}
+                      onClick={() => handleSelectFinding(f.index, f.line)}
                     >
                       <span className={`finding-sev-dot sev-${f.severity.toLowerCase()}`} />
                       <span className="finding-line">L{f.line}</span>
@@ -268,9 +314,71 @@ export function ExplorerPage() {
                   ))}
               </div>
             </div>
+
+            {/* Taint Flow (shown when a finding is selected) */}
+            {hasFlow && (
+              <div className="explorer-right-section">
+                <h3>Taint Flow</h3>
+                <ExplorerFlowTimeline
+                  steps={flowSteps}
+                  onStepClick={(line) => setHighlightLine(line)}
+                />
+              </div>
+            )}
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Flow Timeline (compact version for explorer) ────────────────────────────
+
+function ExplorerFlowTimeline({
+  steps,
+  onStepClick,
+}: {
+  steps: FlowStep[];
+  onStepClick: (line: number) => void;
+}) {
+  return (
+    <div className="flow-timeline explorer-flow">
+      {steps.map((s, i) => {
+        const color = FLOW_KIND_COLORS[s.kind] || 'var(--text-secondary)';
+        const label = FLOW_KIND_LABELS[s.kind] || s.kind;
+        const isLast = i === steps.length - 1;
+
+        return (
+          <div
+            key={i}
+            className={`flow-step${s.is_cross_file ? ' flow-step-cross-file' : ''}`}
+            onClick={() => s.line && onStepClick(s.line)}
+          >
+            <div className="flow-step-connector">
+              <div className="flow-step-dot" style={{ background: color }} />
+              {!isLast && <div className="flow-step-line" />}
+            </div>
+            <div className="flow-step-card">
+              <div className="flow-step-header">
+                <span className="flow-step-badge" style={{ color }}>
+                  {label}
+                </span>
+                {s.variable && (
+                  <span className="flow-step-var">{s.variable}</span>
+                )}
+                {s.callee && (
+                  <span className="flow-step-callee">{s.callee}</span>
+                )}
+              </div>
+              <div className="flow-step-loc">
+                L{s.line}:{s.col}
+                {s.function ? ` in ${s.function}` : ''}
+              </div>
+              {s.snippet && <div className="flow-step-snippet">{s.snippet}</div>}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -284,13 +392,11 @@ function findEntry(
 ): TreeEntry | undefined {
   if (!path) return undefined;
 
-  // Check root
   if (rootEntries) {
     const found = rootEntries.find((e) => e.path === path);
     if (found) return found;
   }
 
-  // Check loaded children
   for (const children of loadedChildren.values()) {
     const found = children.find((e) => e.path === path);
     if (found) return found;
