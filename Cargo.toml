@@ -14,6 +14,7 @@ readme = "README.md"
 default-run = "nyx"
 exclude = [
     "assets/",
+    "frontend/node_modules/",
     ".github/",
     "CLAUDE.md",
     ".claude/",

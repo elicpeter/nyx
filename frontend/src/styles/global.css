@@ -1955,7 +1955,7 @@ tr.selected td {
   border-collapse: collapse;
   table-layout: fixed;
 }
-/* Fixed pixel widths for stable columns; col-title has no explicit width → takes remainder */
+/* Fixed pixel widths for stable columns; col-title has no explicit width -> takes remainder */
 .rules-table .col-toggle { width: 60px; }
 .rules-table .col-lang   { width: 100px; }
 .rules-table .col-kind   { width: 110px; }

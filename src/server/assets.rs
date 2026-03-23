@@ -2,9 +2,9 @@ use axum::extract::Request;
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 
-static INDEX_HTML: &str = include_str!("assets/index.html");
-static STYLE_CSS: &str = include_str!("assets/style.css");
-static APP_JS: &str = include_str!("assets/app.js");
+static INDEX_HTML: &str = include_str!("assets/dist/index.html");
+static STYLE_CSS: &str = include_str!("assets/dist/style.css");
+static APP_JS: &str = include_str!("assets/dist/app.js");
 static FAVICON_SVG: &str = include_str!("assets/favicon.svg");
 
 /// Serve embedded static files or fall back to the SPA shell.
