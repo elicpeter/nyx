@@ -1917,10 +1917,11 @@ let _triageFilter = 'all';
 async function renderTriage(el, params, match) {
   el.innerHTML = '<div class="loading">Loading triage data...</div>';
   try {
-    const [firstPage, auditData, suppressionData] = await Promise.all([
+    const [firstPage, auditData, suppressionData, syncStatus] = await Promise.all([
       api('/findings?per_page=5000'),
       api('/triage/audit?per_page=100'),
       api('/triage/suppress'),
+      api('/triage/sync-status'),
     ]);
 
     let findings = firstPage.findings || [];
@@ -2035,11 +2036,20 @@ async function renderTriage(el, params, match) {
           </div>` : ''}
         </div>` : ''}
 
-        <!-- Tabs for Findings vs Rules vs Audit -->
-        <div class="triage-tabs">
-          <button class="triage-tab active" data-tab="findings">Findings (${filtered.length})</button>
-          <button class="triage-tab" data-tab="rules">Suppression Rules (${suppressionRules.length})</button>
-          <button class="triage-tab" data-tab="audit">Audit Log (${auditEntries.length})</button>
+        <!-- Tabs and sync controls -->
+        <div class="triage-tabs-row">
+          <div class="triage-tabs">
+            <button class="triage-tab active" data-tab="findings">Findings (${filtered.length})</button>
+            <button class="triage-tab" data-tab="rules">Suppression Rules (${suppressionRules.length})</button>
+            <button class="triage-tab" data-tab="audit">Audit Log (${auditEntries.length})</button>
+          </div>
+          <div class="triage-sync-controls">
+            <span class="triage-sync-status">${syncStatus.file_exists
+              ? `<span class="triage-sync-dot synced"></span> .nyx/triage.json (${syncStatus.decisions} decisions)`
+              : '<span class="triage-sync-dot unsynced"></span> No sync file'}</span>
+            <button class="btn btn-sm" id="triage-export" title="Save triage decisions to .nyx/triage.json for team sharing via git">Export</button>
+            ${syncStatus.file_exists ? `<button class="btn btn-sm" id="triage-import" title="Load triage decisions from .nyx/triage.json">Import</button>` : ''}
+          </div>
         </div>
 
         <!-- Findings tab -->
@@ -2159,6 +2169,28 @@ async function renderTriage(el, params, match) {
           alert('Failed to delete rule: ' + err.message);
         }
       });
+    });
+
+    // Export triage to .nyx/triage.json
+    $('#triage-export', el)?.addEventListener('click', async () => {
+      try {
+        const result = await api('/triage/export', { method: 'POST', signal: null });
+        renderTriage(el, params, match);
+        alert(`Exported ${result.exported} decisions and ${result.suppression_rules} suppression rules to .nyx/triage.json\n\nCommit this file to share triage decisions with your team.`);
+      } catch (err) {
+        alert('Export failed: ' + err.message);
+      }
+    });
+
+    // Import triage from .nyx/triage.json
+    $('#triage-import', el)?.addEventListener('click', async () => {
+      try {
+        const result = await api('/triage/import', { method: 'POST', signal: null });
+        renderTriage(el, params, match);
+        alert(`Imported ${result.imported} of ${result.total_in_file} decisions from .nyx/triage.json`);
+      } catch (err) {
+        alert('Import failed: ' + err.message);
+      }
     });
 
   } catch (e) {

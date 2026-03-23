@@ -18,6 +18,9 @@ pub fn routes() -> Router<AppState> {
                 .post(add_suppression)
                 .delete(remove_suppression),
         )
+        .route("/triage/export", post(export_triage_file))
+        .route("/triage/import", post(import_triage_file))
+        .route("/triage/sync-status", get(get_sync_status))
 }
 
 // ── POST /api/triage ────────────────────────────────────────────────────────
@@ -73,6 +76,9 @@ async fn set_triage(
                 Json(serde_json::json!({ "error": e.to_string() })),
             )
         })?;
+
+    // Auto-sync to .nyx/triage.json
+    auto_sync_to_file(&state);
 
     Ok(Json(serde_json::json!({
         "updated": results.len(),
@@ -256,6 +262,9 @@ async fn add_suppression(
     }
     drop(views);
 
+    // Auto-sync to .nyx/triage.json
+    auto_sync_to_file(&state);
+
     Ok(Json(serde_json::json!({
         "rule_id": rule_id,
         "findings_affected": affected,
@@ -295,5 +304,101 @@ async fn remove_suppression(
         .delete_suppression_rule(query.id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // Auto-sync to .nyx/triage.json
+    auto_sync_to_file(&state);
+
     Ok(Json(serde_json::json!({ "deleted": deleted })))
+}
+
+// ── Auto-sync helper ────────────────────────────────────────────────────────
+
+fn auto_sync_to_file(state: &AppState) {
+    if let Some(ref pool) = state.db_pool {
+        let findings = load_latest_findings(state);
+        let _ = crate::server::triage_sync::sync_to_file(pool, &findings, &state.scan_root);
+    }
+}
+
+// ── POST /api/triage/export ─────────────────────────────────────────────────
+
+async fn export_triage_file(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let pool = state.db_pool.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({ "error": "database not available" })),
+    ))?;
+
+    let findings = load_latest_findings(&state);
+    let file =
+        crate::server::triage_sync::export_triage(pool, &findings, &state.scan_root).map_err(
+            |e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e })),
+                )
+            },
+        )?;
+
+    crate::server::triage_sync::save_triage_file(&state.scan_root, &file).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
+
+    let path = crate::server::triage_sync::triage_file_path(&state.scan_root);
+    Ok(Json(serde_json::json!({
+        "exported": file.decisions.len(),
+        "suppression_rules": file.suppression_rules.len(),
+        "path": path.to_string_lossy(),
+    })))
+}
+
+// ── POST /api/triage/import ─────────────────────────────────────────────────
+
+async fn import_triage_file(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let pool = state.db_pool.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({ "error": "database not available" })),
+    ))?;
+
+    let file = crate::server::triage_sync::load_triage_file(&state.scan_root).ok_or((
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": ".nyx/triage.json not found" })),
+    ))?;
+
+    let findings = load_latest_findings(&state);
+    let applied =
+        crate::server::triage_sync::import_triage(pool, &findings, &state.scan_root, &file)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e })),
+                )
+            })?;
+
+    Ok(Json(serde_json::json!({
+        "imported": applied,
+        "total_in_file": file.decisions.len(),
+        "suppression_rules": file.suppression_rules.len(),
+    })))
+}
+
+// ── GET /api/triage/sync-status ─────────────────────────────────────────────
+
+async fn get_sync_status(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let path = crate::server::triage_sync::triage_file_path(&state.scan_root);
+    let file = crate::server::triage_sync::load_triage_file(&state.scan_root);
+
+    Json(serde_json::json!({
+        "file_path": path.to_string_lossy(),
+        "file_exists": path.exists(),
+        "decisions": file.as_ref().map(|f| f.decisions.len()).unwrap_or(0),
+        "suppression_rules": file.as_ref().map(|f| f.suppression_rules.len()).unwrap_or(0),
+    }))
 }

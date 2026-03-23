@@ -36,6 +36,8 @@ pub fn is_valid_triage_state(s: &str) -> bool {
 pub struct FindingView {
     pub index: usize,
     pub fingerprint: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub portable_fingerprint: String,
     pub path: String,
     pub line: usize,
     pub col: usize,
@@ -206,6 +208,7 @@ pub fn finding_from_diag(index: usize, d: &Diag) -> FindingView {
     FindingView {
         index,
         fingerprint: compute_fingerprint(d),
+        portable_fingerprint: String::new(), // set by caller with scan_root
         path: d.path.clone(),
         line: d.line,
         col: d.col,
@@ -445,6 +448,40 @@ pub fn overlay_triage_states(
             }
         }
     }
+}
+
+/// Compute a portable fingerprint using a path relative to scan_root.
+///
+/// This fingerprint is stable across machines because it strips the absolute
+/// path prefix. Used for `.nyx/triage.json` sync files that get committed to git.
+pub fn compute_portable_fingerprint(d: &Diag, scan_root: &Path) -> String {
+    let rel_path = d
+        .path
+        .strip_prefix(&scan_root.to_string_lossy().as_ref())
+        .unwrap_or(&d.path)
+        .trim_start_matches('/');
+    let sink_snippet = d
+        .evidence
+        .as_ref()
+        .and_then(|e| e.sink.as_ref())
+        .and_then(|s| s.snippet.as_deref())
+        .unwrap_or("");
+    let source_snippet = d
+        .evidence
+        .as_ref()
+        .and_then(|e| e.source.as_ref())
+        .and_then(|s| s.snippet.as_deref())
+        .unwrap_or("");
+    let func_ctx = d
+        .evidence
+        .as_ref()
+        .and_then(|e| e.flow_steps.iter().find_map(|s| s.function.as_deref()))
+        .unwrap_or("");
+    let input = format!(
+        "{}\0{}\0{}\0{}\0{}",
+        d.id, rel_path, sink_snippet, source_snippet, func_ctx
+    );
+    blake3::hash(input.as_bytes()).to_hex().to_string()
 }
 
 /// Build a summary from a slice of findings.
