@@ -2,6 +2,7 @@ use crate::callgraph::normalize_callee_name;
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
 use crate::interop::InteropEdge;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule, SourceKind};
+use crate::ssa::heap::{HeapState, PointsToResult};
 use crate::ssa::ir::*;
 use crate::state::lattice::Lattice;
 use crate::summary::{CalleeResolution, GlobalSummaries};
@@ -30,6 +31,10 @@ pub struct SsaTaintState {
     pub validated_may: SmallBitSet,
     /// Per-variable predicate summary (sorted by SymbolId, intersection on join).
     pub predicates: SmallVec<[(SymbolId, PredicateSummary); 4]>,
+    /// Per-heap-object taint: container contents taint tracked through
+    /// abstract heap identity. Separate from `values` so container taint
+    /// persists independently of the SSA value referencing the container.
+    pub heap: HeapState,
 }
 
 impl SsaTaintState {
@@ -39,6 +44,7 @@ impl SsaTaintState {
             validated_must: SmallBitSet::empty(),
             validated_may: SmallBitSet::empty(),
             predicates: SmallVec::new(),
+            heap: HeapState::empty(),
         }
     }
 
@@ -78,7 +84,8 @@ impl Lattice for SsaTaintState {
         let validated_must = self.validated_must.intersection(other.validated_must);
         let validated_may = self.validated_may.union(other.validated_may);
         let predicates = merge_join_ssa_predicates(&self.predicates, &other.predicates);
-        SsaTaintState { values, validated_must, validated_may, predicates }
+        let heap = self.heap.join(&other.heap);
+        SsaTaintState { values, validated_must, validated_may, predicates, heap }
     }
 
     fn leq(&self, other: &Self) -> bool {
@@ -89,6 +96,9 @@ impl Lattice for SsaTaintState {
             return false;
         }
         if !self.validated_may.is_subset_of(other.validated_may) {
+            return false;
+        }
+        if !self.heap.leq(&other.heap) {
             return false;
         }
         true
@@ -296,6 +306,10 @@ pub struct SsaTaintTransfer<'a> {
     /// Callback bindings: maps callee parameter name → actual function name.
     /// Set during inline analysis when caller passes a function reference as arg.
     pub callback_bindings: Option<&'a HashMap<String, String>>,
+    /// Points-to analysis result: per-SSA-value abstract heap object sets.
+    /// When present, container taint flows through heap objects instead of
+    /// being merged directly into SSA values.
+    pub points_to: Option<&'a PointsToResult>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -1042,6 +1056,7 @@ fn inline_analyse_callee(
         inline_cache: None,
         context_depth: transfer.context_depth + 1,
         callback_bindings: cb_ref,
+        points_to: Some(&callee_body.opt.points_to),
     };
 
     let (_, callee_block_states) =
@@ -1358,12 +1373,12 @@ fn transfer_inst(
                 // e.g. `parts.add(req.getParameter("input"))` — callee is
                 // "req.getParameter" but outer_callee is "parts.add").
                 let mut container_handled = try_container_propagation(
-                    inst, info, args, receiver, state, transfer.lang, callee, ssa,
+                    inst, info, args, receiver, state, transfer, callee, ssa,
                 );
                 if !container_handled {
                     if let Some(ref oc) = info.outer_callee {
                         container_handled = try_container_propagation(
-                            inst, info, args, receiver, state, transfer.lang, oc, ssa,
+                            inst, info, args, receiver, state, transfer, oc, ssa,
                         );
                     }
                 }
@@ -1376,6 +1391,12 @@ fn transfer_inst(
                         if let Some(container_val) = find_container_receiver(
                             recv_callee, receiver, args, ssa, transfer.lang,
                         ) {
+                            // Also store into heap objects when available
+                            if let Some(pts_result) = transfer.points_to {
+                                if let Some(pts) = pts_result.get(container_val) {
+                                    state.heap.store_set(pts, return_bits, &return_origins);
+                                }
+                            }
                             merge_taint_into(state, container_val, return_bits, &return_origins);
                         }
                     }
@@ -1716,7 +1737,7 @@ fn collect_block_events(
         }
 
         // Collect tainted SSA values that flow into this sink
-        let tainted = collect_tainted_sink_values(inst, info, &state, sink_caps, ssa);
+        let tainted = collect_tainted_sink_values(inst, info, &state, sink_caps, ssa, transfer);
         if !tainted.is_empty() {
             // Compute all_validated: check if all tainted vars are validated
             let all_validated = tainted.iter().all(|(val, _, _)| {
@@ -1933,10 +1954,11 @@ fn try_container_propagation(
     args: &[SmallVec<[SsaValue; 2]>],
     receiver: &Option<SsaValue>,
     state: &mut SsaTaintState,
-    lang: Lang,
+    transfer: &SsaTaintTransfer,
     callee: &str,
     ssa: &SsaBody,
 ) -> bool {
+    let lang = transfer.lang;
     use crate::ssa::pointsto::{classify_container_op, ContainerOp};
 
     let op = match classify_container_op(callee, lang) {
@@ -2018,7 +2040,24 @@ fn try_container_propagation(
                 return true; // Container op handled, but no taint to propagate
             }
 
-            // Merge taint into container receiver (monotone: caps OR, origins union)
+            // When points-to info available, store through heap objects
+            if let Some(pts_result) = transfer.points_to {
+                if let Some(pts) = pts_result.get(container_val) {
+                    state.heap.store_set(pts, val_caps, &val_origins);
+                    // For Go append, result also points to same heap objects
+                    if lang == Lang::Go && receiver.is_none() {
+                        if let Some(ht) = state.heap.load_set(pts) {
+                            state.set(inst.value, VarTaint {
+                                caps: ht.caps,
+                                origins: ht.origins,
+                                uses_summary: false,
+                            });
+                        }
+                    }
+                    return true;
+                }
+            }
+            // Fallback: direct SSA value taint (no pts info for this container)
             merge_taint_into(state, container_val, val_caps, &val_origins);
 
             // For Go append, the result is the new slice — propagate merged taint
@@ -2035,6 +2074,20 @@ fn try_container_propagation(
                 Some(v) => v,
                 None => return false,
             };
+            // When points-to info available, load from heap objects
+            if let Some(pts_result) = transfer.points_to {
+                if let Some(pts) = pts_result.get(container_val) {
+                    if let Some(ht) = state.heap.load_set(pts) {
+                        state.set(inst.value, VarTaint {
+                            caps: ht.caps,
+                            origins: ht.origins,
+                            uses_summary: false,
+                        });
+                    }
+                    return true;
+                }
+            }
+            // Fallback: direct SSA value taint
             if let Some(taint) = state.get(container_val) {
                 state.set(inst.value, taint.clone());
             }
@@ -2134,8 +2187,24 @@ fn collect_tainted_sink_values(
     state: &SsaTaintState,
     sink_caps: Cap,
     ssa: &SsaBody,
+    transfer: &SsaTaintTransfer,
 ) -> Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)> {
     let mut result = Vec::new();
+
+    // Helper: check heap taint for an SSA value that may point to container(s).
+    // Returns true if heap taint was found and added to result.
+    let check_heap_taint = |v: SsaValue, result: &mut Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>| {
+        if let Some(pts_result) = transfer.points_to {
+            if let Some(pts) = pts_result.get(v) {
+                if let Some(ht) = state.heap.load_set(pts) {
+                    let effective = ht.caps & sink_caps;
+                    if !effective.is_empty() && !result.iter().any(|&(rv, _, _)| rv == v) {
+                        result.push((v, ht.caps, ht.origins));
+                    }
+                }
+            }
+        }
+    };
 
     // Collect SSA values used by this instruction
     let used_values = inst_use_values(inst);
@@ -2153,6 +2222,7 @@ fn collect_tainted_sink_values(
                                 result.push((v, taint.caps, taint.origins.clone()));
                             }
                         }
+                        check_heap_taint(v, &mut result);
                     }
                 }
             }
@@ -2168,6 +2238,7 @@ fn collect_tainted_sink_values(
                 result.push((v, taint.caps, taint.origins.clone()));
             }
         }
+        check_heap_taint(v, &mut result);
     }
 
     apply_field_aware_suppression(&mut result, inst, state, sink_caps, ssa);
@@ -3009,6 +3080,7 @@ pub fn extract_ssa_func_summary(
             inline_cache: None,
             context_depth: 0,
             callback_bindings: None,
+            points_to: None,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);
@@ -3105,5 +3177,7 @@ pub fn extract_ssa_func_summary(
         param_to_sink,
         source_caps,
         param_to_sink_param,
+        param_container_to_return: Vec::new(),
+        param_to_container_store: Vec::new(),
     }
 }

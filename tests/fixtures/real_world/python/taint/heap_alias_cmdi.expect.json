@@ -1,0 +1,28 @@
+{
+  "description": "Command injection through list alias: a and b share the same list, taint appended via a flows to sink via b",
+  "tags": [
+    "taint",
+    "cmdi",
+    "flask",
+    "list",
+    "container",
+    "alias",
+    "heap"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        7,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "heap identity: b = a makes both point to same list, append through a visible at sink through b"
+    }
+  ]
+}

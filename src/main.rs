@@ -63,6 +63,12 @@ fn main() -> NyxResult<()> {
     init_tracing();
 
     tracing::debug!("CLI starting up");
+
+    if std::env::args().count() == 1 {
+        eprint!("{}", fmt::render_welcome());
+        return Ok(());
+    }
+
     let cli = Cli::parse();
 
     let proj_dirs =

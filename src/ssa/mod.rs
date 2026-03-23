@@ -4,6 +4,7 @@ pub mod display;
 pub mod const_prop;
 pub mod copy_prop;
 pub mod dce;
+pub mod heap;
 #[allow(dead_code)]
 pub mod ir;
 pub mod lower;
@@ -27,6 +28,8 @@ pub struct OptimizeResult {
     pub type_facts: type_facts::TypeFactResult,
     /// Base-variable alias groups from copy propagation.
     pub alias_result: alias::BaseAliasResult,
+    /// Points-to analysis: per-SSA-value abstract heap object sets.
+    pub points_to: heap::PointsToResult,
     /// Number of branches pruned by constant propagation.
     pub branches_pruned: usize,
     /// Number of copies eliminated.
@@ -55,10 +58,14 @@ pub fn optimize_ssa(body: &mut SsaBody, cfg: &Cfg, lang: Option<Lang>) -> Optimi
     // 5. Type fact analysis (uses const prop results + language for constructor inference)
     let type_facts = type_facts::analyze_types(body, cfg, &cp.values, lang);
 
+    // 6. Points-to analysis (uses allocation site detection + SSA def-use)
+    let points_to = heap::analyze_points_to(body, cfg, lang);
+
     OptimizeResult {
         const_values: cp.values,
         type_facts,
         alias_result,
+        points_to,
         branches_pruned,
         copies_eliminated,
         dead_defs_removed,

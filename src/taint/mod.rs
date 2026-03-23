@@ -141,6 +141,7 @@ pub fn analyse_file(
                     inline_cache: inline_cache_ref,
                     context_depth: 0,
                     callback_bindings: None,
+                    points_to: Some(&opt.points_to),
                 };
                 let events =
                     ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
@@ -371,6 +372,7 @@ fn analyse_ssa_js_two_level(
         inline_cache,
         context_depth: 0,
         callback_bindings: None,
+        points_to: Some(&toplevel_opt.points_to),
     };
     let (toplevel_events, toplevel_block_states) =
         ssa_transfer::run_ssa_taint_full(&toplevel_ssa, cfg, &toplevel_transfer);
@@ -418,6 +420,7 @@ fn analyse_ssa_js_two_level(
                 inline_cache,
                 context_depth: 0,
                 callback_bindings: None,
+                points_to: Some(&func_opt.points_to),
             };
             let (func_events, func_block_states) =
                 ssa_transfer::run_ssa_taint_full(&func_ssa, cfg, &func_transfer);

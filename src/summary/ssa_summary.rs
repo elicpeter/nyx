@@ -31,4 +31,14 @@ pub struct SsaFuncSummary {
     /// (caller_param_index, sink_arg_position, sink_caps).
     #[serde(default)]
     pub param_to_sink_param: Vec<(usize, usize, Cap)>,
+    /// [STUB – future inter-procedural heap analysis] Parameter indices whose
+    /// container identity flows to the return value (e.g., function returns
+    /// the same container it received as input).
+    #[serde(default)]
+    pub param_container_to_return: Vec<usize>,
+    /// [STUB – future inter-procedural heap analysis] (src_param, container_param)
+    /// pairs: indicates that src_param's taint is stored into container_param's
+    /// container contents.
+    #[serde(default)]
+    pub param_to_container_store: Vec<(usize, usize)>,
 }

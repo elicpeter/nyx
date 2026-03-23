@@ -1,0 +1,17 @@
+{
+  "description": "No XSS: reassignment separates container identity. b points to old array, a points to new empty array",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "array",
+    "container",
+    "alias",
+    "heap",
+    "safe"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
+}

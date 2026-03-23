@@ -161,6 +161,68 @@ pub fn shorten_callee(s: &str) -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Welcome screen
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Render the branded welcome screen shown when `nyx` is invoked with no arguments.
+pub fn render_welcome() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let mut out = String::new();
+
+    out.push('\n');
+
+    for line in LOGO {
+        out.push_str(&format!("  {}\n", style(line).cyan().bold()));
+    }
+
+    out.push_str(&format!(
+        "\n{}  {}\n",
+        style(format!("v{version}")).dim(),
+        style("static analysis engine").dim(),
+    ));
+    out.push_str(&format!("{}\n", style("────────────────────────────────────────").dim()));
+    out.push('\n');
+
+    out.push_str(&format!("{}\n\n", style("Getting started").bold()));
+    for &(cmd, desc) in &[
+        ("nyx scan", "Scan the current directory"),
+        ("nyx serve", "Start the web dashboard"),
+        ("nyx config show", "Show current configuration"),
+    ] {
+        out.push_str(&format!(
+            "  {}  {}\n",
+            style(format!("{cmd:<18}")).green(),
+            style(desc).dim(),
+        ));
+    }
+    out.push('\n');
+
+    out.push_str(&format!("{}\n\n", style("More help").bold()));
+    for &(cmd, desc) in &[
+        ("nyx --help", "All commands"),
+        ("nyx <command> --help", "Help for a specific command"),
+    ] {
+        out.push_str(&format!(
+            "  {}  {}\n",
+            style(format!("{cmd:<22}")).white(),
+            style(desc).dim(),
+        ));
+    }
+    out.push('\n');
+
+    out
+}
+
+const LOGO: &[&str] = &[
+    r"███╗   ██╗██╗   ██╗██╗  ██╗",
+    r"████╗  ██║╚██╗ ██╔╝╚██╗██╔╝",
+    r"██╔██╗ ██║ ╚████╔╝  ╚███╔╝",
+    r"██║╚██╗██║  ╚██╔╝   ██╔██╗",
+    r"██║ ╚████║   ██║   ██╔╝ ██╗",
+    r"╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝",
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Internal rendering
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -786,6 +848,30 @@ mod tests {
         assert_eq!(capitalize_first(""), "");
         assert_eq!(capitalize_first("A"), "A");
         assert_eq!(capitalize_first("unsanitised"), "Unsanitised");
+    }
+
+    // ── render_welcome ────────────────────────────────────────────────────
+
+    #[test]
+    fn welcome_screen_content() {
+        let output = render_welcome();
+        let stripped = strip_ansi(&output);
+        assert!(stripped.contains("nyx"), "should contain logo text");
+        assert!(
+            stripped.contains(env!("CARGO_PKG_VERSION")),
+            "should contain version"
+        );
+        assert!(stripped.contains("nyx scan"), "should mention scan command");
+        assert!(
+            stripped.contains("nyx serve"),
+            "should mention serve command"
+        );
+        assert!(stripped.contains("nyx --help"), "should mention help");
+        let line_count = stripped.lines().count();
+        assert!(
+            line_count <= 20,
+            "should be compact, got {line_count} lines"
+        );
     }
 
     // ── taint flow rendering (integration-style) ─────────────────────────
