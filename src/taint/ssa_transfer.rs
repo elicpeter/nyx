@@ -1660,7 +1660,7 @@ fn collect_block_events(
         }
 
         // Collect tainted SSA values that flow into this sink
-        let tainted = collect_tainted_sink_values(inst, info, &state, sink_caps);
+        let tainted = collect_tainted_sink_values(inst, info, &state, sink_caps, ssa);
         if !tainted.is_empty() {
             // Compute all_validated: check if all tainted vars are validated
             let all_validated = tainted.iter().all(|(val, _, _)| {
@@ -1889,6 +1889,7 @@ fn collect_tainted_sink_values(
     info: &NodeInfo,
     state: &SsaTaintState,
     sink_caps: Cap,
+    ssa: &SsaBody,
 ) -> Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)> {
     let mut result = Vec::new();
 
@@ -1911,6 +1912,7 @@ fn collect_tainted_sink_values(
                     }
                 }
             }
+            apply_field_aware_suppression(&mut result, inst, state, sink_caps, ssa);
             return result;
         }
     }
@@ -1924,7 +1926,47 @@ fn collect_tainted_sink_values(
         }
     }
 
+    apply_field_aware_suppression(&mut result, inst, state, sink_caps, ssa);
     result
+}
+
+/// Suppress plain-ident taint when a dotted-path field value used by the same
+/// instruction is untainted. Prevents false positives from base-ident bleed
+/// (e.g. `obj.safe = "const"; sink(obj.safe)` where `obj` is tainted).
+fn apply_field_aware_suppression(
+    result: &mut Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>,
+    inst: &SsaInst,
+    state: &SsaTaintState,
+    sink_caps: Cap,
+    ssa: &SsaBody,
+) {
+    if result.is_empty() {
+        return;
+    }
+    let all_used = inst_use_values(inst);
+    result.retain(|(v, _, _)| {
+        let Some(base) = ssa.def_of(*v).var_name.as_deref() else {
+            return true;
+        };
+        // Only suppress plain idents (no dots)
+        if base.contains('.') {
+            return true;
+        }
+        let prefix = format!("{}.", base);
+        let has_untainted_field = all_used.iter().any(|&u| {
+            if u == *v {
+                return false;
+            }
+            ssa.def_of(u).var_name.as_deref().is_some_and(|uname| {
+                uname.starts_with(&prefix)
+                    && match state.get(u) {
+                        None => true,
+                        Some(t) => (t.caps & sink_caps).is_empty(),
+                    }
+            })
+        });
+        !has_untainted_field
+    });
 }
 
 /// Get all SSA values used by an instruction.

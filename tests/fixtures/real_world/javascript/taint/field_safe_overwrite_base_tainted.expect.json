@@ -1,0 +1,15 @@
+{
+  "description": "Safe field overwrite on tainted base: reading obj.safe after obj.safe='constant' should NOT fire even though base obj was tainted",
+  "tags": ["taint", "field-access", "false-positive-fix"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [4, 8],
+      "evidence_contains": [],
+      "notes": "obj.safe overwritten with constant; field-aware suppression should prevent base ident bleed"
+    }
+  ]
+}

@@ -3591,6 +3591,48 @@ fn ssa_python_attribute_taint() {
     );
 }
 
+// ── Field-aware taint suppression tests ──────────────────────────────────
+
+#[test]
+fn ssa_field_safe_overwrite_no_fp() {
+    // obj = tainted source; obj.safe = "constant"; sink(obj.safe) → NO finding
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = req.query;\n    obj.safe = \"constant\";\n    res.send(obj.safe);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[], None);
+    assert!(
+        findings.is_empty(),
+        "field-aware suppression: reading safe field of tainted base should not produce a finding, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_field_tainted_field_still_fires() {
+    // obj.data = source; sink(obj.data) → finding (dotted path IS tainted, no suppression)
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    res.send(obj.data);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "field-aware suppression: tainted dotted-path field read should still produce a finding"
+    );
+}
+
+#[test]
+fn ssa_field_base_sink_no_suppression() {
+    // obj.data = source; sink(obj) → finding (no dotted path at sink, no suppression)
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    res.send(obj);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "field-aware suppression: tainted base passed directly to sink should still fire"
+    );
+}
+
 // ── SSA Function Summary tests ───────────────────────────────────────────
 
 #[test]
