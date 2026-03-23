@@ -1,6 +1,7 @@
 pub mod ssa_summary;
 
 use crate::labels::{Cap, DataLabel};
+use crate::summary::ssa_summary::SsaFuncSummary;
 use crate::symbol::{FuncKey, Lang, normalize_namespace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -183,6 +184,9 @@ pub enum CalleeResolution {
 pub struct GlobalSummaries {
     by_key: HashMap<FuncKey, FuncSummary>,
     by_lang_name: HashMap<(Lang, String), Vec<FuncKey>>,
+    /// Precise SSA-derived per-parameter summaries, keyed by `FuncKey`.
+    /// These take precedence over `FuncSummary` during callee resolution.
+    ssa_by_key: HashMap<FuncKey, SsaFuncSummary>,
 }
 
 impl GlobalSummaries {
@@ -249,11 +253,25 @@ impl GlobalSummaries {
         for (key, summary) in other.by_key {
             self.insert(key, summary);
         }
+        // SSA summaries: last-writer-wins (exact-key replacement, no unioning)
+        for (key, ssa_sum) in other.ssa_by_key {
+            self.ssa_by_key.insert(key, ssa_sum);
+        }
+    }
+
+    /// Insert an SSA summary with exact-key replacement (no union merge).
+    pub fn insert_ssa(&mut self, key: FuncKey, summary: SsaFuncSummary) {
+        self.ssa_by_key.insert(key, summary);
+    }
+
+    /// Exact lookup of an SSA summary by fully-qualified key.
+    pub fn get_ssa(&self, key: &FuncKey) -> Option<&SsaFuncSummary> {
+        self.ssa_by_key.get(key)
     }
 
     #[allow(dead_code)] // used by tests and future call-graph consumers
     pub fn is_empty(&self) -> bool {
-        self.by_key.is_empty()
+        self.by_key.is_empty() && self.ssa_by_key.is_empty()
     }
 
     /// Iterate over all (key, summary) pairs.
@@ -339,6 +357,7 @@ impl std::fmt::Debug for GlobalSummaries {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GlobalSummaries")
             .field("len", &self.by_key.len())
+            .field("ssa_len", &self.ssa_by_key.len())
             .finish()
     }
 }

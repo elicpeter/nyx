@@ -66,6 +66,19 @@ bitflags! {
     }
 }
 
+impl serde::Serialize for Cap {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u16(self.bits())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Cap {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let bits = u16::deserialize(d)?;
+        Ok(Cap::from_bits_truncate(bits))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     If,

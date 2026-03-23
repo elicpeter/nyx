@@ -70,6 +70,27 @@ fn cross_file_taint() {
     validate_expectations(&diags, &dir);
 }
 
+#[test]
+fn cross_file_ssa_propagation() {
+    let dir = fixture_path("cross_file_ssa_propagation");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn cross_file_ssa_source() {
+    let dir = fixture_path("cross_file_ssa_source");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn cross_file_ssa_sanitizer() {
+    let dir = fixture_path("cross_file_ssa_sanitizer");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── Cross-cutting tests ───────────────────────────────────────────────────
 
 #[test]

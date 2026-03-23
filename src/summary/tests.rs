@@ -417,3 +417,145 @@ fn snapshot_caps_detects_change() {
     let snap3 = gs.snapshot_caps();
     assert_eq!(snap2, snap3, "snapshot should be stable without changes");
 }
+
+// ── SSA summary tests ───────────────────────────────────────────────────
+
+use super::ssa_summary::{SsaFuncSummary, TaintTransform};
+
+#[test]
+fn ssa_summary_serde_round_trip_identity() {
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        param_to_sink: vec![],
+        source_caps: Cap::empty(),
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+}
+
+#[test]
+fn ssa_summary_serde_round_trip_strip_bits() {
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE | Cap::URL_ENCODE))],
+        param_to_sink: vec![(1, Cap::SQL_QUERY)],
+        source_caps: Cap::empty(),
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+}
+
+#[test]
+fn ssa_summary_serde_round_trip_add_bits() {
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(2, TaintTransform::AddBits(Cap::CODE_EXEC))],
+        param_to_sink: vec![],
+        source_caps: Cap::ENV_VAR | Cap::FILE_IO,
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+}
+
+#[test]
+fn ssa_summary_serde_round_trip_all_variants() {
+    let summary = SsaFuncSummary {
+        param_to_return: vec![
+            (0, TaintTransform::Identity),
+            (1, TaintTransform::StripBits(Cap::SHELL_ESCAPE)),
+            (2, TaintTransform::AddBits(Cap::SSRF)),
+        ],
+        param_to_sink: vec![(0, Cap::SQL_QUERY), (1, Cap::CODE_EXEC | Cap::CRYPTO)],
+        source_caps: Cap::all(),
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+}
+
+#[test]
+fn global_summaries_insert_ssa_exact_key_replacement() {
+    let mut gs = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Python,
+        namespace: "app.py".into(),
+        name: "process".into(),
+        arity: Some(1),
+    };
+
+    let v1 = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        param_to_sink: vec![],
+        source_caps: Cap::empty(),
+    };
+    gs.insert_ssa(key.clone(), v1.clone());
+    assert_eq!(gs.get_ssa(&key), Some(&v1));
+
+    // Replace with a different summary — exact replacement, not union
+    let v2 = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
+        param_to_sink: vec![(0, Cap::SQL_QUERY)],
+        source_caps: Cap::ENV_VAR,
+    };
+    gs.insert_ssa(key.clone(), v2.clone());
+    assert_eq!(gs.get_ssa(&key), Some(&v2));
+}
+
+#[test]
+fn global_summaries_merge_with_ssa_entries() {
+    let mut gs1 = GlobalSummaries::new();
+    let mut gs2 = GlobalSummaries::new();
+
+    let key_a = FuncKey {
+        lang: Lang::Python,
+        namespace: "a.py".into(),
+        name: "foo".into(),
+        arity: Some(1),
+    };
+    let key_b = FuncKey {
+        lang: Lang::Python,
+        namespace: "b.py".into(),
+        name: "bar".into(),
+        arity: Some(2),
+    };
+
+    let sum_a = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        param_to_sink: vec![],
+        source_caps: Cap::empty(),
+    };
+    let sum_b = SsaFuncSummary {
+        param_to_return: vec![],
+        param_to_sink: vec![(0, Cap::CODE_EXEC)],
+        source_caps: Cap::ENV_VAR,
+    };
+
+    gs1.insert_ssa(key_a.clone(), sum_a.clone());
+    gs2.insert_ssa(key_b.clone(), sum_b.clone());
+
+    gs1.merge(gs2);
+
+    assert_eq!(gs1.get_ssa(&key_a), Some(&sum_a));
+    assert_eq!(gs1.get_ssa(&key_b), Some(&sum_b));
+}
+
+#[test]
+fn global_summaries_is_empty_considers_ssa() {
+    let mut gs = GlobalSummaries::new();
+    assert!(gs.is_empty());
+
+    let key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "lib.rs".into(),
+        name: "f".into(),
+        arity: Some(1),
+    };
+    gs.insert_ssa(key, SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        param_to_sink: vec![],
+        source_caps: Cap::empty(),
+    });
+
+    assert!(!gs.is_empty());
+}

@@ -6,6 +6,7 @@ use crate::evidence::{Evidence, SpanEvidence, StateEvidence};
 use crate::labels::{build_lang_rules, severity_for_source_kind, Cap, DataLabel, LangAnalysisRules};
 use crate::patterns::{FindingCategory, Severity};
 use crate::state;
+use crate::summary::ssa_summary::SsaFuncSummary;
 use crate::summary::{FuncSummary, GlobalSummaries};
 use crate::symbol::{Lang, normalize_namespace};
 use crate::taint::analyse_file;
@@ -409,6 +410,52 @@ impl<'a> ParsedFile<'a> {
         )
     }
 
+    /// Extract SSA function summaries for all functions in this file.
+    fn extract_ssa_summaries(
+        &self,
+        global_summaries: Option<&GlobalSummaries>,
+        scan_root: Option<&Path>,
+    ) -> Vec<(String, usize, SsaFuncSummary)> {
+        use crate::state::symbol::SymbolInterner;
+        let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
+        let interner = SymbolInterner::from_cfg(&self.cfg_graph);
+        let scan_root_str = scan_root.map(|p| p.to_string_lossy());
+        let namespace =
+            normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
+
+        let map = crate::taint::extract_intra_file_ssa_summaries(
+            &self.cfg_graph,
+            &interner,
+            caller_lang,
+            &namespace,
+            &self.local_summaries,
+            global_summaries,
+        );
+
+        map.into_iter()
+            .map(|(name, summary)| {
+                // Look up param_count from local summaries (same function name).
+                let param_count = self
+                    .local_summaries
+                    .iter()
+                    .find(|(k, _)| k.name == name)
+                    .map(|(_, ls)| ls.param_count)
+                    .unwrap_or_else(|| {
+                        // Fallback: infer from summary contents
+                        summary
+                            .param_to_return
+                            .iter()
+                            .map(|(idx, _)| *idx)
+                            .chain(summary.param_to_sink.iter().map(|(idx, _)| *idx))
+                            .max()
+                            .map(|m| m + 1)
+                            .unwrap_or(0)
+                    });
+                (name, param_count, summary)
+            })
+            .collect()
+    }
+
     /// Run taint analysis, CFG structural analyses, and state-model analysis.
     fn run_cfg_analyses(
         &self,
@@ -595,6 +642,27 @@ pub fn extract_summaries_from_bytes(
 pub fn extract_summaries_from_file(path: &Path, cfg: &Config) -> NyxResult<Vec<FuncSummary>> {
     let bytes = std::fs::read(path)?;
     extract_summaries_from_bytes(&bytes, path, cfg)
+}
+
+/// Extract both `FuncSummary` and `SsaFuncSummary` from pre-read bytes.
+///
+/// This is the shared pass-1 pipeline for indexed scans: parses once, builds
+/// CFG once, and returns both summary types. Uses the same `ParsedFile`
+/// pipeline as `analyse_file_fused` — no divergent extraction path.
+pub fn extract_all_summaries_from_bytes(
+    bytes: &[u8],
+    path: &Path,
+    cfg: &Config,
+    scan_root: Option<&Path>,
+) -> NyxResult<(Vec<FuncSummary>, Vec<(String, usize, SsaFuncSummary)>)> {
+    let _span = tracing::debug_span!("extract_all_summaries", file = %path.display()).entered();
+    let Some(source) = ParsedSource::try_new(bytes, path)? else {
+        return Ok((vec![], vec![]));
+    };
+    let parsed = ParsedFile::from_source(source, cfg);
+    let func_summaries = parsed.export_summaries();
+    let ssa_summaries = parsed.extract_ssa_summaries(None, scan_root);
+    Ok((func_summaries, ssa_summaries))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -925,6 +993,8 @@ pub fn run_rules_on_file(
 pub struct FusedResult {
     pub summaries: Vec<FuncSummary>,
     pub diags: Vec<Diag>,
+    /// SSA-derived per-parameter summaries: (func_name, param_count, summary).
+    pub ssa_summaries: Vec<(String, usize, SsaFuncSummary)>,
 }
 
 /// Parse the file once, build the CFG once, and produce both function
@@ -948,6 +1018,7 @@ pub fn analyse_file_fused(
         return Ok(FusedResult {
             summaries: vec![],
             diags: vec![],
+            ssa_summaries: vec![],
         });
     };
 
@@ -958,9 +1029,14 @@ pub fn analyse_file_fused(
 
     let needs_cfg =
         cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Taint;
-    if needs_cfg {
+
+    let ssa_summaries = if needs_cfg {
         out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
-    }
+        parsed.extract_ssa_summaries(global_summaries, scan_root)
+    } else {
+        vec![]
+    };
+
     if cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Ast {
         let ast_findings = parsed.source.run_ast_queries(cfg);
         // Layer B only applies when taint had the opportunity to evaluate
@@ -982,6 +1058,7 @@ pub fn analyse_file_fused(
     Ok(FusedResult {
         summaries,
         diags: out,
+        ssa_summaries,
     })
 }
 

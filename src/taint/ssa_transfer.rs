@@ -1599,6 +1599,18 @@ fn resolve_callee(
         }
     }
 
+    // 0.5) Cross-file SSA summaries (GlobalSummaries.ssa_by_key)
+    if let Some(gs) = transfer.global_summaries {
+        match gs.resolve_callee_key(normalized, transfer.lang, transfer.namespace, None) {
+            CalleeResolution::Resolved(target_key) => {
+                if let Some(ssa_sum) = gs.get_ssa(&target_key) {
+                    return Some(convert_ssa_to_resolved(ssa_sum));
+                }
+            }
+            _ => {}
+        }
+    }
+
     // 1) Local (same-file)
     let local_matches: Vec<_> = transfer
         .local_summaries

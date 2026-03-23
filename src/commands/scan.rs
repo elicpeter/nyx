@@ -1,5 +1,6 @@
 pub(crate) use crate::ast::{
-    analyse_file_fused, extract_summaries_from_bytes, run_rules_on_bytes, run_rules_on_file,
+    analyse_file_fused, extract_all_summaries_from_bytes, extract_summaries_from_bytes,
+    run_rules_on_bytes, run_rules_on_file,
 };
 use crate::cli::{IndexMode, OutputFormat};
 use crate::database::index::{Indexer, IssueRow};
@@ -544,9 +545,33 @@ pub(crate) fn scan_filesystem(
                 if let Ok(bytes) = std::fs::read(path) {
                     match analyse_file_fused(&bytes, path, cfg, None, Some(root)) {
                         Ok(r) => {
+                            // Extract lang slug before consuming summaries
+                            let first_lang = r.summaries.first().map(|s| s.lang.clone());
+
                             for s in r.summaries {
                                 let key = s.func_key(Some(&root_str));
                                 local_gs.insert(key, s);
+                            }
+
+                            // Insert SSA summaries keyed by FuncKey
+                            if !r.ssa_summaries.is_empty() {
+                                let lang = first_lang
+                                    .as_deref()
+                                    .and_then(crate::symbol::Lang::from_slug)
+                                    .unwrap_or(crate::symbol::Lang::Rust);
+                                let namespace = crate::symbol::normalize_namespace(
+                                    &path.to_string_lossy(),
+                                    Some(&root_str),
+                                );
+                                for (name, arity, ssa_sum) in r.ssa_summaries {
+                                    let key = crate::symbol::FuncKey {
+                                        lang,
+                                        namespace: namespace.clone(),
+                                        name,
+                                        arity: Some(arity),
+                                    };
+                                    local_gs.insert_ssa(key, ssa_sum);
+                                }
                             }
                         }
                         Err(e) => {
@@ -646,6 +671,7 @@ pub fn scan_with_index_parallel(
             show_progress,
         );
 
+        let scan_root_ref = scan_root;
         files.par_iter().for_each_init(
             || Indexer::from_pool(project, &pool).expect("db pool"),
             |idx, path| {
@@ -655,9 +681,25 @@ pub fn scan_with_index_parallel(
                     let hash = Indexer::digest_bytes(&bytes);
                     let needs_scan = idx.should_scan_with_hash(path, &hash).unwrap_or(true);
                     if needs_scan {
-                        match extract_summaries_from_bytes(&bytes, path, cfg) {
-                            Ok(sums) => {
-                                idx.replace_summaries_for_file(path, &hash, &sums).ok();
+                        match extract_all_summaries_from_bytes(&bytes, path, cfg, Some(scan_root_ref)) {
+                            Ok((func_sums, ssa_sums)) => {
+                                idx.replace_summaries_for_file(path, &hash, &func_sums).ok();
+                                // Persist SSA summaries with full FuncKey metadata
+                                if !ssa_sums.is_empty() {
+                                    let lang_slug = func_sums.first()
+                                        .map(|s| s.lang.clone())
+                                        .unwrap_or_default();
+                                    let namespace = crate::symbol::normalize_namespace(
+                                        &path.to_string_lossy(),
+                                        Some(&scan_root_ref.to_string_lossy()),
+                                    );
+                                    let ssa_rows: Vec<_> = ssa_sums.into_iter()
+                                        .map(|(name, arity, sum)| {
+                                            (name, arity, lang_slug.clone(), namespace.clone(), sum)
+                                        })
+                                        .collect();
+                                    idx.replace_ssa_summaries_for_file(path, &hash, &ssa_rows).ok();
+                                }
                             }
                             Err(e) => {
                                 tracing::warn!("pass 1: {}: {e}", path.display());
@@ -680,7 +722,32 @@ pub fn scan_with_index_parallel(
         let idx = Indexer::from_pool(project, &pool)?;
         let all = idx.load_all_summaries()?;
         tracing::info!(summaries = all.len(), "loaded cross-file summaries from DB");
-        Some(summary::merge_summaries(all, Some(&root_str)))
+        let mut gs = summary::merge_summaries(all, Some(&root_str));
+
+        // Load and insert SSA summaries
+        let ssa_rows = idx.load_all_ssa_summaries()?;
+        if !ssa_rows.is_empty() {
+            tracing::info!(ssa_summaries = ssa_rows.len(), "loaded SSA summaries from DB");
+            for (file_path, name, lang_str, arity, namespace, ssa_sum) in ssa_rows {
+                let lang = crate::symbol::Lang::from_slug(&lang_str)
+                    .unwrap_or(crate::symbol::Lang::Rust);
+                // Use persisted namespace; fall back to normalized file_path
+                let ns = if namespace.is_empty() {
+                    crate::symbol::normalize_namespace(&file_path, Some(&root_str))
+                } else {
+                    namespace
+                };
+                let key = crate::symbol::FuncKey {
+                    lang,
+                    namespace: ns,
+                    name,
+                    arity: if arity >= 0 { Some(arity as usize) } else { None },
+                };
+                gs.insert_ssa(key, ssa_sum);
+            }
+        }
+
+        Some(gs)
     } else {
         None
     };

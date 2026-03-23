@@ -46,6 +46,20 @@ pub mod index {
             updated_at INTEGER NOT NULL,
             UNIQUE(project, file_path, name, arity)
         );
+
+        CREATE TABLE IF NOT EXISTS ssa_function_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash BLOB NOT NULL,
+            name TEXT NOT NULL,
+            arity INTEGER NOT NULL DEFAULT -1,
+            lang TEXT NOT NULL,
+            namespace TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(project, file_path, name, arity)
+        );
     "#;
 
     // TODO: ADD CLEANS FOR EACH TABLE BASED ON PROJECT WHICH RUNS ON CLEAN
@@ -337,6 +351,50 @@ pub mod index {
             Ok(())
         }
 
+        /// Atomically replace all SSA function summaries for a single file.
+        pub fn replace_ssa_summaries_for_file(
+            &mut self,
+            file_path: &Path,
+            file_hash: &[u8],
+            summaries: &[(String, usize, String, String, crate::summary::ssa_summary::SsaFuncSummary)],
+        ) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = file_path.to_string_lossy();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+            tx.execute(
+                "DELETE FROM ssa_function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO ssa_function_summaries
+                        (project, file_path, file_hash, name, arity, lang, namespace, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                )?;
+
+                for (name, arity, lang, namespace, summary) in summaries {
+                    let json = serde_json::to_string(summary)
+                        .map_err(|e| NyxError::Msg(format!("SSA summary serialise: {e}")))?;
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(())
+        }
+
         /// Load every function summary for this project.
         ///
         /// Reads all JSON strings from SQLite in one pass, then
@@ -372,6 +430,56 @@ pub mod index {
             }
         }
 
+        /// Load every SSA function summary for this project.
+        ///
+        /// Returns rows with full metadata for `FuncKey` reconstruction:
+        /// `(file_path, name, lang, arity, namespace, SsaFuncSummary)`.
+        pub fn load_all_ssa_summaries(
+            &self,
+        ) -> NyxResult<Vec<(String, String, String, i64, String, crate::summary::ssa_summary::SsaFuncSummary)>> {
+            let mut stmt = self.c().prepare(
+                "SELECT file_path, name, lang, arity, namespace, summary
+                 FROM ssa_function_summaries WHERE project = ?1",
+            )?;
+
+            let rows: Vec<(String, String, String, i64, String, String)> = stmt
+                .query_map([&self.project], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                })?
+                .filter_map(Result::ok)
+                .collect();
+
+            if rows.len() > 256 {
+                use rayon::prelude::*;
+                let results: Vec<_> = rows
+                    .par_iter()
+                    .filter_map(|(fp, name, lang, arity, ns, json)| {
+                        serde_json::from_str::<crate::summary::ssa_summary::SsaFuncSummary>(json)
+                            .ok()
+                            .map(|s| (fp.clone(), name.clone(), lang.clone(), *arity, ns.clone(), s))
+                    })
+                    .collect();
+                Ok(results)
+            } else {
+                let mut out = Vec::with_capacity(rows.len());
+                for (fp, name, lang, arity, ns, json) in &rows {
+                    if let Ok(s) =
+                        serde_json::from_str::<crate::summary::ssa_summary::SsaFuncSummary>(json)
+                    {
+                        out.push((fp.clone(), name.clone(), lang.clone(), *arity, ns.clone(), s));
+                    }
+                }
+                Ok(out)
+            }
+        }
+
         /// gets files from the database
         pub fn get_files(&self, project: &str) -> NyxResult<Vec<PathBuf>> {
             let mut stmt = self.c().prepare(
@@ -398,6 +506,7 @@ pub mod index {
         DROP TABLE IF EXISTS issues;
         DROP TABLE IF EXISTS files;
         DROP TABLE IF EXISTS function_summaries;
+        DROP TABLE IF EXISTS ssa_function_summaries;
 
         PRAGMA foreign_keys = ON;
         VACUUM;
@@ -512,4 +621,148 @@ fn clear_and_vacuum_reset_tables() {
     idx.clear().unwrap();
     idx.vacuum().unwrap();
     assert!(idx.get_files("proj").unwrap().is_empty());
+}
+
+#[test]
+fn ssa_summaries_round_trip() {
+    use crate::labels::Cap;
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("app.py");
+    std::fs::write(&f, "def process(data): return data").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash = index::Indexer::digest_bytes(b"def process(data): return data");
+    let summaries = vec![
+        (
+            "process".to_string(),
+            1_usize,
+            "python".to_string(),
+            "app.py".to_string(),
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::Identity)],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+            },
+        ),
+        (
+            "sanitize".to_string(),
+            1_usize,
+            "python".to_string(),
+            "app.py".to_string(),
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
+                param_to_sink: vec![(0, Cap::SQL_QUERY)],
+                source_caps: Cap::ENV_VAR,
+            },
+        ),
+    ];
+
+    idx.replace_ssa_summaries_for_file(&f, &hash, &summaries).unwrap();
+
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(loaded.len(), 2);
+
+    // Check first summary
+    let (_, name1, lang1, arity1, ns1, sum1) = loaded.iter()
+        .find(|(_, n, _, _, _, _)| n == "process")
+        .unwrap();
+    assert_eq!(name1, "process");
+    assert_eq!(lang1, "python");
+    assert_eq!(*arity1, 1);
+    assert_eq!(ns1, "app.py");
+    assert_eq!(sum1.param_to_return, vec![(0, TaintTransform::Identity)]);
+    assert!(sum1.param_to_sink.is_empty());
+
+    // Check second summary
+    let (_, name2, _, _, _, sum2) = loaded.iter()
+        .find(|(_, n, _, _, _, _)| n == "sanitize")
+        .unwrap();
+    assert_eq!(name2, "sanitize");
+    assert_eq!(sum2.param_to_return, vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))]);
+    assert_eq!(sum2.param_to_sink, vec![(0, Cap::SQL_QUERY)]);
+    assert_eq!(sum2.source_caps, Cap::ENV_VAR);
+}
+
+#[test]
+fn ssa_summaries_hash_rescan_replaces_stale() {
+    use crate::labels::Cap;
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("lib.py");
+    std::fs::write(&f, "v1").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash_v1 = index::Indexer::digest_bytes(b"v1");
+    let sums_v1 = vec![(
+        "old_func".to_string(),
+        1_usize,
+        "python".to_string(),
+        "lib.py".to_string(),
+        SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+        },
+    )];
+    idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1).unwrap();
+
+    // Simulate file change: different function, different hash
+    let hash_v2 = index::Indexer::digest_bytes(b"v2");
+    let sums_v2 = vec![(
+        "new_func".to_string(),
+        2_usize,
+        "python".to_string(),
+        "lib.py".to_string(),
+        SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::StripBits(Cap::SHELL_ESCAPE))],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+        },
+    )];
+    idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2).unwrap();
+
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(loaded.len(), 1, "old summary should be replaced, not duplicated");
+    assert_eq!(loaded[0].1, "new_func");
+}
+
+#[test]
+fn clear_drops_ssa_summaries_table() {
+    use crate::labels::Cap;
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("test.py");
+    std::fs::write(&f, "x").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash = index::Indexer::digest_bytes(b"x");
+    let sums = vec![(
+        "f".to_string(),
+        1_usize,
+        "python".to_string(),
+        "test.py".to_string(),
+        SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+        },
+    )];
+    idx.replace_ssa_summaries_for_file(&f, &hash, &sums).unwrap();
+    assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 1);
+
+    idx.clear().unwrap();
+    assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 0);
 }

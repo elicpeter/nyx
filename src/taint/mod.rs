@@ -175,7 +175,7 @@ fn find_function_entries(cfg: &Cfg) -> Vec<(String, NodeIndex)> {
 ///
 /// Lowers each function to SSA individually and runs per-parameter probing
 /// to produce an `SsaFuncSummary`. The resulting map is keyed by function name.
-fn extract_intra_file_ssa_summaries(
+pub(crate) fn extract_intra_file_ssa_summaries(
     cfg: &Cfg,
     interner: &SymbolInterner,
     lang: Lang,

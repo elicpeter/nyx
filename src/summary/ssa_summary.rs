@@ -1,7 +1,8 @@
 use crate::labels::Cap;
+use serde::{Deserialize, Serialize};
 
 /// Per-parameter taint transform describing how taint flows through a function.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaintTransform {
     /// Parameter flows to return value unchanged.
     Identity,
@@ -18,7 +19,7 @@ pub enum TaintTransform {
 /// This is more precise than the legacy `FuncSummary` bitmask approach
 /// because it can express per-parameter transforms (e.g., "param 0 flows
 /// to return but loses HTML_ESCAPE bits").
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SsaFuncSummary {
     /// Per-parameter flows to return value: (param_index, transform).
     pub param_to_return: Vec<(usize, TaintTransform)>,
