@@ -4,6 +4,7 @@ import { useFinding } from '../api/queries/findings';
 import { useBulkTriage } from '../api/mutations/triage';
 import { truncPath } from '../utils/truncPath';
 import { escapeHtml, highlightSyntax } from '../utils/syntaxHighlight';
+import { CodeViewerModal } from '../modals/CodeViewerModal';
 import type { FindingView, Evidence, FlowStep, SpanEvidence, RelatedFindingView } from '../api/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -449,6 +450,7 @@ export function FindingDetailPage() {
   const { data: finding, isLoading, isError, error } = useFinding(id ?? '');
 
   const bulkTriage = useBulkTriage();
+  const [codeModalOpen, setCodeModalOpen] = useState(false);
 
   const handleTriage = useCallback(
     (state: string, note: string) => {
@@ -534,7 +536,7 @@ export function FindingDetailPage() {
         className="file-location"
         onClick={(e) => {
           e.preventDefault();
-          // Placeholder for code modal integration
+          setCodeModalOpen(true);
         }}
       >
         {f.path}:{f.line}:{f.col}
@@ -636,6 +638,7 @@ export function FindingDetailPage() {
           />
         </CollapsibleSection>
       )}
+      <CodeViewerModal open={codeModalOpen} onClose={() => setCodeModalOpen(false)} finding={f} />
     </div>
   );
 }

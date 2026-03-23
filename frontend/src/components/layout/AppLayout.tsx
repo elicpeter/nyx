@@ -13,6 +13,7 @@ import { RulesPage } from '../../pages/RulesPage';
 import { TriagePage } from '../../pages/TriagePage';
 import { ConfigPage } from '../../pages/ConfigPage';
 import { StubPage } from '../../pages/StubPage';
+import { ExplorerPage } from '../../pages/ExplorerPage';
 
 export function AppLayout() {
   const [scanModalOpen, setScanModalOpen] = useState(false);
@@ -38,7 +39,7 @@ export function AppLayout() {
             <Route path="/rules/:id" element={<RulesPage />} />
             <Route path="/triage" element={<TriagePage />} />
             <Route path="/config" element={<ConfigPage />} />
-            <Route path="/explorer" element={<StubPage />} />
+            <Route path="/explorer" element={<ExplorerPage />} />
             <Route path="/debug" element={<StubPage />} />
             <Route path="/debug/cfg" element={<StubPage />} />
             <Route path="/debug/ssa" element={<StubPage />} />

@@ -68,7 +68,7 @@ function ConfigSection({
 
   return (
     <div className="config-section" id={id}>
-      <div className="config-section-header" onClick={() => setCollapsed(!collapsed)}>
+      <div className={`config-section-header${collapsed ? ' collapsed' : ''}`} onClick={() => setCollapsed(!collapsed)}>
         <span className={`config-collapse-arrow${collapsed ? ' collapsed' : ''}`}>
           &#9660;
         </span>{' '}

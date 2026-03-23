@@ -349,6 +349,36 @@ export interface FileResponse {
   total_lines: number;
 }
 
+// Explorer types
+export interface TreeEntry {
+  name: string;
+  entry_type: 'file' | 'dir';
+  path: string;
+  language?: string;
+  finding_count: number;
+  severity_max?: string;
+}
+
+export interface SymbolEntry {
+  name: string;
+  kind: string;
+  line?: number;
+  finding_count: number;
+  namespace?: string;
+  arity?: number;
+}
+
+export interface ExplorerFinding {
+  index: number;
+  line: number;
+  col: number;
+  severity: string;
+  rule_id: string;
+  category: string;
+  message?: string;
+  confidence?: string;
+}
+
 // Scan log entry
 export interface ScanLogEntry {
   timestamp: string;
