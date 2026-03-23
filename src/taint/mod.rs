@@ -57,6 +57,7 @@ pub fn analyse_file(
     caller_lang: Lang,
     caller_namespace: &str,
     interop_edges: &[InteropEdge],
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
 ) -> Vec<Finding> {
     let _span = tracing::debug_span!("taint_analyse_file").entered();
 
@@ -83,6 +84,7 @@ pub fn analyse_file(
         match analyse_ssa_js_two_level(
             cfg, entry, &interner, caller_lang, caller_namespace,
             local_summaries, global_summaries, interop_edges, ssa_sums_ref,
+            extra_labels,
         ) {
             Ok(f) => f,
             Err(e) => {
@@ -113,6 +115,7 @@ pub fn analyse_file(
                     const_values: Some(&opt.const_values),
                     type_facts: Some(&opt.type_facts),
                     ssa_summaries: ssa_sums_ref,
+                    extra_labels,
                 };
                 let events =
                     ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
@@ -242,6 +245,7 @@ fn analyse_ssa_js_two_level(
     global_summaries: Option<&GlobalSummaries>,
     interop_edges: &[InteropEdge],
     ssa_summaries: Option<&std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>>,
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
 ) -> Result<Vec<Finding>, crate::ssa::ir::SsaError> {
     const MAX_ITERATIONS: usize = 3;
 
@@ -265,6 +269,7 @@ fn analyse_ssa_js_two_level(
         const_values: Some(&toplevel_opt.const_values),
         type_facts: Some(&toplevel_opt.type_facts),
         ssa_summaries,
+        extra_labels,
     };
     let (toplevel_events, toplevel_block_states) =
         ssa_transfer::run_ssa_taint_full(&toplevel_ssa, cfg, &toplevel_transfer);
@@ -306,6 +311,7 @@ fn analyse_ssa_js_two_level(
                 const_values: Some(&func_opt.const_values),
                 type_facts: Some(&func_opt.type_facts),
                 ssa_summaries,
+                extra_labels,
             };
             let (func_events, func_block_states) =
                 ssa_transfer::run_ssa_taint_full(&func_ssa, cfg, &func_transfer);

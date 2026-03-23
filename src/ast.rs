@@ -472,6 +472,11 @@ impl<'a> ParsedFile<'a> {
         let scan_root_str = scan_root.map(|p| p.to_string_lossy());
         let namespace =
             normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
+        let extra = if self.lang_rules.extra_labels.is_empty() {
+            None
+        } else {
+            Some(self.lang_rules.extra_labels.as_slice())
+        };
         let taint_results = analyse_file(
             &self.cfg_graph,
             self.entry,
@@ -480,6 +485,7 @@ impl<'a> ParsedFile<'a> {
             caller_lang,
             &namespace,
             &[],
+            extra,
         );
         for finding in &taint_results {
             out.push(build_taint_diag(

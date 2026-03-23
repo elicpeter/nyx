@@ -13,6 +13,8 @@ mod labels;
 mod output;
 mod patterns;
 mod rank;
+#[cfg(feature = "serve")]
+mod server;
 mod ssa;
 mod state;
 mod summary;
@@ -80,6 +82,7 @@ fn main() -> NyxResult<()> {
         .build_global()
         .expect("set rayon stack size");
 
+    let is_serve = cli.command.is_serve();
     let quiet = config.output.quiet || cli.command.is_structured_output(&config);
 
     // Print config note before scanning (human-readable mode only).
@@ -89,7 +92,7 @@ fn main() -> NyxResult<()> {
 
     commands::handle_command(cli.command, database_dir, config_dir, &mut config)?;
 
-    if !quiet {
+    if !quiet && !is_serve {
         eprintln!(
             "{} in {:.3}s.",
             style("Finished").green().bold(),

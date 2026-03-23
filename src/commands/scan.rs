@@ -254,7 +254,7 @@ pub fn handle(
 // --------------------------------------------------------------------------------------------
 
 /// Assign confidence, rank, and truncate diagnostics.
-fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
+pub(crate) fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
     // 1. Compute confidence first (needed by ranking).
     for d in diags.iter_mut() {
         if d.confidence.is_none() {

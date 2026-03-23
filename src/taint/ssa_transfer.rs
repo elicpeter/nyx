@@ -1,7 +1,7 @@
 use crate::callgraph::normalize_callee_name;
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
 use crate::interop::InteropEdge;
-use crate::labels::{Cap, DataLabel, SourceKind};
+use crate::labels::{Cap, DataLabel, RuntimeLabelRule, SourceKind};
 use crate::ssa::ir::*;
 use crate::state::lattice::Lattice;
 use crate::summary::{CalleeResolution, GlobalSummaries};
@@ -247,6 +247,10 @@ pub struct SsaTaintTransfer<'a> {
     /// Precise per-function SSA summaries for intra-file callee resolution.
     /// Checked before legacy FuncSummary resolution.
     pub ssa_summaries: Option<&'a HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>>,
+    /// Extra label rules from user config (custom sources/sanitizers/sinks).
+    /// Used as fallback when `resolve_callee` finds no summary for an inner
+    /// arg callee — so label-only sanitizers still reduce sink caps.
+    pub extra_labels: Option<&'a [RuntimeLabelRule]>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -1206,6 +1210,21 @@ fn collect_block_events(
                 let caller_func = info.enclosing_func.as_deref().unwrap_or("");
                 if let Some(resolved) = resolve_callee(transfer, inner_callee, caller_func, 0) {
                     sink_caps &= !resolved.sanitizer_caps;
+                } else {
+                    // Fallback: check label classification (built-in + custom rules).
+                    // This handles sanitizers that have no function summary (e.g.
+                    // external libraries like `escapeHtml`, `DOMPurify.sanitize`).
+                    let lang_str = transfer.lang.as_str();
+                    let labels = crate::labels::classify_all(
+                        lang_str,
+                        inner_callee,
+                        transfer.extra_labels,
+                    );
+                    for lbl in &labels {
+                        if let DataLabel::Sanitizer(bits) = lbl {
+                            sink_caps &= !*bits;
+                        }
+                    }
                 }
             }
         }
@@ -1898,6 +1917,7 @@ pub fn extract_ssa_func_summary(
             const_values: None,
             type_facts: None,
             ssa_summaries: None,
+            extra_labels: None,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);

@@ -26,6 +26,11 @@ impl Commands {
         let fmt = self.effective_format(config);
         matches!(self, Commands::Scan { .. }) && (fmt == OutputFormat::Json || fmt == OutputFormat::Sarif)
     }
+
+    /// Whether this is a long-running server command (skip timing output).
+    pub fn is_serve(&self) -> bool {
+        matches!(self, Commands::Serve { .. })
+    }
 }
 
 /// Output format for scan results.
@@ -230,6 +235,25 @@ pub enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+
+    /// Start the local web UI for browsing scan results
+    Serve {
+        /// Path to scan root (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Port to bind to (overrides config)
+        #[arg(short, long)]
+        port: Option<u16>,
+
+        /// Host to bind to (overrides config)
+        #[arg(long)]
+        host: Option<String>,
+
+        /// Don't open browser automatically
+        #[arg(long)]
+        no_browser: bool,
     },
 }
 

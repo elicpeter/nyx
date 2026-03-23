@@ -3,6 +3,8 @@ pub mod config;
 pub mod index;
 pub mod list;
 pub mod scan;
+#[cfg(feature = "serve")]
+pub mod serve;
 
 use crate::cli::{Commands, IndexMode, ScanMode};
 use crate::errors::NyxResult;
@@ -175,6 +177,24 @@ pub fn handle_command(
                 ConfigAction::AddTerminator { lang, name } => {
                     self::config::add_terminator(config_dir, &lang, &name)?
                 }
+            }
+        }
+        Commands::Serve {
+            path,
+            port,
+            host,
+            no_browser,
+        } => {
+            #[cfg(feature = "serve")]
+            {
+                serve::handle(&path, port, host.as_deref(), no_browser, config_dir, database_dir, config)?;
+            }
+            #[cfg(not(feature = "serve"))]
+            {
+                let _ = (path, port, host, no_browser);
+                return Err(crate::errors::NyxError::Msg(
+                    "The `serve` feature is not enabled. Rebuild with `cargo build --features serve`.".into(),
+                ));
             }
         }
     }

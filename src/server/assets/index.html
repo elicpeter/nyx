@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nyx Scanner</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <nav class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <h1 class="logo">Nyx</h1>
+        <span class="version" id="version"></span>
+      </div>
+      <ul class="nav-list">
+        <li><a href="/" class="nav-link" data-route="/">Dashboard</a></li>
+        <li><a href="/findings" class="nav-link" data-route="/findings">Findings</a></li>
+        <li><a href="/scans" class="nav-link" data-route="/scans">Scans</a></li>
+        <li><a href="/settings" class="nav-link" data-route="/settings">Settings</a></li>
+      </ul>
+    </nav>
+    <main class="content" id="content">
+      <div class="loading">Loading...</div>
+    </main>
+  </div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

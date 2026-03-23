@@ -54,6 +54,8 @@ pub mod labels;
 pub mod output;
 pub mod patterns;
 pub mod rank;
+#[cfg(feature = "serve")]
+pub mod server;
 pub mod ssa;
 pub mod state;
 pub mod summary;

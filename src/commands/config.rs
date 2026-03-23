@@ -59,7 +59,7 @@ pub fn add_rule(
         lang_cfg.rules.push(new_rule);
     }
 
-    write_local_config(&local_path, &config)?;
+    save_local_config(&local_path, &config)?;
 
     println!(
         "{}: Added {} rule for `{}` ({}) in {}",
@@ -92,7 +92,7 @@ pub fn add_terminator(config_dir: &Path, lang: &str, name: &str) -> NyxResult<()
         lang_cfg.terminators.push(name.to_string());
     }
 
-    write_local_config(&local_path, &config)?;
+    save_local_config(&local_path, &config)?;
 
     println!(
         "{}: Added terminator `{}` for {}",
@@ -104,7 +104,7 @@ pub fn add_terminator(config_dir: &Path, lang: &str, name: &str) -> NyxResult<()
 }
 
 /// Write only the non-default portions to nyx.local.
-fn write_local_config(path: &Path, config: &Config) -> NyxResult<()> {
+pub(crate) fn save_local_config(path: &Path, config: &Config) -> NyxResult<()> {
     // Only write the analysis section to nyx.local to keep it minimal.
     // Other settings keep their defaults unless previously customized.
     let mut local = Config {
