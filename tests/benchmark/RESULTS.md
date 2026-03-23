@@ -1,5 +1,72 @@
 # Nyx Benchmark Results
 
+## Phase 8.5 — Cross-File SSA Benchmark Validation (2026-03-22)
+
+Scanner version: 0.4.0
+Analysis mode: Full (taint + AST patterns + state analysis)
+Corpus: 141 cases (81 vulnerable, 60 safe)
+
+### Changes from Ruby Parity
+- **`param_to_sink_param` field** added to `SsaFuncSummary` — tracks which caller param flows to which sink argument position with caps
+- **Multi-file benchmark support**: `scan_corpus_file()` now handles directory-based test cases via `copy_dir_recursive()`
+- **6 new cross-file benchmark cases** across 3 languages (Python, Go, JavaScript):
+  - Pattern A (propagation): `py-cmdi-cross-001`, `js-xss-cross-001`
+  - Pattern B (source detection): `py-cmdi-cross-002`, `go-cmdi-cross-001`
+  - Pattern C (wrong-cap sanitizer): `py-cmdi-cross-003`, `go-path_traversal-cross-001`
+- All 6 cases are TP — cross-file SSA summaries correctly propagate taint
+
+### Overall Metrics
+
+| Level | TP | FP | FN | TN | Precision | Recall | F1 |
+|-------|----|----|----|----|-----------|--------|----|
+| File-level | 79 | 15 | 2 | 44 | 84.0% | 97.5% | 90.3% |
+| Rule-level | 79 | 15 | 2 | 44 | 84.0% | 97.5% | 90.3% |
+
+Delta vs Ruby Parity: TP +10 (6 new cross-file + 4 from corpus expansion), FP unchanged, TN +6. Precision +1.9pp, Recall -1.1pp, F1 +0.7pp.
+
+### Per Language (rule-level)
+
+| Language | TP | FP | FN | TN | Precision | Recall | F1 |
+|----------|----|----|----|----|-----------|--------|----|
+| Go | 15 | 5 | 0 | 5 | 75.0% | 100.0% | 85.7% |
+| Java | 10 | 1 | 2 | 8 | 90.9% | 83.3% | 87.0% |
+| JavaScript | 14 | 3 | 0 | 7 | 82.4% | 100.0% | 90.3% |
+| PHP | 12 | 1 | 0 | 9 | 92.3% | 100.0% | 96.0% |
+| Python | 16 | 1 | 0 | 9 | 94.1% | 100.0% | 97.0% |
+| Ruby | 12 | 4 | 0 | 6 | 75.0% | 100.0% | 85.7% |
+
+### Per Vulnerability Class (rule-level)
+
+| Class | TP | FP | FN | Precision | Recall | F1 |
+|-------|----|----|----|-----------|---------|----|
+| cmdi | 18 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| code_injection | 8 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| deser | 6 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| fmt_string | 1 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| path_traversal | 7 | 0 | 1 | 100.0% | 87.5% | 93.3% |
+| sqli | 15 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| ssrf | 10 | 0 | 1 | 100.0% | 90.9% | 95.2% |
+| xss | 14 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+
+### Cross-File Cases (all TP)
+
+| Case | Pattern | Language | Status |
+|------|---------|----------|--------|
+| py-cmdi-cross-001 | Propagation | Python | TP |
+| py-cmdi-cross-002 | Source detection | Python | TP |
+| py-cmdi-cross-003 | Wrong-cap sanitizer | Python | TP |
+| js-xss-cross-001 | Propagation | JavaScript | TP |
+| go-cmdi-cross-001 | Source detection | Go | TP |
+| go-path_traversal-cross-001 | Wrong-cap sanitizer | Go | TP |
+
+### Thresholds
+
+| Metric | Baseline | Threshold |
+|--------|----------|-----------|
+| Rule-level Precision | 84.0% | 60.4% |
+| Rule-level Recall | 97.5% | 91.4% |
+| Rule-level F1 | 90.3% | 72.9% |
+
 ## Ruby Parity — Benchmark Corpus Expansion (2026-03-22)
 
 Scanner version: 0.5.0

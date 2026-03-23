@@ -186,11 +186,16 @@ struct BenchmarkResults {
 
 fn scan_corpus_file(corpus_root: &Path, relative_path: &str) -> Vec<Diag> {
     let source = corpus_root.join(relative_path);
-    assert!(source.exists(), "Corpus file not found: {}", source.display());
+    assert!(source.exists(), "Corpus path not found: {}", source.display());
 
     let tmp = tempfile::TempDir::with_prefix("nyx_bench_").expect("tempdir");
-    let dest = tmp.path().join(source.file_name().unwrap());
-    std::fs::copy(&source, &dest).expect("copy corpus file");
+
+    if source.is_dir() {
+        copy_dir_recursive(&source, tmp.path());
+    } else {
+        let dest = tmp.path().join(source.file_name().unwrap());
+        std::fs::copy(&source, &dest).expect("copy corpus file");
+    }
 
     let cfg = test_config(AnalysisMode::Full);
     let mut diags =
@@ -213,6 +218,19 @@ fn scan_corpus_file(corpus_root: &Path, relative_path: &str) -> Vec<Diag> {
     });
 
     diags
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    for entry in std::fs::read_dir(src).expect("read corpus dir") {
+        let entry = entry.expect("dir entry");
+        let dest_path = dst.join(entry.file_name());
+        if entry.file_type().expect("file type").is_dir() {
+            std::fs::create_dir_all(&dest_path).expect("create subdir");
+            copy_dir_recursive(&entry.path(), &dest_path);
+        } else {
+            std::fs::copy(entry.path(), &dest_path).expect("copy file");
+        }
+    }
 }
 
 // ── Scoring helpers ──────────────────────────────────────────────────

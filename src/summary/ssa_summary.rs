@@ -27,4 +27,8 @@ pub struct SsaFuncSummary {
     pub param_to_sink: Vec<(usize, Cap)>,
     /// Source caps introduced regardless of parameters (e.g., function reads env).
     pub source_caps: Cap,
+    /// Per-parameter flows to specific internal sink argument positions:
+    /// (caller_param_index, sink_arg_position, sink_caps).
+    #[serde(default)]
+    pub param_to_sink_param: Vec<(usize, usize, Cap)>,
 }

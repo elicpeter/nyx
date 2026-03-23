@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-22T23:49:58Z",
+  "timestamp": "2026-03-23T00:50:52Z",
   "scanner_version": "0.4.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:62c123e5d16066ab660bad28acdf41244286fd9a3ff4635bd47384f13d3b0cea",
-  "corpus_size": 135,
-  "cases_run": 134,
+  "ground_truth_hash": "sha256:4827b2f457e7f7d61f2031b92a5aad004b05e06b68429f51c3f9139173fa7ead",
+  "corpus_size": 141,
+  "cases_run": 140,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -84,6 +84,30 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "go-cmdi-cross-001",
+      "file": "go/cmdi/cross_source/",
+      "language": "go",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "go.cmdi.exec_command",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [
+        "state-unauthed-access"
+      ],
+      "all_finding_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 3,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "go-fmt_string-001",
       "file": "go/fmt_string/fmt_injection.go",
       "language": "go",
@@ -105,6 +129,28 @@
     {
       "case_id": "go-path_traversal-001",
       "file": "go/path_traversal/path_traversal.go",
+      "language": "go",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "unexpected_rule_ids": [
+        "state-unauthed-access"
+      ],
+      "all_finding_ids": [
+        "state-unauthed-access",
+        "taint-unsanitised-flow (source 9:2)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "go-path_traversal-cross-001",
+      "file": "go/path_traversal/cross_sanitizer/",
       "language": "go",
       "vuln_class": "path_traversal",
       "is_vulnerable": true,
@@ -1259,6 +1305,27 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "js-xss-cross-001",
+      "file": "javascript/xss/cross_propagation/",
+      "language": "javascript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "js.xss.document_write",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "js.xss.document_write",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "js-xss-react-001",
       "file": "javascript/xss/xss_react_dangerously.js",
       "language": "javascript",
@@ -1709,6 +1776,70 @@
       "all_finding_ids": [
         "py.cmdi.subprocess_shell",
         "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-cmdi-cross-001",
+      "file": "python/cmdi/cross_propagation/",
+      "language": "python",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 4:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 4:1)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-cmdi-cross-002",
+      "file": "python/cmdi/cross_source/",
+      "language": "python",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.cmdi.subprocess_shell"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "py.cmdi.subprocess_shell"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "py-cmdi-cross-003",
+      "file": "python/cmdi/cross_sanitizer/",
+      "language": "python",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 4:1)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "py.cmdi.os_system",
+        "taint-unsanitised-flow (source 4:1)"
       ],
       "security_finding_count": 2,
       "non_security_finding_count": 0
@@ -2514,32 +2645,32 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 73,
+    "tp": 79,
     "fp": 15,
     "fn_": 2,
     "tn": 44,
-    "precision": 0.8295454545454546,
-    "recall": 0.9733333333333334,
-    "f1": 0.8957055214723927
+    "precision": 0.8404255319148937,
+    "recall": 0.9753086419753086,
+    "f1": 0.9028571428571429
   },
   "aggregate_rule_level": {
-    "tp": 73,
+    "tp": 79,
     "fp": 15,
     "fn_": 2,
     "tn": 44,
-    "precision": 0.8295454545454546,
-    "recall": 0.9733333333333334,
-    "f1": 0.8957055214723927
+    "precision": 0.8404255319148937,
+    "recall": 0.9753086419753086,
+    "f1": 0.9028571428571429
   },
   "by_language": {
     "go": {
-      "tp": 13,
+      "tp": 15,
       "fp": 5,
       "fn_": 0,
       "tn": 5,
-      "precision": 0.7222222222222222,
+      "precision": 0.75,
       "recall": 1.0,
-      "f1": 0.8387096774193548
+      "f1": 0.8571428571428571
     },
     "java": {
       "tp": 10,
@@ -2551,13 +2682,13 @@
       "f1": 0.8695652173913043
     },
     "javascript": {
-      "tp": 13,
+      "tp": 14,
       "fp": 3,
       "fn_": 0,
       "tn": 7,
-      "precision": 0.8125,
+      "precision": 0.8235294117647058,
       "recall": 1.0,
-      "f1": 0.896551724137931
+      "f1": 0.9032258064516129
     },
     "php": {
       "tp": 12,
@@ -2569,13 +2700,13 @@
       "f1": 0.9600000000000001
     },
     "python": {
-      "tp": 13,
+      "tp": 16,
       "fp": 1,
       "fn_": 0,
       "tn": 9,
-      "precision": 0.9285714285714286,
+      "precision": 0.9411764705882353,
       "recall": 1.0,
-      "f1": 0.962962962962963
+      "f1": 0.9696969696969697
     },
     "ruby": {
       "tp": 12,
@@ -2589,7 +2720,7 @@
   },
   "by_vuln_class": {
     "cmdi": {
-      "tp": 14,
+      "tp": 18,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -2625,13 +2756,13 @@
       "f1": 1.0
     },
     "path_traversal": {
-      "tp": 6,
+      "tp": 7,
       "fp": 0,
       "fn_": 1,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.8571428571428571,
-      "f1": 0.923076923076923
+      "recall": 0.875,
+      "f1": 0.9333333333333333
     },
     "safe": {
       "tp": 0,
@@ -2661,7 +2792,7 @@
       "f1": 0.9523809523809523
     },
     "xss": {
-      "tp": 13,
+      "tp": 14,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -2672,31 +2803,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 49,
+      "tp": 54,
       "fp": 32,
-      "fn_": 26,
+      "fn_": 27,
       "tn": 27,
-      "precision": 0.6049382716049383,
-      "recall": 0.6533333333333333,
-      "f1": 0.6282051282051282
+      "precision": 0.627906976744186,
+      "recall": 0.6666666666666666,
+      "f1": 0.6467065868263472
     },
     ">=Low": {
-      "tp": 49,
-      "fp": 36,
+      "tp": 55,
+      "fp": 34,
       "fn_": 26,
-      "tn": 23,
-      "precision": 0.5764705882352941,
-      "recall": 0.6533333333333333,
-      "f1": 0.6124999999999999
+      "tn": 25,
+      "precision": 0.6179775280898876,
+      "recall": 0.6790123456790124,
+      "f1": 0.6470588235294118
     },
     ">=Medium": {
-      "tp": 49,
-      "fp": 36,
+      "tp": 55,
+      "fp": 34,
       "fn_": 26,
-      "tn": 23,
-      "precision": 0.5764705882352941,
-      "recall": 0.6533333333333333,
-      "f1": 0.6124999999999999
+      "tn": 25,
+      "precision": 0.6179775280898876,
+      "recall": 0.6790123456790124,
+      "f1": 0.6470588235294118
     }
   }
 }

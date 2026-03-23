@@ -647,6 +647,7 @@ fn ssa_summaries_round_trip() {
                 param_to_return: vec![(0, TaintTransform::Identity)],
                 param_to_sink: vec![],
                 source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
             },
         ),
         (
@@ -658,6 +659,7 @@ fn ssa_summaries_round_trip() {
                 param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
                 param_to_sink: vec![(0, Cap::SQL_QUERY)],
                 source_caps: Cap::ENV_VAR,
+                param_to_sink_param: vec![],
             },
         ),
     ];
@@ -711,6 +713,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             param_to_return: vec![(0, TaintTransform::Identity)],
             param_to_sink: vec![],
             source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1).unwrap();
@@ -726,6 +729,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             param_to_return: vec![(0, TaintTransform::StripBits(Cap::SHELL_ESCAPE))],
             param_to_sink: vec![],
             source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2).unwrap();
@@ -758,6 +762,7 @@ fn clear_drops_ssa_summaries_table() {
             param_to_return: vec![(0, TaintTransform::Identity)],
             param_to_sink: vec![],
             source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &sums).unwrap();

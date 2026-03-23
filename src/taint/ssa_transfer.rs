@@ -1787,6 +1787,50 @@ pub fn ssa_events_to_findings(
 
 // ── SSA Function Summary Extraction ──────────────────────────────────────
 
+/// Given an SSA taint event at a sink, find which argument positions of the
+/// sink call instruction were tainted.
+fn extract_sink_arg_positions(
+    event: &SsaTaintEvent,
+    ssa: &SsaBody,
+) -> Vec<usize> {
+    let ssa_val = match ssa.cfg_node_map.get(&event.sink_node) {
+        Some(v) => *v,
+        None => return vec![],
+    };
+
+    let def = ssa.def_of(ssa_val);
+    let block = &ssa.blocks[def.block.0 as usize];
+
+    let inst = block
+        .phis
+        .iter()
+        .chain(block.body.iter())
+        .find(|i| i.value == ssa_val);
+
+    let inst = match inst {
+        Some(i) => i,
+        None => return vec![],
+    };
+
+    if let SsaOp::Call { args, .. } = &inst.op {
+        let tainted_vals: HashSet<SsaValue> = event
+            .tainted_values
+            .iter()
+            .map(|(v, _, _)| *v)
+            .collect();
+
+        let mut positions = Vec::new();
+        for (i, arg_vals) in args.iter().enumerate() {
+            if arg_vals.iter().any(|v| tainted_vals.contains(v)) {
+                positions.push(i);
+            }
+        }
+        positions
+    } else {
+        vec![]
+    }
+}
+
 /// Maximum number of parameters to probe for summary extraction.
 /// Functions with more params fall back to legacy `FuncSummary`.
 const MAX_PROBE_PARAMS: usize = 8;
@@ -1898,6 +1942,7 @@ pub fn extract_ssa_func_summary(
     // Probe each param
     let mut param_to_return = Vec::new();
     let mut param_to_sink = Vec::new();
+    let mut param_to_sink_param = Vec::new();
 
     for &(idx, ref var_name, _ssa_val) in &param_info {
         let sym = match interner.get(var_name) {
@@ -1931,10 +1976,13 @@ pub fn extract_ssa_func_summary(
             param_to_return.push((idx, transform));
         }
 
-        // Collect sink caps from events
+        // Collect sink caps from events + per-arg-position detail
         let mut sink_caps = Cap::empty();
         for event in &events {
             sink_caps |= event.sink_caps;
+            for pos in extract_sink_arg_positions(event, ssa) {
+                param_to_sink_param.push((idx, pos, event.sink_caps));
+            }
         }
         if !sink_caps.is_empty() {
             param_to_sink.push((idx, sink_caps));
@@ -1945,5 +1993,6 @@ pub fn extract_ssa_func_summary(
         param_to_return,
         param_to_sink,
         source_caps,
+        param_to_sink_param,
     }
 }
