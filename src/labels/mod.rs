@@ -12,6 +12,7 @@ mod typescript;
 use bitflags::bitflags;
 use once_cell::sync::Lazy;
 use phf::Map;
+use serde::Serialize;
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
@@ -750,6 +751,148 @@ fn normalize_chained_call(text: &str) -> String {
         }
     }
     result
+}
+
+// ── Rule enumeration ─────────────────────────────────────────────────────────
+
+/// All canonical language slugs (no aliases).
+const CANONICAL_LANGS: &[&str] = &[
+    "javascript", "typescript", "python", "go", "java", "c", "cpp", "php", "ruby", "rust",
+];
+
+/// Map alias slugs to canonical language name.
+pub fn canonical_lang(slug: &str) -> &str {
+    // Check exact matches first (fast path, no allocation)
+    match slug {
+        "javascript" | "js" => "javascript",
+        "typescript" | "ts" => "typescript",
+        "python" | "py" => "python",
+        "go" => "go",
+        "java" => "java",
+        "c" => "c",
+        "cpp" | "c++" => "cpp",
+        "php" => "php",
+        "ruby" | "rb" => "ruby",
+        "rust" | "rs" => "rust",
+        // For unknown slugs, return as-is (the caller's borrow keeps it alive)
+        _ => slug,
+    }
+}
+
+/// Human-readable name for a Cap bitflag value.
+pub fn cap_to_name(cap: Cap) -> &'static str {
+    if cap == Cap::all() {
+        return "all";
+    }
+    match cap {
+        Cap::ENV_VAR => "env_var",
+        Cap::HTML_ESCAPE => "html_escape",
+        Cap::SHELL_ESCAPE => "shell_escape",
+        Cap::URL_ENCODE => "url_encode",
+        Cap::JSON_PARSE => "json_parse",
+        Cap::FILE_IO => "file_io",
+        Cap::FMT_STRING => "fmt_string",
+        Cap::SQL_QUERY => "sql_query",
+        Cap::DESERIALIZE => "deserialize",
+        Cap::SSRF => "ssrf",
+        Cap::CODE_EXEC => "code_exec",
+        Cap::CRYPTO => "crypto",
+        _ => "unknown",
+    }
+}
+
+/// Generate a stable rule ID from language, kind, and matchers.
+pub fn rule_id(lang: &str, kind: &str, matchers: &[&str]) -> String {
+    let mut sorted: Vec<&str> = matchers.to_vec();
+    sorted.sort_unstable();
+    let joined = sorted.join("\0");
+    let hash = blake3::hash(joined.as_bytes());
+    let hex = hash.to_hex();
+    format!("{}.{}.{}", lang, kind, &hex[..8])
+}
+
+/// Metadata-enriched view of a label rule (built-in or custom).
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleInfo {
+    pub id: String,
+    pub title: String,
+    pub language: String,
+    pub kind: String,
+    pub cap: String,
+    pub cap_bits: u16,
+    pub matchers: Vec<String>,
+    pub case_sensitive: bool,
+    pub is_custom: bool,
+    pub is_gated: bool,
+    pub enabled: bool,
+}
+
+/// Enumerate all built-in rules across all languages.
+pub fn enumerate_builtin_rules() -> Vec<RuleInfo> {
+    let mut out = Vec::new();
+
+    for &lang in CANONICAL_LANGS {
+        if let Some(rules) = REGISTRY.get(lang) {
+            for rule in *rules {
+                let (kind_str, cap) = match rule.label {
+                    DataLabel::Source(c) => ("source", c),
+                    DataLabel::Sanitizer(c) => ("sanitizer", c),
+                    DataLabel::Sink(c) => ("sink", c),
+                };
+                let matchers_strs: Vec<&str> = rule.matchers.to_vec();
+                let id = rule_id(lang, kind_str, &matchers_strs);
+                let first = rule.matchers.first().copied().unwrap_or("?");
+                let title = format!("{} ({})", first, kind_str);
+                out.push(RuleInfo {
+                    id,
+                    title,
+                    language: lang.to_string(),
+                    kind: kind_str.to_string(),
+                    cap: cap_to_name(cap).to_string(),
+                    cap_bits: cap.bits(),
+                    matchers: rule.matchers.iter().map(|s| s.to_string()).collect(),
+                    case_sensitive: rule.case_sensitive,
+                    is_custom: false,
+                    is_gated: false,
+                    enabled: true,
+                });
+            }
+        }
+
+        // Include gated sink entries
+        if let Some(gates) = GATED_REGISTRY.get(lang) {
+            for gate in *gates {
+                let cap = match gate.label {
+                    DataLabel::Source(c) | DataLabel::Sanitizer(c) | DataLabel::Sink(c) => c,
+                };
+                let kind_str = "sink";
+                let matchers_strs = &[gate.callee_matcher];
+                let id = rule_id(lang, &format!("gated_{}", kind_str), matchers_strs);
+                let title = format!("{} (gated {})", gate.callee_matcher, kind_str);
+                out.push(RuleInfo {
+                    id,
+                    title,
+                    language: lang.to_string(),
+                    kind: kind_str.to_string(),
+                    cap: cap_to_name(cap).to_string(),
+                    cap_bits: cap.bits(),
+                    matchers: vec![gate.callee_matcher.to_string()],
+                    case_sensitive: gate.case_sensitive,
+                    is_custom: false,
+                    is_gated: true,
+                    enabled: true,
+                });
+            }
+        }
+    }
+
+    out
+}
+
+/// Generate a custom rule ID with `custom.` prefix.
+pub fn custom_rule_id(lang: &str, kind: &str, matchers: &[String]) -> String {
+    let refs: Vec<&str> = matchers.iter().map(|s| s.as_str()).collect();
+    format!("custom.{}", rule_id(lang, kind, &refs))
 }
 
 #[cfg(test)]

@@ -431,6 +431,9 @@ pub struct LanguageAnalysisConfig {
 #[serde(default)]
 pub struct AnalysisRulesConfig {
     pub languages: HashMap<String, LanguageAnalysisConfig>,
+    /// Rule IDs that have been disabled via the UI.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_rules: Vec<String>,
 }
 
 /// Configuration for the local web UI server (`nyx serve`).

@@ -1941,6 +1941,158 @@ tr.selected td {
   margin-left: auto;
 }
 
+/* ── Rules Page ───────────────────────────────────────────────────── */
+.rules-layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 0;
+  height: calc(100vh - 160px);
+  min-height: 400px;
+}
+.rules-list-panel {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding-right: var(--space-4);
+}
+.rules-detail-panel {
+  overflow-y: auto;
+  padding-left: var(--space-4);
+}
+.rules-filters {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+  align-items: center;
+}
+.rules-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.rules-table th,
+.rules-table td {
+  padding: 6px 10px;
+  font-size: var(--text-sm);
+  text-align: left;
+  border-bottom: 1px solid var(--border-light);
+}
+.rules-table th {
+  background: var(--bg-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  border-bottom: 1px solid var(--border);
+}
+.rule-row { cursor: pointer; }
+.rule-row:hover td { background: var(--bg-secondary); }
+.rule-row.selected td { background: var(--accent-light); }
+.rule-row.rule-disabled { opacity: 0.55; }
+.rules-table tr:last-child td { border-bottom: none; }
+.rule-toggle {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  background: var(--bg-secondary);
+}
+.rule-toggle.toggle-on { background: var(--success-bg); color: var(--success); border-color: var(--success); }
+.rule-toggle.toggle-off { background: var(--bg-secondary); color: var(--text-tertiary); }
+.matcher-tag {
+  display: inline-block;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  margin: 2px;
+  font-size: var(--text-sm);
+}
+.detail-meta { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin-top: var(--space-3); }
+.detail-meta > div { font-size: var(--text-sm); }
+
+/* ── Rule Detail Card ─────────────────────────────────────────────── */
+.rule-detail-card h3 {
+  margin: 0 0 var(--space-3) 0;
+  font-size: var(--text-lg);
+  word-break: break-word;
+}
+.rule-detail-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+}
+.rule-detail-label {
+  color: var(--text-secondary);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+/* ── Config Page ──────────────────────────────────────────────────── */
+.config-section { margin-bottom: var(--space-6); }
+.config-section-header {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  user-select: none;
+  font-size: var(--text-base);
+}
+.config-section-header:hover { background: var(--bg-tertiary); }
+.config-collapse-arrow {
+  font-size: 10px;
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.config-section-header.collapsed .config-collapse-arrow {
+  transform: rotate(-90deg);
+}
+.config-section-header.collapsed + .config-section-body { display: none; }
+.config-section-body { padding: var(--space-3) 0; }
+
+/* Label entry tables */
+.label-table { width: 100%; border-collapse: collapse; }
+.label-table td, .label-table th { padding: 6px 10px; text-align: left; }
+.label-builtin { opacity: 0.7; }
+.add-label-form { margin-bottom: var(--space-2); }
+
+/* Badges */
+.badge-custom {
+  background: var(--accent-light);
+  color: var(--accent);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.badge-builtin {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+}
+.badge-source { background: var(--sev-low-bg); color: var(--sev-low); }
+.badge-sanitizer { background: var(--success-bg); color: var(--success); }
+.badge-sink { background: var(--sev-high-bg); color: var(--sev-high); }
+
+/* Toggle switch inline */
+.toggle-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+.toggle-inline input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
 /* ── Code Modal Responsive ────────────────────────────────────────── */
 @media (max-width: 768px) {
   .code-modal {

@@ -1,0 +1,15 @@
+{
+  "description": "Alias-aware sanitization: obj and alias share the same object. Sanitizing alias.data via DOMPurify should also suppress obj.data at res.send.",
+  "tags": ["taint", "alias", "sanitization", "xss"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [6, 9],
+      "evidence_contains": [],
+      "notes": "alias.data is sanitized by DOMPurify, and alias is a must-alias of obj — obj.data should be safe"
+    }
+  ]
+}

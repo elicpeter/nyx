@@ -126,6 +126,59 @@ pub struct TerminatorView {
     pub name: String,
 }
 
+/// Rule list item for GET /api/rules (built-in + custom, with metadata).
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleListItem {
+    pub id: String,
+    pub title: String,
+    pub language: String,
+    pub kind: String,
+    pub cap: String,
+    pub matchers: Vec<String>,
+    pub enabled: bool,
+    pub is_custom: bool,
+    pub is_gated: bool,
+    pub case_sensitive: bool,
+    pub finding_count: usize,
+    pub suppression_rate: f64,
+}
+
+/// Full rule detail for GET /api/rules/:id
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleDetailView {
+    pub id: String,
+    pub title: String,
+    pub language: String,
+    pub kind: String,
+    pub cap: String,
+    pub matchers: Vec<String>,
+    pub case_sensitive: bool,
+    pub enabled: bool,
+    pub is_custom: bool,
+    pub is_gated: bool,
+    pub finding_count: usize,
+    pub suppression_rate: f64,
+    pub example_findings: Vec<RelatedFindingView>,
+}
+
+/// Label entry for sources/sinks/sanitizers listing.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct LabelEntryView {
+    pub lang: String,
+    pub matchers: Vec<String>,
+    pub cap: String,
+    pub case_sensitive: bool,
+    pub is_builtin: bool,
+}
+
+/// Profile view for profile listing.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileView {
+    pub name: String,
+    pub is_builtin: bool,
+    pub settings: serde_json::Value,
+}
+
 /// Distinct filter values available in a set of findings.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct FilterValues {

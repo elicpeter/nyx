@@ -9,8 +9,11 @@ use crate::cfg::Cfg;
 /// labels (i.e., no semantic significance like sanitizer/source), then rewrites
 /// all uses of the destination value to use the source value directly.
 ///
-/// Returns the number of copies eliminated.
-pub fn copy_propagate(body: &mut SsaBody, cfg: &Cfg) -> usize {
+/// Returns `(copies_eliminated, resolved_replacement_map)`. The replacement map
+/// maps each eliminated destination SsaValue to its transitive root source
+/// SsaValue, used downstream by alias analysis to recover base-variable
+/// aliasing relationships.
+pub fn copy_propagate(body: &mut SsaBody, cfg: &Cfg) -> (usize, HashMap<SsaValue, SsaValue>) {
     // 1. Identify copies: Assign with single operand and no labels on CFG node
     let mut replace_map: HashMap<SsaValue, SsaValue> = HashMap::new();
 
@@ -31,7 +34,7 @@ pub fn copy_propagate(body: &mut SsaBody, cfg: &Cfg) -> usize {
     }
 
     if replace_map.is_empty() {
-        return 0;
+        return (0, HashMap::new());
     }
 
     // 2. Build transitive replacement map: chase chains (SSA is acyclic)
@@ -94,7 +97,7 @@ pub fn copy_propagate(body: &mut SsaBody, cfg: &Cfg) -> usize {
         }
     }
 
-    count
+    (count, resolved)
 }
 
 /// Chase the replacement chain to find the root value.
@@ -192,8 +195,11 @@ mod tests {
             exception_edges: vec![],
         };
 
-        let eliminated = copy_propagate(&mut body, &cfg);
+        let (eliminated, copy_map) = copy_propagate(&mut body, &cfg);
         assert_eq!(eliminated, 2);
+        // Both v1 and v2 should map to v0 (the root)
+        assert_eq!(copy_map.get(&SsaValue(1)), Some(&SsaValue(0)));
+        assert_eq!(copy_map.get(&SsaValue(2)), Some(&SsaValue(0)));
 
         // v1 and v2 should be Nop now
         assert!(matches!(body.blocks[0].body[1].op, SsaOp::Nop));

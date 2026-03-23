@@ -356,6 +356,14 @@ impl JobManager {
             .find(|j| j.status == JobStatus::Completed)
             .cloned()
     }
+
+    /// Return findings from the latest completed scan, or empty if none.
+    pub fn latest_findings(&self) -> Vec<Diag> {
+        self.get_latest_completed()
+            .and_then(|j| j.findings)
+            .map(|arc| arc.as_ref().clone())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

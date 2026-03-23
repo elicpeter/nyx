@@ -1,4 +1,5 @@
 #[allow(dead_code)] // IR types — fields used by Display impl, tests, and Phase 2+
+pub mod alias;
 pub mod display;
 pub mod const_prop;
 pub mod copy_prop;
@@ -23,6 +24,8 @@ pub struct OptimizeResult {
     pub const_values: HashMap<SsaValue, const_prop::ConstLattice>,
     /// Type fact analysis results.
     pub type_facts: type_facts::TypeFactResult,
+    /// Base-variable alias groups from copy propagation.
+    pub alias_result: alias::BaseAliasResult,
     /// Number of branches pruned by constant propagation.
     pub branches_pruned: usize,
     /// Number of copies eliminated.
@@ -40,17 +43,21 @@ pub fn optimize_ssa(body: &mut SsaBody, cfg: &Cfg, lang: Option<Lang>) -> Optimi
     let branches_pruned = const_prop::apply_const_prop(body, &cp);
 
     // 2. Copy propagation
-    let copies_eliminated = copy_prop::copy_propagate(body, cfg);
+    let (copies_eliminated, copy_map) = copy_prop::copy_propagate(body, cfg);
 
-    // 3. Dead code elimination
+    // 3. Alias analysis (uses copy_map before DCE removes dead defs)
+    let alias_result = alias::compute_base_aliases(&copy_map, body);
+
+    // 4. Dead code elimination
     let dead_defs_removed = dce::eliminate_dead_defs(body, cfg);
 
-    // 4. Type fact analysis (uses const prop results + language for constructor inference)
+    // 5. Type fact analysis (uses const prop results + language for constructor inference)
     let type_facts = type_facts::analyze_types(body, cfg, &cp.values, lang);
 
     OptimizeResult {
         const_values: cp.values,
         type_facts,
+        alias_result,
         branches_pruned,
         copies_eliminated,
         dead_defs_removed,

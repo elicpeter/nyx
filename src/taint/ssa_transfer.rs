@@ -286,6 +286,10 @@ pub struct SsaTaintTransfer<'a> {
     /// Cache for context-sensitive inline results. Uses `RefCell` for interior
     /// mutability (safe: k=1 depth limit prevents re-entrancy during borrow).
     pub inline_cache: Option<&'a RefCell<InlineCache>>,
+    /// Base-variable alias groups for alias-aware sanitization propagation.
+    /// When present, sanitization of `alias.field` also sanitizes `base.field`
+    /// for all must-aliased base names.
+    pub base_aliases: Option<&'a crate::ssa::alias::BaseAliasResult>,
     /// Current inline analysis depth (0 = top-level caller). When >= 1,
     /// inline analysis falls back to summary resolution (k=1 bound).
     pub context_depth: u8,
@@ -1033,6 +1037,7 @@ fn inline_analyse_callee(
         type_facts: Some(&callee_body.opt.type_facts),
         ssa_summaries: transfer.ssa_summaries,
         extra_labels: transfer.extra_labels,
+        base_aliases: Some(&callee_body.opt.alias_result),
         callee_bodies: None, // no recursion into further inline analysis
         inline_cache: None,
         context_depth: transfer.context_depth + 1,
@@ -1359,6 +1364,15 @@ fn transfer_inst(
                 }
             }
 
+            // Alias-aware sanitization: propagate through must-aliased field paths
+            if !sanitizer_bits.is_empty() {
+                if let Some(aliases) = transfer.base_aliases {
+                    if !aliases.is_empty() {
+                        propagate_sanitization_to_aliases(inst, state, sanitizer_bits, aliases, ssa);
+                    }
+                }
+            }
+
             // Write result
             if return_bits.is_empty() {
                 state.remove(inst.value);
@@ -1404,6 +1418,15 @@ fn transfer_inst(
 
             // Apply sanitizer
             combined_caps &= !sanitizer_bits;
+
+            // Alias-aware sanitization: propagate through must-aliased field paths
+            if !sanitizer_bits.is_empty() {
+                if let Some(aliases) = transfer.base_aliases {
+                    if !aliases.is_empty() {
+                        propagate_sanitization_to_aliases(inst, state, sanitizer_bits, aliases, ssa);
+                    }
+                }
+            }
 
             // Check for source labels
             for lbl in &info.labels {
@@ -1988,6 +2011,97 @@ fn inst_use_values(inst: &SsaInst) -> Vec<SsaValue> {
         }
         SsaOp::Source | SsaOp::Const(_) | SsaOp::Param { .. } | SsaOp::CatchParam | SsaOp::Nop => {
             Vec::new()
+        }
+    }
+}
+
+// ── Alias-Aware Sanitization ────────────────────────────────────────────
+
+/// After sanitizing `inst`, propagate the sanitization to must-aliased field paths.
+///
+/// When `alias.data` is sanitized and `alias` and `obj` are base aliases (from
+/// copy propagation), this function also sanitizes `obj.data` in the taint state.
+/// For plain idents (no dot), sanitizing `alias` also sanitizes `obj`.
+fn propagate_sanitization_to_aliases(
+    inst: &SsaInst,
+    state: &mut SsaTaintState,
+    sanitizer_bits: Cap,
+    aliases: &crate::ssa::alias::BaseAliasResult,
+    ssa: &SsaBody,
+) {
+    let var_name = match inst.var_name.as_deref() {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Split into base and suffix: "alias.data" → ("alias", ".data"); "alias" → ("alias", "")
+    let (base, suffix) = match var_name.find('.') {
+        Some(pos) => (&var_name[..pos], &var_name[pos..]),
+        None => (var_name, ""),
+    };
+
+    let alias_bases = match aliases.aliases_of(base) {
+        Some(bases) => bases,
+        None => return,
+    };
+
+    // Collect SsaValues to sanitize (avoid borrowing state while iterating).
+    let to_sanitize: SmallVec<[SsaValue; 8]> = state
+        .values
+        .iter()
+        .filter_map(|&(v, ref t)| {
+            if t.caps.is_empty() {
+                return None;
+            }
+            let vdef_name = ssa.value_defs.get(v.0 as usize)?.var_name.as_deref()?;
+
+            // For each alias base, check if the value's var_name matches
+            // the aliased field path.
+            for alias_base in alias_bases {
+                if alias_base == base {
+                    continue; // skip self — already sanitized
+                }
+                let target = if suffix.is_empty() {
+                    // Plain ident: look for exact match on alias base
+                    alias_base.as_str()
+                } else {
+                    // Can't construct target without allocation; check inline
+                    ""
+                };
+
+                if suffix.is_empty() {
+                    if vdef_name == target {
+                        return Some(v);
+                    }
+                } else {
+                    // Dotted path: check if vdef_name == "{alias_base}{suffix}"
+                    if vdef_name.len() == alias_base.len() + suffix.len()
+                        && vdef_name.starts_with(alias_base.as_str())
+                        && vdef_name.ends_with(suffix)
+                    {
+                        return Some(v);
+                    }
+                }
+            }
+            None
+        })
+        .collect();
+
+    for v in to_sanitize {
+        if let Some(taint) = state.get(v) {
+            let new_caps = taint.caps & !sanitizer_bits;
+            if new_caps.is_empty() {
+                state.remove(v);
+            } else {
+                state.set(
+                    v,
+                    VarTaint {
+                        caps: new_caps,
+                        origins: taint.origins.clone(),
+                        uses_summary: taint.uses_summary,
+                    },
+                );
+            }
         }
     }
 }
@@ -2626,6 +2740,7 @@ pub fn extract_ssa_func_summary(
             type_facts: None,
             ssa_summaries: None,
             extra_labels: None,
+            base_aliases: None,
             callee_bodies: None,
             inline_cache: None,
             context_depth: 0,

@@ -40,17 +40,17 @@ const ROUTES = [
   { path: '/scans',            section: 'scans',    render: renderScans },
   { path: '/scans/compare/:left/:right', section: 'scans', render: renderScanCompare },
   { path: '/scans/:id',        section: 'scans',    render: renderScanDetail },
-  { path: '/rules',            section: 'rules',    render: renderStub },
-  { path: '/rules/:id',        section: 'rules',    render: renderStub },
+  { path: '/rules',            section: 'rules',    render: renderRules },
+  { path: '/rules/:id',        section: 'rules',    render: renderRules },
   { path: '/triage',           section: 'triage',   render: renderTriage },
-  { path: '/config',           section: 'config',   render: renderStub },
+  { path: '/config',           section: 'config',   render: renderConfig },
   { path: '/explorer',         section: 'explorer', render: renderStub },
   { path: '/debug',            section: 'debug',    render: renderStub },
   { path: '/debug/cfg',        section: 'debug',    render: renderStub },
   { path: '/debug/ssa',        section: 'debug',    render: renderStub },
   { path: '/debug/call-graph', section: 'debug',    render: renderStub },
   { path: '/debug/taint',      section: 'debug',    render: renderStub },
-  { path: '/settings',         section: 'settings', render: renderSettings },
+  { path: '/settings',         section: 'settings', render: renderStub },
 ];
 
 const SECTION_TITLES = {
@@ -73,10 +73,7 @@ const ROUTE_TITLES = {
 };
 
 const STUB_DESCRIPTIONS = {
-  '/rules':            'Define and manage custom taint analysis rules for sources, sinks, and sanitizers across all supported languages.',
-  '/rules/:id':        'View and edit rule details.',
   '/triage':           'Review, classify, and prioritize findings with bulk actions and assignment workflows.',
-  '/config':           'Configure scan settings, language options, and analysis parameters.',
   '/explorer':         'Browse the scanned codebase, view file trees, and inspect individual files with inline annotations.',
   '/debug':            'Inspect internal analysis state — control flow graphs, SSA IR, call graphs, and taint propagation.',
   '/debug/cfg':        'Visualize control flow graphs for individual functions with block-level detail.',
@@ -84,6 +81,7 @@ const STUB_DESCRIPTIONS = {
   '/debug/call-graph': 'Explore the inter-procedural call graph with SCC highlighting and topo-order visualization.',
   '/debug/taint':      'Step through taint propagation with per-instruction state snapshots and path tracking.',
   '/scans/:id':        'View detailed scan results, timing breakdown, and per-file analysis.',
+  '/settings':         'Application settings and preferences. Visit Config for sources, sinks, and sanitizers. Visit Rules to manage analysis rules.',
 };
 
 // ── API helpers ──────────────────────────────────────────────────────────────
@@ -2205,99 +2203,250 @@ async function renderTriage(el, params, match) {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
-async function renderSettings(el, params, match) {
-  el.innerHTML = '<div class="loading">Loading settings...</div>';
+// ── Rules Page ────────────────────────────────────────────────────────────────
+
+async function renderRules(el, params, match) {
+  el.innerHTML = '<div class="loading">Loading rules...</div>';
   try {
-    const [rules, terminators] = await Promise.all([
-      api('/config/rules'),
+    const rules = await api('/rules');
+
+    const langs = [...new Set(rules.map(r => r.language))].sort();
+    const kinds = ['source', 'sanitizer', 'sink'];
+
+    let selectedId = match.params?.id || null;
+
+    function renderPage() {
+      const selectedRule = selectedId ? rules.find(r => r.id === selectedId) : null;
+
+      el.innerHTML = `
+        <div class="page-header"><h2>Rules</h2>
+          <span style="color:var(--text-secondary);font-size:var(--text-sm);margin-left:var(--space-3)">${rules.length} rules</span>
+        </div>
+        <div class="rules-layout">
+          <div class="rules-list-panel">
+            <div class="rules-filters">
+              <select id="rules-lang-filter">
+                <option value="">All Languages</option>
+                ${langs.map(l => `<option value="${escHtml(l)}">${escHtml(l)}</option>`).join('')}
+              </select>
+              <select id="rules-kind-filter">
+                <option value="">All Kinds</option>
+                ${kinds.map(k => `<option value="${escHtml(k)}">${escHtml(k)}</option>`).join('')}
+              </select>
+              <label style="display:flex;align-items:center;gap:4px;font-size:var(--text-sm)">
+                <input type="checkbox" id="rules-custom-only"> Custom only
+              </label>
+              <input type="text" id="rules-search" placeholder="Search matchers..." style="flex:1;min-width:100px">
+            </div>
+            <div id="rules-table-wrap">
+              ${renderRulesTable(rules, selectedId)}
+            </div>
+          </div>
+          <div class="rules-detail-panel" id="rules-detail">
+            ${selectedRule ? renderRuleDetail(selectedRule) : '<div class="empty-state" style="padding:40px"><p>Select a rule to view details</p></div>'}
+          </div>
+        </div>
+      `;
+
+      bindAll();
+    }
+
+    function selectRule(id) {
+      selectedId = id;
+      history.replaceState(null, '', id ? '/rules/' + encodeURIComponent(id) : '/rules');
+
+      // Update detail panel without full re-render
+      const detail = $('#rules-detail');
+      const rule = id ? rules.find(r => r.id === id) : null;
+      if (detail) {
+        detail.innerHTML = rule
+          ? renderRuleDetail(rule)
+          : '<div class="empty-state" style="padding:40px"><p>Select a rule to view details</p></div>';
+        bindDetailActions();
+      }
+
+      // Update selected row highlight
+      $$('.rule-row', el).forEach(row => {
+        row.classList.toggle('selected', row.dataset.ruleId === id);
+      });
+    }
+
+    function bindDetailActions() {
+      $('#clone-rule-btn')?.addEventListener('click', async () => {
+        if (!selectedId) return;
+        try {
+          await api('/rules/clone', { method: 'POST', signal: null, body: JSON.stringify({ rule_id: selectedId }) });
+          renderRules(el, params, match);
+        } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
+      });
+
+      $('#detail-toggle-btn')?.addEventListener('click', async () => {
+        if (!selectedId) return;
+        try {
+          await api('/rules/' + encodeURIComponent(selectedId) + '/toggle', { method: 'POST', signal: null });
+          renderRules(el, params, match);
+        } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
+      });
+    }
+
+    function applyFilters() {
+      const lang = $('#rules-lang-filter').value;
+      const kind = $('#rules-kind-filter').value;
+      const customOnly = $('#rules-custom-only').checked;
+      const search = $('#rules-search').value.toLowerCase();
+
+      const filtered = rules.filter(r => {
+        if (lang && r.language !== lang) return false;
+        if (kind && r.kind !== kind) return false;
+        if (customOnly && !r.is_custom) return false;
+        if (search && !r.matchers.some(m => m.toLowerCase().includes(search)) && !r.title.toLowerCase().includes(search)) return false;
+        return true;
+      });
+
+      const wrap = $('#rules-table-wrap');
+      if (wrap) wrap.innerHTML = renderRulesTable(filtered, selectedId);
+      bindTableRows();
+    }
+
+    function bindTableRows() {
+      $$('.rule-row', el).forEach(row => {
+        row.addEventListener('click', (e) => {
+          if (e.target.closest('.rule-toggle')) return;
+          selectRule(row.dataset.ruleId);
+        });
+      });
+
+      $$('.rule-toggle', el).forEach(toggle => {
+        toggle.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            await api('/rules/' + encodeURIComponent(toggle.dataset.ruleId) + '/toggle', { method: 'POST', signal: null });
+            renderRules(el, params, match);
+          } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
+        });
+      });
+    }
+
+    function bindAll() {
+      $('#rules-lang-filter')?.addEventListener('change', applyFilters);
+      $('#rules-kind-filter')?.addEventListener('change', applyFilters);
+      $('#rules-custom-only')?.addEventListener('change', applyFilters);
+      $('#rules-search')?.addEventListener('input', debounce(applyFilters, 200));
+      bindTableRows();
+      bindDetailActions();
+    }
+
+    renderPage();
+
+  } catch (e) {
+    if (isAbortError(e)) return;
+    el.innerHTML = `<div class="error-state"><h3>Error</h3><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderRulesTable(rules, selectedId) {
+  if (rules.length === 0) {
+    return '<div class="empty-state" style="padding:20px"><p>No rules match filters</p></div>';
+  }
+  return `<table class="rules-table">
+    <thead><tr>
+      <th style="width:42px"></th><th>Title</th><th>Lang</th><th>Kind</th><th>Cap</th><th style="width:70px">Finds</th>
+    </tr></thead><tbody>
+    ${rules.map(r => `<tr class="rule-row${r.id === selectedId ? ' selected' : ''}${!r.enabled ? ' rule-disabled' : ''}" data-rule-id="${escHtml(r.id)}">
+      <td><button class="rule-toggle${r.enabled ? ' toggle-on' : ' toggle-off'}" data-rule-id="${escHtml(r.id)}" title="${r.enabled ? 'Disable' : 'Enable'}">${r.enabled ? 'On' : 'Off'}</button></td>
+      <td>${escHtml(r.title)}${r.is_custom ? ' <span class="badge-custom">custom</span>' : ''}${r.is_gated ? ' <span class="badge-builtin">gated</span>' : ''}</td>
+      <td>${escHtml(r.language)}</td>
+      <td><span class="badge badge-${r.kind}">${escHtml(r.kind)}</span></td>
+      <td>${escHtml(r.cap)}</td>
+      <td>${r.finding_count}</td>
+    </tr>`).join('')}
+  </tbody></table>`;
+}
+
+function renderRuleDetail(rule) {
+  return `
+    <div class="rule-detail-card">
+      <h3>${escHtml(rule.title)}</h3>
+      <div class="rule-detail-grid">
+        <div class="rule-detail-label">ID</div>
+        <div><code style="font-size:var(--text-xs);word-break:break-all">${escHtml(rule.id)}</code></div>
+        <div class="rule-detail-label">Language</div>
+        <div>${escHtml(rule.language)}</div>
+        <div class="rule-detail-label">Kind</div>
+        <div><span class="badge badge-${rule.kind}">${escHtml(rule.kind)}</span></div>
+        <div class="rule-detail-label">Capability</div>
+        <div>${escHtml(rule.cap)}</div>
+        <div class="rule-detail-label">Case Sensitive</div>
+        <div>${rule.case_sensitive ? 'Yes' : 'No'}</div>
+        <div class="rule-detail-label">Status</div>
+        <div>${rule.enabled
+          ? '<span style="color:var(--success)">Enabled</span>'
+          : '<span style="color:var(--text-tertiary)">Disabled</span>'}</div>
+        <div class="rule-detail-label">Findings</div>
+        <div>${rule.finding_count}${rule.suppression_rate > 0 ? ` (${(rule.suppression_rate * 100).toFixed(0)}% suppressed)` : ''}</div>
+      </div>
+      ${rule.is_custom ? '<div style="margin-top:var(--space-3)"><span class="badge-custom">Custom Rule</span></div>' : ''}
+      ${rule.is_gated ? '<div style="margin-top:var(--space-3)"><span class="badge-builtin">Gated Sink</span></div>' : ''}
+      <div style="margin-top:var(--space-4)">
+        <div class="rule-detail-label" style="margin-bottom:var(--space-2)">Matchers</div>
+        <div>${rule.matchers.map(m => `<code class="matcher-tag">${escHtml(m)}</code>`).join(' ')}</div>
+      </div>
+      <div style="margin-top:var(--space-5);display:flex;gap:var(--space-2)">
+        <button class="btn btn-sm" id="detail-toggle-btn">${rule.enabled ? 'Disable' : 'Enable'}</button>
+        ${!rule.is_custom ? `<button class="btn btn-primary btn-sm" id="clone-rule-btn">Clone to Custom</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+// ── Config Page ───────────────────────────────────────────────────────────────
+
+const LANG_OPTIONS = ['javascript', 'typescript', 'python', 'go', 'java', 'c', 'cpp', 'php', 'ruby', 'rust'];
+const CAP_OPTIONS = ['all', 'env_var', 'html_escape', 'shell_escape', 'url_encode', 'json_parse', 'file_io', 'sql_query', 'deserialize', 'ssrf', 'code_exec', 'crypto'];
+
+async function renderConfig(el, params, match) {
+  el.innerHTML = '<div class="loading">Loading configuration...</div>';
+  try {
+    const [config, sources, sinks, sanitizers, terminators, profiles] = await Promise.all([
+      api('/config'),
+      api('/config/sources'),
+      api('/config/sinks'),
+      api('/config/sanitizers'),
       api('/config/terminators'),
+      api('/config/profiles'),
     ]);
 
     el.innerHTML = `
-      <div class="page-header"><h2>Settings</h2></div>
+      <div class="page-header"><h2>Config</h2></div>
 
-      <div class="settings-section">
-        <h3>Custom Rules</h3>
-        <div class="inline-form" id="add-rule-form">
-          <div class="form-group">
-            <label>Language</label>
-            <select id="rule-lang" style="width:140px">
-              <option value="">Select...</option>
-              <option value="javascript">JavaScript</option>
-              <option value="typescript">TypeScript</option>
-              <option value="python">Python</option>
-              <option value="go">Go</option>
-              <option value="java">Java</option>
-              <option value="c">C</option>
-              <option value="cpp">C++</option>
-              <option value="php">PHP</option>
-              <option value="ruby">Ruby</option>
-              <option value="rust">Rust</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Matcher</label>
-            <input type="text" id="rule-matcher" placeholder="functionName">
-          </div>
-          <div class="form-group">
-            <label>Kind</label>
-            <select id="rule-kind">
-              <option value="source">Source</option>
-              <option value="sanitizer">Sanitizer</option>
-              <option value="sink">Sink</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Capability</label>
-            <select id="rule-cap">
-              <option value="all">all</option>
-              <option value="env_var">env_var</option>
-              <option value="html_escape">html_escape</option>
-              <option value="shell_escape">shell_escape</option>
-              <option value="url_encode">url_encode</option>
-              <option value="json_parse">json_parse</option>
-              <option value="file_io">file_io</option>
-              <option value="sql_query">sql_query</option>
-              <option value="deserialize">deserialize</option>
-              <option value="ssrf">ssrf</option>
-              <option value="code_exec">code_exec</option>
-              <option value="crypto">crypto</option>
-            </select>
-          </div>
-          <button class="btn btn-primary btn-sm" id="add-rule-btn">Add Rule</button>
+      ${renderConfigSection('General', 'config-general', `
+        <div class="detail-meta">
+          <div><strong>Analysis Mode:</strong> ${escHtml(config.scanner?.mode || 'full')}</div>
+          <div><strong>Min Severity:</strong> ${escHtml(config.scanner?.min_severity || 'Low')}</div>
+          <div><strong>Max File Size:</strong> ${config.scanner?.max_file_size_mb ? config.scanner.max_file_size_mb + ' MB' : 'unlimited'}</div>
+          <div><strong>Excluded Dirs:</strong> ${escHtml((config.scanner?.excluded_directories || []).join(', '))}</div>
+          <div><strong>Excluded Exts:</strong> ${escHtml((config.scanner?.excluded_extensions || []).join(', '))}</div>
+          <div><strong>Attack Surface Ranking:</strong> ${config.output?.attack_surface_ranking ? 'Enabled' : 'Disabled'}</div>
         </div>
-        <div class="table-wrap">
-          ${rules.length === 0 ? '<div class="empty-state" style="padding:20px"><p>No custom rules configured</p></div>' :
-            `<table><thead><tr><th>Language</th><th>Matchers</th><th>Kind</th><th>Capability</th><th></th></tr></thead><tbody>
-            ${rules.map((r, i) => `<tr>
-              <td>${escHtml(r.lang)}</td>
-              <td style="font-family:var(--font-mono)">${escHtml(r.matchers.join(', '))}</td>
-              <td><span class="badge">${escHtml(r.kind)}</span></td>
-              <td>${escHtml(r.cap)}</td>
-              <td><button class="btn btn-danger btn-sm delete-rule" data-idx="${i}">Remove</button></td>
-            </tr>`).join('')}
-            </tbody></table>`
-          }
+        <div style="margin-top:var(--space-4);padding-top:var(--space-3);border-top:1px solid var(--border)">
+          <div class="toggle-inline">
+            <input type="checkbox" id="triage-sync-toggle" ${config.server?.triage_sync ? 'checked' : ''}>
+            <label for="triage-sync-toggle"><strong>Triage Sync</strong> &mdash; Auto-sync triage decisions to <code>.nyx/triage.json</code> for git-based team sharing</label>
+          </div>
         </div>
-      </div>
+      `)}
 
-      <div class="settings-section">
-        <h3>Terminators</h3>
+      ${renderConfigSection('Custom Sources', 'config-sources', renderLabelTable(sources, 'source'))}
+      ${renderConfigSection('Custom Sinks', 'config-sinks', renderLabelTable(sinks, 'sink'))}
+      ${renderConfigSection('Custom Sanitizers', 'config-sanitizers', renderLabelTable(sanitizers, 'sanitizer'))}
+
+      ${renderConfigSection('Terminators', 'config-terminators', `
         <div class="inline-form" id="add-term-form">
           <div class="form-group">
             <label>Language</label>
             <select id="term-lang" style="width:140px">
               <option value="">Select...</option>
-              <option value="javascript">JavaScript</option>
-              <option value="typescript">TypeScript</option>
-              <option value="python">Python</option>
-              <option value="go">Go</option>
-              <option value="java">Java</option>
-              <option value="c">C</option>
-              <option value="cpp">C++</option>
-              <option value="php">PHP</option>
-              <option value="ruby">Ruby</option>
-              <option value="rust">Rust</option>
+              ${LANG_OPTIONS.map(l => `<option value="${l}">${escHtml(l)}</option>`).join('')}
             </select>
           </div>
           <div class="form-group">
@@ -2307,93 +2456,213 @@ async function renderSettings(el, params, match) {
           <button class="btn btn-primary btn-sm" id="add-term-btn">Add Terminator</button>
         </div>
         <div class="table-wrap">
-          ${terminators.length === 0 ? '<div class="empty-state" style="padding:20px"><p>No custom terminators configured</p></div>' :
+          ${terminators.length === 0 ? '<div class="empty-state" style="padding:12px"><p>No terminators configured</p></div>' :
             `<table><thead><tr><th>Language</th><th>Name</th><th></th></tr></thead><tbody>
             ${terminators.map((t, i) => `<tr>
               <td>${escHtml(t.lang)}</td>
               <td style="font-family:var(--font-mono)">${escHtml(t.name)}</td>
               <td><button class="btn btn-danger btn-sm delete-term" data-idx="${i}">Remove</button></td>
             </tr>`).join('')}
-            </tbody></table>`
-          }
+            </tbody></table>`}
         </div>
-      </div>
+      `)}
+
+      ${renderConfigSection('Profiles', 'config-profiles', `
+        <div class="table-wrap">
+          ${profiles.length === 0 ? '<div class="empty-state" style="padding:12px"><p>No profiles configured</p></div>' :
+            `<table><thead><tr><th>Name</th><th>Type</th><th>Settings</th><th></th></tr></thead><tbody>
+            ${profiles.map(p => `<tr>
+              <td><strong>${escHtml(p.name)}</strong></td>
+              <td>${p.is_builtin ? '<span class="badge-builtin">built-in</span>' : '<span class="badge-custom">custom</span>'}</td>
+              <td style="font-size:var(--text-xs);max-width:300px;overflow:hidden;text-overflow:ellipsis">${escHtml(JSON.stringify(p.settings))}</td>
+              <td>
+                <button class="btn btn-sm activate-profile" data-name="${escHtml(p.name)}">Activate</button>
+                ${!p.is_builtin ? `<button class="btn btn-danger btn-sm delete-profile" data-name="${escHtml(p.name)}">Delete</button>` : ''}
+              </td>
+            </tr>`).join('')}
+            </tbody></table>`}
+        </div>
+        <div class="inline-form" style="margin-top:12px">
+          <div class="form-group">
+            <label>Profile Name</label>
+            <input type="text" id="profile-name" placeholder="my_profile">
+          </div>
+          <button class="btn btn-primary btn-sm" id="save-profile-btn">Save Current as Profile</button>
+        </div>
+      `)}
     `;
 
-    // Add rule
-    $('#add-rule-btn')?.addEventListener('click', async () => {
-      const lang = $('#rule-lang').value.trim();
-      const matcher = $('#rule-matcher').value.trim();
-      const kind = $('#rule-kind').value;
-      const cap = $('#rule-cap').value;
-      if (!lang || !matcher) {
-        if (!lang) $('#rule-lang').classList.add('input-error');
-        if (!matcher) $('#rule-matcher').classList.add('input-error');
-        return;
-      }
-      $('#rule-lang').classList.remove('input-error');
-      $('#rule-matcher').classList.remove('input-error');
-      try {
-        await api('/config/rules', {
-          method: 'POST', signal: null,
-          body: JSON.stringify({ lang, matchers: [matcher], kind, cap }),
-        });
-        renderSettings(el, params, match);
-      } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
-    });
-
-    // Delete rule
-    $$('.delete-rule', el).forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const r = rules[btn.dataset.idx];
-        try {
-          await api('/config/rules', {
-            method: 'DELETE', signal: null,
-            body: JSON.stringify(r),
-          });
-          renderSettings(el, params, match);
-        } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
+    // ── Section collapse ──
+    $$('.config-section-header', el).forEach(header => {
+      header.addEventListener('click', () => {
+        const body = header.nextElementSibling;
+        if (body) body.classList.toggle('collapsed');
+        header.classList.toggle('collapsed');
       });
     });
 
-    // Add terminator
+    // ── Triage sync toggle ──
+    $('#triage-sync-toggle')?.addEventListener('change', async (e) => {
+      try {
+        await api('/config/triage-sync', {
+          method: 'POST', signal: null,
+          body: JSON.stringify({ enabled: e.target.checked }),
+        });
+      } catch (err) { if (!isAbortError(err)) alert('Error: ' + err.message); }
+    });
+
+    // ── Source/Sink/Sanitizer add/delete ──
+    bindLabelActions(el, 'source', 'sources', params, match);
+    bindLabelActions(el, 'sink', 'sinks', params, match);
+    bindLabelActions(el, 'sanitizer', 'sanitizers', params, match);
+
+    // ── Terminators ──
     $('#add-term-btn')?.addEventListener('click', async () => {
       const lang = $('#term-lang').value.trim();
       const name = $('#term-name').value.trim();
-      if (!lang || !name) {
-        if (!lang) $('#term-lang').classList.add('input-error');
-        if (!name) $('#term-name').classList.add('input-error');
-        return;
-      }
-      $('#term-lang').classList.remove('input-error');
-      $('#term-name').classList.remove('input-error');
+      if (!lang || !name) return;
       try {
-        await api('/config/terminators', {
-          method: 'POST', signal: null,
-          body: JSON.stringify({ lang, name }),
-        });
-        renderSettings(el, params, match);
+        await api('/config/terminators', { method: 'POST', signal: null, body: JSON.stringify({ lang, name }) });
+        renderConfig(el, params, match);
       } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
     });
 
-    // Delete terminator
     $$('.delete-term', el).forEach(btn => {
       btn.addEventListener('click', async () => {
         const t = terminators[btn.dataset.idx];
         try {
-          await api('/config/terminators', {
-            method: 'DELETE', signal: null,
-            body: JSON.stringify(t),
-          });
-          renderSettings(el, params, match);
+          await api('/config/terminators', { method: 'DELETE', signal: null, body: JSON.stringify(t) });
+          renderConfig(el, params, match);
         } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
       });
+    });
+
+    // ── Profiles ──
+    $$('.activate-profile', el).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api('/config/profiles/' + encodeURIComponent(btn.dataset.name) + '/activate', { method: 'POST', signal: null });
+          renderConfig(el, params, match);
+        } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
+      });
+    });
+
+    $$('.delete-profile', el).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api('/config/profiles/' + encodeURIComponent(btn.dataset.name), { method: 'DELETE', signal: null });
+          renderConfig(el, params, match);
+        } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
+      });
+    });
+
+    $('#save-profile-btn')?.addEventListener('click', async () => {
+      const name = $('#profile-name').value.trim();
+      if (!name) { $('#profile-name').classList.add('input-error'); return; }
+      try {
+        await api('/config/profiles', { method: 'POST', signal: null, body: JSON.stringify({ name, settings: {} }) });
+        renderConfig(el, params, match);
+      } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
     });
 
   } catch (e) {
     if (isAbortError(e)) return;
     el.innerHTML = `<div class="error-state"><h3>Error</h3><p>${escHtml(e.message)}</p></div>`;
   }
+}
+
+function renderConfigSection(title, id, content) {
+  return `
+    <div class="config-section" id="${id}">
+      <div class="config-section-header"><span class="config-collapse-arrow">&#9660;</span> <strong>${escHtml(title)}</strong></div>
+      <div class="config-section-body">${content}</div>
+    </div>
+  `;
+}
+
+function renderLabelTable(entries, kind) {
+  const builtins = entries.filter(e => e.is_builtin);
+  const custom = entries.filter(e => !e.is_builtin);
+
+  return `
+    <div class="inline-form add-label-form" data-kind="${kind}">
+      <div class="form-group">
+        <label>Language</label>
+        <select class="label-lang" style="width:140px">
+          <option value="">Select...</option>
+          ${LANG_OPTIONS.map(l => `<option value="${l}">${escHtml(l)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Matcher</label>
+        <input type="text" class="label-matcher" placeholder="functionName">
+      </div>
+      <div class="form-group">
+        <label>Capability</label>
+        <select class="label-cap">
+          ${CAP_OPTIONS.map(c => `<option value="${c}">${escHtml(c)}</option>`).join('')}
+        </select>
+      </div>
+      <button class="btn btn-primary btn-sm add-label-btn" data-kind="${kind}">Add ${kind}</button>
+    </div>
+    <div class="table-wrap" style="margin-top:8px">
+      ${entries.length === 0 ? `<div class="empty-state" style="padding:12px"><p>No ${kind} rules</p></div>` :
+        `<table class="label-table"><thead><tr><th>Language</th><th>Matchers</th><th>Cap</th><th></th></tr></thead><tbody>
+        ${builtins.map(e => `<tr class="label-builtin">
+          <td>${escHtml(e.lang)}</td>
+          <td style="font-family:var(--font-mono)">${escHtml(e.matchers.join(', '))}</td>
+          <td>${escHtml(e.cap)}</td>
+          <td><span class="badge-builtin">built-in</span></td>
+        </tr>`).join('')}
+        ${custom.map((e, i) => `<tr>
+          <td>${escHtml(e.lang)}</td>
+          <td style="font-family:var(--font-mono)">${escHtml(e.matchers.join(', '))}</td>
+          <td>${escHtml(e.cap)}</td>
+          <td><button class="btn btn-danger btn-sm delete-label-btn" data-kind="${kind}" data-idx="${i}">Remove</button></td>
+        </tr>`).join('')}
+        </tbody></table>`}
+    </div>
+  `;
+}
+
+function bindLabelActions(el, kind, endpoint, params, match) {
+  // Scope to the specific section
+  const forms = $$('.add-label-form[data-kind="' + kind + '"]', el);
+  forms.forEach(form => {
+    const addBtn = form.querySelector('.add-label-btn');
+    if (!addBtn) return;
+    addBtn.addEventListener('click', async () => {
+      const lang = form.querySelector('.label-lang').value.trim();
+      const matcher = form.querySelector('.label-matcher').value.trim();
+      const cap = form.querySelector('.label-cap').value;
+      if (!lang || !matcher) return;
+      try {
+        await api('/config/' + endpoint, {
+          method: 'POST', signal: null,
+          body: JSON.stringify({ lang, matchers: [matcher], cap, case_sensitive: false, is_builtin: false }),
+        });
+        renderConfig(el, params, match);
+      } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
+    });
+  });
+
+  $$('.delete-label-btn[data-kind="' + kind + '"]', el).forEach(btn => {
+    btn.addEventListener('click', async () => {
+      // Find the custom entries for this kind from the table
+      const row = btn.closest('tr');
+      const cells = row.querySelectorAll('td');
+      const lang = cells[0].textContent.trim();
+      const matchers = cells[1].textContent.trim().split(', ');
+      const cap = cells[2].textContent.trim();
+      try {
+        await api('/config/' + endpoint, {
+          method: 'DELETE', signal: null,
+          body: JSON.stringify({ lang, matchers, cap, case_sensitive: false, is_builtin: false }),
+        });
+        renderConfig(el, params, match);
+      } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
+    });
+  });
 }
 
 // ── Actions ──────────────────────────────────────────────────────────────────
@@ -2437,7 +2706,7 @@ function connectSSE() {
   });
 
   es.addEventListener('config_changed', () => {
-    if (currentRoute === '/settings') scheduleRefresh();
+    if (currentRoute === '/settings' || currentRoute === '/config' || currentRoute.startsWith('/rules')) scheduleRefresh();
   });
 
   es.onerror = () => {

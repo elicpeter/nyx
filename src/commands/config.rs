@@ -105,10 +105,11 @@ pub fn add_terminator(config_dir: &Path, lang: &str, name: &str) -> NyxResult<()
 
 /// Write only the non-default portions to nyx.local.
 pub(crate) fn save_local_config(path: &Path, config: &Config) -> NyxResult<()> {
-    // Only write the analysis section to nyx.local to keep it minimal.
-    // Other settings keep their defaults unless previously customized.
+    // Write analysis + profiles + server settings to nyx.local.
     let mut local = Config {
         analysis: config.analysis.clone(),
+        profiles: config.profiles.clone(),
+        server: config.server.clone(),
         ..Config::default()
     };
 
@@ -117,8 +118,8 @@ pub(crate) fn save_local_config(path: &Path, config: &Config) -> NyxResult<()> {
         !v.rules.is_empty() || !v.terminators.is_empty() || !v.event_handlers.is_empty()
     });
 
-    // If no analysis rules, only write the analysis section
-    if local.analysis.languages.is_empty() {
+    // If no analysis rules and no disabled rules, clear the analysis section
+    if local.analysis.languages.is_empty() && local.analysis.disabled_rules.is_empty() {
         local.analysis = AnalysisRulesConfig::default();
     }
 
