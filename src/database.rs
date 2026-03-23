@@ -761,6 +761,12 @@ pub mod index {
             Ok(rows)
         }
 
+        /// Delete a scan and its associated metrics/logs (FK CASCADE).
+        pub fn delete_scan(&self, id: &str) -> NyxResult<usize> {
+            let rows = self.c().execute("DELETE FROM scans WHERE id = ?1", params![id])?;
+            Ok(rows)
+        }
+
         /// Insert scan metrics for a completed scan.
         pub fn insert_scan_metrics(
             &self,

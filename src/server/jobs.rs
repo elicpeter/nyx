@@ -357,6 +357,23 @@ impl JobManager {
             .cloned()
     }
 
+    /// Remove a job from in-memory state. Rejects if the scan is currently running.
+    pub fn remove_job(&self, id: &str) -> Result<(), &'static str> {
+        let active = self.active_job_id.lock().unwrap();
+        if active.as_deref() == Some(id) {
+            return Err("Cannot delete a running scan");
+        }
+        drop(active);
+
+        let mut jobs = self.jobs.lock().unwrap();
+        if jobs.remove(id).is_none() {
+            return Err("Scan not found");
+        }
+        let mut order = self.job_order.lock().unwrap();
+        order.retain(|x| x != id);
+        Ok(())
+    }
+
     /// Return findings from the latest completed scan, or empty if none.
     pub fn latest_findings(&self) -> Vec<Diag> {
         self.get_latest_completed()

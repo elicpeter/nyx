@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useScans } from '../api/queries/scans';
+import { useDeleteScan } from '../api/mutations/scans';
 import { useSSE } from '../contexts/SSEContext';
 import { LoadingState } from '../components/ui/LoadingState';
 import { ErrorState } from '../components/ui/ErrorState';
@@ -82,6 +83,7 @@ function ScanProgress({ data }: { data: NonNullable<ReturnType<typeof useSSE>['s
 export function ScansPage() {
   const navigate = useNavigate();
   const { data: scans, isLoading, error } = useScans();
+  const deleteScan = useDeleteScan();
   const { scanProgress, isScanRunning } = useSSE();
   const [selectedScans, setSelectedScans] = useState<Set<string>>(new Set());
 
@@ -172,6 +174,7 @@ export function ScansPage() {
                 <th>Findings</th>
                 <th>Languages</th>
                 <th>Started</th>
+                <th style={{ width: 60 }}></th>
               </tr>
             </thead>
             <tbody>
@@ -217,6 +220,21 @@ export function ScansPage() {
                       : '-'}
                   </td>
                   <td>{relTime(s.started_at)}</td>
+                  <td>
+                    {s.status !== 'running' && (
+                      <button
+                        className="btn btn-sm btn-danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm('Delete this scan?')) {
+                            deleteScan.mutate(s.id);
+                          }
+                        }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

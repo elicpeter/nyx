@@ -322,6 +322,7 @@ fn run_topo_batches(
     cfg: &Config,
     scan_root: Option<&Path>,
     pb: &ProgressBar,
+    logs: Option<&Arc<ScanLogCollector>>,
 ) -> Vec<Diag> {
     let root_str = scan_root.map(|r| r.to_string_lossy());
     let root_str_ref = root_str.as_deref();
@@ -356,6 +357,9 @@ fn run_topo_batches(
                             }
                             Err(e) => {
                                 tracing::warn!("pass 2 (SCC iter {}): {}: {e}", iter, path.display());
+                                if let Some(l) = logs {
+                                    l.warn(format!("Pass 2 (SCC iter {iter}) analysis failed: {e}"), Some(path.display().to_string()), None);
+                                }
                                 (vec![], vec![])
                             }
                         }
@@ -397,6 +401,9 @@ fn run_topo_batches(
                         Ok(d) => d,
                         Err(e) => {
                             tracing::warn!("pass 2: {}: {e}", path.display());
+                            if let Some(l) = logs {
+                                l.warn(format!("Pass 2 analysis failed: {e}"), Some(path.display().to_string()), None);
+                            }
                             vec![]
                         }
                     };
@@ -424,6 +431,9 @@ fn run_topo_batches(
                     Ok(d) => d,
                     Err(e) => {
                         tracing::warn!("pass 2: {}: {e}", path.display());
+                        if let Some(l) = logs {
+                            l.warn(format!("Pass 2 analysis failed: {e}"), Some(path.display().to_string()), None);
+                        }
                         vec![]
                     }
                 };
@@ -492,6 +502,9 @@ pub(crate) fn scan_filesystem_with_observer(
         let paths: Vec<PathBuf> = rx.into_iter().flatten().collect();
         if let Err(err) = handle.join() {
             tracing::error!("walker thread panicked: {:#?}", err);
+            if let Some(l) = logs {
+                l.error("Walker thread panicked", None, Some(format!("{err:#?}")));
+            }
         }
         paths
     };
@@ -539,6 +552,9 @@ pub(crate) fn scan_filesystem_with_observer(
                     Ok(r) => r.diags,
                     Err(e) => {
                         tracing::warn!("analysis: {}: {e}", path.display());
+                        if let Some(l) = logs {
+                            l.warn(format!("Analysis failed: {e}"), Some(path.display().to_string()), None);
+                        }
                         vec![]
                     }
                 };
@@ -639,10 +655,16 @@ pub(crate) fn scan_filesystem_with_observer(
                         }
                         Err(e) => {
                             tracing::warn!("pass 1: {}: {e}", path.display());
+                            if let Some(l) = logs {
+                                l.warn(format!("Pass 1 analysis failed: {e}"), Some(path.display().to_string()), None);
+                            }
                         }
                     }
                 } else {
                     tracing::warn!("pass 1: cannot read {}", path.display());
+                    if let Some(l) = logs {
+                        l.warn("Cannot read file", Some(path.display().to_string()), None);
+                    }
                 }
                 pb.inc(1);
                 if let Some(p) = progress {
@@ -731,9 +753,15 @@ pub(crate) fn scan_filesystem_with_observer(
             orphan_files = orphans.len(),
             "topo-ordered file batches computed"
         );
+        if let Some(l) = logs {
+            l.info(
+                format!("Topo-ordered file batches: {} batches, {} orphan files", batches.len(), orphans.len()),
+                None,
+            );
+        }
 
         let mut gs = global_summaries;
-        let result = run_topo_batches(&batches, &orphans, &mut gs, cfg, Some(root), &pb);
+        let result = run_topo_batches(&batches, &orphans, &mut gs, cfg, Some(root), &pb, logs);
 
         pb.finish_and_clear();
         result
@@ -993,6 +1021,7 @@ pub fn scan_with_index_parallel(
         cfg,
         Some(scan_root),
         &pb2,
+        None,
     );
     pb2.finish_and_clear();
 

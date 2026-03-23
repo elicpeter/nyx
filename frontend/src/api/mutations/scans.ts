@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiPost } from '../client';
+import { apiPost, apiDelete } from '../client';
 import type { ScanView } from '../types';
 
 export function useStartScan() {
@@ -9,6 +9,18 @@ export function useStartScan() {
       apiPost<ScanView>('/scans', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['scans'] });
+    },
+  });
+}
+
+export function useDeleteScan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiDelete<void>(`/scans/${encodeURIComponent(id)}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['scans'] });
+      qc.invalidateQueries({ queryKey: ['overview'] });
     },
   });
 }

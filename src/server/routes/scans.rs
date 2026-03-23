@@ -18,7 +18,7 @@ pub fn routes() -> Router<AppState> {
         .route("/scans", post(start_scan).get(list_scans))
         .route("/scans/active", get(active_scan))
         .route("/scans/compare", get(compare_scans))
-        .route("/scans/{id}", get(get_scan))
+        .route("/scans/{id}", get(get_scan).delete(delete_scan))
         .route("/scans/{id}/findings", get(get_scan_findings))
         .route("/scans/{id}/logs", get(get_scan_logs))
         .route("/scans/{id}/metrics", get(get_scan_metrics))
@@ -123,6 +123,31 @@ async fn get_scan(
     }
 
     Err(StatusCode::NOT_FOUND)
+}
+
+async fn delete_scan(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Remove from in-memory jobs (rejects if running)
+    if let Err(msg) = state.job_manager.remove_job(&id) {
+        if msg.contains("running") {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": msg })),
+            ));
+        }
+        // "Scan not found" in memory is fine — may be DB-only
+    }
+
+    // Delete from DB (CASCADE handles metrics + logs)
+    if let Some(ref pool) = state.db_pool {
+        if let Ok(idx) = Indexer::from_pool("_scans", pool) {
+            let _ = idx.delete_scan(&id);
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "status": "deleted", "id": id })))
 }
 
 #[derive(serde::Deserialize, Default)]
