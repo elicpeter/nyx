@@ -701,6 +701,11 @@ fn rename_variables(
             } else if info.defines.is_some() && info.uses.is_empty()
                 && !info.labels.iter().any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
             {
+                // Reassignment kill: a node that defines a variable but has no
+                // uses (operands) and is not a source is a constant/literal
+                // assignment.  SSA rename allocates a fresh SsaValue, so
+                // downstream references see this new (untainted) value — the
+                // prior tainted definition is implicitly dead.
                 SsaOp::Const(info.const_text.clone())
             } else if info.defines.is_some() {
                 let uses: SmallVec<[SsaValue; 4]> = info

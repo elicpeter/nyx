@@ -1,0 +1,15 @@
+{
+  "description": "Conditional reassignment: one branch kills taint but the other preserves it. PHI merge must keep taint alive.",
+  "tags": ["taint", "reassignment", "phi", "conditional"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 9],
+      "evidence_contains": [],
+      "notes": "req.query.name flows to eval via the non-reassigned branch through PHI merge"
+    }
+  ]
+}

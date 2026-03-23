@@ -1,0 +1,6 @@
+{
+  "description": "Source from document.location killed by constant reassignment before reaching eval sink.",
+  "tags": ["taint", "negative", "reassignment", "safe"],
+  "modes": ["full"],
+  "expected": []
+}

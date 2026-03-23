@@ -1,0 +1,6 @@
+{
+  "description": "Source from env::var killed by constant reassignment (let rebinding) before reaching Command sink.",
+  "tags": ["taint", "negative", "reassignment", "safe"],
+  "modes": ["full"],
+  "expected": []
+}

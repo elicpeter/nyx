@@ -3952,3 +3952,204 @@ fn ssa_phi_path_sensitive_one_branch_not_validated() {
         "finding should NOT be path_validated (sink in failed-validation branch)"
     );
 }
+
+// ── Phase 9: Cross-language reassignment kill verification ──────────────
+
+#[test]
+fn ssa_reassignment_kills_taint_js() {
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/r', function(req, res) {\n    var name = req.query.input;\n    name = \"Guest\";\n    eval(name);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[], None);
+    assert!(
+        findings.is_empty(),
+        "JS: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_ts() {
+    let src = b"function main() {\n  let x = document.location();\n  x = \"safe\";\n  eval(x);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
+    let (cfg, entry, summaries) = parse_lang(src, "typescript", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::TypeScript, "test.ts", &[], None);
+    assert!(
+        findings.is_empty(),
+        "TS: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_python() {
+    let src = b"import os\ndef main():\n    cmd = os.getenv(\"CMD\")\n    cmd = \"safe\"\n    os.system(cmd)\n";
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "python", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Python, "test.py", &[], None);
+    assert!(
+        findings.is_empty(),
+        "Python: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_go() {
+    let src = b"package main\n\nimport \"os\"\nimport \"os/exec\"\n\nfunc main() {\n\tcmd := os.Getenv(\"CMD\")\n\tcmd = \"safe\"\n\texec.Command(cmd)\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "go", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Go, "test.go", &[], None);
+    assert!(
+        findings.is_empty(),
+        "Go: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_java() {
+    let src = b"class Main {\n  void main() {\n    String cmd = System.getenv(\"CMD\");\n    cmd = \"safe\";\n    Runtime.exec(cmd);\n  }\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "java", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Java, "test.java", &[], None);
+    assert!(
+        findings.is_empty(),
+        "Java: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_php() {
+    let src = b"<?php\n$cmd = $_GET['cmd'];\n$cmd = \"safe\";\neval($cmd);\n";
+    let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Php, "test.php", &[], None);
+    assert!(
+        findings.is_empty(),
+        "PHP: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_ruby() {
+    let src = b"def main\n  cmd = gets()\n  cmd = \"safe\"\n  system(cmd)\nend\n";
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "ruby", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Ruby, "test.rb", &[], None);
+    assert!(
+        findings.is_empty(),
+        "Ruby: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_c() {
+    let src = b"#include <stdlib.h>\nvoid main() {\n  char* cmd = getenv(\"CMD\");\n  cmd = \"safe\";\n  system(cmd);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[], None);
+    assert!(
+        findings.is_empty(),
+        "C: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_reassignment_kills_taint_cpp() {
+    let src = b"#include <cstdlib>\nvoid main() {\n  char* cmd = std::getenv(\"CMD\");\n  cmd = \"safe\";\n  system(cmd);\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "cpp", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Cpp, "test.cpp", &[], None);
+    assert!(
+        findings.is_empty(),
+        "C++: reassignment to constant should kill taint, got {} findings",
+        findings.len()
+    );
+}
+
+// ── Phase 9: Compound assignment preserves taint ────────────────────────
+
+#[test]
+fn ssa_compound_preserves_taint_js() {
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/r', function(req, res) {\n    var name = req.query.input;\n    name = name + \" suffix\";\n    eval(name);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "JS: compound assignment should preserve taint"
+    );
+}
+
+#[test]
+fn ssa_compound_preserves_taint_python() {
+    let src = b"import os\ndef main():\n    cmd = os.getenv(\"CMD\")\n    cmd = cmd + \" safe\"\n    os.system(cmd)\n";
+    let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "python", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Python, "test.py", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "Python: compound assignment should preserve taint"
+    );
+}
+
+#[test]
+fn ssa_compound_preserves_taint_go() {
+    let src = b"package main\n\nimport \"os\"\nimport \"os/exec\"\n\nfunc main() {\n\tcmd := os.Getenv(\"CMD\")\n\tcmd = cmd + \" suffix\"\n\texec.Command(cmd)\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "go", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Go, "test.go", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "Go: compound assignment should preserve taint"
+    );
+}
+
+#[test]
+fn ssa_compound_preserves_taint_java() {
+    let src = b"class Main {\n  void main() {\n    String cmd = System.getenv(\"CMD\");\n    cmd = cmd + \" safe\";\n    Runtime.exec(cmd);\n  }\n}\n";
+    let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "java", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Java, "test.java", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "Java: compound assignment should preserve taint"
+    );
+}
+
+// ── Phase 9: PHI merge preserves taint on non-reassigned path ───────────
+
+#[test]
+fn ssa_phi_preserves_taint_on_non_reassigned_path_js() {
+    let src = b"var express = require('express');\nvar app = express();\napp.get('/r', function(req, res) {\n    var name = req.query.input;\n    if (name.length > 10) {\n        name = \"fallback\";\n    }\n    eval(name);\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "JS: PHI merge should preserve taint from non-reassigned path"
+    );
+}
+
+#[test]
+fn ssa_phi_preserves_taint_on_non_reassigned_path_rust() {
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let mut x = env::var("DANGEROUS").unwrap();
+            if x.len() > 5 {
+                x = "safe".to_string();
+            }
+            Command::new("sh").arg(&x).status().unwrap();
+        }"#;
+    let findings = ssa_analyse_rust(src);
+    assert!(
+        !findings.is_empty(),
+        "Rust: PHI merge should preserve taint from non-reassigned path"
+    );
+}

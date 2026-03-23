@@ -1062,7 +1062,8 @@ fn transfer_inst(
         }
 
         SsaOp::Const(_) | SsaOp::Nop => {
-            // No taint
+            // No taint — this is the kill mechanism for `x = "literal"` after
+            // `x = source()`.  The fresh SsaValue carries zero caps.
         }
 
         SsaOp::Param { .. } => {

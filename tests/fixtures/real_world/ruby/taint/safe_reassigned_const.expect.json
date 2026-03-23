@@ -1,0 +1,6 @@
+{
+  "description": "Source from params[:cmd] killed by constant reassignment before reaching system sink.",
+  "tags": ["taint", "negative", "reassignment", "safe"],
+  "modes": ["full"],
+  "expected": []
+}

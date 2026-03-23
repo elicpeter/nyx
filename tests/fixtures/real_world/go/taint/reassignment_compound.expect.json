@@ -1,0 +1,15 @@
+{
+  "description": "Compound assignment preserves taint: source concatenated with literal still carries taint to exec.Command sink.",
+  "tags": ["taint", "reassignment", "compound"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [1, 12],
+      "evidence_contains": [],
+      "notes": "os.Getenv flows through cmd + suffix concatenation into exec.Command"
+    }
+  ]
+}
