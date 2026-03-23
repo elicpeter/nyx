@@ -4153,3 +4153,18 @@ fn ssa_phi_preserves_taint_on_non_reassigned_path_rust() {
         "Rust: PHI merge should preserve taint from non-reassigned path"
     );
 }
+
+#[test]
+fn ruby_type_check_guard_suppresses_taint() {
+    // Ruby `unless user_id.is_a?(Integer)` guard should validate user_id
+    // so that the subsequent SQL sink does not produce a finding.
+    let src = b"def run_query(params)\n  user_id = params[:id]\n  unless user_id.is_a?(Integer)\n    return \"bad input\"\n  end\n  connection.execute(\"SELECT * FROM users WHERE id = \" + user_id.to_s)\nend\n";
+    let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "ruby", lang);
+    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::Ruby, "test.rb", &[], None);
+    assert!(
+        findings.is_empty(),
+        "Ruby: is_a?(Integer) type guard should suppress taint finding, got {} findings",
+        findings.len()
+    );
+}

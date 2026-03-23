@@ -1072,11 +1072,418 @@ tr.selected td {
 .tok-number { color: #3498db; }
 .tok-function { color: #e67e22; }
 
+/* ── Scan Modal ───────────────────────────────────────────────────── */
+.scan-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.scan-modal {
+  background: var(--bg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  width: min(480px, 90vw);
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: var(--space-6);
+}
+.scan-modal h3 {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-xl);
+}
+.scan-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.scan-modal-form .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.scan-modal-form .form-group label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+}
+.scan-modal-form .form-group input,
+.scan-modal-form .form-group textarea {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--bg);
+  color: var(--text);
+}
+.scan-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ── Scan Progress ────────────────────────────────────────────────── */
+.scan-progress {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.scan-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
+.scan-progress-header h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+/* Stage pipeline */
+.stage-pipeline {
+  display: flex;
+  gap: 0;
+  margin-bottom: var(--space-3);
+}
+.stage-step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  padding: var(--space-2) var(--space-1);
+}
+.stage-step::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -1px;
+  width: 2px;
+  height: 60%;
+  transform: translateY(-50%);
+  background: var(--border);
+}
+.stage-step:last-child::after {
+  display: none;
+}
+.stage-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border);
+  margin-bottom: var(--space-1);
+  transition: background 0.3s;
+}
+.stage-step.active .stage-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+.stage-step.done .stage-dot {
+  background: var(--success);
+}
+.stage-label {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+.stage-step.active .stage-label {
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+.stage-step.done .stage-label {
+  color: var(--success);
+}
+
+/* Progress bar */
+.progress-bar {
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: var(--space-2);
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+  min-width: 0;
+}
+
+.progress-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.progress-current-file {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: var(--space-1);
+}
+
+/* ── Scan Detail Tabs ─────────────────────────────────────────────── */
+.scan-detail-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-4);
+}
+.scan-detail-tab {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.2s, border-color 0.2s;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+}
+.scan-detail-tab:hover {
+  color: var(--text);
+}
+.scan-detail-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.scan-detail-tab-content {
+  display: none;
+}
+.scan-detail-tab-content.active {
+  display: block;
+}
+
+/* ── Log Viewer ───────────────────────────────────────────────────── */
+.log-viewer {
+  max-height: 500px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.log-entry {
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+.log-entry:last-child {
+  border-bottom: none;
+}
+.log-entry.log-warn {
+  background: var(--sev-medium-bg);
+}
+.log-entry.log-error {
+  background: var(--sev-high-bg);
+}
+.log-level {
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  padding: 1px 4px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  min-width: 36px;
+  text-align: center;
+}
+.log-level.info { background: var(--accent-light); color: var(--accent); }
+.log-level.warn { background: var(--sev-medium-bg); color: var(--sev-medium); }
+.log-level.error { background: var(--sev-high-bg); color: var(--sev-high); }
+.log-time {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  font-size: 0.65rem;
+}
+.log-message {
+  color: var(--text);
+  word-break: break-all;
+}
+.log-filters {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.log-filter-btn {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.log-filter-btn.active {
+  background: var(--accent-light);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Metric Cards Grid ────────────────────────────────────────────── */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-3);
+}
+.metric-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  text-align: center;
+}
+.metric-card-label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-1);
+}
+.metric-card-value {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+/* ── Scan List Enhancements ───────────────────────────────────────── */
+.lang-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 0.65rem;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  margin-right: 2px;
+}
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.status-badge.running {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+.status-badge.completed {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.status-badge.failed {
+  background: var(--sev-high-bg);
+  color: var(--sev-high);
+}
+.status-badge .status-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* Pulse animation for running status */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.status-badge.running .status-dot {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* Timing breakdown bar */
+.timing-bar {
+  display: flex;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin: var(--space-2) 0;
+}
+.timing-bar-segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  font-weight: var(--weight-medium);
+  color: white;
+  min-width: 2px;
+  transition: width 0.3s;
+}
+.timing-bar-segment.walk { background: var(--sev-low); }
+.timing-bar-segment.pass1 { background: var(--accent); }
+.timing-bar-segment.callgraph { background: var(--sev-medium); }
+.timing-bar-segment.pass2 { background: var(--success); }
+.timing-bar-segment.postprocess { background: var(--text-tertiary); }
+.timing-legend {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  margin-top: var(--space-1);
+}
+.timing-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.timing-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+/* Scan detail stat cards */
+.scan-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.scan-stat-card {
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+}
+.scan-stat-label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-1);
+}
+.scan-stat-value {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
 /* ── Code Modal Responsive ────────────────────────────────────────── */
 @media (max-width: 768px) {
   .code-modal {
     width: 100vw;
     height: 100vh;
     border-radius: 0;
+  }
+  .scan-modal {
+    width: 100vw;
+    margin: 0;
+    border-radius: 0;
+    max-height: 100vh;
+  }
+  .metric-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }

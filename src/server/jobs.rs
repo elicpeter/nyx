@@ -1,12 +1,31 @@
 use crate::commands::scan::{self, Diag};
+use crate::database::index::{Indexer, ScanRecord};
 use crate::server::app::ServerEvent;
+use crate::server::progress::{ScanMetrics, ScanProgress, TimingBreakdown};
+use crate::server::scan_log::ScanLogCollector;
 use crate::utils::config::Config;
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
 use uuid::Uuid;
+
+/// Build a dedicated rayon thread pool for server-initiated scans.
+/// Reserves at least 2 cores for the tokio HTTP server so the UI stays
+/// responsive while a scan is running.
+fn build_scan_pool(stack_size: usize) -> rayon::ThreadPool {
+    let total = num_cpus::get();
+    let scan_threads = total.saturating_sub(2).max(1);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(scan_threads)
+        .stack_size(stack_size)
+        .thread_name(|i| format!("nyx-scan-{i}"))
+        .build()
+        .expect("failed to build scan thread pool")
+}
 
 /// Status of a scan job.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -29,6 +48,13 @@ pub struct ScanJob {
     pub duration_secs: Option<f64>,
     pub findings: Option<Vec<Diag>>,
     pub error: Option<String>,
+    pub progress: Option<Arc<ScanProgress>>,
+    pub metrics: Option<Arc<ScanMetrics>>,
+    pub log_collector: Option<Arc<ScanLogCollector>>,
+    pub engine_version: Option<String>,
+    pub languages: Option<Vec<String>>,
+    pub files_scanned: Option<u64>,
+    pub timing: Option<TimingBreakdown>,
 }
 
 /// Manages scan jobs with single-scan policy.
@@ -38,6 +64,9 @@ pub struct JobManager {
     job_order: Mutex<Vec<String>>,
     active_job_id: Mutex<Option<String>>,
     max_jobs: usize,
+    /// Dedicated rayon pool for scans — keeps the global pool (and tokio
+    /// worker threads) free so the web UI stays responsive during a scan.
+    scan_pool: rayon::ThreadPool,
 }
 
 impl std::fmt::Debug for JobManager {
@@ -49,12 +78,13 @@ impl std::fmt::Debug for JobManager {
 }
 
 impl JobManager {
-    pub fn new(max_jobs: usize) -> Self {
+    pub fn new(max_jobs: usize, rayon_stack_size: usize) -> Self {
         Self {
             jobs: Mutex::new(HashMap::new()),
             job_order: Mutex::new(Vec::new()),
             active_job_id: Mutex::new(None),
             max_jobs,
+            scan_pool: build_scan_pool(rayon_stack_size),
         }
     }
 
@@ -64,6 +94,7 @@ impl JobManager {
         scan_root: PathBuf,
         config: Config,
         event_tx: broadcast::Sender<ServerEvent>,
+        db_pool: Option<Arc<Pool<SqliteConnectionManager>>>,
     ) -> Result<String, &'static str> {
         let mut active = self.active_job_id.lock().unwrap();
         if active.is_some() {
@@ -71,6 +102,12 @@ impl JobManager {
         }
 
         let job_id = Uuid::new_v4().to_string();
+        let progress = Arc::new(ScanProgress::new());
+        let metrics = Arc::new(ScanMetrics::new());
+        let log_collector = Arc::new(ScanLogCollector::default());
+
+        let engine_version = env!("CARGO_PKG_VERSION").to_string();
+
         let job = ScanJob {
             id: job_id.clone(),
             status: JobStatus::Running,
@@ -80,6 +117,13 @@ impl JobManager {
             duration_secs: None,
             findings: None,
             error: None,
+            progress: Some(Arc::clone(&progress)),
+            metrics: Some(Arc::clone(&metrics)),
+            log_collector: Some(Arc::clone(&log_collector)),
+            engine_version: Some(engine_version.clone()),
+            languages: None,
+            files_scanned: None,
+            timing: None,
         };
 
         {
@@ -108,43 +152,169 @@ impl JobManager {
             job_id: job_id.clone(),
         });
 
-        // Spawn a std::thread for the scan (it uses rayon internally).
+        // Persist initial scan record to DB
+        if let Some(ref pool) = db_pool {
+            if let Ok(idx) = Indexer::from_pool("_scans", pool) {
+                let _ = idx.insert_scan(&ScanRecord {
+                    id: job_id.clone(),
+                    status: "running".to_string(),
+                    scan_root: scan_root.display().to_string(),
+                    started_at: Some(chrono::Utc::now().to_rfc3339()),
+                    finished_at: None,
+                    duration_secs: None,
+                    engine_version: Some(engine_version.clone()),
+                    languages: None,
+                    files_scanned: None,
+                    files_skipped: None,
+                    finding_count: None,
+                    findings_json: None,
+                    timing_json: None,
+                    error: None,
+                });
+            }
+        }
+
+        // Spawn SSE progress emitter thread (polls every 500ms)
+        let progress_for_sse = Arc::clone(&progress);
+        let event_tx_sse = event_tx.clone();
+        let jid_sse = job_id.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let snap = progress_for_sse.snapshot();
+                let is_complete = snap.stage == "complete";
+                let _ = event_tx_sse.send(ServerEvent::ScanProgress {
+                    job_id: jid_sse.clone(),
+                    stage: snap.stage,
+                    files_discovered: snap.files_discovered,
+                    files_parsed: snap.files_parsed,
+                    files_analyzed: snap.files_analyzed,
+                    current_file: snap.current_file,
+                    elapsed_ms: snap.elapsed_ms,
+                });
+                if is_complete {
+                    break;
+                }
+            }
+        });
+
+        // Spawn the main scan thread. All rayon parallelism inside the
+        // scan is routed through `scan_pool.install()` so it uses our
+        // dedicated (CPU-limited) pool, keeping tokio worker threads free.
         let manager = Arc::clone(self);
         let jid = job_id.clone();
         std::thread::spawn(move || {
             let start = Instant::now();
-            let result = scan::scan_filesystem(&scan_root, &config, false);
+            log_collector.info("Scan started", None);
+
+            let result = manager.scan_pool.install(|| {
+                scan::scan_filesystem_with_observer(
+                    &scan_root,
+                    &config,
+                    false,
+                    Some(&progress),
+                    Some(&metrics),
+                    Some(&log_collector),
+                )
+            });
             let elapsed = start.elapsed().as_secs_f64();
 
-            let mut jobs = manager.jobs.lock().unwrap();
-            if let Some(job) = jobs.get_mut(&jid) {
-                job.finished_at = Some(chrono::Utc::now());
-                job.duration_secs = Some(elapsed);
-                match result {
-                    Ok(mut diags) => {
-                        scan::post_process_diags(&mut diags, &config);
-                        job.status = JobStatus::Completed;
-                        job.findings = Some(diags);
-                        let _ = event_tx.send(ServerEvent::ScanCompleted {
-                            job_id: jid.clone(),
-                        });
-                    }
-                    Err(e) => {
-                        let err_str = e.to_string();
-                        job.status = JobStatus::Failed;
-                        job.error = Some(err_str.clone());
-                        let _ = event_tx.send(ServerEvent::ScanFailed {
-                            job_id: jid.clone(),
-                            error: err_str,
-                        });
-                    }
+            // Collect snapshots and do expensive work (post-processing,
+            // JSON serialization) BEFORE acquiring the jobs mutex.
+            let progress_snap = progress.snapshot();
+            let metrics_snap = metrics.snapshot();
+            let logs = log_collector.drain();
+            let languages: Vec<String> = progress_snap.languages.keys().cloned().collect();
+            let files_scanned = progress_snap.files_discovered;
+            let timing = progress_snap.timing.clone();
+            let finished_at = chrono::Utc::now();
+
+            // Prepare the final state outside the lock.
+            let (status, diags, error_str) = match result {
+                Ok(mut diags) => {
+                    scan::post_process_diags(&mut diags, &config);
+                    log_collector.info(
+                        format!("Scan completed: {} findings", diags.len()),
+                        None,
+                    );
+                    (JobStatus::Completed, Some(diags), None)
+                }
+                Err(e) => {
+                    let err_str = e.to_string();
+                    log_collector.error(&err_str, None, None);
+                    (JobStatus::Failed, None, Some(err_str))
+                }
+            };
+
+            let finding_count = diags.as_ref().map(|d| d.len());
+
+            // Pre-serialize findings JSON outside the lock (can be large).
+            let findings_json = diags.as_ref().and_then(|f| serde_json::to_string(f).ok());
+            let timing_json = serde_json::to_string(&timing).ok();
+            let langs_json = serde_json::to_string(&languages).ok();
+
+            // Brief lock: just update in-memory job state.
+            {
+                let mut jobs = manager.jobs.lock().unwrap();
+                if let Some(job) = jobs.get_mut(&jid) {
+                    job.finished_at = Some(finished_at);
+                    job.duration_secs = Some(elapsed);
+                    job.languages = Some(languages.clone());
+                    job.files_scanned = Some(files_scanned);
+                    job.timing = Some(timing.clone());
+                    job.status = status.clone();
+                    job.findings = diags;
+                    job.error = error_str.clone();
                 }
             }
-            drop(jobs);
 
-            let mut active = manager.active_job_id.lock().unwrap();
-            if active.as_deref() == Some(&jid) {
-                *active = None;
+            // Clear active flag.
+            {
+                let mut active = manager.active_job_id.lock().unwrap();
+                if active.as_deref() == Some(&jid) {
+                    *active = None;
+                }
+            }
+
+            // Broadcast event (no lock held).
+            match status {
+                JobStatus::Completed => {
+                    let _ = event_tx.send(ServerEvent::ScanCompleted {
+                        job_id: jid.clone(),
+                    });
+                }
+                JobStatus::Failed => {
+                    let _ = event_tx.send(ServerEvent::ScanFailed {
+                        job_id: jid.clone(),
+                        error: error_str.clone().unwrap_or_default(),
+                    });
+                }
+                _ => {}
+            }
+
+            // Persist to DB (no lock held, can take time).
+            if let Some(ref pool) = db_pool {
+                if let Ok(idx) = Indexer::from_pool("_scans", pool) {
+                    let finished_str = finished_at.to_rfc3339();
+                    let _ = idx.update_scan(
+                        &jid,
+                        if finding_count.is_some() { "completed" } else { "failed" },
+                        Some(&finished_str),
+                        Some(elapsed),
+                        finding_count.map(|c| c as i64),
+                        findings_json.as_deref(),
+                        timing_json.as_deref(),
+                        error_str.as_deref(),
+                        Some(files_scanned as i64),
+                        langs_json.as_deref(),
+                    );
+                    let _ = idx.insert_scan_metrics(&jid, &metrics_snap);
+                    let final_logs = log_collector.drain();
+                    let all_logs: Vec<_> = logs.into_iter().chain(final_logs).collect();
+                    if !all_logs.is_empty() {
+                        let _ = idx.insert_scan_logs(&jid, &all_logs);
+                    }
+                }
             }
         });
 
@@ -198,29 +368,29 @@ mod tests {
 
     #[test]
     fn single_scan_policy() {
-        let manager = Arc::new(JobManager::new(10));
+        let manager = Arc::new(JobManager::new(10, 8 * 1024 * 1024));
         let (tx, _rx) = broadcast::channel(16);
         let dir = tempfile::tempdir().unwrap();
 
         let id = manager
-            .start_scan(dir.path().to_path_buf(), test_config(), tx.clone())
+            .start_scan(dir.path().to_path_buf(), test_config(), tx.clone(), None)
             .unwrap();
         assert!(!id.is_empty());
 
         // Second scan should fail while first is running.
-        let result = manager.start_scan(dir.path().to_path_buf(), test_config(), tx);
+        let result = manager.start_scan(dir.path().to_path_buf(), test_config(), tx, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn bounded_history() {
-        let manager = Arc::new(JobManager::new(2));
+        let manager = Arc::new(JobManager::new(2, 8 * 1024 * 1024));
         let (tx, _rx) = broadcast::channel(16);
         let dir = tempfile::tempdir().unwrap();
 
         // Start scan and wait for it to finish.
         let id1 = manager
-            .start_scan(dir.path().to_path_buf(), test_config(), tx.clone())
+            .start_scan(dir.path().to_path_buf(), test_config(), tx.clone(), None)
             .unwrap();
 
         // Wait for scan to complete (it's scanning an empty dir so should be fast).
@@ -234,7 +404,7 @@ mod tests {
         }
 
         let id2 = manager
-            .start_scan(dir.path().to_path_buf(), test_config(), tx.clone())
+            .start_scan(dir.path().to_path_buf(), test_config(), tx.clone(), None)
             .unwrap();
 
         for _ in 0..100 {
@@ -248,7 +418,7 @@ mod tests {
 
         // Third scan should evict the oldest.
         let _id3 = manager
-            .start_scan(dir.path().to_path_buf(), test_config(), tx)
+            .start_scan(dir.path().to_path_buf(), test_config(), tx, None)
             .unwrap();
 
         for _ in 0..100 {

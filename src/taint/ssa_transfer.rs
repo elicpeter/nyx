@@ -957,6 +957,44 @@ fn transfer_inst(
                 return_bits &= !resolved.sanitizer_caps;
             }
 
+            // Type-qualified receiver resolution: when normal callee resolution
+            // failed and explicit labels are absent, try constructing a type-qualified
+            // callee name from the receiver's inferred type (e.g., client.send →
+            // HttpClient.send when client is typed as HttpClient).
+            if !resolved_callee && info.labels.is_empty() {
+                if let Some(rv) = receiver {
+                    if let Some(type_facts) = transfer.type_facts {
+                        let tq_labels = resolve_type_qualified_labels(
+                            callee, *rv, type_facts, transfer.lang, transfer.extra_labels,
+                        );
+                        for lbl in &tq_labels {
+                            match lbl {
+                                DataLabel::Source(bits) if !has_source_label => {
+                                    return_bits |= *bits;
+                                    let source_kind =
+                                        crate::labels::infer_source_kind(*bits, callee);
+                                    let origin = TaintOrigin {
+                                        node: inst.cfg_node,
+                                        source_kind,
+                                    };
+                                    if !return_origins.iter().any(|o| o.node == inst.cfg_node) {
+                                        return_origins.push(origin);
+                                    }
+                                }
+                                DataLabel::Sanitizer(bits) => {
+                                    sanitizer_bits |= *bits;
+                                }
+                                DataLabel::Sink(_) => {
+                                    // Sink detection is handled separately in
+                                    // collect_block_events via resolve_sink_caps_typed
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+
             // Apply explicit sanitizer labels
             if !sanitizer_bits.is_empty() {
                 // Collect uses taint then strip bits
@@ -1198,8 +1236,34 @@ fn collect_block_events(
         }
 
         let mut sink_caps = resolve_sink_caps(info, transfer);
+
+        // Type-qualified sink resolution: when normal sink resolution found nothing,
+        // try using the receiver's inferred type to construct a qualified callee name.
+        if sink_caps.is_empty() {
+            if let SsaOp::Call { callee, receiver: Some(rv), .. } = &inst.op {
+                if let Some(type_facts) = transfer.type_facts {
+                    let tq_labels = resolve_type_qualified_labels(
+                        callee, *rv, type_facts, transfer.lang, transfer.extra_labels,
+                    );
+                    for lbl in &tq_labels {
+                        if let DataLabel::Sink(bits) = lbl {
+                            sink_caps |= *bits;
+                        }
+                    }
+                }
+            }
+        }
+
         if sink_caps.is_empty() {
             continue;
+        }
+
+        // Suppress known non-sink callees (e.g., System.out.println in Java)
+        if let SsaOp::Call { callee, .. } = &inst.op {
+            sink_caps = suppress_known_safe_callees(sink_caps, callee, transfer.lang);
+            if sink_caps.is_empty() {
+                continue;
+            }
         }
 
         // Interprocedural sanitizer: subtract sanitizer caps from inner arg callees.
@@ -1572,17 +1636,61 @@ fn all_args_const(
     })
 }
 
-/// Check if a sink is type-safe (e.g., SQL injection with int-typed argument).
+/// Try to resolve a callee using the receiver's inferred type.
 ///
-/// Currently suppresses SQL injection findings when all argument values are
-/// known to be integer-typed, since integer values cannot carry SQL injection payloads.
+/// When the callee string is `"client.send"` and the receiver SSA value is typed
+/// as `HttpClient`, constructs `"HttpClient.send"` and checks label rules.
+/// Returns the matched labels (source/sanitizer/sink) if any.
+fn resolve_type_qualified_labels(
+    callee: &str,
+    receiver: SsaValue,
+    type_facts: &crate::ssa::type_facts::TypeFactResult,
+    lang: Lang,
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
+) -> SmallVec<[DataLabel; 2]> {
+    let receiver_type = match type_facts.get_type(receiver) {
+        Some(tk) => tk,
+        None => return SmallVec::new(),
+    };
+    let prefix = match receiver_type.label_prefix() {
+        Some(p) => p,
+        None => return SmallVec::new(),
+    };
+    // Extract the method part: last segment after '.'
+    let method = callee.rsplit('.').next().unwrap_or(callee);
+    let qualified = format!("{}.{}", prefix, method);
+    crate::labels::classify_all(lang.as_str(), &qualified, extra_labels)
+}
+
+/// Suppress sinks from known non-sink callees (e.g., `System.out.println` in Java).
+///
+/// These are callees whose suffix matches a broad sink rule but whose
+/// receiver is known to be safe (console output, not HTTP response).
+fn suppress_known_safe_callees(sink_caps: Cap, callee: &str, lang: Lang) -> Cap {
+    match lang {
+        Lang::Java => {
+            if callee.starts_with("System.out.") || callee.starts_with("System.err.") {
+                sink_caps & !Cap::HTML_ESCAPE
+            } else {
+                sink_caps
+            }
+        }
+        _ => sink_caps,
+    }
+}
+
+/// Check if a sink is type-safe (e.g., SQL injection or path traversal with int-typed argument).
+///
+/// Suppresses findings when all argument values are known to be integer-typed,
+/// since integer values cannot carry SQL injection or path traversal payloads.
 fn is_type_safe_for_sink(
     inst: &SsaInst,
     sink_caps: Cap,
     type_facts: &crate::ssa::type_facts::TypeFactResult,
 ) -> bool {
-    // Only suppress SQL injection for int-typed values
-    if !sink_caps.intersects(Cap::SQL_QUERY) {
+    // Suppress SQL injection and path traversal (FILE_IO) for int-typed values
+    let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO;
+    if !sink_caps.intersects(type_suppressible) {
         return false;
     }
 

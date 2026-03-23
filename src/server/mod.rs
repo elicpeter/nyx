@@ -2,6 +2,8 @@ pub mod app;
 pub mod assets;
 pub mod jobs;
 pub mod models;
+pub mod progress;
 pub mod routes;
+pub mod scan_log;
 
 pub use app::{build_router, AppState};

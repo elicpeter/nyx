@@ -80,7 +80,7 @@ terminal_size = "0.4"
 rayon = "1.11.0"
 r2d2 = "0.8.10"
 bytesize  = "2.3.1"
-chrono    = { version = "0.4.44", default-features = false, features = ["std", "clock"] }
+chrono    = { version = "0.4.44", default-features = false, features = ["std", "clock", "serde"] }
 thiserror = "2.0.18"
 dashmap = "7.0.0-rc2"
 petgraph = "0.8.3"

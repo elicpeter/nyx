@@ -1239,13 +1239,13 @@ fn extract_condition_raw<'a>(
 /// Handles:
 /// - `!expr` (unary_expression / prefix_unary_expression with `!` operator)
 /// - `not expr` (Python `not_operator`, Ruby)
-/// - Ruby `unless` (the whole If node kind is `unless`)
+///
+/// NOTE: Ruby `unless` is NOT handled here. The CFG builder already swaps
+/// True/False edges for `unless` (cfg.rs lines 2076-2085), so the edge labels
+/// encode the correct branch semantics. Setting `condition_negated=true` here
+/// would cause a double-negation in `compute_succ_states`, applying validation
+/// to the wrong branch.
 fn detect_negation<'a>(cond: Node<'a>, if_ast: Node<'a>, _lang: &str) -> (Node<'a>, bool) {
-    // Ruby `unless` is mapped to Kind::If but is semantically negated.
-    if if_ast.kind() == "unless" {
-        return (cond, true);
-    }
-
     // Unwrap parenthesized_expression — JS/Java/PHP wrap if-conditions in parens.
     // This lets us detect negation inside: `if (!expr)` → cond is `(!expr)`.
     let cond = if cond.kind() == "parenthesized_expression" {

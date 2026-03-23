@@ -22,6 +22,7 @@ async fn event_stream(
                     ServerEvent::ScanStarted { .. } => "scan_started",
                     ServerEvent::ScanCompleted { .. } => "scan_completed",
                     ServerEvent::ScanFailed { .. } => "scan_failed",
+                    ServerEvent::ScanProgress { .. } => "scan_progress",
                     ServerEvent::ConfigChanged => "config_changed",
                 };
                 Ok(Event::default().event(event_type).data(data))

@@ -6,6 +6,8 @@ use crate::cli::{IndexMode, OutputFormat};
 use crate::database::index::{Indexer, IssueRow};
 use crate::errors::NyxResult;
 use crate::patterns::{FindingCategory, Severity, SeverityFilter};
+use crate::server::progress::{ScanMetrics, ScanProgress};
+use crate::server::scan_log::ScanLogCollector;
 use crate::summary::{self, GlobalSummaries};
 use crate::utils::config::Config;
 use crate::utils::project::get_project_info;
@@ -36,7 +38,7 @@ fn make_progress_bar(len: u64, msg: &str, show: bool) -> ProgressBar {
     pb
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Diag {
     pub path: String,
     pub line: usize,
@@ -82,7 +84,7 @@ pub struct Diag {
 }
 
 /// Rollup data for grouped findings (e.g. 38 occurrences of `rs.quality.unwrap`).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RollupData {
     /// Total number of occurrences.
     pub count: usize,
@@ -91,7 +93,7 @@ pub struct RollupData {
 }
 
 /// A source location within a file.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Location {
     pub line: usize,
     pub col: usize,
@@ -451,6 +453,19 @@ pub(crate) fn scan_filesystem(
     cfg: &Config,
     show_progress: bool,
 ) -> NyxResult<Vec<Diag>> {
+    scan_filesystem_with_observer(root, cfg, show_progress, None, None, None)
+}
+
+/// Walk the filesystem and perform a two-pass scan, optionally reporting
+/// progress and metrics through the supplied atomic structs.
+pub(crate) fn scan_filesystem_with_observer(
+    root: &Path,
+    cfg: &Config,
+    show_progress: bool,
+    progress: Option<&Arc<ScanProgress>>,
+    metrics: Option<&Arc<ScanMetrics>>,
+    logs: Option<&Arc<ScanLogCollector>>,
+) -> NyxResult<Vec<Diag>> {
     // Ensure framework context is available (handle sets it, but direct
     // callers like scan_no_index may not).
     let owned_cfg;
@@ -465,13 +480,15 @@ pub(crate) fn scan_filesystem(
         &owned_cfg
     };
 
+    if let Some(p) = progress {
+        p.set_stage(1); // discovering
+    }
+
     // ── Collect file list ────────────────────────────────────────────────
+    let walk_start = std::time::Instant::now();
     let all_paths: Vec<PathBuf> = {
         let _span = tracing::info_span!("walk_files").entered();
         let (rx, handle) = spawn_file_walker(root, cfg);
-        // Drain the channel BEFORE joining the walker thread.
-        // The channel is bounded, so joining first would deadlock once
-        // the walker fills it and blocks on send.
         let paths: Vec<PathBuf> = rx.into_iter().flatten().collect();
         if let Err(err) = handle.join() {
             tracing::error!("walker thread panicked: {:#?}", err);
@@ -480,11 +497,32 @@ pub(crate) fn scan_filesystem(
     };
     tracing::info!(file_count = all_paths.len(), "file walk complete");
 
+    if let Some(p) = progress {
+        p.record_walk_ms(walk_start.elapsed().as_millis() as u64);
+        p.set_files_discovered(all_paths.len() as u64);
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!(
+                "File walk complete: {} files discovered in {}ms",
+                all_paths.len(),
+                walk_start.elapsed().as_millis()
+            ),
+            None,
+        );
+    }
+
     let needs_taint = cfg.scanner.mode == crate::utils::config::AnalysisMode::Full
         || cfg.scanner.mode == crate::utils::config::AnalysisMode::Taint;
 
     if !needs_taint {
         // ── AST-only: single fused pass (no cross-file context needed) ──
+        if let Some(p) = progress {
+            p.set_stage(2); // parsing
+        }
+        if let Some(l) = logs {
+            l.info("Starting AST-only analysis (no taint)", None);
+        }
         let _span = tracing::info_span!("ast_only_analysis", files = all_paths.len()).entered();
         let pb = make_progress_bar(all_paths.len() as u64, "Running analysis", show_progress);
 
@@ -505,11 +543,19 @@ pub(crate) fn scan_filesystem(
                     }
                 };
                 pb.inc(1);
+                if let Some(p) = progress {
+                    p.inc_parsed(1);
+                    p.inc_analyzed(1);
+                    p.set_current_file(&path.to_string_lossy());
+                }
                 result
             })
             .collect();
         pb.finish_and_clear();
 
+        if let Some(p) = progress {
+            p.set_stage(4); // complete
+        }
         post_process_diags(&mut diags, cfg);
         return Ok(diags);
     }
@@ -530,6 +576,16 @@ pub(crate) fn scan_filesystem(
     // Each rayon thread builds a local `GlobalSummaries` from its chunk,
     // then the per-thread maps are merged in a binary reduce tree.
     // This eliminates the serial merge_summaries bottleneck.
+    if let Some(p) = progress {
+        p.set_stage(2); // parsing
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!("Starting pass 1: extracting summaries from {} files", all_paths.len()),
+            None,
+        );
+    }
+    let pass1_start = std::time::Instant::now();
     let global_summaries: GlobalSummaries = {
         let _span = tracing::info_span!("pass1_fused", files = all_paths.len()).entered();
         let pb = make_progress_bar(
@@ -573,6 +629,13 @@ pub(crate) fn scan_filesystem(
                                     local_gs.insert_ssa(key, ssa_sum);
                                 }
                             }
+
+                            // Record language for progress
+                            if let Some(p) = progress {
+                                if let Some(ref lang) = first_lang {
+                                    p.record_language(lang);
+                                }
+                            }
                         }
                         Err(e) => {
                             tracing::warn!("pass 1: {}: {e}", path.display());
@@ -582,6 +645,10 @@ pub(crate) fn scan_filesystem(
                     tracing::warn!("pass 1: cannot read {}", path.display());
                 }
                 pb.inc(1);
+                if let Some(p) = progress {
+                    p.inc_parsed(1);
+                    p.set_current_file(&path.to_string_lossy());
+                }
                 local_gs
             })
             .reduce(GlobalSummaries::new, |mut a, b| {
@@ -593,12 +660,58 @@ pub(crate) fn scan_filesystem(
         tracing::info!("pass 1 complete");
         gs
     };
+    if let Some(p) = progress {
+        p.record_pass1_ms(pass1_start.elapsed().as_millis() as u64);
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!("Pass 1 complete in {}ms", pass1_start.elapsed().as_millis()),
+            None,
+        );
+    }
 
     // ── Build call graph ────────────────────────────────────────────────
+    if let Some(l) = logs {
+        l.info("Building call graph", None);
+    }
+    let cg_start = std::time::Instant::now();
     let (call_graph, cg_analysis) = build_and_analyse_call_graph(&global_summaries);
     log_unresolved_callees(&call_graph);
+    if let Some(p) = progress {
+        p.record_call_graph_ms(cg_start.elapsed().as_millis() as u64);
+    }
+    if let Some(m) = metrics {
+        m.call_edges.store(call_graph.graph.edge_count() as u64, std::sync::atomic::Ordering::Relaxed);
+        m.functions_analyzed.store(call_graph.graph.node_count() as u64, std::sync::atomic::Ordering::Relaxed);
+        m.unresolved_calls.store(
+            (call_graph.unresolved_not_found.len() + call_graph.unresolved_ambiguous.len()) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!(
+                "Call graph built in {}ms: {} nodes, {} edges, {} unresolved",
+                cg_start.elapsed().as_millis(),
+                call_graph.graph.node_count(),
+                call_graph.graph.edge_count(),
+                call_graph.unresolved_not_found.len() + call_graph.unresolved_ambiguous.len(),
+            ),
+            None,
+        );
+    }
 
     // ── Pass 2: re-run with cross-file global summaries ──────────────────
+    if let Some(p) = progress {
+        p.set_stage(3); // analyzing
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!("Starting pass 2: taint analysis on {} files", all_paths.len()),
+            None,
+        );
+    }
+    let pass2_start = std::time::Instant::now();
     let mut diags: Vec<Diag> = {
         let _span = tracing::info_span!("pass2_analysis", files = all_paths.len()).entered();
         let pb = make_progress_bar(
@@ -626,8 +739,36 @@ pub(crate) fn scan_filesystem(
         result
     };
     tracing::info!(diags = diags.len(), "pass 2 complete");
+    if let Some(p) = progress {
+        p.record_pass2_ms(pass2_start.elapsed().as_millis() as u64);
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!(
+                "Pass 2 complete in {}ms: {} raw findings",
+                pass2_start.elapsed().as_millis(),
+                diags.len()
+            ),
+            None,
+        );
+    }
 
+    let pp_start = std::time::Instant::now();
     post_process_diags(&mut diags, cfg);
+    if let Some(p) = progress {
+        p.record_post_process_ms(pp_start.elapsed().as_millis() as u64);
+        p.set_stage(4); // complete
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!(
+                "Post-processing complete in {}ms: {} final findings",
+                pp_start.elapsed().as_millis(),
+                diags.len()
+            ),
+            None,
+        );
+    }
 
     Ok(diags)
 }

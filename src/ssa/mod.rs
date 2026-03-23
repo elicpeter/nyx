@@ -14,6 +14,7 @@ pub use lower::lower_to_ssa;
 pub use lower::lower_to_ssa_scoped_nop;
 
 use crate::cfg::Cfg;
+use crate::symbol::Lang;
 use std::collections::HashMap;
 
 /// Result of SSA optimization passes.
@@ -33,7 +34,7 @@ pub struct OptimizeResult {
 /// Run all SSA optimization passes on a body.
 ///
 /// Pipeline: const propagation → branch pruning → copy propagation → DCE → type facts.
-pub fn optimize_ssa(body: &mut SsaBody, cfg: &Cfg) -> OptimizeResult {
+pub fn optimize_ssa(body: &mut SsaBody, cfg: &Cfg, lang: Option<Lang>) -> OptimizeResult {
     // 1. Constant propagation (SCCP)
     let cp = const_prop::const_propagate(body);
     let branches_pruned = const_prop::apply_const_prop(body, &cp);
@@ -44,8 +45,8 @@ pub fn optimize_ssa(body: &mut SsaBody, cfg: &Cfg) -> OptimizeResult {
     // 3. Dead code elimination
     let dead_defs_removed = dce::eliminate_dead_defs(body, cfg);
 
-    // 4. Type fact analysis (uses const prop results)
-    let type_facts = type_facts::analyze_types(body, cfg, &cp.values);
+    // 4. Type fact analysis (uses const prop results + language for constructor inference)
+    let type_facts = type_facts::analyze_types(body, cfg, &cp.values, lang);
 
     OptimizeResult {
         const_values: cp.values,

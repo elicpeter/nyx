@@ -88,6 +88,7 @@ pub fn classify_condition(text: &str) -> PredicateKind {
 
     // ── Allowlist / membership checks ────────────────────────────────────
     if lower.contains(".includes(")
+        || lower.contains(".include?(")
         || lower.contains(".contains(")
         || lower.contains(".indexof(")
         || lower.contains(".has(")
@@ -107,6 +108,8 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         || lower.contains("is_string(")
         || lower.contains("is_float(")
         || lower.contains("ctype_")
+        || lower.contains(".is_a?(")
+        || lower.contains(".kind_of?(")
     {
         return PredicateKind::TypeCheck;
     }
@@ -238,7 +241,7 @@ fn extract_allowlist_target(text: &str) -> Option<String> {
     let lower = trimmed.to_ascii_lowercase();
 
     // Method call pattern: something.includes(arg) / .contains(arg) / .has(arg) / .indexof(arg)
-    for method in &[".includes(", ".contains(", ".indexof(", ".has("] {
+    for method in &[".includes(", ".include?(", ".contains(", ".indexof(", ".has("] {
         if let Some(pos) = lower.find(method) {
             let args_start = pos + method.len();
             let args_part = &trimmed[args_start..];
@@ -352,6 +355,17 @@ fn extract_type_check_target(text: &str) -> Option<String> {
             let first_arg = first_arg.strip_prefix('$').unwrap_or(first_arg);
             if !first_arg.is_empty() && is_identifier(first_arg) {
                 return Some(first_arg.to_string());
+            }
+        }
+    }
+
+    // Ruby type checks: user_id.is_a?(Integer), x.kind_of?(String) → receiver
+    for method in &[".is_a?(", ".kind_of?("] {
+        if let Some(pos) = lower.find(method) {
+            let receiver = trimmed[..pos].trim();
+            let receiver = receiver.strip_prefix('!').unwrap_or(receiver).trim();
+            if !receiver.is_empty() && is_identifier(receiver) {
+                return Some(receiver.to_string());
             }
         }
     }
@@ -720,5 +734,35 @@ mod tests {
         let (kind, target) = classify_condition_with_target("ctype_digit($x)");
         assert_eq!(kind, PredicateKind::TypeCheck);
         assert_eq!(target.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn classify_type_check_is_a() {
+        assert_eq!(
+            classify_condition("user_id.is_a?(Integer)"),
+            PredicateKind::TypeCheck
+        );
+    }
+
+    #[test]
+    fn target_type_check_is_a() {
+        let (kind, target) = classify_condition_with_target("user_id.is_a?(Integer)");
+        assert_eq!(kind, PredicateKind::TypeCheck);
+        assert_eq!(target.as_deref(), Some("user_id"));
+    }
+
+    #[test]
+    fn classify_allowlist_include_question() {
+        assert_eq!(
+            classify_condition("ALLOWED.include?(cmd)"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    #[test]
+    fn target_allowlist_include_question() {
+        let (kind, target) = classify_condition_with_target("ALLOWED.include?(cmd)");
+        assert_eq!(kind, PredicateKind::AllowlistCheck);
+        assert_eq!(target.as_deref(), Some("cmd"));
     }
 }

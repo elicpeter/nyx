@@ -38,7 +38,7 @@ const ROUTES = [
   { path: '/findings',         section: 'findings', render: renderFindings },
   { path: '/findings/:id',     section: 'findings', render: renderFindingDetail },
   { path: '/scans',            section: 'scans',    render: renderScans },
-  { path: '/scans/:id',        section: 'scans',    render: renderStub },
+  { path: '/scans/:id',        section: 'scans',    render: renderScanDetail },
   { path: '/rules',            section: 'rules',    render: renderStub },
   { path: '/rules/:id',        section: 'rules',    render: renderStub },
   { path: '/triage',           section: 'triage',   render: renderStub },
@@ -228,9 +228,11 @@ function updateHeader(match) {
     <div class="header-right">
       <input type="text" class="header-search-input" placeholder="Search... (/)" disabled title="Coming soon">
       <button class="btn btn-sm" disabled title="Coming soon">Export</button>
-      <button class="btn btn-primary btn-sm" disabled title="Coming soon">Start Scan</button>
+      <button class="btn btn-primary btn-sm" id="header-start-scan">Start Scan</button>
     </div>
   `;
+
+  $('#header-start-scan')?.addEventListener('click', () => openNewScanModal());
 }
 
 function buildBreadcrumbs(match) {
@@ -306,7 +308,6 @@ async function renderDashboard(el, params, match) {
     el.innerHTML = `
       <div class="page-header">
         <h2>Dashboard</h2>
-        <button class="btn btn-primary" id="scan-btn">New Scan</button>
       </div>
       <div class="card-grid">
         <div class="card">
@@ -344,9 +345,8 @@ async function renderDashboard(el, params, match) {
         }
       </div>`;
 
-    $('#scan-btn')?.addEventListener('click', startScan);
     $$('[data-scan-id]', el).forEach(row => {
-      row.addEventListener('click', () => navigate('/scans'));
+      row.addEventListener('click', () => navigate(`/scans/${row.dataset.scanId}`));
     });
   } catch (e) {
     el.innerHTML = `<div class="error-state"><h3>Error loading dashboard</h3><p>${escHtml(e.message)}</p></div>`;
@@ -1070,30 +1070,376 @@ async function renderScans(el, params, match) {
   try {
     const scans = await api('/scans');
 
+    // Show progress view if a scan is running
+    const runningScans = scans.filter(s => s.status === 'running');
+    const progressHtml = runningScans.length > 0 && window.activeScanProgress
+      ? renderProgressView(window.activeScanProgress)
+      : '';
+
+    const relTime = (iso) => {
+      if (!iso) return '-';
+      const d = new Date(iso);
+      const diff = Date.now() - d.getTime();
+      if (diff < 60000) return 'just now';
+      if (diff < 3600000) return `${Math.floor(diff/60000)}m ago`;
+      if (diff < 86400000) return `${Math.floor(diff/3600000)}h ago`;
+      return d.toLocaleDateString();
+    };
+
     el.innerHTML = `
       <div class="page-header">
         <h2>Scans</h2>
-        <button class="btn btn-primary" id="scan-btn">New Scan</button>
       </div>
+      ${progressHtml}
       ${scans.length === 0
-        ? '<div class="empty-state"><h3>No scans yet</h3><p>Click "New Scan" to start your first scan.</p></div>'
+        ? '<div class="empty-state"><h3>No scans yet</h3><p>Use the "Start Scan" button in the header to start your first scan.</p></div>'
         : `<div class="table-wrap"><table>
-          <thead><tr><th>Status</th><th>Root</th><th>Duration</th><th>Findings</th><th>Started</th><th>Error</th></tr></thead>
+          <thead><tr><th>Status</th><th>Root</th><th>Duration</th><th>Findings</th><th>Languages</th><th>Started</th></tr></thead>
           <tbody>
-          ${scans.map(s => `<tr>
-            <td><span class="status-dot ${s.status}"></span>${s.status}</td>
+          ${scans.map(s => `<tr class="clickable" data-scan-id="${s.id}">
+            <td><span class="status-badge ${s.status}"><span class="status-dot ${s.status}"></span>${s.status}</span></td>
             <td style="font-family:var(--font-mono);font-size:0.82rem">${escHtml(truncPath(s.scan_root))}</td>
             <td>${s.duration_secs != null ? s.duration_secs.toFixed(2) + 's' : '-'}</td>
             <td>${s.finding_count ?? '-'}</td>
-            <td>${s.started_at ? new Date(s.started_at).toLocaleString() : '-'}</td>
-            <td style="color:var(--sev-high)">${s.error ? escHtml(s.error) : ''}</td>
+            <td>${(s.languages || []).map(l => `<span class="lang-badge">${escHtml(l)}</span>`).join('') || '-'}</td>
+            <td>${relTime(s.started_at)}</td>
           </tr>`).join('')}
           </tbody></table></div>`
       }`;
 
-    $('#scan-btn')?.addEventListener('click', startScan);
+    $$('[data-scan-id]', el).forEach(row => {
+      row.addEventListener('click', () => navigate(`/scans/${row.dataset.scanId}`));
+    });
   } catch (e) {
     el.innerHTML = `<div class="error-state"><h3>Error</h3><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+
+// ── Scan Detail Page ─────────────────────────────────────────────────────────
+
+async function renderScanDetail(el, params) {
+  const id = params.id;
+  el.innerHTML = '<div class="loading">Loading scan...</div>';
+  try {
+    const scan = await api(`/scans/${id}`);
+    let activeTab = 'summary';
+
+    const renderTabs = () => {
+      el.innerHTML = `
+        <button class="btn btn-sm" id="back-to-scans" style="margin-bottom:var(--space-4)">Back to Scans</button>
+        <div class="page-header">
+          <h2>Scan Detail</h2>
+          <span class="status-badge ${scan.status}"><span class="status-dot ${scan.status}"></span>${scan.status}</span>
+        </div>
+        <div class="scan-detail-tabs">
+          <button class="scan-detail-tab ${activeTab === 'summary' ? 'active' : ''}" data-tab="summary">Summary</button>
+          <button class="scan-detail-tab ${activeTab === 'findings' ? 'active' : ''}" data-tab="findings">Findings</button>
+          <button class="scan-detail-tab ${activeTab === 'logs' ? 'active' : ''}" data-tab="logs">Logs</button>
+          <button class="scan-detail-tab ${activeTab === 'metrics' ? 'active' : ''}" data-tab="metrics">Metrics</button>
+        </div>
+        <div id="scan-tab-content"></div>
+      `;
+
+      $('#back-to-scans')?.addEventListener('click', () => navigate('/scans'));
+      $$('.scan-detail-tab', el).forEach(tab => {
+        tab.addEventListener('click', () => {
+          activeTab = tab.dataset.tab;
+          renderTabs();
+        });
+      });
+
+      const content = $('#scan-tab-content', el);
+      if (activeTab === 'summary') renderSummaryTab(content, scan, id);
+      else if (activeTab === 'findings') renderFindingsTab(content, id);
+      else if (activeTab === 'logs') renderLogsTab(content, id);
+      else if (activeTab === 'metrics') renderMetricsTab(content, id, scan);
+    };
+
+    renderTabs();
+  } catch (e) {
+    el.innerHTML = `<div class="error-state"><h3>Scan not found</h3><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderSummaryTab(el, scan, id) {
+  const fmtDate = (iso) => iso ? new Date(iso).toLocaleString() : '-';
+  const duration = scan.duration_secs != null ? scan.duration_secs.toFixed(2) + 's' : '-';
+  const langs = (scan.languages || []).join(', ') || '-';
+
+  let timingHtml = '';
+  if (scan.timing) {
+    const t = scan.timing;
+    const total = t.walk_ms + t.pass1_ms + t.call_graph_ms + t.pass2_ms + t.post_process_ms;
+    if (total > 0) {
+      const pct = (ms) => ((ms / total) * 100).toFixed(1);
+      timingHtml = `
+        <div class="card" style="margin-top:var(--space-4)">
+          <div class="card-header">Timing Breakdown</div>
+          <div class="timing-bar">
+            <div class="timing-bar-segment walk" style="width:${pct(t.walk_ms)}%" title="Walk: ${t.walk_ms}ms"></div>
+            <div class="timing-bar-segment pass1" style="width:${pct(t.pass1_ms)}%" title="Pass 1: ${t.pass1_ms}ms"></div>
+            <div class="timing-bar-segment callgraph" style="width:${pct(t.call_graph_ms)}%" title="Call Graph: ${t.call_graph_ms}ms"></div>
+            <div class="timing-bar-segment pass2" style="width:${pct(t.pass2_ms)}%" title="Pass 2: ${t.pass2_ms}ms"></div>
+            <div class="timing-bar-segment postprocess" style="width:${pct(t.post_process_ms)}%" title="Post-process: ${t.post_process_ms}ms"></div>
+          </div>
+          <div class="timing-legend">
+            <span class="timing-legend-item"><span class="timing-legend-dot" style="background:var(--sev-low)"></span> Walk ${t.walk_ms}ms</span>
+            <span class="timing-legend-item"><span class="timing-legend-dot" style="background:var(--accent)"></span> Pass 1 ${t.pass1_ms}ms</span>
+            <span class="timing-legend-item"><span class="timing-legend-dot" style="background:var(--sev-medium)"></span> Call Graph ${t.call_graph_ms}ms</span>
+            <span class="timing-legend-item"><span class="timing-legend-dot" style="background:var(--success)"></span> Pass 2 ${t.pass2_ms}ms</span>
+            <span class="timing-legend-item"><span class="timing-legend-dot" style="background:var(--text-tertiary)"></span> Post ${t.post_process_ms}ms</span>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  el.innerHTML = `
+    <div class="scan-stat-grid">
+      <div class="scan-stat-card">
+        <div class="scan-stat-label">Files Scanned</div>
+        <div class="scan-stat-value">${scan.files_scanned ?? '-'}</div>
+      </div>
+      <div class="scan-stat-card">
+        <div class="scan-stat-label">Findings</div>
+        <div class="scan-stat-value">${scan.finding_count ?? '-'}</div>
+      </div>
+      <div class="scan-stat-card">
+        <div class="scan-stat-label">Duration</div>
+        <div class="scan-stat-value">${duration}</div>
+      </div>
+      <div class="scan-stat-card">
+        <div class="scan-stat-label">Languages</div>
+        <div class="scan-stat-value" style="font-size:var(--text-base)">${langs}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Details</div>
+      <table>
+        <tr><td style="color:var(--text-secondary);width:140px">Scan ID</td><td style="font-family:var(--font-mono);font-size:var(--text-xs)">${escHtml(scan.id)}</td></tr>
+        <tr><td style="color:var(--text-secondary)">Root</td><td style="font-family:var(--font-mono);font-size:var(--text-sm)">${escHtml(scan.scan_root)}</td></tr>
+        <tr><td style="color:var(--text-secondary)">Engine</td><td>${escHtml(scan.engine_version || '-')}</td></tr>
+        <tr><td style="color:var(--text-secondary)">Started</td><td>${fmtDate(scan.started_at)}</td></tr>
+        <tr><td style="color:var(--text-secondary)">Finished</td><td>${fmtDate(scan.finished_at)}</td></tr>
+        ${scan.error ? `<tr><td style="color:var(--text-secondary)">Error</td><td style="color:var(--sev-high)">${escHtml(scan.error)}</td></tr>` : ''}
+      </table>
+    </div>
+
+    ${timingHtml}
+  `;
+}
+
+async function renderFindingsTab(el, scanId) {
+  el.innerHTML = '<div class="loading">Loading findings...</div>';
+  try {
+    const data = await api(`/scans/${scanId}/findings`);
+    if (!data.findings || data.findings.length === 0) {
+      el.innerHTML = '<div class="empty-state"><h3>No findings</h3><p>This scan produced no findings.</p></div>';
+      return;
+    }
+    el.innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Severity</th><th>Rule</th><th>File</th><th>Line</th><th>Confidence</th>
+        </tr></thead>
+        <tbody>
+        ${data.findings.map(f => `<tr class="clickable" data-finding-idx="${f.index}">
+          <td><span class="badge badge-${f.severity.toLowerCase()}">${f.severity}</span></td>
+          <td>${escHtml(f.rule_id)}</td>
+          <td class="cell-path" title="${escHtml(f.path)}">${escHtml(truncPath(f.path))}</td>
+          <td>${f.line}</td>
+          <td>${f.confidence ? `<span class="badge badge-conf-${f.confidence.toLowerCase()}">${f.confidence}</span>` : '-'}</td>
+        </tr>`).join('')}
+        </tbody></table></div>
+      <div style="margin-top:var(--space-2);font-size:var(--text-sm);color:var(--text-secondary)">
+        Showing ${data.findings.length} of ${data.total} findings
+      </div>
+    `;
+    $$('[data-finding-idx]', el).forEach(row => {
+      row.addEventListener('click', () => navigate(`/findings/${row.dataset.findingIdx}`));
+    });
+  } catch (e) {
+    el.innerHTML = `<div class="error-state"><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+
+async function renderLogsTab(el, scanId) {
+  el.innerHTML = '<div class="loading">Loading logs...</div>';
+  let levelFilter = null;
+
+  const render = async () => {
+    try {
+      const url = levelFilter ? `/scans/${scanId}/logs?level=${levelFilter}` : `/scans/${scanId}/logs`;
+      const logs = await api(url);
+
+      el.innerHTML = `
+        <div class="log-filters">
+          <button class="log-filter-btn ${!levelFilter ? 'active' : ''}" data-level="">All</button>
+          <button class="log-filter-btn ${levelFilter === 'info' ? 'active' : ''}" data-level="info">Info</button>
+          <button class="log-filter-btn ${levelFilter === 'warn' ? 'active' : ''}" data-level="warn">Warn</button>
+          <button class="log-filter-btn ${levelFilter === 'error' ? 'active' : ''}" data-level="error">Error</button>
+        </div>
+        ${logs.length === 0
+          ? '<div class="empty-state"><p>No log entries</p></div>'
+          : `<div class="log-viewer">
+            ${logs.map(l => `<div class="log-entry log-${l.level}">
+              <span class="log-level ${l.level}">${l.level}</span>
+              <span class="log-time">${new Date(l.timestamp).toLocaleTimeString()}</span>
+              <span class="log-message">${escHtml(l.message)}${l.file_path ? ` <span style="color:var(--text-tertiary)">${escHtml(l.file_path)}</span>` : ''}</span>
+            </div>`).join('')}
+          </div>`
+        }
+      `;
+
+      $$('.log-filter-btn', el).forEach(btn => {
+        btn.addEventListener('click', () => {
+          levelFilter = btn.dataset.level || null;
+          render();
+        });
+      });
+    } catch (e) {
+      el.innerHTML = `<div class="error-state"><p>${escHtml(e.message)}</p></div>`;
+    }
+  };
+  render();
+}
+
+async function renderMetricsTab(el, scanId, scan) {
+  // Try to get metrics from scan view first, then from API
+  let metrics = scan.metrics;
+  if (!metrics) {
+    try {
+      metrics = await api(`/scans/${scanId}/metrics`);
+    } catch {
+      // no metrics available
+    }
+  }
+
+  if (!metrics) {
+    el.innerHTML = '<div class="empty-state"><p>No metrics available for this scan.</p></div>';
+    return;
+  }
+
+  const fmtNum = (n) => n != null ? n.toLocaleString() : '-';
+
+  el.innerHTML = `
+    <div class="metric-grid">
+      <div class="metric-card">
+        <div class="metric-card-label">CFG Nodes</div>
+        <div class="metric-card-value">${fmtNum(metrics.cfg_nodes)}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-card-label">Call Edges</div>
+        <div class="metric-card-value">${fmtNum(metrics.call_edges)}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-card-label">Functions Analyzed</div>
+        <div class="metric-card-value">${fmtNum(metrics.functions_analyzed)}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-card-label">Summaries Reused</div>
+        <div class="metric-card-value">${fmtNum(metrics.summaries_reused)}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-card-label">Unresolved Calls</div>
+        <div class="metric-card-value">${fmtNum(metrics.unresolved_calls)}</div>
+      </div>
+    </div>
+  `;
+}
+
+// ── New Scan Modal ───────────────────────────────────────────────────────────
+
+function openNewScanModal() {
+  const modal = document.createElement('div');
+  modal.className = 'scan-modal-overlay';
+  const defaultRoot = appMeta?.scan_root || '';
+
+  modal.innerHTML = `
+    <div class="scan-modal">
+      <h3>Start New Scan</h3>
+      <div class="scan-modal-form">
+        <div class="form-group">
+          <label>Scan Root</label>
+          <input type="text" id="scan-root-input" value="${escHtml(defaultRoot)}" placeholder="/path/to/project">
+        </div>
+        <div class="scan-modal-actions">
+          <button class="btn btn-sm" id="scan-modal-cancel">Cancel</button>
+          <button class="btn btn-primary btn-sm" id="scan-modal-start">Start Scan</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const close = () => modal.remove();
+  $('#scan-modal-cancel', modal).addEventListener('click', close);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  const onKey = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } };
+  document.addEventListener('keydown', onKey);
+
+  $('#scan-modal-start', modal).addEventListener('click', async () => {
+    const root = $('#scan-root-input', modal).value.trim();
+    try {
+      const body = root && root !== defaultRoot
+        ? JSON.stringify({ scan_root: root })
+        : undefined;
+      await api('/scans', { method: 'POST', body });
+      close();
+      navigate('/scans');
+    } catch (e) {
+      alert(e.message);
+    }
+  });
+}
+
+// ── Scan Progress View ───────────────────────────────────────────────────────
+
+function renderProgressView(data) {
+  const stages = ['discovering', 'parsing', 'analyzing', 'complete'];
+  const stageLabels = { discovering: 'Discovering', parsing: 'Parsing', analyzing: 'Analyzing', complete: 'Complete' };
+  const currentIdx = stages.indexOf(data.stage);
+
+  const total = data.files_discovered || 1;
+  const processed = data.stage === 'parsing' ? data.files_parsed
+    : data.stage === 'analyzing' ? data.files_analyzed
+    : data.stage === 'complete' ? total : 0;
+  const pct = Math.min(100, (processed / total) * 100);
+  const elapsed = data.elapsed_ms ? (data.elapsed_ms / 1000).toFixed(1) + 's' : '-';
+
+  return `
+    <div class="scan-progress">
+      <div class="scan-progress-header">
+        <h3>Scan in Progress</h3>
+        <span style="font-size:var(--text-sm);color:var(--text-secondary)">${elapsed} elapsed</span>
+      </div>
+      <div class="stage-pipeline">
+        ${stages.map((s, i) => {
+          const cls = i < currentIdx ? 'done' : i === currentIdx ? 'active' : '';
+          return `<div class="stage-step ${cls}">
+            <div class="stage-dot"></div>
+            <span class="stage-label">${stageLabels[s]}</span>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="progress-bar"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+      <div class="progress-stats">
+        <span>${processed} / ${data.files_discovered || 0} files</span>
+        <span>${pct.toFixed(0)}%</span>
+      </div>
+      ${data.current_file ? `<div class="progress-current-file">${escHtml(truncPath(data.current_file, 80))}</div>` : ''}
+    </div>
+  `;
+}
+
+function updateProgressDisplay(data) {
+  // Update inline progress if visible on current page
+  const existing = document.querySelector('.scan-progress');
+  if (existing) {
+    const temp = document.createElement('div');
+    temp.innerHTML = renderProgressView(data);
+    existing.replaceWith(temp.firstElementChild);
   }
 }
 
@@ -1291,21 +1637,15 @@ async function renderSettings(el, params, match) {
 
 // ── Actions ──────────────────────────────────────────────────────────────────
 
-async function startScan() {
-  try {
-    await api('/scans', { method: 'POST' });
-    navigate('/scans');
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
 // ── SSE ──────────────────────────────────────────────────────────────────────
+
+window.activeScanProgress = null;
 
 function connectSSE() {
   const es = new EventSource('/api/events');
 
   es.addEventListener('scan_completed', () => {
+    window.activeScanProgress = null;
     setScanIndicator(false);
     route(currentRoute);
   });
@@ -1318,8 +1658,21 @@ function connectSSE() {
   });
 
   es.addEventListener('scan_failed', () => {
+    window.activeScanProgress = null;
     setScanIndicator(false);
     route(currentRoute);
+  });
+
+  es.addEventListener('scan_progress', (e) => {
+    try {
+      const outer = JSON.parse(e.data);
+      const data = outer.data || outer;
+      window.activeScanProgress = data;
+      if (currentRoute === '/scans' || currentRoute.startsWith('/scans/')) {
+        updateProgressDisplay(data);
+      }
+      updateScanIndicatorProgress(data);
+    } catch { /* ignore parse errors */ }
   });
 
   es.addEventListener('config_changed', () => {
@@ -1336,6 +1689,20 @@ function setScanIndicator(visible) {
   const indicator = $('#scan-indicator');
   if (indicator) {
     indicator.classList.toggle('visible', visible);
+  }
+}
+
+function updateScanIndicatorProgress(data) {
+  const indicator = $('#scan-indicator');
+  if (!indicator) return;
+  indicator.classList.add('visible');
+  const span = indicator.querySelector('span:last-child');
+  if (span) {
+    const stage = data.stage || 'scanning';
+    const pct = data.files_discovered > 0
+      ? Math.round(((data.files_parsed || 0) / data.files_discovered) * 100)
+      : 0;
+    span.textContent = `${stage} ${pct}%`;
   }
 }
 

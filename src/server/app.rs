@@ -2,6 +2,8 @@ use crate::server::routes;
 use crate::server::jobs::JobManager;
 use crate::utils::config::Config;
 use axum::Router;
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
@@ -13,6 +15,15 @@ pub enum ServerEvent {
     ScanStarted { job_id: String },
     ScanCompleted { job_id: String },
     ScanFailed { job_id: String, error: String },
+    ScanProgress {
+        job_id: String,
+        stage: String,
+        files_discovered: u64,
+        files_parsed: u64,
+        files_analyzed: u64,
+        current_file: String,
+        elapsed_ms: u64,
+    },
     ConfigChanged,
 }
 
@@ -25,6 +36,7 @@ pub struct AppState {
     pub config: Arc<RwLock<Config>>,
     pub job_manager: Arc<JobManager>,
     pub event_tx: broadcast::Sender<ServerEvent>,
+    pub db_pool: Option<Arc<Pool<SqliteConnectionManager>>>,
 }
 
 /// Build the main axum router with all API routes and static asset fallback.

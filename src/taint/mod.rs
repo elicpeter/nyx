@@ -103,7 +103,7 @@ pub fn analyse_file(
     } else {
         match crate::ssa::lower_to_ssa(cfg, entry, None, true) {
             Ok(mut ssa_body) => {
-                let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg);
+                let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg, Some(caller_lang));
                 tracing::debug!(
                     blocks = ssa_body.blocks.len(),
                     values = ssa_body.num_values(),
@@ -259,7 +259,7 @@ fn analyse_ssa_js_two_level(
 
     // Level 1: top-level SSA (scope=None, nop for function bodies)
     let mut toplevel_ssa = crate::ssa::lower_to_ssa_scoped_nop(cfg, entry, None)?;
-    let toplevel_opt = crate::ssa::optimize_ssa(&mut toplevel_ssa, cfg);
+    let toplevel_opt = crate::ssa::optimize_ssa(&mut toplevel_ssa, cfg, Some(lang));
     tracing::debug!(
         blocks = toplevel_ssa.blocks.len(),
         values = toplevel_ssa.num_values(),
@@ -307,7 +307,7 @@ fn analyse_ssa_js_two_level(
                 Ok(ssa) => ssa,
                 Err(_) => continue, // empty function → skip
             };
-            let func_opt = crate::ssa::optimize_ssa(&mut func_ssa, cfg);
+            let func_opt = crate::ssa::optimize_ssa(&mut func_ssa, cfg, Some(lang));
             let func_transfer = ssa_transfer::SsaTaintTransfer {
                 lang,
                 namespace,

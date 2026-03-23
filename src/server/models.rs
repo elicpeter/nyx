@@ -77,6 +77,16 @@ pub struct ScanView {
     pub duration_secs: Option<f64>,
     pub finding_count: Option<usize>,
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub languages: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files_scanned: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<crate::server::progress::TimingBreakdown>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<crate::server::progress::ScanMetricsSnapshot>,
 }
 
 /// Custom rule view for the config API.

@@ -1,7 +1,9 @@
+use crate::database::index::Indexer;
 use crate::errors::NyxResult;
 use crate::server::app::{AppState, build_router};
 use crate::server::jobs::JobManager;
 use crate::utils::config::Config;
+use crate::utils::project::get_project_info;
 use console::style;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -23,16 +25,30 @@ pub fn handle(
     let port = port.unwrap_or(config.server.port);
     let open_browser = !no_browser && config.server.open_browser;
     let max_jobs = config.server.max_saved_runs as usize;
+    let rayon_stack_size = config.performance.rayon_thread_stack_size;
 
     let (event_tx, _) = tokio::sync::broadcast::channel(64);
+
+    // Initialize DB pool for scan persistence
+    let db_pool = {
+        let (_, db_path) = get_project_info(&scan_root, database_dir)?;
+        match Indexer::init(&db_path) {
+            Ok(pool) => Some(pool),
+            Err(e) => {
+                tracing::warn!("Failed to initialize scan DB: {e}");
+                None
+            }
+        }
+    };
 
     let state = AppState {
         scan_root: scan_root.clone(),
         config_dir: config_dir.to_path_buf(),
         database_dir: database_dir.to_path_buf(),
         config: Arc::new(RwLock::new(config.clone())),
-        job_manager: Arc::new(JobManager::new(max_jobs)),
+        job_manager: Arc::new(JobManager::new(max_jobs, rayon_stack_size)),
         event_tx,
+        db_pool,
     };
 
     let router = build_router(state);
@@ -52,7 +68,7 @@ pub fn handle(
     );
 
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+        .worker_threads(4)
         .enable_all()
         .build()
         .map_err(|e| crate::errors::NyxError::Msg(format!("Failed to build tokio runtime: {e}")))?;

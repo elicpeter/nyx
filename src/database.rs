@@ -60,6 +60,43 @@ pub mod index {
             updated_at INTEGER NOT NULL,
             UNIQUE(project, file_path, name, arity)
         );
+
+        CREATE TABLE IF NOT EXISTS scans (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            scan_root TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            duration_secs REAL,
+            engine_version TEXT,
+            languages TEXT,
+            files_scanned INTEGER,
+            files_skipped INTEGER,
+            finding_count INTEGER,
+            findings_json TEXT,
+            timing_json TEXT,
+            error TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS scan_metrics (
+            scan_id TEXT PRIMARY KEY REFERENCES scans(id) ON DELETE CASCADE,
+            cfg_nodes INTEGER,
+            call_edges INTEGER,
+            functions_analyzed INTEGER,
+            summaries_reused INTEGER,
+            unresolved_calls INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS scan_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id TEXT NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+            timestamp TEXT NOT NULL,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL,
+            file_path TEXT,
+            detail TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_scan_logs_scan ON scan_logs(scan_id);
     "#;
 
     // TODO: ADD CLEANS FOR EACH TABLE BASED ON PROJECT WHICH RUNS ON CLEAN
@@ -72,6 +109,25 @@ pub mod index {
         pub severity: &'a str,
         pub line: i64,
         pub col: i64,
+    }
+
+    /// A scan record for DB persistence.
+    #[derive(Debug, Clone)]
+    pub struct ScanRecord {
+        pub id: String,
+        pub status: String,
+        pub scan_root: String,
+        pub started_at: Option<String>,
+        pub finished_at: Option<String>,
+        pub duration_secs: Option<f64>,
+        pub engine_version: Option<String>,
+        pub languages: Option<String>,
+        pub files_scanned: Option<i64>,
+        pub files_skipped: Option<i64>,
+        pub finding_count: Option<i64>,
+        pub findings_json: Option<String>,
+        pub timing_json: Option<String>,
+        pub error: Option<String>,
     }
 
     pub struct Indexer {
@@ -496,6 +552,261 @@ pub mod index {
         }
 
         // -------------------------------------------------------------------------
+        // Scan persistence
+        // -------------------------------------------------------------------------
+
+        /// Insert a new scan record.
+        pub fn insert_scan(&self, record: &ScanRecord) -> NyxResult<()> {
+            self.c().execute(
+                "INSERT OR REPLACE INTO scans (id, status, scan_root, started_at, finished_at,
+                 duration_secs, engine_version, languages, files_scanned, files_skipped,
+                 finding_count, findings_json, timing_json, error)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    record.id,
+                    record.status,
+                    record.scan_root,
+                    record.started_at,
+                    record.finished_at,
+                    record.duration_secs,
+                    record.engine_version,
+                    record.languages,
+                    record.files_scanned,
+                    record.files_skipped,
+                    record.finding_count,
+                    record.findings_json,
+                    record.timing_json,
+                    record.error,
+                ],
+            )?;
+            Ok(())
+        }
+
+        /// Update a scan record status and completion fields.
+        pub fn update_scan(
+            &self,
+            id: &str,
+            status: &str,
+            finished_at: Option<&str>,
+            duration_secs: Option<f64>,
+            finding_count: Option<i64>,
+            findings_json: Option<&str>,
+            timing_json: Option<&str>,
+            error: Option<&str>,
+            files_scanned: Option<i64>,
+            languages: Option<&str>,
+        ) -> NyxResult<()> {
+            self.c().execute(
+                "UPDATE scans SET status = ?2, finished_at = ?3, duration_secs = ?4,
+                 finding_count = ?5, findings_json = ?6, timing_json = ?7, error = ?8,
+                 files_scanned = ?9, languages = ?10
+                 WHERE id = ?1",
+                params![
+                    id,
+                    status,
+                    finished_at,
+                    duration_secs,
+                    finding_count,
+                    findings_json,
+                    timing_json,
+                    error,
+                    files_scanned,
+                    languages,
+                ],
+            )?;
+            Ok(())
+        }
+
+        /// Get a single scan record by ID.
+        pub fn get_scan(&self, id: &str) -> NyxResult<Option<ScanRecord>> {
+            let result = self
+                .c()
+                .query_row(
+                    "SELECT id, status, scan_root, started_at, finished_at, duration_secs,
+                     engine_version, languages, files_scanned, files_skipped, finding_count,
+                     findings_json, timing_json, error
+                     FROM scans WHERE id = ?1",
+                    params![id],
+                    |row| {
+                        Ok(ScanRecord {
+                            id: row.get(0)?,
+                            status: row.get(1)?,
+                            scan_root: row.get(2)?,
+                            started_at: row.get(3)?,
+                            finished_at: row.get(4)?,
+                            duration_secs: row.get(5)?,
+                            engine_version: row.get(6)?,
+                            languages: row.get(7)?,
+                            files_scanned: row.get(8)?,
+                            files_skipped: row.get(9)?,
+                            finding_count: row.get(10)?,
+                            findings_json: row.get(11)?,
+                            timing_json: row.get(12)?,
+                            error: row.get(13)?,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(result)
+        }
+
+        /// List scan records, most recent first, up to `limit`.
+        pub fn list_scans(&self, limit: i64) -> NyxResult<Vec<ScanRecord>> {
+            let mut stmt = self.c().prepare(
+                "SELECT id, status, scan_root, started_at, finished_at, duration_secs,
+                 engine_version, languages, files_scanned, files_skipped, finding_count,
+                 findings_json, timing_json, error
+                 FROM scans ORDER BY started_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![limit], |row| {
+                    Ok(ScanRecord {
+                        id: row.get(0)?,
+                        status: row.get(1)?,
+                        scan_root: row.get(2)?,
+                        started_at: row.get(3)?,
+                        finished_at: row.get(4)?,
+                        duration_secs: row.get(5)?,
+                        engine_version: row.get(6)?,
+                        languages: row.get(7)?,
+                        files_scanned: row.get(8)?,
+                        files_skipped: row.get(9)?,
+                        finding_count: row.get(10)?,
+                        findings_json: row.get(11)?,
+                        timing_json: row.get(12)?,
+                        error: row.get(13)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok(rows)
+        }
+
+        /// Insert scan metrics for a completed scan.
+        pub fn insert_scan_metrics(
+            &self,
+            scan_id: &str,
+            metrics: &crate::server::progress::ScanMetricsSnapshot,
+        ) -> NyxResult<()> {
+            self.c().execute(
+                "INSERT OR REPLACE INTO scan_metrics (scan_id, cfg_nodes, call_edges,
+                 functions_analyzed, summaries_reused, unresolved_calls)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    scan_id,
+                    metrics.cfg_nodes as i64,
+                    metrics.call_edges as i64,
+                    metrics.functions_analyzed as i64,
+                    metrics.summaries_reused as i64,
+                    metrics.unresolved_calls as i64,
+                ],
+            )?;
+            Ok(())
+        }
+
+        /// Get scan metrics by scan ID.
+        pub fn get_scan_metrics(
+            &self,
+            scan_id: &str,
+        ) -> NyxResult<Option<crate::server::progress::ScanMetricsSnapshot>> {
+            let result = self
+                .c()
+                .query_row(
+                    "SELECT cfg_nodes, call_edges, functions_analyzed,
+                     summaries_reused, unresolved_calls
+                     FROM scan_metrics WHERE scan_id = ?1",
+                    params![scan_id],
+                    |row| {
+                        Ok(crate::server::progress::ScanMetricsSnapshot {
+                            cfg_nodes: row.get::<_, i64>(0)? as u64,
+                            call_edges: row.get::<_, i64>(1)? as u64,
+                            functions_analyzed: row.get::<_, i64>(2)? as u64,
+                            summaries_reused: row.get::<_, i64>(3)? as u64,
+                            unresolved_calls: row.get::<_, i64>(4)? as u64,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(result)
+        }
+
+        /// Insert scan log entries.
+        pub fn insert_scan_logs(
+            &self,
+            scan_id: &str,
+            logs: &[crate::server::scan_log::ScanLogEntry],
+        ) -> NyxResult<()> {
+            let mut stmt = self.c().prepare(
+                "INSERT INTO scan_logs (scan_id, timestamp, level, message, file_path, detail)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for log in logs {
+                stmt.execute(params![
+                    scan_id,
+                    log.timestamp.to_rfc3339(),
+                    log.level.to_string(),
+                    log.message,
+                    log.file_path,
+                    log.detail,
+                ])?;
+            }
+            Ok(())
+        }
+
+        /// Get scan logs, optionally filtered by level.
+        pub fn get_scan_logs(
+            &self,
+            scan_id: &str,
+            level_filter: Option<&str>,
+        ) -> NyxResult<Vec<crate::server::scan_log::ScanLogEntry>> {
+            let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                if let Some(level) = level_filter {
+                    (
+                        "SELECT timestamp, level, message, file_path, detail
+                         FROM scan_logs WHERE scan_id = ?1 AND level = ?2
+                         ORDER BY id ASC",
+                        vec![
+                            Box::new(scan_id.to_string()),
+                            Box::new(level.to_string()),
+                        ],
+                    )
+                } else {
+                    (
+                        "SELECT timestamp, level, message, file_path, detail
+                         FROM scan_logs WHERE scan_id = ?1
+                         ORDER BY id ASC",
+                        vec![Box::new(scan_id.to_string())],
+                    )
+                };
+
+            let mut stmt = self.c().prepare(sql)?;
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    let ts_str: String = row.get(0)?;
+                    let level_str: String = row.get(1)?;
+                    Ok((ts_str, level_str, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?))
+                })?
+                .filter_map(Result::ok)
+                .filter_map(|(ts_str, level_str, message, file_path, detail)| {
+                    let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
+                        .ok()?
+                        .with_timezone(&chrono::Utc);
+                    let level = crate::server::scan_log::LogLevel::from_str(&level_str)?;
+                    Some(crate::server::scan_log::ScanLogEntry {
+                        timestamp,
+                        level,
+                        message,
+                        file_path,
+                        detail,
+                    })
+                })
+                .collect();
+            Ok(rows)
+        }
+
+        // -------------------------------------------------------------------------
         // Maintenance utilities
         // -------------------------------------------------------------------------
         pub fn clear(&self) -> NyxResult<()> {
@@ -503,6 +814,9 @@ pub mod index {
                 r#"
         PRAGMA foreign_keys = OFF;
 
+        DROP TABLE IF EXISTS scan_logs;
+        DROP TABLE IF EXISTS scan_metrics;
+        DROP TABLE IF EXISTS scans;
         DROP TABLE IF EXISTS issues;
         DROP TABLE IF EXISTS files;
         DROP TABLE IF EXISTS function_summaries;
