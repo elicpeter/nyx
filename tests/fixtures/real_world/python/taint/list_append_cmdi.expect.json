@@ -1,10 +1,10 @@
 {
-  "description": "XSS through array operations: req.query.item pushed into array then joined into HTML",
+  "description": "Command injection via list.append: user input appended to list then passed to subprocess.call",
   "tags": [
     "taint",
-    "xss",
-    "express",
-    "array",
+    "cmdi",
+    "flask",
+    "list",
     "container"
   ],
   "modes": [
@@ -16,11 +16,11 @@
       "severity": null,
       "must_match": true,
       "line_range": [
-        3,
-        8
+        6,
+        11
       ],
       "evidence_contains": [],
-      "notes": "array push + join taint tracked via container propagation (Phase 14)"
+      "notes": "request.args.get('cmd') appended to list then passed to subprocess.call"
     }
   ]
 }

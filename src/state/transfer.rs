@@ -316,6 +316,7 @@ mod tests {
             catch_param: false,
             const_text: None,
             arg_callees: Vec::new(),
+            outer_callee: None,
         };
 
         let (state, events) =
@@ -358,6 +359,7 @@ mod tests {
             catch_param: false,
             const_text: None,
             arg_callees: Vec::new(),
+            outer_callee: None,
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -399,6 +401,7 @@ mod tests {
             catch_param: false,
             const_text: None,
             arg_callees: Vec::new(),
+            outer_callee: None,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -441,6 +444,7 @@ mod tests {
             catch_param: false,
             const_text: None,
             arg_callees: Vec::new(),
+            outer_callee: None,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);

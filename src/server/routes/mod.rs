@@ -3,6 +3,7 @@ pub mod events;
 pub mod files;
 pub mod findings;
 pub mod health;
+pub mod overview;
 pub mod rules;
 pub mod scans;
 pub mod triage;
@@ -21,4 +22,5 @@ pub fn api_routes() -> Router<AppState> {
         .merge(rules::routes())
         .merge(events::routes())
         .merge(triage::routes())
+        .merge(overview::routes())
 }

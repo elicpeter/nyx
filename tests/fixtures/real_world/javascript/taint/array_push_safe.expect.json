@@ -1,0 +1,15 @@
+{
+  "description": "No XSS: only constants pushed into array then joined into HTML",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "array",
+    "container",
+    "safe"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
+}

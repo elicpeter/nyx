@@ -7,6 +7,7 @@ pub mod dce;
 #[allow(dead_code)]
 pub mod ir;
 pub mod lower;
+pub mod pointsto;
 pub mod type_facts;
 
 #[allow(unused_imports)]

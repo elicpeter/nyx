@@ -93,6 +93,11 @@ pub struct NodeInfo {
     /// the RHS call callee at position 0 (if the RHS is a call expression).
     /// Used by SSA sink detection for interprocedural sanitizer resolution.
     pub arg_callees: Vec<Option<String>>,
+    /// When `find_classifiable_inner_call` overrides the primary callee
+    /// (e.g. `parts.add(req.getParameter("input"))` → callee becomes
+    /// "req.getParameter"), this field preserves the original outer callee
+    /// ("parts.add") so container propagation can still recognise it.
+    pub outer_callee: Option<String>,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -595,6 +600,7 @@ fn push_condition_node<'a>(
         catch_param: false,
         const_text: None,
         arg_callees: Vec::new(),
+        outer_callee: None,
     })
 }
 
@@ -1423,6 +1429,10 @@ fn push_node<'a>(
 
     // If the outermost call didn't classify, try inner/nested calls.
     // E.g. `str(eval(expr))` — `str` is not a sink, but `eval` is.
+    // When the callee is overridden, save the original for container ops
+    // (e.g. `parts.add(req.getParameter(...))` — callee becomes
+    // "req.getParameter" but outer_callee preserves "parts.add").
+    let mut outer_callee: Option<String> = None;
     if labels.is_empty()
         && matches!(
             lookup(lang, ast.kind()),
@@ -1432,6 +1442,7 @@ fn push_node<'a>(
             find_classifiable_inner_call(ast, lang, code, extra)
     {
         labels.push(inner_label);
+        outer_callee = Some(text.clone());
         text = inner_text;
     }
 
@@ -1667,6 +1678,7 @@ fn push_node<'a>(
         catch_param: false,
         const_text,
         arg_callees,
+        outer_callee,
     });
 
     debug!(
@@ -1948,6 +1960,7 @@ fn build_try<'a>(
                     catch_param: true,
                     const_text: None,
                     arg_callees: Vec::new(),
+                    outer_callee: None,
                 });
 
                 // Wire exception edges from every exception source → synthetic node
@@ -2219,6 +2232,7 @@ fn build_sub<'a>(
                     catch_param: false,
                     const_text: None,
                     arg_callees: Vec::new(),
+                    outer_callee: None,
                 });
                 connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
@@ -2837,6 +2851,7 @@ fn build_sub<'a>(
                 catch_param: false,
                 const_text: None,
                 arg_callees: Vec::new(),
+                outer_callee: None,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -3114,6 +3129,7 @@ pub(crate) fn build_cfg<'a>(
         catch_param: false,
         const_text: None,
         arg_callees: Vec::new(),
+        outer_callee: None,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -3135,6 +3151,7 @@ pub(crate) fn build_cfg<'a>(
         catch_param: false,
         const_text: None,
         arg_callees: Vec::new(),
+        outer_callee: None,
     });
 
     // Build the body below the synthetic ENTRY.

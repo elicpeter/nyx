@@ -324,68 +324,290 @@ function render404(el) {
   `;
 }
 
+// ── SVG Chart Helpers ─────────────────────────────────────────────────────────
+
+function svgHorizontalBar(items, opts = {}) {
+  if (!items || items.length === 0) {
+    return '<div class="empty-state" style="padding:20px"><p>No data</p></div>';
+  }
+  const barH = opts.barHeight || 22;
+  const gap = 4;
+  const labelW = 110;
+  const valueW = 45;
+  const chartW = opts.width || 400;
+  const barAreaW = chartW - labelW - valueW - 16;
+  const totalH = items.length * (barH + gap);
+  const maxVal = opts.maxValue || Math.max(...items.map(i => i.value), 1);
+
+  let svg = `<svg viewBox="0 0 ${chartW} ${totalH}" width="100%" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg">`;
+  items.forEach((item, i) => {
+    const y = i * (barH + gap);
+    const w = Math.max((item.value / maxVal) * barAreaW, 2);
+    const color = item.color || 'var(--accent)';
+    svg += `<text x="${labelW - 8}" y="${y + barH / 2 + 4}" text-anchor="end" font-size="11" font-family="var(--font)" fill="var(--text-secondary)">${escHtml(item.label)}</text>`;
+    svg += `<rect x="${labelW}" y="${y + 2}" width="${w}" height="${barH - 4}" rx="3" fill="${color}" opacity="0.85"/>`;
+    svg += `<text x="${labelW + barAreaW + 8}" y="${y + barH / 2 + 4}" text-anchor="start" font-size="11" font-family="var(--font-mono)" font-weight="600" fill="var(--text)">${item.value}</text>`;
+  });
+  svg += '</svg>';
+  return `<div class="chart-container">${svg}</div>`;
+}
+
+function svgLineChart(points, opts = {}) {
+  if (!points || points.length < 2) {
+    return '<div class="empty-state" style="padding:20px"><p>Need multiple scans for trends</p></div>';
+  }
+  const W = opts.width || 400;
+  const H = opts.height || 160;
+  const pad = { top: 15, right: 15, bottom: 30, left: 40 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  const maxVal = Math.max(...points.map(p => p.value), 1);
+  const minVal = 0;
+  const yRange = maxVal - minVal || 1;
+
+  const xStep = plotW / Math.max(points.length - 1, 1);
+  const coords = points.map((p, i) => ({
+    x: pad.left + i * xStep,
+    y: pad.top + plotH - ((p.value - minVal) / yRange) * plotH,
+    label: p.label,
+    value: p.value,
+  }));
+
+  const polyPoints = coords.map(c => `${c.x},${c.y}`).join(' ');
+  const areaPoints = `${coords[0].x},${pad.top + plotH} ${polyPoints} ${coords[coords.length - 1].x},${pad.top + plotH}`;
+  const color = opts.color || 'var(--accent)';
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg">`;
+  // Grid lines
+  const yTicks = 4;
+  for (let i = 0; i <= yTicks; i++) {
+    const y = pad.top + (i / yTicks) * plotH;
+    const val = Math.round(maxVal - (i / yTicks) * yRange);
+    svg += `<line x1="${pad.left}" y1="${y}" x2="${pad.left + plotW}" y2="${y}" stroke="var(--border-light)" stroke-width="1"/>`;
+    svg += `<text x="${pad.left - 6}" y="${y + 3}" text-anchor="end" font-size="9" font-family="var(--font-mono)" fill="var(--text-tertiary)">${val}</text>`;
+  }
+  // Area fill
+  svg += `<polygon points="${areaPoints}" fill="${color}" opacity="0.08"/>`;
+  // Line
+  svg += `<polyline points="${polyPoints}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  // Dots
+  coords.forEach(c => {
+    svg += `<circle cx="${c.x}" cy="${c.y}" r="3" fill="${color}" stroke="var(--bg)" stroke-width="2"/>`;
+  });
+  // X-axis labels (show subset if many points)
+  const maxLabels = 6;
+  const step = Math.max(1, Math.ceil(coords.length / maxLabels));
+  coords.forEach((c, i) => {
+    if (i % step !== 0 && i !== coords.length - 1) return;
+    const label = formatShortDate(c.label);
+    svg += `<text x="${c.x}" y="${H - 4}" text-anchor="middle" font-size="9" font-family="var(--font)" fill="var(--text-tertiary)">${escHtml(label)}</text>`;
+  });
+  svg += '</svg>';
+  return `<div class="chart-container">${svg}</div>`;
+}
+
+function formatShortDate(isoStr) {
+  if (!isoStr) return '';
+  try {
+    const d = new Date(isoStr);
+    return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  } catch { return ''; }
+}
+
+function renderStatCard(label, value, opts = {}) {
+  let deltaHtml = '';
+  if (opts.delta != null && opts.delta !== 0) {
+    const dir = opts.delta > 0 ? 'up' : 'down';
+    const arrow = opts.delta > 0 ? '&#9650;' : '&#9660;';
+    deltaHtml = `<span class="stat-delta delta-${dir}">${arrow}&nbsp;${Math.abs(opts.delta)}</span>`;
+  }
+  const colorStyle = opts.color ? `color:${opts.color}` : '';
+  const subtitle = opts.subtitle ? `<div class="stat-subtitle">${escHtml(opts.subtitle)}</div>` : '';
+  return `
+    <div class="overview-stat-card">
+      <div class="stat-label">${escHtml(label)}</div>
+      <div class="stat-value" style="${colorStyle}">${value}${deltaHtml}</div>
+      ${subtitle}
+    </div>`;
+}
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 async function renderDashboard(el, params, match) {
-  el.innerHTML = '<div class="loading">Loading dashboard...</div>';
+  el.innerHTML = '<div class="loading">Loading overview...</div>';
   try {
-    const [health, summary, scans] = await Promise.all([
-      api('/health'),
-      api('/findings/summary').catch(() => null),
-      api('/scans'),
+    const [overview, trends] = await Promise.all([
+      api('/overview'),
+      api('/overview/trends').catch(() => []),
     ]);
 
-    const high = summary?.by_severity?.HIGH || 0;
-    const medium = summary?.by_severity?.MEDIUM || 0;
-    const low = summary?.by_severity?.LOW || 0;
-    const total = summary?.total || 0;
+    // ── Empty state ──
+    if (overview.state === 'empty') {
+      el.innerHTML = `
+        <div class="overview-empty">
+          ${ICONS.overview}
+          <h2>Welcome to Nyx</h2>
+          <p>Start your first scan to see security findings and analytics.</p>
+          <button class="btn btn-primary" id="first-scan-btn">Start Scan</button>
+        </div>`;
+      $('#first-scan-btn', el)?.addEventListener('click', openNewScanModal);
+      return;
+    }
 
+    // ── Fresh banner ──
+    const freshBanner = overview.state === 'fresh' ? `
+      <div class="overview-fresh-banner">
+        <strong>Scan completed</strong>
+        <span>${overview.total_findings} finding${overview.total_findings === 1 ? '' : 's'} detected${overview.latest_scan_duration_secs != null ? ' in ' + overview.latest_scan_duration_secs.toFixed(1) + 's' : ''}.</span>
+        <a href="/findings" class="nav-link-internal">View all findings &rarr;</a>
+      </div>` : '';
+
+    // ── Stat cards ──
+    const netDelta = overview.new_since_last - overview.fixed_since_last;
+    const statCards = [
+      renderStatCard('Total Findings', overview.total_findings, {
+        delta: netDelta || null,
+      }),
+      renderStatCard('New', overview.new_since_last, { color: overview.new_since_last > 0 ? 'var(--sev-high)' : undefined }),
+      renderStatCard('Fixed', overview.fixed_since_last, { color: overview.fixed_since_last > 0 ? 'var(--success)' : undefined }),
+      renderStatCard('High Confidence', (overview.high_confidence_rate * 100).toFixed(0) + '%'),
+      renderStatCard('Triage Coverage', (overview.triage_coverage * 100).toFixed(0) + '%'),
+      renderStatCard('Scan Duration', overview.latest_scan_duration_secs != null
+        ? overview.latest_scan_duration_secs.toFixed(1) + 's' : '-'),
+    ].join('');
+
+    // ── Charts ──
+    const sevItems = ['HIGH', 'MEDIUM', 'LOW'].map(s => ({
+      label: s.charAt(0) + s.slice(1).toLowerCase(),
+      value: overview.by_severity[s] || 0,
+      color: s === 'HIGH' ? '#e74c3c' : s === 'MEDIUM' ? '#e67e22' : '#3498db',
+    }));
+
+    const catItems = Object.entries(overview.by_category || {})
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([k, v]) => ({ label: k, value: v, color: '#5856d6' }));
+
+    const langItems = Object.entries(overview.by_language || {})
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([k, v]) => ({ label: k, value: v, color: '#5856d6' }));
+
+    const trendData = trends.map(t => ({ label: t.timestamp, value: t.total }));
+
+    // ── Top tables ──
+    function compactTable(items, nameLabel, countLabel, opts = {}) {
+      if (!items || items.length === 0) return '<div class="empty-state" style="padding:16px"><p>No data</p></div>';
+      const nameKey = opts.nameKey || 'name';
+      const countKey = opts.countKey || 'count';
+      return `<table><thead><tr><th>${escHtml(nameLabel)}</th><th>${escHtml(countLabel)}</th></tr></thead><tbody>
+        ${items.map(item => {
+          const name = item[nameKey];
+          const displayName = opts.truncate ? truncPath(name, 45) : name;
+          return `<tr${opts.clickAttr ? ` class="clickable" ${opts.clickAttr(item)}` : ''}>
+            <td title="${escHtml(name)}">${escHtml(displayName)}</td>
+            <td>${item[countKey]}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>`;
+    }
+
+    const topFilesHtml = compactTable(overview.top_files, 'File', 'Findings', {
+      truncate: true,
+      clickAttr: item => `data-file-path="${escHtml(item.name)}"`,
+    });
+    const topDirsHtml = compactTable(overview.top_directories, 'Directory', 'Findings', {
+      truncate: true,
+    });
+    const topRulesHtml = compactTable(overview.top_rules, 'Rule', 'Findings');
+
+    const recentScansHtml = overview.recent_scans.length === 0
+      ? '<div class="empty-state" style="padding:16px"><p>No scans yet</p></div>'
+      : `<table><thead><tr><th>Status</th><th>Duration</th><th>Findings</th><th>Time</th></tr></thead><tbody>
+        ${overview.recent_scans.slice(0, 5).map(s => `<tr class="clickable" data-scan-id="${escHtml(s.id)}">
+          <td><span class="status-dot ${s.status}"></span> ${escHtml(s.status)}</td>
+          <td>${s.duration_secs != null ? s.duration_secs.toFixed(1) + 's' : '-'}</td>
+          <td>${s.finding_count ?? '-'}</td>
+          <td>${s.started_at ? new Date(s.started_at).toLocaleString() : '-'}</td>
+        </tr>`).join('')}
+      </tbody></table>`;
+
+    // ── Insights ──
+    const insightsHtml = overview.insights.length > 0 ? `
+      <div class="overview-insights">
+        <div class="card">
+          <div class="card-header">Insights</div>
+          <div class="insight-list">
+            ${overview.insights.map(i => `
+              <div class="insight-card insight-${i.severity}">
+                <span>${escHtml(i.message)}</span>
+                ${i.action_url ? `<a href="${escHtml(i.action_url)}" class="nav-link-internal">View &rarr;</a>` : ''}
+              </div>`).join('')}
+          </div>
+        </div>
+      </div>` : '';
+
+    // ── Render ──
     el.innerHTML = `
-      <div class="page-header">
-        <h2>Dashboard</h2>
+      <div class="page-header"><h2>Overview</h2></div>
+      ${freshBanner}
+      <div class="overview-stat-grid">${statCards}</div>
+      <div class="overview-chart-grid">
+        <div class="card">
+          <div class="card-header">Findings Over Time</div>
+          ${svgLineChart(trendData)}
+        </div>
+        <div class="card">
+          <div class="card-header">By Severity</div>
+          ${svgHorizontalBar(sevItems)}
+        </div>
+        <div class="card">
+          <div class="card-header">By Category</div>
+          ${svgHorizontalBar(catItems)}
+        </div>
+        <div class="card">
+          <div class="card-header">By Language</div>
+          ${svgHorizontalBar(langItems)}
+        </div>
       </div>
-      <div class="card-grid">
+      <div class="overview-table-grid">
         <div class="card">
-          <div class="card-header">Total Findings</div>
-          <div class="card-value">${total}</div>
+          <div class="card-header">Top Affected Files</div>
+          ${topFilesHtml}
         </div>
         <div class="card">
-          <div class="card-header">High</div>
-          <div class="card-value" style="color:var(--sev-high)">${high}</div>
+          <div class="card-header">Top Directories</div>
+          ${topDirsHtml}
         </div>
         <div class="card">
-          <div class="card-header">Medium</div>
-          <div class="card-value" style="color:var(--sev-medium)">${medium}</div>
+          <div class="card-header">Top Rules Triggered</div>
+          ${topRulesHtml}
         </div>
         <div class="card">
-          <div class="card-header">Low</div>
-          <div class="card-value" style="color:var(--sev-low)">${low}</div>
+          <div class="card-header">Recent Scans</div>
+          ${recentScansHtml}
         </div>
       </div>
-      <div class="card" style="margin-bottom:16px">
-        <div class="card-header">Scan Root</div>
-        <div style="font-family:var(--font-mono);font-size:0.85rem">${escHtml(health.scan_root)}</div>
-      </div>
-      <div class="card">
-        <div class="card-header">Recent Scans</div>
-        ${scans.length === 0 ? '<div class="empty-state" style="padding:20px"><h3>No scans yet</h3><p>Click "New Scan" to start</p></div>' :
-          `<table><thead><tr><th>Status</th><th>Duration</th><th>Findings</th><th>Time</th></tr></thead><tbody>
-          ${scans.slice(0, 5).map(s => `<tr class="clickable" data-scan-id="${s.id}">
-            <td><span class="status-dot ${s.status}"></span>${s.status}</td>
-            <td>${s.duration_secs != null ? s.duration_secs.toFixed(1) + 's' : '-'}</td>
-            <td>${s.finding_count ?? '-'}</td>
-            <td>${s.started_at ? new Date(s.started_at).toLocaleString() : '-'}</td>
-          </tr>`).join('')}
-          </tbody></table>`
-        }
-      </div>`;
+      ${insightsHtml}
+    `;
 
+    // ── Wire click handlers ──
     $$('[data-scan-id]', el).forEach(row => {
       row.addEventListener('click', () => navigate(`/scans/${row.dataset.scanId}`));
     });
+    $$('[data-file-path]', el).forEach(row => {
+      row.addEventListener('click', () => navigate(`/findings?search=${encodeURIComponent(row.dataset.filePath)}`));
+    });
+    $$('.nav-link-internal', el).forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        navigate(a.getAttribute('href'));
+      });
+    });
   } catch (e) {
     if (isAbortError(e)) return;
-    el.innerHTML = `<div class="error-state"><h3>Error loading dashboard</h3><p>${escHtml(e.message)}</p></div>`;
+    el.innerHTML = `<div class="error-state"><h3>Error loading overview</h3><p>${escHtml(e.message)}</p></div>`;
   }
 }
 
@@ -2349,18 +2571,28 @@ function renderRulesTable(rules, selectedId) {
     return '<div class="empty-state" style="padding:20px"><p>No rules match filters</p></div>';
   }
   return `<table class="rules-table">
+    <colgroup>
+      <col class="col-toggle">
+      <col><!-- title: takes remaining space -->
+      <col class="col-lang">
+      <col class="col-kind">
+      <col class="col-cap">
+      <col class="col-finds">
+    </colgroup>
     <thead><tr>
-      <th style="width:42px"></th><th>Title</th><th>Lang</th><th>Kind</th><th>Cap</th><th style="width:70px">Finds</th>
-    </tr></thead><tbody>
+      <th></th><th>Title</th><th>Lang</th><th>Kind</th><th>Cap</th><th>Finds</th>
+    </tr></thead>
+    <tbody>
     ${rules.map(r => `<tr class="rule-row${r.id === selectedId ? ' selected' : ''}${!r.enabled ? ' rule-disabled' : ''}" data-rule-id="${escHtml(r.id)}">
       <td><button class="rule-toggle${r.enabled ? ' toggle-on' : ' toggle-off'}" data-rule-id="${escHtml(r.id)}" title="${r.enabled ? 'Disable' : 'Enable'}">${r.enabled ? 'On' : 'Off'}</button></td>
-      <td>${escHtml(r.title)}${r.is_custom ? ' <span class="badge-custom">custom</span>' : ''}${r.is_gated ? ' <span class="badge-builtin">gated</span>' : ''}</td>
+      <td class="col-title-cell"><span class="rule-title-text">${escHtml(r.title)}${r.is_custom ? ' <span class="badge-custom">custom</span>' : ''}${r.is_gated ? ' <span class="badge-builtin">gated</span>' : ''}</span></td>
       <td>${escHtml(r.language)}</td>
       <td><span class="badge badge-${r.kind}">${escHtml(r.kind)}</span></td>
       <td>${escHtml(r.cap)}</td>
       <td>${r.finding_count}</td>
     </tr>`).join('')}
-  </tbody></table>`;
+    </tbody>
+  </table>`;
 }
 
 function renderRuleDetail(rule) {

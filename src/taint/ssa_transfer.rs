@@ -1352,15 +1352,48 @@ fn transfer_inst(
                 }
                 return_bits &= !sanitizer_bits;
             } else if !resolved_callee {
-                // Curl special case: propagate URL taint to handle
-                if try_curl_url_propagation(inst, info, args, state) {
-                    return;
+                // Container operation propagation (push/pop/get/set/etc.)
+                // Try the primary callee first, then fall back to outer_callee
+                // (set when find_classifiable_inner_call overrides the callee,
+                // e.g. `parts.add(req.getParameter("input"))` — callee is
+                // "req.getParameter" but outer_callee is "parts.add").
+                let mut container_handled = try_container_propagation(
+                    inst, info, args, receiver, state, transfer.lang, callee, ssa,
+                );
+                if !container_handled {
+                    if let Some(ref oc) = info.outer_callee {
+                        container_handled = try_container_propagation(
+                            inst, info, args, receiver, state, transfer.lang, oc, ssa,
+                        );
+                    }
                 }
-                // No labels and no summary — default propagation (gen/kill)
-                let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
-                if return_bits.is_empty() {
-                    return_bits = use_caps;
-                    return_origins = use_origins;
+                if container_handled {
+                    // When this call node is also a Source (e.g. items.push(req.query.item)
+                    // where req.query.item triggers a Source label on the call), merge
+                    // the source taint into the container receiver too.
+                    if !return_bits.is_empty() {
+                        let recv_callee = info.outer_callee.as_deref().unwrap_or(callee);
+                        if let Some(container_val) = find_container_receiver(
+                            recv_callee, receiver, args, ssa, transfer.lang,
+                        ) {
+                            merge_taint_into(state, container_val, return_bits, &return_origins);
+                        }
+                    }
+                    // Fall through to write return_bits to inst.value if non-empty
+                    if return_bits.is_empty() {
+                        return;
+                    }
+                } else {
+                    // Curl special case: propagate URL taint to handle
+                    if try_curl_url_propagation(inst, info, args, state) {
+                        return;
+                    }
+                    // No labels and no summary — default propagation (gen/kill)
+                    let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
+                    if return_bits.is_empty() {
+                        return_bits = use_caps;
+                        return_origins = use_origins;
+                    }
                 }
             }
 
@@ -1884,6 +1917,194 @@ fn try_curl_url_propagation(
     true
 }
 
+/// Handle container operations: propagate taint between receiver and arguments.
+///
+/// **Store** operations (push, append, set, add, insert, etc.):
+///   Merge value-argument taint into receiver SSA value.
+///
+/// **Load** operations (pop, get, join, shift, values, etc.):
+///   Propagate receiver taint to the instruction's result value.
+///
+/// Returns `true` if the operation was handled and the caller should skip
+/// default propagation.
+fn try_container_propagation(
+    inst: &SsaInst,
+    _info: &NodeInfo,
+    args: &[SmallVec<[SsaValue; 2]>],
+    receiver: &Option<SsaValue>,
+    state: &mut SsaTaintState,
+    lang: Lang,
+    callee: &str,
+    ssa: &SsaBody,
+) -> bool {
+    use crate::ssa::pointsto::{classify_container_op, ContainerOp};
+
+    let op = match classify_container_op(callee, lang) {
+        Some(op) => op,
+        None => return false,
+    };
+
+    // Resolve the container SSA value.
+    // Languages with `Kind::CallMethod` (Java, Ruby, PHP, Rust, etc.) set
+    // `receiver` explicitly. For languages like JS/TS where method calls are
+    // `Kind::CallFn`, the receiver is embedded in the args. We find it by
+    // looking for an SSA value whose var_name matches the receiver portion
+    // of the dotted callee (e.g. "items" from "items.push").
+    let resolve_container = |recv: &Option<SsaValue>| -> Option<SsaValue> {
+        if let Some(v) = *recv {
+            return Some(v);
+        }
+        // Go append: no receiver, arg 0 is the slice
+        if lang == Lang::Go {
+            return args.first().and_then(|a| a.first().copied());
+        }
+        // For dotted callees like "items.push", find the SSA value for "items"
+        let dot_pos = callee.rfind('.')?;
+        let receiver_name = &callee[..dot_pos];
+        // Search all arg groups for an SSA value with matching var_name
+        for arg_group in args {
+            for &v in arg_group {
+                if let Some(def) = ssa.value_defs.get(v.0 as usize) {
+                    if def.var_name.as_deref() == Some(receiver_name) {
+                        return Some(v);
+                    }
+                }
+            }
+        }
+        None
+    };
+
+    match op {
+        ContainerOp::Store { value_args } => {
+            let container_val = match resolve_container(receiver) {
+                Some(v) => v,
+                None => return false,
+            };
+
+            // For Go append, value args start after the slice (arg 0).
+            // For CallMethod languages (Java, Ruby, PHP, Rust), the receiver
+            // is prepended to arg_uses[0] by the CFG builder, so real args
+            // start at index 1.
+            let arg_offset = if lang == Lang::Go && receiver.is_none() {
+                1usize
+            } else if receiver.is_some() {
+                1usize
+            } else {
+                0
+            };
+
+            // Collect taint from value argument(s)
+            let mut val_caps = Cap::empty();
+            let mut val_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+            for &arg_idx in &value_args {
+                let effective_idx = arg_idx + arg_offset;
+                if let Some(arg_vals) = args.get(effective_idx) {
+                    for &v in arg_vals {
+                        if let Some(taint) = state.get(v) {
+                            val_caps |= taint.caps;
+                            for orig in &taint.origins {
+                                if val_origins.len() < MAX_ORIGINS
+                                    && !val_origins.iter().any(|o| o.node == orig.node)
+                                {
+                                    val_origins.push(*orig);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if val_caps.is_empty() {
+                return true; // Container op handled, but no taint to propagate
+            }
+
+            // Merge taint into container receiver (monotone: caps OR, origins union)
+            merge_taint_into(state, container_val, val_caps, &val_origins);
+
+            // For Go append, the result is the new slice — propagate merged taint
+            if lang == Lang::Go && receiver.is_none() {
+                if let Some(merged) = state.get(container_val) {
+                    state.set(inst.value, merged.clone());
+                }
+            }
+
+            true
+        }
+        ContainerOp::Load => {
+            let container_val = match resolve_container(receiver) {
+                Some(v) => v,
+                None => return false,
+            };
+            if let Some(taint) = state.get(container_val) {
+                state.set(inst.value, taint.clone());
+            }
+            true
+        }
+    }
+}
+
+/// Find the container receiver SSA value for a container operation.
+/// Reuses the same logic as `try_container_propagation`'s resolve_container.
+fn find_container_receiver(
+    callee: &str,
+    receiver: &Option<SsaValue>,
+    args: &[SmallVec<[SsaValue; 2]>],
+    ssa: &SsaBody,
+    lang: Lang,
+) -> Option<SsaValue> {
+    if let Some(v) = *receiver {
+        return Some(v);
+    }
+    if lang == Lang::Go {
+        return args.first().and_then(|a| a.first().copied());
+    }
+    let dot_pos = callee.rfind('.')?;
+    let receiver_name = &callee[..dot_pos];
+    for arg_group in args {
+        for &v in arg_group {
+            if let Some(def) = ssa.value_defs.get(v.0 as usize) {
+                if def.var_name.as_deref() == Some(receiver_name) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Merge taint caps and origins into an existing SSA value's taint (monotone).
+fn merge_taint_into(
+    state: &mut SsaTaintState,
+    target: SsaValue,
+    caps: Cap,
+    origins: &SmallVec<[TaintOrigin; 2]>,
+) {
+    match state.get(target) {
+        Some(existing) => {
+            let mut merged = existing.clone();
+            merged.caps |= caps;
+            for orig in origins {
+                if merged.origins.len() < MAX_ORIGINS
+                    && !merged.origins.iter().any(|o| o.node == orig.node)
+                {
+                    merged.origins.push(*orig);
+                }
+            }
+            state.set(target, merged);
+        }
+        None => {
+            state.set(
+                target,
+                VarTaint {
+                    caps,
+                    origins: origins.clone(),
+                    uses_summary: false,
+                },
+            );
+        }
+    }
+}
+
 /// Resolve sink caps from labels or callee summary.
 fn resolve_sink_caps(info: &NodeInfo, transfer: &SsaTaintTransfer) -> Cap {
     let label_sink_caps = info.labels.iter().fold(Cap::empty(), |acc, lbl| {
@@ -1976,12 +2197,26 @@ fn apply_field_aware_suppression(
             return true;
         }
         let prefix = format!("{}.", base);
+        // Collect callee-like names to exclude from field suppression.
+        // Method call expressions like "items.join" (from inner calls within
+        // this node's arguments) should NOT be treated as field accesses.
+        let callee_name = match &inst.op {
+            SsaOp::Call { callee, .. } => Some(callee.as_str()),
+            _ => None,
+        };
+        // Also check if any OTHER Call instruction in the same block uses a
+        // dotted name matching "base.X" — those are method calls, not field reads.
         let has_untainted_field = all_used.iter().any(|&u| {
             if u == *v {
                 return false;
             }
             ssa.def_of(u).var_name.as_deref().is_some_and(|uname| {
                 uname.starts_with(&prefix)
+                    // Skip the callee expression of this call
+                    && callee_name.map_or(true, |cn| uname != cn)
+                    // Skip values whose name looks like a method call expression
+                    // (e.g., "items.join" is a method call, not a field access)
+                    && !is_likely_method_expression(uname)
                     && match state.get(u) {
                         None => true,
                         Some(t) => (t.caps & sink_caps).is_empty(),
@@ -1990,6 +2225,35 @@ fn apply_field_aware_suppression(
         });
         !has_untainted_field
     });
+}
+
+/// Check if a dotted var_name looks like a method call expression rather than
+/// a field access. E.g., "items.join" where "join" is a method name, vs
+/// "obj.data" which is a field access.
+///
+/// Used by field-aware suppression to avoid treating method call expressions
+/// as untainted field accesses (which would incorrectly suppress base-ident taint).
+fn is_likely_method_expression(name: &str) -> bool {
+    // Check if the dotted name matches any Call callee in the SSA body,
+    // or if its suffix is a known function/method name.
+    let suffix = name.rsplit('.').next().unwrap_or(name);
+    // Common method names that are unlikely to be data field names.
+    // This is a heuristic; it doesn't need to be exhaustive because
+    // false negatives just mean slightly more conservative (no suppression).
+    matches!(
+        suffix,
+        "push" | "pop" | "shift" | "unshift"
+            | "join" | "split" | "concat" | "slice" | "splice"
+            | "map" | "filter" | "reduce" | "forEach" | "find" | "some" | "every"
+            | "get" | "set" | "has" | "delete" | "add" | "remove" | "clear"
+            | "keys" | "values" | "entries" | "toString" | "valueOf"
+            | "send" | "write" | "end" | "render" | "redirect"
+            | "append" | "extend" | "insert" | "update" | "items"
+            | "call" | "apply" | "bind" | "then" | "catch"
+            | "trim" | "replace" | "match" | "search" | "test"
+            | "log" | "warn" | "error" | "info" | "debug"
+            | "execute" | "query" | "fetch" | "request"
+    )
 }
 
 /// Get all SSA values used by an instruction.

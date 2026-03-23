@@ -557,3 +557,116 @@ pub fn summarize_findings(findings: &[Diag]) -> FindingSummary {
 
     summary
 }
+
+// ── Overview Types ───────────────────────────────────────────────────────────
+
+/// Full response for GET /api/overview.
+#[derive(Debug, Clone, Serialize)]
+pub struct OverviewResponse {
+    pub state: String,
+    pub total_findings: usize,
+    pub new_since_last: usize,
+    pub fixed_since_last: usize,
+    pub high_confidence_rate: f64,
+    pub triage_coverage: f64,
+    pub latest_scan_duration_secs: Option<f64>,
+    pub latest_scan_id: Option<String>,
+    pub latest_scan_at: Option<String>,
+    pub by_severity: HashMap<String, usize>,
+    pub by_category: HashMap<String, usize>,
+    pub by_language: HashMap<String, usize>,
+    pub top_files: Vec<OverviewCount>,
+    pub top_directories: Vec<OverviewCount>,
+    pub top_rules: Vec<OverviewCount>,
+    pub noisy_rules: Vec<NoisyRule>,
+    pub recent_scans: Vec<ScanSummary>,
+    pub insights: Vec<Insight>,
+}
+
+/// A name + count pair for overview top-N lists.
+#[derive(Debug, Clone, Serialize)]
+pub struct OverviewCount {
+    pub name: String,
+    pub count: usize,
+}
+
+/// A rule that has high finding count + high suppression rate.
+#[derive(Debug, Clone, Serialize)]
+pub struct NoisyRule {
+    pub rule_id: String,
+    pub finding_count: usize,
+    pub suppression_rate: f64,
+}
+
+/// Compact scan info for the overview recent-scans list.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanSummary {
+    pub id: String,
+    pub status: String,
+    pub started_at: Option<String>,
+    pub duration_secs: Option<f64>,
+    pub finding_count: Option<i64>,
+}
+
+/// An actionable insight for the overview page.
+#[derive(Debug, Clone, Serialize)]
+pub struct Insight {
+    pub kind: String,
+    pub message: String,
+    pub severity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_url: Option<String>,
+}
+
+/// A single trend data point for GET /api/overview/trends.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrendPoint {
+    pub scan_id: String,
+    pub timestamp: String,
+    pub total: usize,
+    pub by_severity: HashMap<String, usize>,
+}
+
+/// Count findings grouped by language.
+pub fn by_language_from_findings(findings: &[Diag]) -> HashMap<String, usize> {
+    let mut map = HashMap::new();
+    for d in findings {
+        if let Some(lang) = lang_for_finding_path(&d.path) {
+            *map.entry(lang).or_insert(0) += 1;
+        }
+    }
+    map
+}
+
+/// Extract top N directories by finding count.
+pub fn top_directories_from_findings(findings: &[Diag], limit: usize) -> Vec<OverviewCount> {
+    let mut dir_counts: HashMap<String, usize> = HashMap::new();
+    for d in findings {
+        let dir = match d.path.rfind('/') {
+            Some(i) => &d.path[..i],
+            None => ".",
+        };
+        *dir_counts.entry(dir.to_string()).or_insert(0) += 1;
+    }
+    let mut sorted: Vec<_> = dir_counts.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted.truncate(limit);
+    sorted
+        .into_iter()
+        .map(|(name, count)| OverviewCount { name, count })
+        .collect()
+}
+
+/// Sort a HashMap by value descending, take top N, return as OverviewCount.
+pub fn top_n_from_map(map: &HashMap<String, usize>, limit: usize) -> Vec<OverviewCount> {
+    let mut sorted: Vec<_> = map.iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(a.1));
+    sorted
+        .into_iter()
+        .take(limit)
+        .map(|(name, &count)| OverviewCount {
+            name: name.clone(),
+            count,
+        })
+        .collect()
+}
