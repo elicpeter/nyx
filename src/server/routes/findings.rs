@@ -1,6 +1,6 @@
 use crate::server::app::AppState;
 use crate::server::models::{
-    collect_filter_values, finding_from_diag, finding_from_diag_with_context, summarize_findings,
+    collect_filter_values, finding_from_diag, finding_from_diag_with_detail, summarize_findings,
     FilterValues, FindingSummary, FindingView,
 };
 use axum::extract::{Path, Query, State};
@@ -176,9 +176,10 @@ async fn get_finding(
         .ok_or(StatusCode::NOT_FOUND)?;
     let findings = job.findings.as_deref().unwrap_or(&[]);
     let diag = findings.get(index).ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(finding_from_diag_with_context(
+    Ok(Json(finding_from_diag_with_detail(
         index,
         diag,
         &state.scan_root,
+        findings,
     )))
 }

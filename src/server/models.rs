@@ -1,10 +1,20 @@
 use crate::commands::scan::Diag;
-use crate::evidence::Confidence;
+use crate::evidence::{Confidence, Evidence};
 use crate::patterns::{FindingCategory, Severity};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
+
+/// Compact related-finding reference for the detail panel.
+#[derive(Debug, Clone, Serialize)]
+pub struct RelatedFindingView {
+    pub index: usize,
+    pub rule_id: String,
+    pub path: String,
+    pub line: usize,
+    pub severity: Severity,
+}
 
 /// Serializable API representation of a Diag finding.
 #[derive(Debug, Clone, Serialize)]
@@ -26,6 +36,16 @@ pub struct FindingView {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_context: Option<CodeContextView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<Evidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank_reason: Option<Vec<(String, String)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sanitizer_status: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub related_findings: Vec<RelatedFindingView>,
 }
 
 /// Lines of source code around a finding for display.
@@ -166,6 +186,11 @@ pub fn finding_from_diag(index: usize, d: &Diag) -> FindingView {
         language: lang_for_finding_path(&d.path),
         status: status_for_diag(d).to_string(),
         code_context: None,
+        evidence: None,
+        guard_kind: None,
+        rank_reason: None,
+        sanitizer_status: None,
+        related_findings: vec![],
     }
 }
 
@@ -178,6 +203,61 @@ pub fn finding_from_diag_with_context(
     let mut view = finding_from_diag(index, d);
     view.code_context = load_code_context(&d.path, d.line, scan_root);
     view
+}
+
+/// Convert a Diag to a FindingView with full detail (evidence, related findings).
+pub fn finding_from_diag_with_detail(
+    index: usize,
+    d: &Diag,
+    scan_root: &Path,
+    all_findings: &[Diag],
+) -> FindingView {
+    let mut view = finding_from_diag_with_context(index, d, scan_root);
+
+    // Evidence (pass through the core type directly)
+    view.evidence = d.evidence.clone();
+    view.guard_kind = d.guard_kind.clone();
+    view.rank_reason = d.rank_reason.clone();
+
+    // Sanitizer status
+    view.sanitizer_status = Some(compute_sanitizer_status(d));
+
+    // Related findings: same rule_id OR same file, excluding self, capped at 10
+    let mut related = Vec::new();
+    for (i, other) in all_findings.iter().enumerate() {
+        if i == index {
+            continue;
+        }
+        if other.id == d.id || other.path == d.path {
+            related.push(RelatedFindingView {
+                index: i,
+                rule_id: other.id.clone(),
+                path: other.path.clone(),
+                line: other.line,
+                severity: other.severity,
+            });
+            if related.len() >= 10 {
+                break;
+            }
+        }
+    }
+    view.related_findings = related;
+
+    view
+}
+
+/// Compute the sanitizer status for a diagnostic based on its evidence.
+fn compute_sanitizer_status(d: &Diag) -> String {
+    match &d.evidence {
+        Some(ev) if !ev.sanitizers.is_empty() => {
+            if d.suppressed {
+                "applied".into()
+            } else {
+                "bypassed".into()
+            }
+        }
+        _ => "none".into(),
+    }
 }
 
 /// Load surrounding lines of code for a finding.

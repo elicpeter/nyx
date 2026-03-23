@@ -105,6 +105,7 @@ async function api(path, opts = {}) {
 let currentRoute = '/';
 let appMeta = null;
 let selectedFindings = new Set();
+const fileCache = new Map();
 
 // ── Router ───────────────────────────────────────────────────────────────────
 
@@ -408,6 +409,17 @@ async function renderFindings(el, params, match) {
       api('/findings/filters').catch(() => null),
     ]);
 
+    renderFullWidthFindings(el, data, filters, state);
+  } catch (e) {
+    if (e.message.includes('404')) {
+      el.innerHTML = '<div class="empty-state"><h3>No scan results yet</h3><p>Run a scan first to see findings.</p></div>';
+    } else {
+      el.innerHTML = `<div class="error-state"><h3>Error</h3><p>${escHtml(e.message)}</p></div>`;
+    }
+  }
+}
+
+function renderFullWidthFindings(el, data, filters, state) {
     const totalPages = Math.ceil(data.total / data.per_page) || 1;
     const page = data.page;
     const hasAnyFilter = state.severity || state.category || state.confidence
@@ -498,7 +510,7 @@ async function renderFindings(el, params, match) {
 
     // ── Event listeners ──
 
-    // Row click → detail (skip if clicking checkbox)
+    // Row click → navigate to detail page (skip if clicking checkbox)
     $$('[data-finding]', el).forEach(row => {
       row.addEventListener('click', (e) => {
         if (e.target.type === 'checkbox') return;
@@ -589,16 +601,9 @@ async function renderFindings(el, params, match) {
     $('#page-last')?.addEventListener('click', () => setFindingsState({ page: String(totalPages) }));
 
     updateBulkBar();
-  } catch (e) {
-    if (e.message.includes('404')) {
-      el.innerHTML = '<div class="empty-state"><h3>No scan results yet</h3><p>Run a scan first to see findings.</p></div>';
-    } else {
-      el.innerHTML = `<div class="error-state"><h3>Error</h3><p>${escHtml(e.message)}</p></div>`;
-    }
-  }
 }
 
-// ── Finding Detail ───────────────────────────────────────────────────────────
+// ── Finding Detail Page ──────────────────────────────────────────────────────
 
 async function renderFindingDetail(el, params, match) {
   const index = params.id;
@@ -606,44 +611,385 @@ async function renderFindingDetail(el, params, match) {
   try {
     const f = await api(`/findings/${index}`);
 
-    el.innerHTML = `
-      <div class="detail-header">
-        <button class="btn btn-sm" id="back-btn" style="margin-bottom:12px">Back to Findings</button>
-        <h2>${escHtml(f.rule_id)}</h2>
-        <div class="detail-meta">
-          <span class="badge badge-${f.severity.toLowerCase()}">${f.severity}</span>
-          <span>${escHtml(f.category)}</span>
-          <span style="font-family:var(--font-mono)">${escHtml(f.path)}:${f.line}:${f.col}</span>
-          ${f.confidence ? `<span>Confidence: ${escHtml(f.confidence)}</span>` : ''}
-          ${f.rank_score != null ? `<span>Score: ${f.rank_score.toFixed(1)}</span>` : ''}
-        </div>
-      </div>
-      ${f.message ? `<div class="detail-section"><h3>Message</h3><p>${escHtml(f.message)}</p></div>` : ''}
-      ${f.labels.length > 0 ? `
-        <div class="detail-section">
-          <h3>Evidence Labels</h3>
-          <div class="label-list">
-            ${f.labels.map(([k, v]) => `<span class="label-item"><span class="label-key">${escHtml(k)}:</span> <span class="label-value">${escHtml(v)}</span></span>`).join('')}
-          </div>
-        </div>` : ''}
-      ${f.code_context ? `
-        <div class="detail-section">
-          <h3>Code</h3>
-          <div class="code-block">
-            ${f.code_context.lines.map((line, i) => {
-              const lineNum = f.code_context.start_line + i;
-              const isHighlight = lineNum === f.code_context.highlight_line;
-              return `<div class="code-line${isHighlight ? ' highlight' : ''}"><span class="line-number">${lineNum}</span><span class="line-content">${escHtml(line)}</span></div>`;
-            }).join('')}
-          </div>
-        </div>` : ''}
-    `;
+    const sanitizerBadge = f.sanitizer_status
+      ? `<span class="badge sanitizer-badge-${f.sanitizer_status}">${f.sanitizer_status === 'none' ? 'No sanitizers' : f.sanitizer_status === 'bypassed' ? 'Sanitizer bypassed' : 'Sanitized'}</span>`
+      : '';
 
+    const evidenceHtml = buildEvidenceHtml(f);
+    const confidenceHtml = buildConfidenceHtml(f);
+    const relatedHtml = buildRelatedHtml(f);
+    const notesHtml = buildNotesHtml(f);
+
+    el.innerHTML = `
+      <div class="detail-panel">
+        <button class="btn btn-sm" id="back-btn" style="margin-bottom:var(--space-4)">Back to Findings</button>
+        <h2>${escHtml(f.rule_id)}</h2>
+        <div class="badge-row">
+          <span class="badge badge-${f.severity.toLowerCase()}">${f.severity}</span>
+          ${f.confidence ? `<span class="badge badge-conf-${f.confidence.toLowerCase()}">${f.confidence}</span>` : ''}
+          <span class="badge">${escHtml(f.category)}</span>
+          <span class="badge badge-status-${f.status}">${f.status}</span>
+          ${sanitizerBadge}
+        </div>
+        <a href="#" class="file-location" id="open-code-viewer" data-path="${escHtml(f.path)}" data-line="${f.line}">${escHtml(f.path)}:${f.line}:${f.col}</a>
+
+        ${f.message || (f.evidence && (f.evidence.source || f.evidence.sink)) ? `
+          <div class="detail-section">
+            <div class="section-toggle" data-section="why">
+              <span class="toggle-arrow">&#9660;</span> Why Nyx Reported This
+            </div>
+            <div class="section-body" id="section-why">
+              ${f.message ? `<p style="margin-bottom:var(--space-3)">${escHtml(f.message)}</p>` : ''}
+              ${f.evidence && f.evidence.source ? `<p class="evidence-note">Tainted data flows from <strong>${escHtml(f.evidence.source.kind)}</strong> at line ${f.evidence.source.line} to a dangerous operation.</p>` : ''}
+              ${f.evidence && f.evidence.sink ? `<p class="evidence-note">Sink at line ${f.evidence.sink.line}${f.evidence.sink.snippet ? ': <code>' + escHtml(f.evidence.sink.snippet) + '</code>' : ''}</p>` : ''}
+              ${f.guard_kind ? `<p class="evidence-note">Guard: ${escHtml(f.guard_kind)}</p>` : ''}
+            </div>
+          </div>` : ''}
+
+        ${evidenceHtml ? `
+          <div class="detail-section">
+            <div class="section-toggle" data-section="evidence">
+              <span class="toggle-arrow">&#9660;</span> Evidence
+            </div>
+            <div class="section-body" id="section-evidence">${evidenceHtml}</div>
+          </div>` : ''}
+
+        ${notesHtml ? `
+          <div class="detail-section">
+            <div class="section-toggle" data-section="notes">
+              <span class="toggle-arrow">&#9660;</span> Analysis Notes
+            </div>
+            <div class="section-body" id="section-notes">${notesHtml}</div>
+          </div>` : ''}
+
+        ${confidenceHtml ? `
+          <div class="detail-section">
+            <div class="section-toggle" data-section="confidence">
+              <span class="toggle-arrow">&#9660;</span> Confidence Reasoning
+            </div>
+            <div class="section-body" id="section-confidence">${confidenceHtml}</div>
+          </div>` : ''}
+
+        ${relatedHtml ? `
+          <div class="detail-section">
+            <div class="section-toggle" data-section="related">
+              <span class="toggle-arrow">&#9660;</span> Related Findings
+            </div>
+            <div class="section-body" id="section-related">${relatedHtml}</div>
+          </div>` : ''}
+
+        ${f.labels.length > 0 ? `
+          <div class="detail-section">
+            <div class="section-toggle" data-section="labels">
+              <span class="toggle-arrow">&#9660;</span> Labels
+            </div>
+            <div class="section-body" id="section-labels">
+              <div class="label-list">
+                ${f.labels.map(([k, v]) => `<span class="label-item"><span class="label-key">${escHtml(k)}:</span> <span class="label-value">${escHtml(v)}</span></span>`).join('')}
+              </div>
+            </div>
+          </div>` : ''}
+
+        ${f.code_context ? `
+          <div class="detail-section">
+            <div class="section-toggle" data-section="code-preview">
+              <span class="toggle-arrow">&#9660;</span> Code Preview
+            </div>
+            <div class="section-body" id="section-code-preview">
+              <div class="code-block">
+                ${f.code_context.lines.map((line, i) => {
+                  const lineNum = f.code_context.start_line + i;
+                  const isHighlight = lineNum === f.code_context.highlight_line;
+                  return `<div class="code-line${isHighlight ? ' highlight' : ''}"><span class="line-number">${lineNum}</span><span class="line-content">${escHtml(line)}</span></div>`;
+                }).join('')}
+              </div>
+            </div>
+          </div>` : ''}
+      </div>`;
+
+    // Back button
     $('#back-btn')?.addEventListener('click', () => navigate('/findings'));
+
+    // File location → open code modal
+    $('#open-code-viewer')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      openCodeModal(f);
+    });
+
+    // Collapsible section toggles
+    $$('.section-toggle', el).forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const sectionId = toggle.dataset.section;
+        const body = $(`#section-${sectionId}`, el);
+        const arrow = $('.toggle-arrow', toggle);
+        if (body) body.classList.toggle('collapsed');
+        if (arrow) arrow.classList.toggle('collapsed');
+      });
+    });
+
+    // Related finding clicks → navigate to that finding's detail page
+    $$('.related-row', el).forEach(row => {
+      row.addEventListener('click', () => navigate(`/findings/${row.dataset.finding}`));
+    });
+
   } catch (e) {
     el.innerHTML = `<div class="error-state"><h3>Finding not found</h3><p>${escHtml(e.message)}</p></div>`;
   }
 }
+
+function buildEvidenceHtml(f) {
+  if (!f.evidence) return '';
+  const cards = [];
+
+  if (f.evidence.source) {
+    const s = f.evidence.source;
+    cards.push(`<div class="evidence-card">
+      <div class="evidence-kind" style="color:var(--success)">Source</div>
+      <div>${escHtml(s.path)}:${s.line}:${s.col}</div>
+      ${s.snippet ? `<div class="evidence-snippet">${escHtml(s.snippet)}</div>` : ''}
+    </div>`);
+  }
+
+  if (f.evidence.sink) {
+    const s = f.evidence.sink;
+    cards.push(`<div class="evidence-card">
+      <div class="evidence-kind" style="color:var(--sev-high)">Sink</div>
+      <div>${escHtml(s.path)}:${s.line}:${s.col}</div>
+      ${s.snippet ? `<div class="evidence-snippet">${escHtml(s.snippet)}</div>` : ''}
+    </div>`);
+  }
+
+  for (const g of (f.evidence.guards || [])) {
+    cards.push(`<div class="evidence-card">
+      <div class="evidence-kind" style="color:var(--accent)">Guard</div>
+      <div>${escHtml(g.path)}:${g.line}:${g.col}</div>
+      ${g.snippet ? `<div class="evidence-snippet">${escHtml(g.snippet)}</div>` : ''}
+    </div>`);
+  }
+
+  for (const s of (f.evidence.sanitizers || [])) {
+    cards.push(`<div class="evidence-card">
+      <div class="evidence-kind" style="color:var(--sev-medium)">Sanitizer</div>
+      <div>${escHtml(s.path)}:${s.line}:${s.col}</div>
+      ${s.snippet ? `<div class="evidence-snippet">${escHtml(s.snippet)}</div>` : ''}
+    </div>`);
+  }
+
+  if (f.evidence.state) {
+    const st = f.evidence.state;
+    cards.push(`<div class="evidence-card">
+      <div class="evidence-kind">State: ${escHtml(st.machine)}</div>
+      <div>${st.subject ? escHtml(st.subject) + ': ' : ''}${escHtml(st.from_state)} &rarr; ${escHtml(st.to_state)}</div>
+    </div>`);
+  }
+
+  return cards.join('');
+}
+
+function buildNotesHtml(f) {
+  if (!f.evidence || !f.evidence.notes || f.evidence.notes.length === 0) return '';
+  const items = f.evidence.notes.map(note => {
+    // Parse known note formats into readable text
+    if (note.startsWith('source_kind:')) {
+      const kind = note.split(':')[1];
+      const readable = { UserInput: 'User Input', EnvironmentConfig: 'Environment/Config', Database: 'Database', FileSystem: 'File System', CaughtException: 'Caught Exception', Unknown: 'Unclassified' };
+      return `Source type: ${readable[kind] || kind}`;
+    }
+    if (note.startsWith('hop_count:')) return `Path length: ${note.split(':')[1]} blocks`;
+    if (note === 'uses_summary') return 'Uses cross-file summary';
+    if (note === 'path_validated') return 'Path has validation guard';
+    if (note.startsWith('cap_specificity:')) return `Cap specificity: ${note.split(':')[1]}`;
+    if (note.startsWith('degraded:')) return `Degraded analysis: ${note.split(':')[1]}`;
+    return note;
+  });
+  return `<ul style="list-style:disc;padding-left:20px;margin:0">${items.map(n => `<li class="evidence-note">${escHtml(n)}</li>`).join('')}</ul>`;
+}
+
+function buildConfidenceHtml(f) {
+  if (!f.confidence) return '';
+  let html = `<span class="badge badge-conf-${f.confidence.toLowerCase()}">${f.confidence}</span>`;
+  if (f.rank_score != null) {
+    html += ` <span style="margin-left:var(--space-2);font-size:var(--text-sm);color:var(--text-secondary)">Score: ${f.rank_score.toFixed(1)}</span>`;
+  }
+  if (f.rank_reason && f.rank_reason.length > 0) {
+    html += '<div style="margin-top:var(--space-2)">';
+    for (const [k, v] of f.rank_reason) {
+      html += `<div class="evidence-note"><strong>${escHtml(k)}:</strong> ${escHtml(v)}</div>`;
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+function buildRelatedHtml(f) {
+  if (!f.related_findings || f.related_findings.length === 0) return '';
+  return f.related_findings.map(r =>
+    `<div class="related-row" data-finding="${r.index}">
+      <span class="badge badge-${r.severity.toLowerCase()}">${r.severity.charAt(0)}</span>
+      <span style="font-size:var(--text-xs)">${escHtml(r.rule_id)}</span>
+      <span class="cell-path" style="font-size:var(--text-xs);max-width:200px">${escHtml(truncPath(r.path, 30))}:${r.line}</span>
+    </div>`
+  ).join('');
+}
+
+// ── Code Viewer Modal ────────────────────────────────────────────────────────
+
+async function openCodeModal(f) {
+  // Create modal overlay
+  const modal = document.createElement('div');
+  modal.className = 'code-modal-overlay';
+  modal.innerHTML = `
+    <div class="code-modal">
+      <div class="code-modal-header">
+        <span class="code-modal-title">${escHtml(f.path)}</span>
+        <button class="btn btn-sm code-modal-close" id="code-modal-close">Close</button>
+      </div>
+      <div class="code-modal-body">
+        <div class="loading" style="padding:40px;text-align:center">Loading file...</div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  // Close handlers
+  const close = () => modal.remove();
+  $('#code-modal-close', modal).addEventListener('click', close);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  const onKey = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); } };
+  document.addEventListener('keydown', onKey);
+
+  try {
+    let fileData = fileCache.get(f.path);
+    if (!fileData) {
+      fileData = await api(`/files?path=${encodeURIComponent(f.path)}`);
+      fileCache.set(f.path, fileData);
+    }
+
+    const sourceLine = f.evidence?.source?.line;
+    const sinkLine = f.evidence?.sink?.line;
+    const findingLine = f.line;
+    const lang = (f.language || '').toLowerCase();
+
+    const body = $('.code-modal-body', modal);
+    body.innerHTML = `<div class="code-viewer-body">${fileData.lines.map(l => {
+      let cls = 'code-line';
+      if (l.number === sourceLine) cls += ' highlight-source';
+      else if (l.number === sinkLine) cls += ' highlight-sink';
+      else if (l.number === findingLine) cls += ' highlight-finding';
+      return `<div class="${cls}" data-line="${l.number}"><span class="line-number">${l.number}</span><span class="line-content">${highlightSyntax(escHtml(l.content), lang)}</span></div>`;
+    }).join('')}</div>`;
+
+    // Scroll to finding line
+    requestAnimationFrame(() => {
+      const target = $(`[data-line="${findingLine}"]`, modal);
+      if (target) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  } catch (e) {
+    const body = $('.code-modal-body', modal);
+    if (body) body.innerHTML = `<div class="error-state" style="padding:40px"><p>Could not load file: ${escHtml(e.message)}</p></div>`;
+  }
+}
+
+// ── Syntax Highlighting ─────────────────────────────────────────────────────
+
+const SYNTAX_RULES = {
+  javascript: {
+    keywords: /\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|this|class|extends|import|export|from|default|try|catch|finally|throw|async|await|yield|typeof|instanceof|in|of|null|undefined|true|false)\b/g,
+    strings: /(["'`])(?:(?!\1|\\).|\\.)*?\1/g,
+    comments: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm,
+    numbers: /\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/gi,
+  },
+  typescript: null, // filled below
+  python: {
+    keywords: /\b(def|class|return|if|elif|else|for|while|import|from|as|try|except|finally|raise|with|yield|lambda|pass|break|continue|and|or|not|in|is|None|True|False|self|async|await|global|nonlocal)\b/g,
+    strings: /("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g,
+    comments: /(#.*$)/gm,
+    numbers: /\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/gi,
+  },
+  go: {
+    keywords: /\b(func|return|if|else|for|range|switch|case|default|break|continue|go|defer|select|chan|map|struct|interface|package|import|var|const|type|nil|true|false|make|new|append|len|cap|error)\b/g,
+    strings: /(["'`])(?:(?!\1|\\).|\\.)*?\1/g,
+    comments: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm,
+    numbers: /\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/gi,
+  },
+  java: {
+    keywords: /\b(public|private|protected|static|final|abstract|class|interface|extends|implements|return|if|else|for|while|do|switch|case|break|continue|new|this|super|try|catch|finally|throw|throws|import|package|void|int|long|double|float|boolean|char|byte|short|String|null|true|false|instanceof|synchronized|volatile|transient)\b/g,
+    strings: /(["'])(?:(?!\1|\\).|\\.)*?\1/g,
+    comments: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm,
+    numbers: /\b(\d+\.?\d*(?:e[+-]?\d+)?[lLfFdD]?)\b/g,
+  },
+  rust: {
+    keywords: /\b(fn|let|mut|const|static|return|if|else|for|while|loop|match|break|continue|use|mod|pub|crate|self|super|struct|enum|impl|trait|where|type|as|in|ref|move|async|await|unsafe|extern|dyn|true|false|None|Some|Ok|Err|Self)\b/g,
+    strings: /(["'])(?:(?!\1|\\).|\\.)*?\1/g,
+    comments: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm,
+    numbers: /\b(\d+\.?\d*(?:e[+-]?\d+)?(?:_\d+)*[uif]?\d*)\b/g,
+  },
+  php: {
+    keywords: /\b(function|return|if|else|elseif|for|foreach|while|do|switch|case|break|continue|class|extends|implements|new|public|private|protected|static|echo|print|require|include|use|namespace|try|catch|finally|throw|null|true|false|array|isset|empty|unset)\b/g,
+    strings: /(["'])(?:(?!\1|\\).|\\.)*?\1/g,
+    comments: /(\/\/.*$|#.*$|\/\*[\s\S]*?\*\/)/gm,
+    numbers: /\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/gi,
+  },
+  ruby: {
+    keywords: /\b(def|end|class|module|return|if|elsif|else|unless|for|while|until|do|begin|rescue|ensure|raise|yield|block_given\?|require|include|extend|attr_accessor|attr_reader|attr_writer|self|nil|true|false|and|or|not|in|then|when|case)\b/g,
+    strings: /(["'])(?:(?!\1|\\).|\\.)*?\1/g,
+    comments: /(#.*$)/gm,
+    numbers: /\b(\d+\.?\d*(?:e[+-]?\d+)?)\b/gi,
+  },
+  c: {
+    keywords: /\b(int|char|float|double|void|long|short|unsigned|signed|const|static|extern|struct|union|enum|typedef|return|if|else|for|while|do|switch|case|break|continue|goto|sizeof|NULL|true|false|include|define|ifdef|ifndef|endif)\b/g,
+    strings: /(["'])(?:(?!\1|\\).|\\.)*?\1/g,
+    comments: /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm,
+    numbers: /\b(\d+\.?\d*(?:e[+-]?\d+)?[uUlLfF]*)\b/g,
+  },
+};
+SYNTAX_RULES.typescript = SYNTAX_RULES.javascript;
+SYNTAX_RULES['c++'] = SYNTAX_RULES.c;
+
+function highlightSyntax(escapedHtml, lang) {
+  const rules = SYNTAX_RULES[lang];
+  if (!rules) return escapedHtml;
+
+  // Tokenize: find all matches, sort by position, apply non-overlapping spans
+  const tokens = [];
+  const addTokens = (regex, cls) => {
+    regex.lastIndex = 0;
+    let m;
+    while ((m = regex.exec(escapedHtml)) !== null) {
+      tokens.push({ start: m.index, end: m.index + m[0].length, cls, text: m[0] });
+    }
+  };
+
+  // Order matters: comments first (highest priority), then strings, then keywords/numbers
+  addTokens(rules.comments, 'tok-comment');
+  addTokens(rules.strings, 'tok-string');
+  addTokens(rules.keywords, 'tok-keyword');
+  addTokens(rules.numbers, 'tok-number');
+
+  // Sort by start position
+  tokens.sort((a, b) => a.start - b.start);
+
+  // Remove overlapping tokens (earlier/higher-priority wins)
+  const filtered = [];
+  let lastEnd = 0;
+  for (const t of tokens) {
+    if (t.start >= lastEnd) {
+      filtered.push(t);
+      lastEnd = t.end;
+    }
+  }
+
+  // Build result
+  let result = '';
+  let pos = 0;
+  for (const t of filtered) {
+    result += escapedHtml.slice(pos, t.start);
+    result += `<span class="${t.cls}">${t.text}</span>`;
+    pos = t.end;
+  }
+  result += escapedHtml.slice(pos);
+  return result;
+}
+
 
 // ── Scans ────────────────────────────────────────────────────────────────────
 

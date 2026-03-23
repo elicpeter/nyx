@@ -142,6 +142,7 @@ This plan breaks the full vision into phases, each scoped for one Claude Code se
 - Add `GET /api/scans/:id/findings` endpoint (findings filtered to a specific scan).
 
 ### Frontend
+- Remove the "New Scan" button from the dashboard that;s not in the header, also the "New Scan" button from the scan tab not in header.
 - **New Scan dialog**: Modal with inputs for scan root, profile, languages, include/exclude paths, advanced options (debug mode, emit graphs). Start button. Links from header "Start Scan" button.
 - **Scan progress view**: When scan is running, show real-time progress: stage indicator (discovering → parsing → analyzing → complete), file counts with progress bar, current file being processed, elapsed time, cancel button. Uses SSE events. No spinner — real data.
 - **Scan detail page** (`/scans/:id`): Tabbed layout:

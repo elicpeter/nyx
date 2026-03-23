@@ -1,5 +1,6 @@
 pub mod config;
 pub mod events;
+pub mod files;
 pub mod findings;
 pub mod health;
 pub mod scans;
@@ -12,6 +13,7 @@ pub fn api_routes() -> Router<AppState> {
     Router::new()
         .merge(health::routes())
         .merge(findings::routes())
+        .merge(files::routes())
         .merge(scans::routes())
         .merge(config::routes())
         .merge(events::routes())

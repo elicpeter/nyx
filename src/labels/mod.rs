@@ -283,6 +283,9 @@ pub fn infer_source_kind(caps: Cap, callee: &str) -> SourceKind {
         || cl.contains("body")
         || cl.contains("header")
         || cl.contains("cookie")
+        || cl.contains("location")
+        || cl.contains("document.url")
+        || cl.contains("document.referrer")
     {
         return SourceKind::UserInput;
     }
