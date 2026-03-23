@@ -451,6 +451,10 @@ pub struct ServerConfig {
     pub persist_runs: bool,
     /// Maximum number of saved runs to keep.
     pub max_saved_runs: u32,
+    /// Auto-sync triage decisions to `.nyx/triage.json` in the project root.
+    /// When enabled, triage changes are written to this file so they can be
+    /// committed to git and shared across team members.
+    pub triage_sync: bool,
 }
 
 impl Default for ServerConfig {
@@ -463,6 +467,7 @@ impl Default for ServerConfig {
             auto_reload: true,
             persist_runs: true,
             max_saved_runs: 50,
+            triage_sync: true,
         }
     }
 }

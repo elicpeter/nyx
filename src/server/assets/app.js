@@ -2044,9 +2044,13 @@ async function renderTriage(el, params, match) {
             <button class="triage-tab" data-tab="audit">Audit Log (${auditEntries.length})</button>
           </div>
           <div class="triage-sync-controls">
-            <span class="triage-sync-status">${syncStatus.file_exists
-              ? `<span class="triage-sync-dot synced"></span> .nyx/triage.json (${syncStatus.decisions} decisions)`
-              : '<span class="triage-sync-dot unsynced"></span> No sync file'}</span>
+            ${syncStatus.sync_enabled ? (() => {
+              if (syncStatus.file_exists) {
+                return `<span class="triage-sync-status"><span class="triage-sync-dot synced"></span> .nyx/triage.json (${syncStatus.decisions} decisions)</span>`;
+              } else {
+                return '<span class="triage-sync-status"><span class="triage-sync-dot unsynced"></span> No sync file</span>';
+              }
+            })() : '<span class="triage-sync-status"><span class="triage-sync-dot unsynced"></span> Sync disabled</span>'}
             <button class="btn btn-sm" id="triage-export" title="Save triage decisions to .nyx/triage.json for team sharing via git">Export</button>
             ${syncStatus.file_exists ? `<button class="btn btn-sm" id="triage-import" title="Load triage decisions from .nyx/triage.json">Import</button>` : ''}
           </div>
