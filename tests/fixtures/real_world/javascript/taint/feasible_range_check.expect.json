@@ -1,0 +1,15 @@
+{
+  "description": "Feasible nested range: n > 0 AND n < 100 is satisfiable. The eval MUST produce a finding — regression guard against over-pruning.",
+  "tags": ["taint", "constraint", "feasible", "regression-guard"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 11],
+      "evidence_contains": [],
+      "notes": "req.query.x flows to eval — feasible path, must not be pruned"
+    }
+  ]
+}

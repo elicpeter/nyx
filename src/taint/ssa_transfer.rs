@@ -10,6 +10,7 @@ use crate::symbol::Lang;
 use crate::state::symbol::{SymbolId, SymbolInterner};
 use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint, predicate_kind_bit};
 use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
+use crate::constraint;
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 use std::cell::RefCell;
@@ -35,6 +36,9 @@ pub struct SsaTaintState {
     /// abstract heap identity. Separate from `values` so container taint
     /// persists independently of the SSA value referencing the container.
     pub heap: HeapState,
+    /// Path constraint environment (Phase 15). `None` when constraint
+    /// solving is disabled via `NYX_CONSTRAINT=0`.
+    pub path_env: Option<constraint::PathEnv>,
 }
 
 impl SsaTaintState {
@@ -45,12 +49,18 @@ impl SsaTaintState {
             validated_may: SmallBitSet::empty(),
             predicates: SmallVec::new(),
             heap: HeapState::empty(),
+            path_env: if constraint::is_enabled() {
+                Some(constraint::PathEnv::empty())
+            } else {
+                None
+            },
         }
     }
 
-    /// Check if any variable has contradictory predicates.
+    /// Check if any variable has contradictory predicates or path constraints.
     pub fn has_contradiction(&self) -> bool {
         self.predicates.iter().any(|(_, s)| s.has_contradiction())
+            || self.path_env.as_ref().is_some_and(|e| e.is_unsat())
     }
 
     pub fn get(&self, v: SsaValue) -> Option<&VarTaint> {
@@ -85,7 +95,11 @@ impl Lattice for SsaTaintState {
         let validated_may = self.validated_may.union(other.validated_may);
         let predicates = merge_join_ssa_predicates(&self.predicates, &other.predicates);
         let heap = self.heap.join(&other.heap);
-        SsaTaintState { values, validated_must, validated_may, predicates, heap }
+        let path_env = match (&self.path_env, &other.path_env) {
+            (Some(a), Some(b)) => Some(a.join(b)),
+            _ => None, // absent = Top, Top.join(x) = Top
+        };
+        SsaTaintState { values, validated_must, validated_may, predicates, heap, path_env }
     }
 
     fn leq(&self, other: &Self) -> bool {
@@ -100,6 +114,24 @@ impl Lattice for SsaTaintState {
         }
         if !self.heap.leq(&other.heap) {
             return false;
+        }
+        // path_env: None (Top) ≥ everything; Some(a) ≤ None only if a is Top-equivalent
+        match (&self.path_env, &other.path_env) {
+            (None, Some(_)) => return false, // Top is NOT ≤ constrained
+            (Some(_), None) => {} // constrained ≤ Top: ok
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                // a ≤ b means a has at least as many constraints as b.
+                // For the worklist to converge, we only need: if the
+                // joined state didn't change, we stop. The PartialEq
+                // check on the full SsaTaintState handles this.
+                // For leq, we use a simple approximation: a ≤ b iff
+                // a.fact_count() >= b.fact_count() (more facts = lower).
+                // This is sound for convergence but approximate.
+                if a.fact_count() < b.fact_count() {
+                    return false;
+                }
+            }
         }
         true
     }
@@ -336,6 +368,15 @@ pub fn run_ssa_taint_full(
     let mut block_states: Vec<Option<SsaTaintState>> = vec![None; num_blocks];
     block_states[ssa.entry.0 as usize] = Some(SsaTaintState::initial());
 
+    // Phase 15: Seed entry block's PathEnv from optimization results
+    if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
+        if let Some(ref mut env) = entry_state.path_env {
+            if let (Some(cv), Some(tf)) = (transfer.const_values, transfer.type_facts) {
+                env.seed_from_optimization(cv, tf);
+            }
+        }
+    }
+
     // Per-predecessor exit states for path-sensitive phi evaluation
     let mut pred_states: PredStates = HashMap::new();
 
@@ -379,7 +420,7 @@ pub fn run_ssa_taint_full(
         );
 
         // Build per-successor states (branch-aware for Branch terminators)
-        let succ_states = compute_succ_states(block, cfg, transfer, &exit_state);
+        let succ_states = compute_succ_states(block, cfg, ssa, transfer, &exit_state);
 
         // Store predecessor-specific states before joining
         for &(succ_id, ref succ_state) in &succ_states {
@@ -419,6 +460,7 @@ pub fn run_ssa_taint_full(
             let catch_idx = catch_blk.0 as usize;
             let mut exc_state = exit_state.clone();
             exc_state.predicates.clear();
+            exc_state.path_env = None; // constraints don't survive exceptions
 
 
             let new_catch_state = match &block_states[catch_idx] {
@@ -657,6 +699,15 @@ fn transfer_block(
                     continue;
                 }
 
+                // Phase 15: Skip predecessor operands from infeasible paths
+                if let Some(ps) = pred_states {
+                    if let Some(pred_st) = ps.get(&(block_idx, pred_blk.0 as usize)) {
+                        if pred_st.path_env.as_ref().is_some_and(|e| e.is_unsat()) {
+                            continue;
+                        }
+                    }
+                }
+
                 // Use predecessor-specific state when available (path sensitivity)
                 let operand_taint = if let Some(ps) = pred_states {
                     ps.get(&(block_idx, pred_blk.0 as usize))
@@ -746,6 +797,7 @@ fn transfer_block(
 fn compute_succ_states(
     block: &SsaBlock,
     cfg: &Cfg,
+    ssa: &SsaBody,
     transfer: &SsaTaintTransfer,
     exit_state: &SsaTaintState,
 ) -> SmallVec<[(BlockId, SsaTaintState); 2]> {
@@ -809,6 +861,35 @@ fn compute_succ_states(
                     false_polarity,
                     transfer.interner,
                 );
+
+                // Phase 15: Constraint refinement
+                if true_state.path_env.is_some() || false_state.path_env.is_some() {
+                    let cond_expr = constraint::lower_condition(
+                        cond_info, ssa, block.id, transfer.const_values,
+                    );
+                    if !matches!(cond_expr, constraint::ConditionExpr::Unknown) {
+                        if let Some(ref mut env) = true_state.path_env {
+                            *env = constraint::refine_env(env, &cond_expr, !effective_negated);
+                            if env.is_unsat() {
+                                tracing::debug!(
+                                    block = ?block.id,
+                                    cond = cond_text,
+                                    "constraint: pruned true branch (unsat)"
+                                );
+                            }
+                        }
+                        if let Some(ref mut env) = false_state.path_env {
+                            *env = constraint::refine_env(env, &cond_expr, effective_negated);
+                            if env.is_unsat() {
+                                tracing::debug!(
+                                    block = ?block.id,
+                                    cond = cond_text,
+                                    "constraint: pruned false branch (unsat)"
+                                );
+                            }
+                        }
+                    }
+                }
 
                 // Contradiction pruning
                 if true_state.has_contradiction() {
@@ -1654,6 +1735,64 @@ fn transfer_inst(
 
         SsaOp::Phi(_) => {
             // Phis processed separately above — shouldn't appear in body
+        }
+    }
+
+    // Phase 15: Constraint propagation through instructions
+    if let Some(ref mut env) = state.path_env {
+        match &inst.op {
+            SsaOp::Assign(uses) if uses.len() == 1 => {
+                // Copy: propagate facts from source to destination
+                let src_fact = env.get(uses[0]);
+                if !src_fact.is_top() {
+                    env.refine(inst.value, &src_fact);
+                    env.assert_equal(inst.value, uses[0]);
+                }
+            }
+            SsaOp::Const(Some(text)) => {
+                // Constant: seed fact from literal value
+                if let Some(cv) = constraint::ConstValue::parse_literal(text) {
+                    let mut fact = constraint::ValueFact::top();
+                    fact.exact = Some(cv.clone());
+                    match &cv {
+                        constraint::ConstValue::Int(i) => {
+                            fact.lo = Some(*i);
+                            fact.hi = Some(*i);
+                            fact.types = constraint::TypeSet::singleton(
+                                &crate::ssa::type_facts::TypeKind::Int,
+                            );
+                            fact.null = constraint::Nullability::NonNull;
+                        }
+                        constraint::ConstValue::Bool(b) => {
+                            fact.bool_state = if *b {
+                                constraint::BoolState::True
+                            } else {
+                                constraint::BoolState::False
+                            };
+                            fact.types = constraint::TypeSet::singleton(
+                                &crate::ssa::type_facts::TypeKind::Bool,
+                            );
+                            fact.null = constraint::Nullability::NonNull;
+                        }
+                        constraint::ConstValue::Null => {
+                            fact.null = constraint::Nullability::Null;
+                            fact.types = constraint::TypeSet::singleton(
+                                &crate::ssa::type_facts::TypeKind::Null,
+                            );
+                        }
+                        constraint::ConstValue::Str(_) => {
+                            fact.types = constraint::TypeSet::singleton(
+                                &crate::ssa::type_facts::TypeKind::String,
+                            );
+                            fact.null = constraint::Nullability::NonNull;
+                        }
+                    }
+                    env.refine(inst.value, &fact);
+                }
+            }
+            _ => {
+                // All other ops: no constraint propagation (conservative)
+            }
         }
     }
 }

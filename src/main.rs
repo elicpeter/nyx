@@ -2,6 +2,7 @@ mod ast;
 mod callgraph;
 mod cfg;
 mod cfg_analysis;
+mod constraint;
 mod cli;
 mod commands;
 mod database;

@@ -1,0 +1,15 @@
+{
+  "description": "Infeasible nested equality: action === 'safe' AND action === 'dangerous' is contradictory. Only the outer eval should produce a finding.",
+  "tags": ["taint", "constraint", "infeasible", "equality"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 12],
+      "evidence_contains": [],
+      "notes": "req.query.action flows to outer eval — reachable path"
+    }
+  ]
+}

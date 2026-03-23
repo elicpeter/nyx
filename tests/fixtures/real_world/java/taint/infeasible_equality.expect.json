@@ -1,0 +1,15 @@
+{
+  "description": "Infeasible nested equality: action.equals('view') AND action.equals('delete') is contradictory. Only the outer exec should produce a finding.",
+  "tags": ["taint", "constraint", "infeasible", "equality"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [7, 15],
+      "evidence_contains": [],
+      "notes": "req.getParameter flows to outer Runtime.exec — reachable path"
+    }
+  ]
+}
