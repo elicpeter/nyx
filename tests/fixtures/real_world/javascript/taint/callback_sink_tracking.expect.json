@@ -1,0 +1,36 @@
+{
+  "description": "Callback tracking: child_process.exec passed as callback to apply(), tainted data flows through.",
+  "tags": [
+    "taint",
+    "callback",
+    "context-sensitivity",
+    "cmd-injection"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        11,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.cmd flows through apply() where child_process.exec is invoked as callback — command injection"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        12,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "Additional flow path: tainted data through apply() return to res.send"
+    }
+  ]
+}

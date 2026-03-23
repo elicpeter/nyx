@@ -4,6 +4,7 @@ pub mod files;
 pub mod findings;
 pub mod health;
 pub mod scans;
+pub mod triage;
 
 use crate::server::app::AppState;
 use axum::Router;
@@ -17,4 +18,5 @@ pub fn api_routes() -> Router<AppState> {
         .merge(scans::routes())
         .merge(config::routes())
         .merge(events::routes())
+        .merge(triage::routes())
 }

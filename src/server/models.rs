@@ -16,10 +16,26 @@ pub struct RelatedFindingView {
     pub severity: Severity,
 }
 
+/// Valid triage states for findings.
+pub const VALID_TRIAGE_STATES: &[&str] = &[
+    "open",
+    "investigating",
+    "false_positive",
+    "accepted_risk",
+    "suppressed",
+    "fixed",
+];
+
+/// Check if a string is a valid triage state.
+pub fn is_valid_triage_state(s: &str) -> bool {
+    VALID_TRIAGE_STATES.contains(&s)
+}
+
 /// Serializable API representation of a Diag finding.
 #[derive(Debug, Clone, Serialize)]
 pub struct FindingView {
     pub index: usize,
+    pub fingerprint: String,
     pub path: String,
     pub line: usize,
     pub col: usize,
@@ -34,6 +50,9 @@ pub struct FindingView {
     pub suppressed: bool,
     pub language: Option<String>,
     pub status: String,
+    pub triage_state: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub triage_note: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_context: Option<CodeContextView>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,6 +157,11 @@ pub fn collect_filter_values(findings: &[Diag]) -> FilterValues {
         statuses.insert(status_for_diag(d).to_string());
     }
 
+    // Always include all valid triage states so the filter dropdown is complete
+    for s in VALID_TRIAGE_STATES {
+        statuses.insert(s.to_string());
+    }
+
     FilterValues {
         severities: severities.into_iter().collect(),
         categories: categories.into_iter().collect(),
@@ -181,6 +205,7 @@ fn status_for_diag(d: &Diag) -> &'static str {
 pub fn finding_from_diag(index: usize, d: &Diag) -> FindingView {
     FindingView {
         index,
+        fingerprint: compute_fingerprint(d),
         path: d.path.clone(),
         line: d.line,
         col: d.col,
@@ -195,6 +220,8 @@ pub fn finding_from_diag(index: usize, d: &Diag) -> FindingView {
         suppressed: d.suppressed,
         language: lang_for_finding_path(&d.path),
         status: status_for_diag(d).to_string(),
+        triage_state: "open".to_string(),
+        triage_note: String::new(),
         code_context: None,
         evidence: None,
         guard_kind: None,
@@ -294,6 +321,130 @@ fn load_code_context(path: &str, line: usize, scan_root: &Path) -> Option<CodeCo
         lines,
         highlight_line: line,
     })
+}
+
+// ── Scan Comparison Types ────────────────────────────────────────────────────
+
+/// Full response from the scan comparison endpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct CompareResponse {
+    pub left_scan: CompareScanInfo,
+    pub right_scan: CompareScanInfo,
+    pub summary: CompareSummary,
+    pub new_findings: Vec<ComparedFinding>,
+    pub fixed_findings: Vec<ComparedFinding>,
+    pub changed_findings: Vec<ChangedFinding>,
+    pub unchanged_findings: Vec<ComparedFinding>,
+}
+
+/// Minimal scan metadata for comparison headers.
+#[derive(Debug, Clone, Serialize)]
+pub struct CompareScanInfo {
+    pub id: String,
+    pub started_at: Option<String>,
+    pub finding_count: usize,
+}
+
+/// Aggregate counts and severity deltas for a comparison.
+#[derive(Debug, Clone, Serialize)]
+pub struct CompareSummary {
+    pub new_count: usize,
+    pub fixed_count: usize,
+    pub changed_count: usize,
+    pub unchanged_count: usize,
+    pub severity_delta: HashMap<String, i64>,
+}
+
+/// A finding annotated with its fingerprint for comparison views.
+#[derive(Debug, Clone, Serialize)]
+pub struct ComparedFinding {
+    pub fingerprint: String,
+    #[serde(flatten)]
+    pub finding: FindingView,
+}
+
+/// A finding that exists in both scans but with changed properties.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangedFinding {
+    pub fingerprint: String,
+    #[serde(flatten)]
+    pub finding: FindingView,
+    pub changes: Vec<FieldChange>,
+}
+
+/// A single field that differs between two scans for the same fingerprint.
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldChange {
+    pub field: String,
+    pub old_value: String,
+    pub new_value: String,
+}
+
+/// Compute a stable fingerprint for a finding based on identity fields.
+///
+/// The fingerprint is a blake3 hash of (rule_id, file_path, sink_snippet,
+/// source_snippet, function_context). Line/col are intentionally excluded
+/// so that fingerprints survive code movement.
+pub fn compute_fingerprint(d: &Diag) -> String {
+    let sink_snippet = d
+        .evidence
+        .as_ref()
+        .and_then(|e| e.sink.as_ref())
+        .and_then(|s| s.snippet.as_deref())
+        .unwrap_or("");
+    let source_snippet = d
+        .evidence
+        .as_ref()
+        .and_then(|e| e.source.as_ref())
+        .and_then(|s| s.snippet.as_deref())
+        .unwrap_or("");
+    let func_ctx = d
+        .evidence
+        .as_ref()
+        .and_then(|e| e.flow_steps.iter().find_map(|s| s.function.as_deref()))
+        .unwrap_or("");
+    let input = format!(
+        "{}\0{}\0{}\0{}\0{}",
+        d.id, d.path, sink_snippet, source_snippet, func_ctx
+    );
+    blake3::hash(input.as_bytes()).to_hex().to_string()
+}
+
+/// Overlay triage states from the database onto a slice of FindingViews.
+///
+/// For each finding, first checks for an explicit triage state by fingerprint.
+/// If none, checks suppression rules in order: fingerprint → rule → rule_in_file → file.
+pub fn overlay_triage_states(
+    views: &mut [FindingView],
+    triage_map: &std::collections::HashMap<String, (String, String, String)>,
+    suppression_rules: &[crate::database::index::SuppressionRule],
+) {
+    for view in views.iter_mut() {
+        if let Some((state, note, _)) = triage_map.get(&view.fingerprint) {
+            view.triage_state = state.clone();
+            view.triage_note = note.clone();
+            view.status = state.clone();
+        } else {
+            for rule in suppression_rules {
+                let matches = match rule.suppress_by.as_str() {
+                    "fingerprint" => view.fingerprint == rule.match_value,
+                    "rule" => view.rule_id == rule.match_value,
+                    "rule_in_file" => {
+                        let key = format!("{}:{}", view.rule_id, view.path);
+                        key == rule.match_value
+                    }
+                    "file" => view.path == rule.match_value,
+                    _ => false,
+                };
+                if matches {
+                    view.triage_state = rule.state.clone();
+                    view.triage_note = rule.note.clone();
+                    view.status = rule.state.clone();
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /// Build a summary from a slice of findings.

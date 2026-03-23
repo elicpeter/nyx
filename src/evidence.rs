@@ -86,13 +86,13 @@ pub struct FlowStep {
     pub file: String,
     pub line: u32,
     pub col: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snippet: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variable: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callee: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_cross_file: bool,
@@ -106,27 +106,27 @@ pub struct FlowStep {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Evidence {
     /// Where tainted data originated.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<SpanEvidence>,
 
     /// Where the dangerous operation happens.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sink: Option<SpanEvidence>,
 
     /// Validation guards protecting this path.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guards: Vec<SpanEvidence>,
 
     /// Sanitizers applied to this path.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sanitizers: Vec<SpanEvidence>,
 
     /// State-machine evidence (resource lifecycle / auth).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<StateEvidence>,
 
     /// Free-form notes for ranking and display.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 
     /// Step-by-step taint flow from source to sink.
@@ -134,7 +134,7 @@ pub struct Evidence {
     pub flow_steps: Vec<FlowStep>,
 
     /// Human-readable explanation of the finding.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explanation: Option<String>,
 
     /// Reasons why confidence is not higher.
@@ -165,7 +165,7 @@ pub struct SpanEvidence {
     pub col: u32,
     /// One of: `"source"`, `"sink"`, `"guard"`, `"sanitizer"`.
     pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snippet: Option<String>,
 }
 
@@ -175,7 +175,7 @@ pub struct StateEvidence {
     /// The state machine: `"resource"` or `"auth"`.
     pub machine: String,
     /// Variable name if available.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
     /// State before the event.
     pub from_state: String,

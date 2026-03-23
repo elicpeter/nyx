@@ -117,6 +117,7 @@ mod tests {
             span: (0, 0),
             labels: SmallVec::new(),
             defines: None,
+            extra_defines: vec![],
             uses: vec![],
             callee: None,
             receiver: None,

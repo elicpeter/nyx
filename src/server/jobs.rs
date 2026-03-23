@@ -46,7 +46,7 @@ pub struct ScanJob {
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
     pub duration_secs: Option<f64>,
-    pub findings: Option<Vec<Diag>>,
+    pub findings: Option<Arc<Vec<Diag>>>,
     pub error: Option<String>,
     pub progress: Option<Arc<ScanProgress>>,
     pub metrics: Option<Arc<ScanMetrics>>,
@@ -237,7 +237,7 @@ impl JobManager {
                         format!("Scan completed: {} findings", diags.len()),
                         None,
                     );
-                    (JobStatus::Completed, Some(diags), None)
+                    (JobStatus::Completed, Some(Arc::new(diags)), None)
                 }
                 Err(e) => {
                     let err_str = e.to_string();
@@ -249,7 +249,7 @@ impl JobManager {
             let finding_count = diags.as_ref().map(|d| d.len());
 
             // Pre-serialize findings JSON outside the lock (can be large).
-            let findings_json = diags.as_ref().and_then(|f| serde_json::to_string(f).ok());
+            let findings_json = diags.as_ref().and_then(|f| serde_json::to_string(f.as_slice()).ok());
             let timing_json = serde_json::to_string(&timing).ok();
             let langs_json = serde_json::to_string(&languages).ok();
 

@@ -11,6 +11,7 @@ use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint,
 use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Maximum origins tracked per SSA value.
@@ -225,6 +226,34 @@ pub struct SsaTaintEvent {
     pub uses_summary: bool,
 }
 
+// ── Context-Sensitive Inline Analysis ──────────────────────────────────
+
+/// Maximum SSA blocks in a callee body before skipping inline analysis.
+const MAX_INLINE_BLOCKS: usize = 500;
+
+/// Compact cache key: per-arg-position cap bits (sorted, non-empty only).
+/// Two calls with identical `ArgTaintSig` produce identical inline results.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ArgTaintSig(SmallVec<[(usize, u16); 4]>);
+
+/// Cached result of inline-analyzing a callee with specific argument taint.
+#[derive(Clone, Debug)]
+pub(crate) struct InlineResult {
+    /// Taint on the return value after inline analysis.
+    return_taint: Option<VarTaint>,
+}
+
+/// Cache for context-sensitive inline analysis results.
+pub(crate) type InlineCache = HashMap<(String, ArgTaintSig), InlineResult>;
+
+/// Pre-lowered and optimized SSA body for an intra-file function,
+/// ready for context-sensitive re-analysis with different argument taint.
+pub struct CalleeSsaBody {
+    pub ssa: SsaBody,
+    pub opt: crate::ssa::OptimizeResult,
+    pub param_count: usize,
+}
+
 // ── SSA Taint Transfer ──────────────────────────────────────────────────
 
 /// Configuration for SSA taint analysis.
@@ -251,6 +280,18 @@ pub struct SsaTaintTransfer<'a> {
     /// Used as fallback when `resolve_callee` finds no summary for an inner
     /// arg callee — so label-only sanitizers still reduce sink caps.
     pub extra_labels: Option<&'a [RuntimeLabelRule]>,
+    /// Pre-lowered + optimized SSA bodies for intra-file functions.
+    /// When present, enables context-sensitive inline analysis at call sites.
+    pub callee_bodies: Option<&'a HashMap<String, CalleeSsaBody>>,
+    /// Cache for context-sensitive inline results. Uses `RefCell` for interior
+    /// mutability (safe: k=1 depth limit prevents re-entrancy during borrow).
+    pub inline_cache: Option<&'a RefCell<InlineCache>>,
+    /// Current inline analysis depth (0 = top-level caller). When >= 1,
+    /// inline analysis falls back to summary resolution (k=1 bound).
+    pub context_depth: u8,
+    /// Callback bindings: maps callee parameter name → actual function name.
+    /// Set during inline analysis when caller passes a function reference as arg.
+    pub callback_bindings: Option<&'a HashMap<String, String>>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -817,6 +858,278 @@ fn apply_branch_predicates(
     }
 }
 
+// ── Context-Sensitive Inline Analysis Functions ───────────────────────
+
+/// Build a compact taint signature from the actual argument taint at a call site.
+fn build_arg_taint_sig(
+    args: &[SmallVec<[SsaValue; 2]>],
+    receiver: &Option<SsaValue>,
+    state: &SsaTaintState,
+) -> ArgTaintSig {
+    let mut sig = SmallVec::new();
+
+    // Receiver taint at position usize::MAX (sentinel)
+    if let Some(rv) = receiver {
+        if let Some(taint) = state.get(*rv) {
+            sig.push((usize::MAX, taint.caps.bits()));
+        }
+    }
+
+    // Per-argument-position taint
+    for (i, arg_vals) in args.iter().enumerate() {
+        let mut caps = Cap::empty();
+        for v in arg_vals {
+            if let Some(taint) = state.get(*v) {
+                caps |= taint.caps;
+            }
+        }
+        if !caps.is_empty() {
+            sig.push((i, caps.bits()));
+        }
+    }
+
+    sig.sort_by_key(|(idx, _)| *idx);
+    ArgTaintSig(sig)
+}
+
+/// Attempt context-sensitive inline analysis of a callee at a specific call site.
+///
+/// Returns `Some(InlineResult)` if inline analysis succeeded, `None` if the
+/// callee is unavailable, the body is too large, or we're already at depth limit.
+fn inline_analyse_callee(
+    callee: &str,
+    args: &[SmallVec<[SsaValue; 2]>],
+    receiver: &Option<SsaValue>,
+    state: &SsaTaintState,
+    transfer: &SsaTaintTransfer,
+    cfg: &Cfg,
+    caller_ssa: &SsaBody,
+    call_inst: &SsaInst,
+) -> Option<InlineResult> {
+    // Enforce k=1 depth limit
+    if transfer.context_depth >= 1 {
+        return None;
+    }
+
+    let callee_bodies = transfer.callee_bodies?;
+    let cache_ref = transfer.inline_cache?;
+    let normalized = normalize_callee_name(callee);
+    let callee_body = callee_bodies.get(normalized)?;
+
+    // Skip very large function bodies
+    if callee_body.ssa.blocks.len() > MAX_INLINE_BLOCKS {
+        return None;
+    }
+
+    // Build cache key from actual argument taint
+    let sig = build_arg_taint_sig(args, receiver, state);
+
+    // Check cache
+    {
+        let cache = cache_ref.borrow();
+        if let Some(cached) = cache.get(&(normalized.to_string(), sig.clone())) {
+            return Some(cached.clone());
+        }
+    }
+
+    // Build per-parameter seed from actual argument taint.
+    // Map callee's Param var_name → caller's argument taint.
+    let mut param_seed: HashMap<SymbolId, VarTaint> = HashMap::new();
+
+    for block in &callee_body.ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            if let SsaOp::Param { index } = &inst.op {
+                if let Some(var_name) = inst.var_name.as_ref() {
+                    if let Some(sym) = transfer.interner.get(var_name) {
+                        // Collect taint from the corresponding caller argument.
+                        // For zero-arg method calls, fallback to receiver taint for
+                        // param 0 (matches collect_args_taint fallback behavior).
+                        let mut combined_caps = Cap::empty();
+                        let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+
+                        if *index < args.len() {
+                            for v in &args[*index] {
+                                if let Some(taint) = state.get(*v) {
+                                    combined_caps |= taint.caps;
+                                    for orig in &taint.origins {
+                                        if combined_origins.len() < MAX_ORIGINS
+                                            && !combined_origins.iter().any(|o| o.node == orig.node)
+                                        {
+                                            combined_origins.push(*orig);
+                                        }
+                                    }
+                                }
+                            }
+                        } else if *index == 0 && args.is_empty() {
+                            // Zero-arg method call: seed param 0 from receiver
+                            if let Some(rv) = receiver {
+                                if let Some(taint) = state.get(*rv) {
+                                    combined_caps |= taint.caps;
+                                    for orig in &taint.origins {
+                                        if combined_origins.len() < MAX_ORIGINS
+                                            && !combined_origins.iter().any(|o| o.node == orig.node)
+                                        {
+                                            combined_origins.push(*orig);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if !combined_caps.is_empty() {
+                            param_seed.insert(sym, VarTaint {
+                                caps: combined_caps,
+                                origins: combined_origins,
+                                uses_summary: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Detect callback arguments: when a call argument refers to a known function
+    // name (in callee_bodies or via label classification), record the mapping
+    // so the callee's analysis can resolve calls through the parameter.
+    let mut callback_bindings: HashMap<String, String> = HashMap::new();
+    if let Some(callee_bodies) = transfer.callee_bodies {
+        for block in &callee_body.ssa.blocks {
+            for inst in block.phis.iter().chain(block.body.iter()) {
+                if let SsaOp::Param { index } = &inst.op {
+                    if let Some(param_name) = inst.var_name.as_ref() {
+                        if *index < args.len() {
+                            // Look up the caller-side argument's var name
+                            for v in &args[*index] {
+                                if let Some(arg_var_name) = caller_ssa.value_defs
+                                    .get(v.0 as usize)
+                                    .and_then(|vd| vd.var_name.as_deref())
+                                {
+                                    // Check if the argument name matches a known callee body
+                                    let norm = normalize_callee_name(arg_var_name);
+                                    if callee_bodies.contains_key(norm) {
+                                        callback_bindings.insert(param_name.clone(), norm.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let seed_ref = if param_seed.is_empty() { None } else { Some(&param_seed) };
+    let cb_ref = if callback_bindings.is_empty() { None } else { Some(&callback_bindings) };
+    let child_transfer = SsaTaintTransfer {
+        lang: transfer.lang,
+        namespace: transfer.namespace,
+        interner: transfer.interner,
+        local_summaries: transfer.local_summaries,
+        global_summaries: transfer.global_summaries,
+        interop_edges: transfer.interop_edges,
+        global_seed: seed_ref,
+        const_values: Some(&callee_body.opt.const_values),
+        type_facts: Some(&callee_body.opt.type_facts),
+        ssa_summaries: transfer.ssa_summaries,
+        extra_labels: transfer.extra_labels,
+        callee_bodies: None, // no recursion into further inline analysis
+        inline_cache: None,
+        context_depth: transfer.context_depth + 1,
+        callback_bindings: cb_ref,
+    };
+
+    let (_, callee_block_states) =
+        run_ssa_taint_full(&callee_body.ssa, cfg, &child_transfer);
+
+    // Extract return taint from return-block exit states
+    let empty_induction = HashSet::new();
+    let return_taint = extract_inline_return_taint(
+        &callee_body.ssa, cfg, &child_transfer, &callee_block_states,
+        &empty_induction, call_inst.cfg_node,
+    );
+
+    let result = InlineResult { return_taint };
+
+    // Cache the result
+    {
+        let mut cache = cache_ref.borrow_mut();
+        cache.insert((normalized.to_string(), sig), result.clone());
+    }
+
+    Some(result)
+}
+
+/// Extract the return value taint from an inline-analyzed callee.
+///
+/// Replays `transfer_block` on converged return-block states and collects
+/// taint from all live values at return points. Remaps origin nodes to the
+/// call site for cleaner finding paths.
+fn extract_inline_return_taint(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    transfer: &SsaTaintTransfer,
+    block_states: &[Option<SsaTaintState>],
+    induction_vars: &HashSet<SsaValue>,
+    call_site_node: NodeIndex,
+) -> Option<VarTaint> {
+    // Collect all param SSA values to separate from derived values
+    let param_values: HashSet<SsaValue> = ssa.blocks.iter()
+        .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+        .filter(|i| matches!(i.op, SsaOp::Param { .. }))
+        .map(|i| i.value)
+        .collect();
+
+    let mut derived_caps = Cap::empty();
+    let mut derived_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+    let mut param_caps = Cap::empty();
+    let mut param_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+
+    for (bid, block) in ssa.blocks.iter().enumerate() {
+        if !matches!(block.terminator, Terminator::Return) {
+            continue;
+        }
+        if let Some(entry_state) = &block_states[bid] {
+            let exit = transfer_block(
+                block, cfg, ssa, transfer, entry_state.clone(),
+                induction_vars, None,
+            );
+            for (val, taint) in &exit.values {
+                let (target_caps, target_origins) = if param_values.contains(val) {
+                    (&mut param_caps, &mut param_origins)
+                } else {
+                    (&mut derived_caps, &mut derived_origins)
+                };
+                *target_caps |= taint.caps;
+                for orig in &taint.origins {
+                    if target_origins.len() < MAX_ORIGINS
+                        && !target_origins.iter().any(|o| o.node == orig.node)
+                    {
+                        target_origins.push(*orig);
+                    }
+                }
+            }
+        }
+    }
+
+    // Prefer derived caps; fall back to param caps for passthrough functions
+    let (final_caps, final_origins) = if !derived_caps.is_empty() {
+        (derived_caps, derived_origins)
+    } else {
+        (param_caps, param_origins)
+    };
+
+    if final_caps.is_empty() {
+        return None;
+    }
+
+    Some(VarTaint {
+        caps: final_caps,
+        origins: final_origins,
+        uses_summary: true, // inline analysis is a form of summary
+    })
+}
+
 /// Transfer a single SSA instruction.
 fn transfer_inst(
     inst: &SsaInst,
@@ -912,8 +1225,33 @@ fn transfer_inst(
                 .any(|l| matches!(l, DataLabel::Source(_)));
 
             let mut resolved_callee = false;
-            if let Some(resolved) =
-                resolve_callee(transfer, callee, caller_func, info.call_ordinal)
+
+            // Context-sensitive inline analysis: attempt before summary fallback.
+            // Only for intra-file calls when context sensitivity is enabled.
+            // Only claims resolution when the inline result produces non-empty
+            // return taint — otherwise falls through to summary for cases like
+            // receiver-only method calls where summary propagation is needed.
+            if transfer.inline_cache.is_some() && transfer.context_depth < 1 {
+                if let Some(result) = inline_analyse_callee(
+                    callee, args, receiver, state, transfer, cfg, ssa, inst,
+                ) {
+                    if let Some(ref ret) = result.return_taint {
+                        resolved_callee = true;
+                        return_bits |= ret.caps;
+                        for orig in &ret.origins {
+                            if return_origins.len() < MAX_ORIGINS
+                                && !return_origins.iter().any(|o| o.node == orig.node)
+                            {
+                                return_origins.push(*orig);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !resolved_callee
+                && let Some(resolved) =
+                    resolve_callee(transfer, callee, caller_func, info.call_ordinal)
             {
                 resolved_callee = true;
 
@@ -1720,6 +2058,64 @@ fn resolve_callee(
 ) -> Option<ResolvedSummary> {
     let normalized = normalize_callee_name(callee);
 
+    // -1) Callback resolution: if the callee name matches a parameter that was
+    // bound to a specific function at the call site, resolve that function instead.
+    if let Some(cb) = transfer.callback_bindings {
+        if let Some(real_func) = cb.get(normalized) {
+            // Try to resolve the actual function via SSA summaries
+            if let Some(ssa_sums) = transfer.ssa_summaries {
+                if let Some(ssa_sum) = ssa_sums.get(real_func.as_str()) {
+                    return Some(convert_ssa_to_resolved(ssa_sum));
+                }
+            }
+            // Try local summaries
+            let local_matches: Vec<_> = transfer
+                .local_summaries
+                .iter()
+                .filter(|(k, _)| {
+                    k.name == real_func.as_str()
+                        && k.lang == transfer.lang
+                        && k.namespace == transfer.namespace
+                })
+                .collect();
+            if local_matches.len() == 1 {
+                let (_, ls) = local_matches[0];
+                return Some(ResolvedSummary {
+                    source_caps: ls.source_caps,
+                    sanitizer_caps: ls.sanitizer_caps,
+                    sink_caps: ls.sink_caps,
+                    propagates_taint: !ls.propagating_params.is_empty(),
+                    propagating_params: ls.propagating_params.clone(),
+                });
+            }
+            // Try label classification for the bound function
+            let labels = crate::labels::classify_all(
+                transfer.lang.as_str(),
+                real_func,
+                transfer.extra_labels,
+            );
+            if !labels.is_empty() {
+                let mut source_caps = Cap::empty();
+                let mut sanitizer_caps = Cap::empty();
+                let mut sink_caps = Cap::empty();
+                for lbl in &labels {
+                    match lbl {
+                        DataLabel::Source(bits) => source_caps |= *bits,
+                        DataLabel::Sanitizer(bits) => sanitizer_caps |= *bits,
+                        DataLabel::Sink(bits) => sink_caps |= *bits,
+                    }
+                }
+                return Some(ResolvedSummary {
+                    source_caps,
+                    sanitizer_caps,
+                    sink_caps,
+                    propagates_taint: false,
+                    propagating_params: vec![],
+                });
+            }
+        }
+    }
+
     // 0) Precise SSA summaries (intra-file, per-parameter transforms)
     if let Some(ssa_sums) = transfer.ssa_summaries {
         if let Some(ssa_sum) = ssa_sums.get(normalized) {
@@ -2188,6 +2584,10 @@ pub fn extract_ssa_func_summary(
             type_facts: None,
             ssa_summaries: None,
             extra_labels: None,
+            callee_bodies: None,
+            inline_cache: None,
+            context_depth: 0,
+            callback_bindings: None,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);

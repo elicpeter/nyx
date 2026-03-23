@@ -712,6 +712,245 @@ tr.selected td {
 .badge-status-validated { background: var(--conf-high-bg); color: var(--conf-high); }
 .badge-status-suppressed { background: var(--conf-low-bg); color: var(--conf-low); }
 
+/* ── Triage State Badges ─────────────────────────────────────────── */
+.badge-triage-open { background: var(--sev-high-bg); color: var(--sev-high); }
+.badge-triage-investigating { background: var(--sev-medium-bg); color: var(--sev-medium); }
+.badge-triage-false_positive { background: #eee; color: #666; }
+.badge-triage-accepted_risk { background: var(--sev-medium-bg); color: var(--sev-medium); }
+.badge-triage-suppressed { background: var(--conf-low-bg); color: var(--conf-low); }
+.badge-triage-fixed { background: var(--success-bg); color: var(--success); }
+
+/* ── Triage Actions Panel (Finding Detail) ───────────────────────── */
+.triage-actions {
+  margin: var(--space-4) 0;
+  padding: var(--space-4);
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.triage-current-note {
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.triage-buttons {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.btn-triage {
+  text-transform: capitalize;
+  font-size: var(--text-xs);
+}
+.btn-triage-investigating { border-color: var(--sev-medium); color: var(--sev-medium); }
+.btn-triage-false_positive { border-color: #999; color: #666; }
+.btn-triage-accepted_risk { border-color: var(--sev-medium); color: var(--sev-medium); }
+.btn-triage-suppressed { border-color: var(--conf-low); color: var(--conf-low); }
+.btn-triage-fixed { border-color: var(--success); color: var(--success); }
+.btn-triage-open { border-color: var(--sev-high); color: var(--sev-high); }
+.triage-note-input {
+  margin-top: var(--space-3);
+}
+.triage-note-input textarea {
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+}
+.triage-note-input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+.triage-note-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ── Triage Page ─────────────────────────────────────────────────── */
+.triage-page {
+  max-width: 1400px;
+}
+.triage-summary-row {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+.triage-summary-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  text-align: center;
+  min-width: 100px;
+  flex: 1;
+}
+.triage-card-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.triage-card-clickable:hover {
+  border-color: var(--accent);
+}
+.triage-card-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+.triage-card-attention .triage-card-count {
+  color: var(--sev-high);
+}
+.triage-card-count {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+  margin-bottom: var(--space-1);
+}
+.triage-card-label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.triage-open-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  align-items: center;
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+.triage-open-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin-right: var(--space-1);
+}
+.triage-open-severity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.triage-sev-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+}
+.triage-top-rules {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.triage-rule-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.triage-rule-pill code {
+  font-size: var(--text-xs);
+  background: var(--bg);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+}
+.triage-rule-count {
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  padding: 0 5px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.triage-tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 2px solid var(--border);
+  margin-bottom: var(--space-4);
+  padding-bottom: 0;
+}
+.triage-tab {
+  padding: var(--space-2) var(--space-4);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: color 0.15s, border-color 0.15s;
+}
+.triage-tab:hover {
+  color: var(--text);
+}
+.triage-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.triage-quick-actions {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.btn-triage-quick {
+  font-size: 11px;
+  padding: 2px 6px;
+  line-height: 1.4;
+}
+.triage-audit-table td {
+  vertical-align: middle;
+}
+.triage-arrow {
+  color: var(--text-secondary);
+  margin: 0 2px;
+}
+.triage-truncation-note {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  margin-top: var(--space-3);
+  text-align: center;
+}
+
+/* ── Suppress by Pattern Modal ───────────────────────────────────── */
+.suppress-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+.suppress-modal {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  min-width: 400px;
+  max-width: 600px;
+  box-shadow: var(--shadow-lg);
+}
+.suppress-modal h3 {
+  margin: 0 0 var(--space-4) 0;
+}
+.suppress-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.suppress-opt {
+  text-align: left;
+  font-size: var(--text-sm);
+}
+
 /* ── Bulk Action Bar ──────────────────────────────────────────────── */
 .bulk-action-bar {
   display: none;
@@ -1468,6 +1707,212 @@ tr.selected td {
 .scan-stat-value {
   font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
+}
+
+/* ── Scan Comparison ──────────────────────────────────────────────── */
+.compare-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+.compare-scan-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+}
+.compare-scan-pill .pill-id {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.compare-scan-pill .pill-count {
+  font-weight: var(--weight-semibold);
+}
+.compare-vs {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  font-weight: var(--weight-semibold);
+}
+.compare-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.compare-card {
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--border);
+}
+.compare-card--new { border-left-color: var(--success); }
+.compare-card--fixed { border-left-color: var(--sev-high); }
+.compare-card--changed { border-left-color: var(--sev-medium); }
+.compare-card--unchanged { border-left-color: var(--text-tertiary); }
+.compare-card .compare-card-label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-1);
+}
+.compare-card .compare-card-value {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+.compare-card--new .compare-card-value { color: var(--success); }
+.compare-card--fixed .compare-card-value { color: var(--sev-high); }
+.compare-card--changed .compare-card-value { color: var(--sev-medium); }
+
+.severity-delta {
+  display: flex;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  font-size: var(--text-sm);
+}
+.severity-delta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.severity-delta-item .delta-positive { color: var(--sev-high); font-weight: var(--weight-semibold); }
+.severity-delta-item .delta-negative { color: var(--success); font-weight: var(--weight-semibold); }
+.severity-delta-item .delta-zero { color: var(--text-tertiary); }
+
+.compare-badge--new {
+  background: var(--success-bg);
+  color: #1a9a52;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+.compare-badge--fixed {
+  background: var(--sev-high-bg);
+  color: var(--sev-high);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+.compare-badge--changed {
+  background: var(--sev-medium-bg);
+  color: var(--sev-medium);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+.compare-badge--unchanged {
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.compare-section {
+  margin-bottom: var(--space-4);
+}
+.compare-section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.compare-section-header:hover {
+  background: var(--bg-tertiary);
+}
+.compare-section-header .section-toggle {
+  transition: transform 0.15s;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.compare-section-header .section-toggle.collapsed {
+  transform: rotate(-90deg);
+}
+.compare-section-body {
+  padding-top: var(--space-2);
+}
+.compare-finding-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid transparent;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.compare-finding-row:hover {
+  background: var(--bg-secondary);
+}
+.compare-finding-row--new { border-left-color: var(--success); }
+.compare-finding-row--fixed { border-left-color: var(--sev-high); }
+.compare-finding-row--changed { border-left-color: var(--sev-medium); }
+.compare-finding-row--unchanged { border-left-color: var(--bg-tertiary); }
+.compare-finding-row .finding-path {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compare-delta-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-xs);
+  color: var(--sev-medium);
+  font-family: var(--font-mono);
+}
+.compare-delta-inline .delta-arrow { color: var(--text-tertiary); }
+
+.compare-select-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-light);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.compare-group-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  margin-top: var(--space-2);
+}
+.compare-group-header:hover { background: var(--bg-tertiary); }
+.compare-group-summary {
+  font-weight: var(--weight-normal);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  margin-left: auto;
 }
 
 /* ── Code Modal Responsive ────────────────────────────────────────── */

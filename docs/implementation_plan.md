@@ -249,7 +249,7 @@ This plan breaks the full vision into phases, each scoped for one Claude Code se
   - `POST /api/config/profiles/:name/activate` — Switch active profile.
 
 ### Frontend
-- Remove the current settings page which has custom sanitizers and sinks
+- Remove the current settings page which has custom sanitizers and sinks and replace it with a coming soon stub
 - **Rules page** (`/rules`): Two-column layout. Left: rule list with columns (id, title, language, category, enabled toggle, finding count, suppression rate, custom badge). Filters by language, category, custom-only. Right: selected rule detail — metadata, description, associated sources/sinks/sanitizers, triggered findings list (clickable), enable/disable toggle, clone-to-custom button.
 - **Config page** (`/config`): Organized sections:
   - **General**: Scan root, include/exclude paths, enabled languages, max file size.
@@ -376,6 +376,7 @@ This plan breaks the full vision into phases, each scoped for one Claude Code se
 - **Dark mode**: Full dark theme with CSS variable swap. Toggle in settings. Respect system preference. Proper contrast ratios for all severity/confidence colors.
 - **Density modes**: Comfortable (default) and Compact. Toggle in settings. Affects table row height, padding, font sizes.
 - **Settings page** (`/settings`): Theme toggle (light/dark/system), density mode, default page size, keyboard shortcut reference.
+- A way to shutdown the server and close the browser tab automatically from inside the app.
 
 ### Definition of done
 - Command palette opens with Cmd+K, supports fuzzy search across all commands

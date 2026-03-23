@@ -466,6 +466,17 @@ fn collect_var_defs(
             }
             if let Some(ref d) = cfg[node].defines {
                 defs.entry(d.clone()).or_default().insert(block_idx);
+                // Register parent prefixes for synthetic base updates on field writes.
+                // E.g. `obj.data` also registers `obj` so phi insertion works correctly.
+                let mut path = d.as_str();
+                while let Some(dot_pos) = path.rfind('.') {
+                    path = &path[..dot_pos];
+                    defs.entry(path.to_string()).or_default().insert(block_idx);
+                }
+            }
+            // Register extra defines from destructuring patterns.
+            for ed in &cfg[node].extra_defines {
+                defs.entry(ed.clone()).or_default().insert(block_idx);
             }
         }
     }
@@ -745,13 +756,82 @@ fn rename_variables(
 
             cfg_node_map.insert(node, v);
 
+            // Clone op for potential extra_defines before moving into SsaInst
+            let primary_op_for_extras = if info.extra_defines.is_empty() {
+                None
+            } else {
+                Some(op.clone())
+            };
             ssa_blocks[block_idx].body.push(SsaInst {
                 value: v,
                 op,
                 cfg_node: node,
-                var_name: var_name_for_ssa,
+                var_name: var_name_for_ssa.clone(),
                 span: info.span,
             });
+
+            // Synthetic base update: when a dotted path is defined (e.g. `obj.data`),
+            // create synthetic Assign instructions for parent prefixes (e.g. `obj`)
+            // so that subsequent reads of the base variable see the field write.
+            // Only includes the new field value (not the old base) so that field
+            // overwrites properly kill taint: if obj.data is re-assigned to a
+            // constant, the base `obj` no longer carries that field's taint.
+            if !nop_nodes.contains(&node) {
+                if let Some(ref d) = info.defines {
+                    let mut current = d.as_str();
+                    let mut child_value = v;
+                    while let Some(dot_pos) = current.rfind('.') {
+                        let parent = &current[..dot_pos];
+                        let synth_v = SsaValue(*next_value);
+                        *next_value += 1;
+                        let synth_uses: SmallVec<[SsaValue; 4]> =
+                            SmallVec::from_elem(child_value, 1);
+                        value_defs.push(ValueDef {
+                            var_name: Some(parent.to_string()),
+                            cfg_node: node,
+                            block: block_id,
+                        });
+                        var_stacks
+                            .entry(parent.to_string())
+                            .or_default()
+                            .push(synth_v);
+                        ssa_blocks[block_idx].body.push(SsaInst {
+                            value: synth_v,
+                            op: SsaOp::Assign(synth_uses),
+                            cfg_node: node,
+                            var_name: Some(parent.to_string()),
+                            span: info.span,
+                        });
+                        child_value = synth_v;
+                        current = parent;
+                    }
+                }
+            }
+
+            // Emit extra SSA instructions for destructuring bindings.
+            // Each extra define inherits the same op (Source/Call/Assign) as the primary.
+            if let Some(ref primary_op) = primary_op_for_extras {
+                for extra_def in &info.extra_defines {
+                    let ev = SsaValue(*next_value);
+                    *next_value += 1;
+                    value_defs.push(ValueDef {
+                        var_name: Some(extra_def.clone()),
+                        cfg_node: node,
+                        block: block_id,
+                    });
+                    var_stacks
+                        .entry(extra_def.clone())
+                        .or_default()
+                        .push(ev);
+                    ssa_blocks[block_idx].body.push(SsaInst {
+                        value: ev,
+                        op: primary_op.clone(),
+                        cfg_node: node,
+                        var_name: Some(extra_def.clone()),
+                        span: info.span,
+                    });
+                }
+            }
         }
 
         // 3. Set terminator
@@ -963,6 +1043,7 @@ mod tests {
             span: (0, 0),
             labels: SmallVec::new(),
             defines: None,
+            extra_defines: vec![],
             uses: vec![],
             callee: None,
             receiver: None,

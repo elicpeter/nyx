@@ -2,20 +2,22 @@ use crate::commands::scan::Diag;
 use crate::database::index::{Indexer, ScanRecord};
 use crate::server::app::AppState;
 use crate::server::models::{
-    self, FindingView, ScanView,
+    self, ChangedFinding, CompareResponse, CompareScanInfo, CompareSummary, ComparedFinding,
+    FieldChange, FindingView, ScanView,
 };
-use crate::server::scan_log::ScanLogEntry;
 use crate::server::progress::ScanMetricsSnapshot;
+use crate::server::scan_log::ScanLogEntry;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/scans", post(start_scan).get(list_scans))
         .route("/scans/active", get(active_scan))
+        .route("/scans/compare", get(compare_scans))
         .route("/scans/{id}", get(get_scan))
         .route("/scans/{id}/findings", get(get_scan_findings))
         .route("/scans/{id}/logs", get(get_scan_logs))
@@ -132,30 +134,54 @@ struct FindingsQuery {
     search: Option<String>,
 }
 
+/// Load findings for a scan by ID (in-memory first, then DB fallback).
+fn load_scan_findings(state: &AppState, id: &str) -> Result<Vec<Diag>, StatusCode> {
+    if let Some(job) = state.job_manager.get_job(id) {
+        return Ok(job.findings.map(|f| (*f).clone()).unwrap_or_default());
+    }
+    if let Some(ref pool) = state.db_pool {
+        if let Ok(idx) = Indexer::from_pool("_scans", pool) {
+            if let Ok(Some(record)) = idx.get_scan(id) {
+                return Ok(record
+                    .findings_json
+                    .as_deref()
+                    .and_then(|j| serde_json::from_str::<Vec<Diag>>(j).ok())
+                    .unwrap_or_default());
+            }
+        }
+    }
+    Err(StatusCode::NOT_FOUND)
+}
+
+/// Load minimal scan info for comparison headers.
+fn load_scan_info(state: &AppState, id: &str) -> Result<CompareScanInfo, StatusCode> {
+    if let Some(job) = state.job_manager.get_job(id) {
+        return Ok(CompareScanInfo {
+            id: job.id.clone(),
+            started_at: job.started_at.map(|t| t.to_rfc3339()),
+            finding_count: job.findings.as_ref().map(|f| f.len()).unwrap_or(0),
+        });
+    }
+    if let Some(ref pool) = state.db_pool {
+        if let Ok(idx) = Indexer::from_pool("_scans", pool) {
+            if let Ok(Some(record)) = idx.get_scan(id) {
+                return Ok(CompareScanInfo {
+                    id: record.id.clone(),
+                    started_at: record.started_at.clone(),
+                    finding_count: record.finding_count.map(|c| c as usize).unwrap_or(0),
+                });
+            }
+        }
+    }
+    Err(StatusCode::NOT_FOUND)
+}
+
 async fn get_scan_findings(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
     Query(query): Query<FindingsQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let findings: Vec<Diag> = if let Some(job) = state.job_manager.get_job(&id) {
-        job.findings.unwrap_or_default()
-    } else if let Some(ref pool) = state.db_pool {
-        if let Ok(idx) = Indexer::from_pool("_scans", pool) {
-            if let Ok(Some(record)) = idx.get_scan(&id) {
-                record
-                    .findings_json
-                    .as_deref()
-                    .and_then(|j| serde_json::from_str::<Vec<Diag>>(j).ok())
-                    .unwrap_or_default()
-            } else {
-                return Err(StatusCode::NOT_FOUND);
-            }
-        } else {
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    } else {
-        return Err(StatusCode::NOT_FOUND);
-    };
+    let findings = load_scan_findings(&state, &id)?;
 
     // Apply filters
     let mut filtered: Vec<&Diag> = findings.iter().collect();
@@ -197,6 +223,178 @@ async fn get_scan_findings(
         "page": page,
         "per_page": per_page,
     })))
+}
+
+// ── Scan Comparison ─────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct CompareQuery {
+    left: String,
+    right: String,
+}
+
+async fn compare_scans(
+    State(state): State<AppState>,
+    Query(query): Query<CompareQuery>,
+) -> Result<Json<CompareResponse>, StatusCode> {
+    let left_info = load_scan_info(&state, &query.left)?;
+    let right_info = load_scan_info(&state, &query.right)?;
+
+    let left_findings = load_scan_findings(&state, &query.left)?;
+    let right_findings = load_scan_findings(&state, &query.right)?;
+
+    // Build fingerprint → Vec<(index, diag)> multi-maps so duplicate
+    // fingerprints are preserved instead of silently dropped.
+    let mut left_map: HashMap<String, Vec<(usize, &Diag)>> = HashMap::new();
+    for (i, d) in left_findings.iter().enumerate() {
+        left_map
+            .entry(models::compute_fingerprint(d))
+            .or_default()
+            .push((i, d));
+    }
+    let mut right_map: HashMap<String, Vec<(usize, &Diag)>> = HashMap::new();
+    for (i, d) in right_findings.iter().enumerate() {
+        right_map
+            .entry(models::compute_fingerprint(d))
+            .or_default()
+            .push((i, d));
+    }
+
+    let scan_root = state.scan_root.clone();
+
+    let mut new_findings = Vec::new();
+    let mut fixed_findings = Vec::new();
+    let mut changed_findings = Vec::new();
+    let mut unchanged_findings = Vec::new();
+
+    // For each fingerprint that appears on the right side, match 1:1 with
+    // left-side findings sharing the same fingerprint.  Excess right entries
+    // are "new"; excess left entries are "fixed".
+    for (fp, right_group) in &right_map {
+        if let Some(left_group) = left_map.get(fp) {
+            let matched = right_group.len().min(left_group.len());
+            // Matched pairs → unchanged or changed
+            for i in 0..matched {
+                let (idx, diag) = right_group[i];
+                let (_, left_diag) = left_group[i];
+                let view = models::finding_from_diag_with_context(idx, diag, &scan_root);
+                let changes = compute_field_changes(left_diag, diag);
+                if changes.is_empty() {
+                    unchanged_findings.push(ComparedFinding {
+                        fingerprint: fp.clone(),
+                        finding: view,
+                    });
+                } else {
+                    changed_findings.push(ChangedFinding {
+                        fingerprint: fp.clone(),
+                        finding: view,
+                        changes,
+                    });
+                }
+            }
+            // Excess right entries → new
+            for &(idx, diag) in &right_group[matched..] {
+                new_findings.push(ComparedFinding {
+                    fingerprint: fp.clone(),
+                    finding: models::finding_from_diag_with_context(idx, diag, &scan_root),
+                });
+            }
+        } else {
+            // Entire group is new (fingerprint not in left)
+            for &(idx, diag) in right_group {
+                new_findings.push(ComparedFinding {
+                    fingerprint: fp.clone(),
+                    finding: models::finding_from_diag_with_context(idx, diag, &scan_root),
+                });
+            }
+        }
+    }
+
+    // Fixed findings: left-side entries whose fingerprint is missing from
+    // right, or excess left entries beyond the matched count.
+    for (fp, left_group) in &left_map {
+        let right_count = right_map.get(fp).map(|g| g.len()).unwrap_or(0);
+        let start = left_group.len().min(right_count);
+        for &(idx, diag) in &left_group[start..] {
+            fixed_findings.push(ComparedFinding {
+                fingerprint: fp.clone(),
+                finding: models::finding_from_diag_with_context(idx, diag, &scan_root),
+            });
+        }
+    }
+
+    // Compute severity delta: right counts - left counts
+    let mut severity_delta: HashMap<String, i64> = HashMap::new();
+    for d in &right_findings {
+        *severity_delta
+            .entry(d.severity.as_db_str().to_string())
+            .or_insert(0) += 1;
+    }
+    for d in &left_findings {
+        *severity_delta
+            .entry(d.severity.as_db_str().to_string())
+            .or_insert(0) -= 1;
+    }
+
+    let summary = CompareSummary {
+        new_count: new_findings.len(),
+        fixed_count: fixed_findings.len(),
+        changed_count: changed_findings.len(),
+        unchanged_count: unchanged_findings.len(),
+        severity_delta,
+    };
+
+    Ok(Json(CompareResponse {
+        left_scan: left_info,
+        right_scan: right_info,
+        summary,
+        new_findings,
+        fixed_findings,
+        changed_findings,
+        unchanged_findings,
+    }))
+}
+
+/// Compare two Diags with the same fingerprint and return field-level changes.
+fn compute_field_changes(left: &Diag, right: &Diag) -> Vec<FieldChange> {
+    let mut changes = Vec::new();
+
+    if left.line != right.line {
+        changes.push(FieldChange {
+            field: "line".into(),
+            old_value: left.line.to_string(),
+            new_value: right.line.to_string(),
+        });
+    }
+    if left.col != right.col {
+        changes.push(FieldChange {
+            field: "col".into(),
+            old_value: left.col.to_string(),
+            new_value: right.col.to_string(),
+        });
+    }
+    if left.severity != right.severity {
+        changes.push(FieldChange {
+            field: "severity".into(),
+            old_value: left.severity.as_db_str().to_string(),
+            new_value: right.severity.as_db_str().to_string(),
+        });
+    }
+    if left.confidence != right.confidence {
+        changes.push(FieldChange {
+            field: "confidence".into(),
+            old_value: left
+                .confidence
+                .map(|c| format!("{c:?}"))
+                .unwrap_or_else(|| "-".into()),
+            new_value: right
+                .confidence
+                .map(|c| format!("{c:?}"))
+                .unwrap_or_else(|| "-".into()),
+        });
+    }
+
+    changes
 }
 
 #[derive(serde::Deserialize, Default)]

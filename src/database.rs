@@ -97,6 +97,35 @@ pub mod index {
             detail TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_scan_logs_scan ON scan_logs(scan_id);
+
+        CREATE TABLE IF NOT EXISTS triage_states (
+            fingerprint TEXT PRIMARY KEY,
+            state TEXT NOT NULL DEFAULT 'open',
+            note TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS triage_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fingerprint TEXT NOT NULL,
+            action TEXT NOT NULL,
+            previous_state TEXT NOT NULL,
+            new_state TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            timestamp TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_triage_audit_fp ON triage_audit_log(fingerprint);
+        CREATE INDEX IF NOT EXISTS idx_triage_audit_ts ON triage_audit_log(timestamp);
+
+        CREATE TABLE IF NOT EXISTS triage_suppression_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suppress_by TEXT NOT NULL,
+            match_value TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'suppressed',
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(suppress_by, match_value)
+        );
     "#;
 
     // TODO: ADD CLEANS FOR EACH TABLE BASED ON PROJECT WHICH RUNS ON CLEAN
@@ -128,6 +157,29 @@ pub mod index {
         pub findings_json: Option<String>,
         pub timing_json: Option<String>,
         pub error: Option<String>,
+    }
+
+    /// A triage audit log entry.
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct AuditEntry {
+        pub id: i64,
+        pub fingerprint: String,
+        pub action: String,
+        pub previous_state: String,
+        pub new_state: String,
+        pub note: String,
+        pub timestamp: String,
+    }
+
+    /// A pattern-based suppression rule.
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct SuppressionRule {
+        pub id: i64,
+        pub suppress_by: String,
+        pub match_value: String,
+        pub state: String,
+        pub note: String,
+        pub created_at: String,
     }
 
     pub struct Indexer {
@@ -807,6 +859,294 @@ pub mod index {
         }
 
         // -------------------------------------------------------------------------
+        // Triage state management
+        // -------------------------------------------------------------------------
+
+        /// Get the triage state for a single finding fingerprint.
+        /// Returns (state, note, updated_at) or None if no triage state exists.
+        #[allow(dead_code)]
+        pub fn get_triage_state(
+            &self,
+            fingerprint: &str,
+        ) -> NyxResult<Option<(String, String, String)>> {
+            let result = self
+                .c()
+                .query_row(
+                    "SELECT state, note, updated_at FROM triage_states WHERE fingerprint = ?1",
+                    params![fingerprint],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            Ok(result)
+        }
+
+        /// Set the triage state for a single finding. Upserts the state and
+        /// appends an audit log entry. Returns the previous state (or "open").
+        #[allow(dead_code)]
+        pub fn set_triage_state(
+            &self,
+            fingerprint: &str,
+            state: &str,
+            note: &str,
+            action: &str,
+        ) -> NyxResult<String> {
+            let now = chrono::Utc::now().to_rfc3339();
+            let prev: String = self
+                .c()
+                .query_row(
+                    "SELECT state FROM triage_states WHERE fingerprint = ?1",
+                    params![fingerprint],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .unwrap_or_else(|| "open".to_string());
+
+            self.c().execute(
+                "INSERT INTO triage_states (fingerprint, state, note, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(fingerprint) DO UPDATE
+                 SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at",
+                params![fingerprint, state, note, now],
+            )?;
+
+            self.c().execute(
+                "INSERT INTO triage_audit_log (fingerprint, action, previous_state, new_state, note, timestamp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![fingerprint, action, prev, state, note, now],
+            )?;
+
+            Ok(prev)
+        }
+
+        /// Bulk set triage state. Returns vec of (fingerprint, previous_state).
+        pub fn set_triage_states_bulk(
+            &self,
+            fingerprints: &[String],
+            state: &str,
+            note: &str,
+            action: &str,
+        ) -> NyxResult<Vec<(String, String)>> {
+            let now = chrono::Utc::now().to_rfc3339();
+            let mut results = Vec::with_capacity(fingerprints.len());
+
+            // Read all previous states first
+            let mut prev_stmt = self
+                .c()
+                .prepare("SELECT state FROM triage_states WHERE fingerprint = ?1")?;
+
+            for fp in fingerprints {
+                let prev: String = prev_stmt
+                    .query_row(params![fp], |row| row.get(0))
+                    .optional()?
+                    .unwrap_or_else(|| "open".to_string());
+                results.push((fp.clone(), prev));
+            }
+            drop(prev_stmt);
+
+            // Upsert all states
+            let mut upsert_stmt = self.c().prepare(
+                "INSERT INTO triage_states (fingerprint, state, note, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(fingerprint) DO UPDATE
+                 SET state = excluded.state, note = excluded.note, updated_at = excluded.updated_at",
+            )?;
+            for fp in fingerprints {
+                upsert_stmt.execute(params![fp, state, note, now])?;
+            }
+            drop(upsert_stmt);
+
+            // Insert audit log entries
+            let mut audit_stmt = self.c().prepare(
+                "INSERT INTO triage_audit_log (fingerprint, action, previous_state, new_state, note, timestamp)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for (fp, prev) in &results {
+                audit_stmt.execute(params![fp, action, prev, state, note, now])?;
+            }
+
+            Ok(results)
+        }
+
+        /// Load all triage states as a map: fingerprint → (state, note, updated_at).
+        pub fn get_all_triage_states(
+            &self,
+        ) -> NyxResult<std::collections::HashMap<String, (String, String, String)>> {
+            let mut stmt = self
+                .c()
+                .prepare("SELECT fingerprint, state, note, updated_at FROM triage_states")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .filter_map(Result::ok)
+                .map(|(fp, state, note, updated)| (fp, (state, note, updated)))
+                .collect();
+            Ok(rows)
+        }
+
+        /// List triage states with optional state filter, paginated.
+        /// Returns (entries, total_count).
+        pub fn list_triage_states(
+            &self,
+            state_filter: Option<&str>,
+            limit: i64,
+            offset: i64,
+        ) -> NyxResult<(Vec<(String, String, String, String)>, i64)> {
+            let (sql, count_sql, params_vec): (&str, &str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                if let Some(state) = state_filter {
+                    (
+                        "SELECT fingerprint, state, note, updated_at FROM triage_states
+                         WHERE state = ?1 ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3",
+                        "SELECT COUNT(*) FROM triage_states WHERE state = ?1",
+                        vec![
+                            Box::new(state.to_string()),
+                            Box::new(limit),
+                            Box::new(offset),
+                        ],
+                    )
+                } else {
+                    (
+                        "SELECT fingerprint, state, note, updated_at FROM triage_states
+                         ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2",
+                        "SELECT COUNT(*) FROM triage_states",
+                        vec![Box::new(limit), Box::new(offset)],
+                    )
+                };
+
+            let total: i64 = if let Some(state) = state_filter {
+                self.c().query_row(count_sql, params![state], |row| row.get(0))?
+            } else {
+                self.c().query_row(count_sql, [], |row| row.get(0))?
+            };
+
+            let mut stmt = self.c().prepare(sql)?;
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok((rows, total))
+        }
+
+        /// Get the audit log, optionally filtered by fingerprint, paginated.
+        /// Returns (entries, total_count).
+        pub fn get_audit_log(
+            &self,
+            fingerprint_filter: Option<&str>,
+            limit: i64,
+            offset: i64,
+        ) -> NyxResult<(Vec<AuditEntry>, i64)> {
+            let (sql, count_sql, params_vec): (&str, &str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                if let Some(fp) = fingerprint_filter {
+                    (
+                        "SELECT id, fingerprint, action, previous_state, new_state, note, timestamp
+                         FROM triage_audit_log WHERE fingerprint = ?1
+                         ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3",
+                        "SELECT COUNT(*) FROM triage_audit_log WHERE fingerprint = ?1",
+                        vec![
+                            Box::new(fp.to_string()),
+                            Box::new(limit),
+                            Box::new(offset),
+                        ],
+                    )
+                } else {
+                    (
+                        "SELECT id, fingerprint, action, previous_state, new_state, note, timestamp
+                         FROM triage_audit_log ORDER BY timestamp DESC LIMIT ?1 OFFSET ?2",
+                        "SELECT COUNT(*) FROM triage_audit_log",
+                        vec![Box::new(limit), Box::new(offset)],
+                    )
+                };
+
+            let total: i64 = if let Some(fp) = fingerprint_filter {
+                self.c().query_row(count_sql, params![fp], |row| row.get(0))?
+            } else {
+                self.c().query_row(count_sql, [], |row| row.get(0))?
+            };
+
+            let mut stmt = self.c().prepare(sql)?;
+            let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt
+                .query_map(params_refs.as_slice(), |row| {
+                    Ok(AuditEntry {
+                        id: row.get(0)?,
+                        fingerprint: row.get(1)?,
+                        action: row.get(2)?,
+                        previous_state: row.get(3)?,
+                        new_state: row.get(4)?,
+                        note: row.get(5)?,
+                        timestamp: row.get(6)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok((rows, total))
+        }
+
+        /// Add a pattern-based suppression rule.
+        pub fn add_suppression_rule(
+            &self,
+            suppress_by: &str,
+            match_value: &str,
+            state: &str,
+            note: &str,
+        ) -> NyxResult<i64> {
+            let now = chrono::Utc::now().to_rfc3339();
+            self.c().execute(
+                "INSERT OR REPLACE INTO triage_suppression_rules
+                 (suppress_by, match_value, state, note, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![suppress_by, match_value, state, note, now],
+            )?;
+            Ok(self.c().last_insert_rowid())
+        }
+
+        /// Get all suppression rules.
+        pub fn get_suppression_rules(&self) -> NyxResult<Vec<SuppressionRule>> {
+            let mut stmt = self.c().prepare(
+                "SELECT id, suppress_by, match_value, state, note, created_at
+                 FROM triage_suppression_rules ORDER BY created_at DESC",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(SuppressionRule {
+                        id: row.get(0)?,
+                        suppress_by: row.get(1)?,
+                        match_value: row.get(2)?,
+                        state: row.get(3)?,
+                        note: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                })?
+                .filter_map(Result::ok)
+                .collect();
+            Ok(rows)
+        }
+
+        /// Delete a suppression rule by ID. Returns true if a row was deleted.
+        pub fn delete_suppression_rule(&self, id: i64) -> NyxResult<bool> {
+            let count = self.c().execute(
+                "DELETE FROM triage_suppression_rules WHERE id = ?1",
+                params![id],
+            )?;
+            Ok(count > 0)
+        }
+
+        // -------------------------------------------------------------------------
         // Maintenance utilities
         // -------------------------------------------------------------------------
         pub fn clear(&self) -> NyxResult<()> {
@@ -821,6 +1161,9 @@ pub mod index {
         DROP TABLE IF EXISTS files;
         DROP TABLE IF EXISTS function_summaries;
         DROP TABLE IF EXISTS ssa_function_summaries;
+        DROP TABLE IF EXISTS triage_states;
+        DROP TABLE IF EXISTS triage_audit_log;
+        DROP TABLE IF EXISTS triage_suppression_rules;
 
         PRAGMA foreign_keys = ON;
         VACUUM;

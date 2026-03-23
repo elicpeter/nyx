@@ -43,6 +43,9 @@ pub struct NodeInfo {
     pub span: (usize, usize),     // byte offsets in the original file
     pub labels: SmallVec<[DataLabel; 2]>, // taint classifications (multi-label)
     pub defines: Option<String>,  // variable written by this stmt
+    /// Additional variable definitions from destructuring patterns.
+    /// E.g. `const { a, b, c } = source()` → defines="a", extra_defines=["b", "c"].
+    pub extra_defines: Vec<String>,
     pub uses: Vec<String>,        // variables read
     pub callee: Option<String>,
     /// For `CallMethod` nodes: the receiver identifier (e.g. `tainted` in
@@ -262,13 +265,29 @@ fn find_classifiable_inner_call<'a>(
 
 /// Build the dot-joined text of a member_expression / attribute / selector_expression.
 /// E.g. for `process.env.CMD` this returns `"process.env.CMD"`.
+/// Field paths are capped at 3 segments (2 dots) to bound state size.
 fn member_expr_text(n: Node, code: &[u8]) -> Option<String> {
+    let path = member_expr_text_inner(n, code)?;
+    // Depth limit: keep at most 3 segments (2 dots)
+    let mut dots = 0;
+    for (i, c) in path.char_indices() {
+        if c == '.' {
+            dots += 1;
+        }
+        if dots >= 3 {
+            return Some(path[..i].to_string());
+        }
+    }
+    Some(path)
+}
+
+fn member_expr_text_inner(n: Node, code: &[u8]) -> Option<String> {
     match n.kind() {
         "member_expression" | "attribute" | "selector_expression" => {
             let obj = n
                 .child_by_field_name("object")
                 .or_else(|| n.child_by_field_name("value"))
-                .and_then(|o| member_expr_text(o, code))
+                .and_then(|o| member_expr_text_inner(o, code))
                 .or_else(|| {
                     n.child_by_field_name("object")
                         .or_else(|| n.child_by_field_name("value"))
@@ -561,6 +580,7 @@ fn push_condition_node<'a>(
         span,
         labels: SmallVec::new(),
         defines: None,
+        extra_defines: vec![],
         uses: Vec::new(),
         callee: None,
         receiver: None,
@@ -1009,11 +1029,14 @@ fn extract_arg_callees(call_node: Node, lang: &str, code: &[u8]) -> Vec<Option<S
 }
 
 /// Return `(defines, uses)` for the AST fragment `ast`.
-fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) {
+/// Returns (defines, uses, extra_defines) where extra_defines captures additional
+/// bindings from destructuring patterns beyond the primary define.
+fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>, Vec<String>) {
     match lookup(lang, ast.kind()) {
         // Declaration wrappers (let, var, short_var_declaration, etc.)
         Kind::CallWrapper => {
             let mut defs = None;
+            let mut extra_defs = Vec::new();
             let mut uses = Vec::new();
 
             // Try direct field names first (Rust `let_declaration`, Go `short_var_declaration`)
@@ -1036,7 +1059,14 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
                     let mut idents = Vec::new();
                     let mut paths = Vec::new();
                     collect_idents_with_paths(pat, code, &mut idents, &mut paths);
-                    defs = paths.pop().or_else(|| idents.into_iter().next());
+                    let first = paths.pop().or_else(|| idents.first().cloned());
+                    // Remaining idents are extra defines (for destructuring)
+                    for ident in &idents {
+                        if first.as_ref() != Some(ident) {
+                            extra_defs.push(ident.clone());
+                        }
+                    }
+                    defs = first;
                 }
                 if let Some(val) = val_node {
                     let mut idents = Vec::new();
@@ -1085,14 +1115,20 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
                             let mut idents = Vec::new();
                             let mut paths = Vec::new();
                             collect_idents_with_paths(name_node, code, &mut idents, &mut paths);
-                            defs = paths.pop().or_else(|| idents.into_iter().next());
+                            let first = paths.pop().or_else(|| idents.first().cloned());
+                            for ident in &idents {
+                                if first.as_ref() != Some(ident) {
+                                    extra_defs.push(ident.clone());
+                                }
+                            }
+                            defs = first;
                         }
                         if let Some(val_node) = child_value {
                             let mut idents = Vec::new();
                             let mut paths = Vec::new();
                             collect_idents_with_paths(val_node, code, &mut idents, &mut paths);
                             uses.extend(paths);
-                            uses.extend(idents);
+                    uses.extend(idents);
                         }
                     }
                 }
@@ -1107,7 +1143,7 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
                     uses.extend(idents);
                 }
             }
-            (defs, uses)
+            (defs, uses, extra_defs)
         }
 
         // Plain assignment `x = y`
@@ -1128,7 +1164,7 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
                 uses.extend(paths);
                 uses.extend(idents);
             }
-            (defs, uses)
+            (defs, uses, vec![])
         }
 
         // if‑let / while‑let — the `let_condition` binds a variable from
@@ -1153,7 +1189,7 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
                 if let Some(val) = c.child_by_field_name("value") {
                     collect_idents(val, code, &mut uses);
                 }
-                return (defs, uses);
+                return (defs, uses, vec![]);
             }
 
             let mut idents = Vec::new();
@@ -1161,7 +1197,7 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
             collect_idents_with_paths(ast, code, &mut idents, &mut paths);
             let mut uses = paths;
             uses.extend(idents);
-            (None, uses)
+            (None, uses, vec![])
         }
 
         // everything else – no definition, but may read vars
@@ -1171,7 +1207,7 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>) 
             collect_idents_with_paths(ast, code, &mut idents, &mut paths);
             let mut uses = paths;
             uses.extend(idents);
-            (None, uses)
+            (None, uses, vec![])
         }
     }
 }
@@ -1509,7 +1545,7 @@ fn push_node<'a>(
 
     /* ── 3.  GRAPH INSERTION + DEBUG ──────────────────────────────────── */
 
-    let (defines, uses) = def_use(ast, lang, code);
+    let (defines, uses, extra_defines) = def_use(ast, lang, code);
 
     // Capture constant text for SSA constant propagation: when this node
     // defines a variable from a syntactic literal (no identifier uses),
@@ -1616,6 +1652,7 @@ fn push_node<'a>(
         span,
         labels,
         defines,
+        extra_defines,
         uses,
         callee,
         receiver,
@@ -1896,6 +1933,7 @@ fn build_try<'a>(
                     span: (catch_node.start_byte(), catch_node.start_byte()),
                     labels: SmallVec::new(),
                     defines: Some(name.clone()),
+                    extra_defines: vec![],
                     uses: Vec::new(),
                     callee: Some(format!("catch({name})")),
                     receiver: None,
@@ -2166,6 +2204,7 @@ fn build_sub<'a>(
                     span: (ast.end_byte(), ast.end_byte()),
                     labels: SmallVec::new(),
                     defines: None,
+                    extra_defines: vec![],
                     uses: Vec::new(),
                     callee: None,
                     receiver: None,
@@ -2783,6 +2822,7 @@ fn build_sub<'a>(
                 span: (ast.start_byte(), ast.end_byte()),
                 labels: SmallVec::new(),
                 defines: None,
+                extra_defines: vec![],
                 uses: Vec::new(),
                 callee: None,
                 receiver: None,
@@ -3059,6 +3099,7 @@ pub(crate) fn build_cfg<'a>(
         span: (0, 0),
         labels: SmallVec::new(),
         defines: None,
+        extra_defines: vec![],
         uses: Vec::new(),
         callee: None,
         receiver: None,
@@ -3079,6 +3120,7 @@ pub(crate) fn build_cfg<'a>(
         span: (code.len(), code.len()),
         labels: SmallVec::new(),
         defines: None,
+        extra_defines: vec![],
         uses: Vec::new(),
         callee: None,
         receiver: None,

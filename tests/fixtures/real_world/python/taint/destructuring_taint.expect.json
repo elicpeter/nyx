@@ -1,0 +1,15 @@
+{
+  "description": "Multiple env var reads — each independently taints its binding.",
+  "tags": ["taint", "cmdi", "field-access"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 6],
+      "evidence_contains": [],
+      "notes": "os.getenv('ARG') taints arg which flows to subprocess.run"
+    }
+  ]
+}

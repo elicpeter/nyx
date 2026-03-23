@@ -1,0 +1,24 @@
+{
+  "description": "Context-sensitive analysis: run() called with tainted input produces finding; run() called with constant does not.",
+  "tags": [
+    "taint",
+    "context-sensitivity",
+    "cmd-injection"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.cmd flows through run() to child_process.exec — command injection"
+    }
+  ]
+}

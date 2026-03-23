@@ -1,0 +1,25 @@
+{
+  "description": "Callback tracking: os.system passed as callback to invoke(), tainted data flows through.",
+  "tags": [
+    "taint",
+    "callback",
+    "context-sensitivity",
+    "cmd-injection"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "request.args.get flows through invoke() where os.system is invoked as callback — command injection"
+    }
+  ]
+}

@@ -1,13 +1,16 @@
+use crate::commands::scan::Diag;
+use crate::database::index::Indexer;
 use crate::server::app::AppState;
 use crate::server::models::{
-    collect_filter_values, finding_from_diag, finding_from_diag_with_detail, summarize_findings,
-    FilterValues, FindingSummary, FindingView,
+    collect_filter_values, finding_from_diag, finding_from_diag_with_detail,
+    overlay_triage_states, summarize_findings, FilterValues, FindingSummary, FindingView,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
+use std::sync::Arc;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -15,6 +18,45 @@ pub fn routes() -> Router<AppState> {
         .route("/findings/summary", get(findings_summary))
         .route("/findings/filters", get(findings_filters))
         .route("/findings/{index}", get(get_finding))
+}
+
+/// Load findings for the latest completed scan, falling back to DB if no
+/// in-memory completed scan exists (e.g. after a server restart).
+pub fn load_latest_findings(state: &AppState) -> Arc<Vec<Diag>> {
+    // In-memory first
+    if let Some(job) = state.job_manager.get_latest_completed() {
+        if let Some(ref findings) = job.findings {
+            return Arc::clone(findings);
+        }
+    }
+    // DB fallback — find the most recent completed scan with findings
+    if let Some(ref pool) = state.db_pool {
+        if let Ok(idx) = Indexer::from_pool("_scans", pool) {
+            if let Ok(scans) = idx.list_scans(20) {
+                for scan in scans {
+                    if scan.status == "completed" {
+                        if let Some(json) = scan.findings_json.as_deref() {
+                            if let Ok(diags) = serde_json::from_str::<Vec<Diag>>(json) {
+                                return Arc::new(diags);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Arc::new(Vec::new())
+}
+
+/// Load triage states and suppression rules from DB, apply to views.
+fn apply_triage_overlay(state: &AppState, views: &mut [FindingView]) {
+    if let Some(ref pool) = state.db_pool {
+        if let Ok(idx) = Indexer::from_pool("_triage", pool) {
+            let triage_map = idx.get_all_triage_states().unwrap_or_default();
+            let rules = idx.get_suppression_rules().unwrap_or_default();
+            overlay_triage_states(views, &triage_map, &rules);
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -37,18 +79,16 @@ async fn list_findings(
     State(state): State<AppState>,
     Query(query): Query<FindingsQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let job = state
-        .job_manager
-        .get_latest_completed()
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let findings = job.findings.as_deref().unwrap_or(&[]);
+    let findings = load_latest_findings(&state);
 
     let mut views: Vec<FindingView> = findings
         .iter()
         .enumerate()
         .map(|(i, d)| finding_from_diag(i, d))
         .collect();
+
+    // Overlay triage states from DB before filtering
+    apply_triage_overlay(&state, &mut views);
 
     // Apply filters.
     if let Some(ref sev) = query.severity {
@@ -132,7 +172,7 @@ async fn list_findings(
     // Paginate.
     let total = views.len();
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(50).clamp(1, 500);
+    let per_page = query.per_page.unwrap_or(50).clamp(1, 10000);
     let start = (page - 1) * per_page;
     let page_views: Vec<_> = views.into_iter().skip(start).take(per_page).collect();
 
@@ -146,40 +186,25 @@ async fn list_findings(
 
 async fn findings_summary(
     State(state): State<AppState>,
-) -> Result<Json<FindingSummary>, StatusCode> {
-    let job = state
-        .job_manager
-        .get_latest_completed()
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let findings = job.findings.as_deref().unwrap_or(&[]);
-    Ok(Json(summarize_findings(findings)))
+) -> Json<FindingSummary> {
+    let findings = load_latest_findings(&state);
+    Json(summarize_findings(&findings))
 }
 
 async fn findings_filters(
     State(state): State<AppState>,
-) -> Result<Json<FilterValues>, StatusCode> {
-    let job = state
-        .job_manager
-        .get_latest_completed()
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let findings = job.findings.as_deref().unwrap_or(&[]);
-    Ok(Json(collect_filter_values(findings)))
+) -> Json<FilterValues> {
+    let findings = load_latest_findings(&state);
+    Json(collect_filter_values(&findings))
 }
 
 async fn get_finding(
     State(state): State<AppState>,
     Path(index): Path<usize>,
 ) -> Result<Json<FindingView>, StatusCode> {
-    let job = state
-        .job_manager
-        .get_latest_completed()
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let findings = job.findings.as_deref().unwrap_or(&[]);
+    let findings = load_latest_findings(&state);
     let diag = findings.get(index).ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(finding_from_diag_with_detail(
-        index,
-        diag,
-        &state.scan_root,
-        findings,
-    )))
+    let mut view = finding_from_diag_with_detail(index, diag, &state.scan_root, &findings);
+    apply_triage_overlay(&state, std::slice::from_mut(&mut view));
+    Ok(Json(view))
 }

@@ -38,10 +38,11 @@ const ROUTES = [
   { path: '/findings',         section: 'findings', render: renderFindings },
   { path: '/findings/:id',     section: 'findings', render: renderFindingDetail },
   { path: '/scans',            section: 'scans',    render: renderScans },
+  { path: '/scans/compare/:left/:right', section: 'scans', render: renderScanCompare },
   { path: '/scans/:id',        section: 'scans',    render: renderScanDetail },
   { path: '/rules',            section: 'rules',    render: renderStub },
   { path: '/rules/:id',        section: 'rules',    render: renderStub },
-  { path: '/triage',           section: 'triage',   render: renderStub },
+  { path: '/triage',           section: 'triage',   render: renderTriage },
   { path: '/config',           section: 'config',   render: renderStub },
   { path: '/explorer',         section: 'explorer', render: renderStub },
   { path: '/debug',            section: 'debug',    render: renderStub },
@@ -87,12 +88,23 @@ const STUB_DESCRIPTIONS = {
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 
+// AbortController for the current page render — aborted on every navigation
+// so stale responses from a previous page cannot overwrite the new page.
+let pageAbort = new AbortController();
+
+function isAbortError(e) {
+  return e.name === 'AbortError';
+}
+
 async function api(path, opts = {}) {
   const headers = { ...opts.headers };
   if (opts.body) {
     headers['Content-Type'] = headers['Content-Type'] || 'application/json';
   }
-  const res = await fetch(`/api${path}`, { ...opts, headers });
+  // Attach the page-level abort signal unless the caller opts out (signal: null)
+  // or provides its own signal.
+  const signal = opts.signal === null ? undefined : (opts.signal || pageAbort.signal);
+  const res = await fetch(`/api${path}`, { ...opts, headers, signal });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `HTTP ${res.status}`);
@@ -124,7 +136,18 @@ function navigate(path) {
   route(path);
 }
 
+// Generation counter — incremented on every route() call so SSE-triggered
+// refreshes can detect they've been superseded and bail out.
+let routeGeneration = 0;
+
 function route(path) {
+  // Abort any in-flight API requests from the previous page render.
+  pageAbort.abort();
+  pageAbort = new AbortController();
+  routeGeneration++;
+  // Cancel any pending SSE refresh so it doesn't fight this render.
+  clearTimeout(_refreshTimer);
+
   currentRoute = path;
   const match = matchRoute(path);
   if (match) {
@@ -136,6 +159,20 @@ function route(path) {
     updateHeader(null);
     render404($('#content'));
   }
+}
+
+// SSE-safe refresh: schedules a re-render of the current page after a short
+// delay.  If the user navigates (or another refresh fires) before the timer
+// expires, the pending refresh is cancelled so it never fights the user.
+let _refreshTimer = null;
+function scheduleRefresh() {
+  clearTimeout(_refreshTimer);
+  const gen = routeGeneration;
+  _refreshTimer = setTimeout(() => {
+    _refreshTimer = null;
+    // Only fire if no navigation happened since we scheduled.
+    if (routeGeneration === gen) route(currentRoute);
+  }, 200);
 }
 
 // ── Sidebar Component ────────────────────────────────────────────────────────
@@ -189,7 +226,7 @@ function updateSidebar(sectionId) {
 
 async function loadAppMeta() {
   try {
-    const health = await api('/health');
+    const health = await api('/health', { signal: null });
     appMeta = health;
     const v = $('#version');
     if (v) v.textContent = `v${health.version}`;
@@ -349,6 +386,7 @@ async function renderDashboard(el, params, match) {
       row.addEventListener('click', () => navigate(`/scans/${row.dataset.scanId}`));
     });
   } catch (e) {
+    if (isAbortError(e)) return;
     el.innerHTML = `<div class="error-state"><h3>Error loading dashboard</h3><p>${escHtml(e.message)}</p></div>`;
   }
 }
@@ -411,6 +449,7 @@ async function renderFindings(el, params, match) {
 
     renderFullWidthFindings(el, data, filters, state);
   } catch (e) {
+    if (isAbortError(e)) return;
     if (e.message.includes('404')) {
       el.innerHTML = '<div class="empty-state"><h3>No scan results yet</h3><p>Run a scan first to see findings.</p></div>';
     } else {
@@ -457,9 +496,11 @@ function renderFullWidthFindings(el, data, filters, state) {
       </div>
       <div class="bulk-action-bar" id="bulk-bar">
         <span class="bulk-count" id="bulk-count">0 selected</span>
-        <button class="btn btn-sm" disabled title="Coming in Phase 7">Suppress</button>
-        <button class="btn btn-sm" disabled title="Coming in Phase 7">Mark FP</button>
-        <button class="btn btn-sm" disabled title="Coming in Phase 7">Export</button>
+        <button class="btn btn-sm btn-bulk-triage" data-state="suppressed">Suppress</button>
+        <button class="btn btn-sm btn-bulk-triage" data-state="false_positive">Mark FP</button>
+        <button class="btn btn-sm btn-bulk-triage" data-state="accepted_risk">Accept Risk</button>
+        <button class="btn btn-sm btn-bulk-triage" data-state="investigating">Investigating</button>
+        <button class="btn btn-sm" id="bulk-suppress-pattern">Suppress by Pattern</button>
       </div>
       ${data.findings.length === 0
         ? '<div class="empty-state"><h3>No findings</h3><p>Run a scan to see results, or adjust your filters.</p></div>'
@@ -476,7 +517,7 @@ function renderFullWidthFindings(el, data, filters, state) {
             <th class="${sortClass('status')}">Status${sortArrow('status')}</th>
           </tr></thead>
           <tbody>
-          ${data.findings.map(f => `<tr class="clickable${selectedFindings.has(f.index) ? ' selected' : ''}" data-finding="${f.index}">
+          ${data.findings.map(f => `<tr class="clickable${selectedFindings.has(f.index) ? ' selected' : ''}" data-finding="${f.index}" data-fingerprint="${f.fingerprint}">
             <td class="col-checkbox"><input type="checkbox" class="row-check" data-idx="${f.index}" ${selectedFindings.has(f.index) ? 'checked' : ''}></td>
             <td><span class="badge badge-${f.severity.toLowerCase()}">${f.severity}</span></td>
             <td>${f.confidence ? `<span class="badge badge-conf-${f.confidence.toLowerCase()}">${f.confidence}</span>` : '-'}</td>
@@ -485,7 +526,7 @@ function renderFullWidthFindings(el, data, filters, state) {
             <td class="cell-path" title="${escHtml(f.path)}">${escHtml(truncPath(f.path))}</td>
             <td>${f.line}</td>
             <td>${f.language || '-'}</td>
-            <td><span class="badge badge-status-${f.status}">${f.status}</span></td>
+            <td><span class="badge badge-triage-${f.triage_state || f.status}">${(f.triage_state || f.status).replace(/_/g, ' ')}</span></td>
           </tr>`).join('')}
           </tbody></table></div>
           <div class="pagination">
@@ -601,6 +642,88 @@ function renderFullWidthFindings(el, data, filters, state) {
     $('#page-last')?.addEventListener('click', () => setFindingsState({ page: String(totalPages) }));
 
     updateBulkBar();
+
+    // Bulk triage action buttons
+    $$('.btn-bulk-triage', el).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const fingerprints = [];
+        $$('tr[data-fingerprint]', el).forEach(row => {
+          const idx = parseInt(row.dataset.finding);
+          if (selectedFindings.has(idx)) {
+            fingerprints.push(row.dataset.fingerprint);
+          }
+        });
+        if (fingerprints.length === 0) return;
+        try {
+          await api('/triage', {
+            method: 'POST',
+            body: JSON.stringify({ fingerprints, state: btn.dataset.state, note: '' }),
+            signal: null,
+          });
+          selectedFindings.clear();
+          renderFindings(el, params, match);
+        } catch (err) {
+          alert('Failed to update triage state: ' + err.message);
+        }
+      });
+    });
+
+    // Suppress by pattern button
+    $('#bulk-suppress-pattern', el)?.addEventListener('click', () => {
+      // Collect rule_ids and file paths from selected findings
+      const selectedRows = [];
+      $$('tr[data-fingerprint]', el).forEach(row => {
+        const idx = parseInt(row.dataset.finding);
+        if (selectedFindings.has(idx)) {
+          const finding = data.findings.find(f => f.index === idx);
+          if (finding) selectedRows.push(finding);
+        }
+      });
+      if (selectedRows.length === 0) return;
+
+      // Get unique rules and files
+      const rules = [...new Set(selectedRows.map(f => f.rule_id))];
+      const files = [...new Set(selectedRows.map(f => f.path))];
+
+      // Build a simple modal for pattern selection
+      const modal = document.createElement('div');
+      modal.className = 'suppress-modal-overlay';
+      modal.innerHTML = `
+        <div class="suppress-modal">
+          <h3>Suppress by Pattern</h3>
+          <div class="suppress-options">
+            ${rules.map(r => `<button class="btn btn-sm suppress-opt" data-by="rule" data-value="${escHtml(r)}">By rule: ${escHtml(r)}</button>`).join('')}
+            ${files.map(f => `<button class="btn btn-sm suppress-opt" data-by="file" data-value="${escHtml(f)}">By file: ${escHtml(truncPath(f, 40))}</button>`).join('')}
+          </div>
+          <textarea id="suppress-note" placeholder="Note (optional)..." rows="2" style="width:100%;margin-top:var(--space-3)"></textarea>
+          <div style="display:flex;gap:var(--space-2);margin-top:var(--space-3)">
+            <button class="btn btn-sm" id="suppress-modal-cancel">Cancel</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      modal.querySelector('#suppress-modal-cancel').addEventListener('click', () => modal.remove());
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+      modal.querySelectorAll('.suppress-opt').forEach(opt => {
+        opt.addEventListener('click', async () => {
+          const note = (modal.querySelector('#suppress-note')?.value || '').trim();
+          try {
+            await api('/triage/suppress', {
+              method: 'POST',
+              body: JSON.stringify({ by: opt.dataset.by, value: opt.dataset.value, note }),
+              signal: null,
+            });
+            modal.remove();
+            selectedFindings.clear();
+            renderFindings($('#content'), params, match);
+          } catch (err) {
+            alert('Failed to add suppression rule: ' + err.message);
+          }
+        });
+      });
+    });
 }
 
 // ── Finding Detail Page ──────────────────────────────────────────────────────
@@ -629,10 +752,27 @@ async function renderFindingDetail(el, params, match) {
           <span class="badge badge-${f.severity.toLowerCase()}">${f.severity}</span>
           ${f.confidence ? `<span class="badge badge-conf-${f.confidence.toLowerCase()}">${f.confidence}</span>` : ''}
           <span class="badge">${escHtml(f.category)}</span>
-          <span class="badge badge-status-${f.status}">${f.status}</span>
+          <span class="badge badge-triage-${f.triage_state || 'open'}">${(f.triage_state || 'open').replace(/_/g, ' ')}</span>
           ${sanitizerBadge}
         </div>
         <a href="#" class="file-location" id="open-code-viewer" data-path="${escHtml(f.path)}" data-line="${f.line}">${escHtml(f.path)}:${f.line}:${f.col}</a>
+
+        <div class="triage-actions" data-fingerprint="${escHtml(f.fingerprint)}">
+          ${f.triage_note ? `<div class="triage-current-note"><strong>Note:</strong> ${escHtml(f.triage_note)}</div>` : ''}
+          <div class="triage-buttons">
+            ${['open','investigating','false_positive','accepted_risk','suppressed','fixed']
+              .filter(s => s !== (f.triage_state || 'open'))
+              .map(s => `<button class="btn btn-sm btn-triage btn-triage-${s}" data-state="${s}">${s.replace(/_/g, ' ')}</button>`)
+              .join('')}
+          </div>
+          <div class="triage-note-input" id="triage-note-form" style="display:none">
+            <textarea id="triage-note-text" placeholder="Add a note (optional)..." rows="2"></textarea>
+            <div class="triage-note-actions">
+              <button class="btn btn-sm btn-primary" id="triage-confirm">Confirm</button>
+              <button class="btn btn-sm" id="triage-cancel">Cancel</button>
+            </div>
+          </div>
+        </div>
 
         ${f.message || (f.evidence && (f.evidence.source || f.evidence.sink)) ? `
           <div class="detail-section">
@@ -751,7 +891,42 @@ async function renderFindingDetail(el, params, match) {
       row.addEventListener('click', () => navigate(`/findings/${row.dataset.finding}`));
     });
 
+    // Triage action buttons
+    let pendingTriageState = null;
+    $$('.btn-triage', el).forEach(btn => {
+      btn.addEventListener('click', () => {
+        pendingTriageState = btn.dataset.state;
+        const form = $('#triage-note-form', el);
+        if (form) form.style.display = 'block';
+        const ta = $('#triage-note-text', el);
+        if (ta) { ta.value = ''; ta.focus(); }
+      });
+    });
+
+    $('#triage-cancel', el)?.addEventListener('click', () => {
+      pendingTriageState = null;
+      const form = $('#triage-note-form', el);
+      if (form) form.style.display = 'none';
+    });
+
+    $('#triage-confirm', el)?.addEventListener('click', async () => {
+      if (!pendingTriageState) return;
+      const note = ($('#triage-note-text', el)?.value || '').trim();
+      try {
+        await api('/triage', {
+          method: 'POST',
+          body: JSON.stringify({ fingerprints: [f.fingerprint], state: pendingTriageState, note }),
+          signal: null,
+        });
+        // Re-render the finding detail to reflect the new state
+        renderFindingDetail(el, params, match);
+      } catch (err) {
+        alert('Failed to update triage state: ' + err.message);
+      }
+    });
+
   } catch (e) {
+    if (isAbortError(e)) return;
     el.innerHTML = `<div class="error-state"><h3>Finding not found</h3><p>${escHtml(e.message)}</p></div>`;
   }
 }
@@ -1069,6 +1244,7 @@ async function renderScans(el, params, match) {
   el.innerHTML = '<div class="loading">Loading scans...</div>';
   try {
     const scans = await api('/scans');
+    const selectedScans = new Set();
 
     // Show progress view if a scan is running
     const runningScans = scans.filter(s => s.status === 'running');
@@ -1086,17 +1262,24 @@ async function renderScans(el, params, match) {
       return d.toLocaleDateString();
     };
 
+    const completedScans = scans.filter(s => s.status === 'completed');
+
     el.innerHTML = `
       <div class="page-header">
         <h2>Scans</h2>
       </div>
       ${progressHtml}
+      <div id="compare-bar" class="compare-select-bar" style="display:none">
+        <span>Select exactly 2 completed scans to compare</span>
+        <button class="btn btn-sm" id="compare-btn" disabled>Compare Selected</button>
+      </div>
       ${scans.length === 0
         ? '<div class="empty-state"><h3>No scans yet</h3><p>Use the "Start Scan" button in the header to start your first scan.</p></div>'
         : `<div class="table-wrap"><table>
-          <thead><tr><th>Status</th><th>Root</th><th>Duration</th><th>Findings</th><th>Languages</th><th>Started</th></tr></thead>
+          <thead><tr>${completedScans.length >= 2 ? '<th style="width:32px"></th>' : ''}<th>Status</th><th>Root</th><th>Duration</th><th>Findings</th><th>Languages</th><th>Started</th></tr></thead>
           <tbody>
           ${scans.map(s => `<tr class="clickable" data-scan-id="${s.id}">
+            ${completedScans.length >= 2 ? `<td>${s.status === 'completed' ? `<input type="checkbox" class="scan-compare-cb" data-cb-id="${s.id}" data-started="${s.started_at || ''}">` : ''}</td>` : ''}
             <td><span class="status-badge ${s.status}"><span class="status-dot ${s.status}"></span>${s.status}</span></td>
             <td style="font-family:var(--font-mono);font-size:0.82rem">${escHtml(truncPath(s.scan_root))}</td>
             <td>${s.duration_secs != null ? s.duration_secs.toFixed(2) + 's' : '-'}</td>
@@ -1107,10 +1290,56 @@ async function renderScans(el, params, match) {
           </tbody></table></div>`
       }`;
 
+    const updateCompareBar = () => {
+      const bar = $('#compare-bar', el);
+      const btn = $('#compare-btn', el);
+      if (!bar || !btn) return;
+      if (selectedScans.size > 0) {
+        bar.style.display = 'flex';
+        btn.disabled = selectedScans.size !== 2;
+        bar.querySelector('span').textContent = selectedScans.size === 2
+          ? '2 scans selected'
+          : `Select ${2 - selectedScans.size} more completed scan${selectedScans.size === 0 ? 's' : ''}`;
+      } else {
+        bar.style.display = 'none';
+      }
+    };
+
+    $$('.scan-compare-cb', el).forEach(cb => {
+      cb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (cb.checked) {
+          if (selectedScans.size >= 2) {
+            cb.checked = false;
+            return;
+          }
+          selectedScans.add(cb.dataset.cbId);
+        } else {
+          selectedScans.delete(cb.dataset.cbId);
+        }
+        updateCompareBar();
+      });
+    });
+
+    $('#compare-btn', el)?.addEventListener('click', () => {
+      if (selectedScans.size !== 2) return;
+      const ids = [...selectedScans];
+      // Sort by started_at so left=older, right=newer
+      const cbEls = $$('.scan-compare-cb', el);
+      const startedMap = {};
+      cbEls.forEach(cb => { startedMap[cb.dataset.cbId] = cb.dataset.started || ''; });
+      ids.sort((a, b) => (startedMap[a] || '').localeCompare(startedMap[b] || ''));
+      navigate(`/scans/compare/${ids[0]}/${ids[1]}`);
+    });
+
     $$('[data-scan-id]', el).forEach(row => {
-      row.addEventListener('click', () => navigate(`/scans/${row.dataset.scanId}`));
+      row.addEventListener('click', (e) => {
+        if (e.target.classList.contains('scan-compare-cb')) return;
+        navigate(`/scans/${row.dataset.scanId}`);
+      });
     });
   } catch (e) {
+    if (isAbortError(e)) return;
     el.innerHTML = `<div class="error-state"><h3>Error</h3><p>${escHtml(e.message)}</p></div>`;
   }
 }
@@ -1122,11 +1351,25 @@ async function renderScanDetail(el, params) {
   el.innerHTML = '<div class="loading">Loading scan...</div>';
   try {
     const scan = await api(`/scans/${id}`);
+    // Find previous completed scan for compare button
+    let prevScanId = null;
+    if (scan.status === 'completed') {
+      try {
+        const allScans = await api('/scans');
+        const completed = allScans.filter(s => s.status === 'completed' && s.started_at);
+        completed.sort((a, b) => (a.started_at || '').localeCompare(b.started_at || ''));
+        const myIdx = completed.findIndex(s => s.id === id);
+        if (myIdx > 0) prevScanId = completed[myIdx - 1].id;
+      } catch { /* ignore */ }
+    }
     let activeTab = 'summary';
 
     const renderTabs = () => {
       el.innerHTML = `
-        <button class="btn btn-sm" id="back-to-scans" style="margin-bottom:var(--space-4)">Back to Scans</button>
+        <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-4)">
+          <button class="btn btn-sm" id="back-to-scans">Back to Scans</button>
+          ${prevScanId ? `<button class="btn btn-sm" id="compare-prev-btn" style="margin-left:auto">Compare with Previous</button>` : ''}
+        </div>
         <div class="page-header">
           <h2>Scan Detail</h2>
           <span class="status-badge ${scan.status}"><span class="status-dot ${scan.status}"></span>${scan.status}</span>
@@ -1141,6 +1384,9 @@ async function renderScanDetail(el, params) {
       `;
 
       $('#back-to-scans')?.addEventListener('click', () => navigate('/scans'));
+      $('#compare-prev-btn', el)?.addEventListener('click', () => {
+        if (prevScanId) navigate(`/scans/compare/${prevScanId}/${id}`);
+      });
       $$('.scan-detail-tab', el).forEach(tab => {
         tab.addEventListener('click', () => {
           activeTab = tab.dataset.tab;
@@ -1157,6 +1403,7 @@ async function renderScanDetail(el, params) {
 
     renderTabs();
   } catch (e) {
+    if (isAbortError(e)) return;
     el.innerHTML = `<div class="error-state"><h3>Scan not found</h3><p>${escHtml(e.message)}</p></div>`;
   }
 }
@@ -1260,6 +1507,7 @@ async function renderFindingsTab(el, scanId) {
       row.addEventListener('click', () => navigate(`/findings/${row.dataset.findingIdx}`));
     });
   } catch (e) {
+    if (isAbortError(e)) return;
     el.innerHTML = `<div class="error-state"><p>${escHtml(e.message)}</p></div>`;
   }
 }
@@ -1299,6 +1547,7 @@ async function renderLogsTab(el, scanId) {
         });
       });
     } catch (e) {
+      if (isAbortError(e)) return;
       el.innerHTML = `<div class="error-state"><p>${escHtml(e.message)}</p></div>`;
     }
   };
@@ -1349,6 +1598,222 @@ async function renderMetricsTab(el, scanId, scan) {
   `;
 }
 
+// ── Scan Comparison Page ─────────────────────────────────────────────────────
+
+async function renderScanCompare(el, params) {
+  const { left, right } = params;
+  el.innerHTML = '<div class="loading">Loading comparison...</div>';
+  try {
+    const data = await api(`/scans/compare?left=${encodeURIComponent(left)}&right=${encodeURIComponent(right)}`);
+    let activeTab = 'status';
+
+    const fmtDate = (iso) => iso ? new Date(iso).toLocaleString() : '-';
+    const shortId = (id) => id.length > 8 ? id.slice(0, 8) : id;
+
+    const renderPage = () => {
+      // Severity delta display
+      const severities = ['HIGH', 'MEDIUM', 'LOW'];
+      const deltaHtml = severities.map(s => {
+        const d = data.summary.severity_delta[s] || 0;
+        let cls = 'delta-zero';
+        let prefix = '';
+        if (d > 0) { cls = 'delta-positive'; prefix = '+'; }
+        else if (d < 0) { cls = 'delta-negative'; }
+        return `<span class="severity-delta-item">
+          <span class="badge badge-${s.toLowerCase()}">${s}</span>
+          <span class="${cls}">${prefix}${d}</span>
+        </span>`;
+      }).join('');
+
+      el.innerHTML = `
+        <button class="btn btn-sm" id="back-to-scans" style="margin-bottom:var(--space-4)">Back to Scans</button>
+        <div class="page-header"><h2>Scan Comparison</h2></div>
+
+        <div class="compare-header">
+          <div class="compare-scan-pill">
+            <span>Left</span>
+            <span class="pill-id">${escHtml(shortId(data.left_scan.id))}</span>
+            <span class="pill-count">${data.left_scan.finding_count} findings</span>
+            <span style="color:var(--text-tertiary);font-size:var(--text-xs)">${fmtDate(data.left_scan.started_at)}</span>
+          </div>
+          <span class="compare-vs">vs</span>
+          <div class="compare-scan-pill">
+            <span>Right</span>
+            <span class="pill-id">${escHtml(shortId(data.right_scan.id))}</span>
+            <span class="pill-count">${data.right_scan.finding_count} findings</span>
+            <span style="color:var(--text-tertiary);font-size:var(--text-xs)">${fmtDate(data.right_scan.started_at)}</span>
+          </div>
+        </div>
+
+        <div class="compare-summary-grid">
+          <div class="compare-card compare-card--new">
+            <div class="compare-card-label">New</div>
+            <div class="compare-card-value">${data.summary.new_count}</div>
+          </div>
+          <div class="compare-card compare-card--fixed">
+            <div class="compare-card-label">Fixed</div>
+            <div class="compare-card-value">${data.summary.fixed_count}</div>
+          </div>
+          <div class="compare-card compare-card--changed">
+            <div class="compare-card-label">Changed</div>
+            <div class="compare-card-value">${data.summary.changed_count}</div>
+          </div>
+          <div class="compare-card compare-card--unchanged">
+            <div class="compare-card-label">Unchanged</div>
+            <div class="compare-card-value">${data.summary.unchanged_count}</div>
+          </div>
+        </div>
+
+        <div class="severity-delta">${deltaHtml}</div>
+
+        <div class="scan-detail-tabs">
+          <button class="scan-detail-tab ${activeTab === 'status' ? 'active' : ''}" data-cmp-tab="status">By Status</button>
+          <button class="scan-detail-tab ${activeTab === 'rule' ? 'active' : ''}" data-cmp-tab="rule">By Rule</button>
+          <button class="scan-detail-tab ${activeTab === 'file' ? 'active' : ''}" data-cmp-tab="file">By File</button>
+        </div>
+        <div id="compare-tab-content"></div>
+      `;
+
+      $('#back-to-scans', el)?.addEventListener('click', () => navigate('/scans'));
+      $$('[data-cmp-tab]', el).forEach(tab => {
+        tab.addEventListener('click', () => {
+          activeTab = tab.dataset.cmpTab;
+          renderPage();
+        });
+      });
+
+      const content = $('#compare-tab-content', el);
+      if (activeTab === 'status') renderCompareByStatus(content, data);
+      else if (activeTab === 'rule') renderCompareByGroup(content, data, 'rule_id');
+      else if (activeTab === 'file') renderCompareByGroup(content, data, 'path');
+    };
+
+    renderPage();
+  } catch (e) {
+    if (isAbortError(e)) return;
+    el.innerHTML = `<div class="error-state"><h3>Comparison failed</h3><p>${escHtml(e.message)}</p></div>`;
+  }
+}
+
+function renderCompareByStatus(el, data) {
+  const sections = [
+    { key: 'new', label: 'New Findings', badge: 'compare-badge--new', rowCls: 'compare-finding-row--new', items: data.new_findings },
+    { key: 'fixed', label: 'Fixed Findings', badge: 'compare-badge--fixed', rowCls: 'compare-finding-row--fixed', items: data.fixed_findings },
+    { key: 'changed', label: 'Changed Findings', badge: 'compare-badge--changed', rowCls: 'compare-finding-row--changed', items: data.changed_findings },
+    { key: 'unchanged', label: 'Unchanged Findings', badge: 'compare-badge--unchanged', rowCls: 'compare-finding-row--unchanged', items: data.unchanged_findings },
+  ];
+
+  el.innerHTML = sections.map(sec => {
+    if (sec.items.length === 0) return '';
+    const collapsed = sec.key === 'unchanged';
+    return `
+      <div class="compare-section" data-section="${sec.key}">
+        <div class="compare-section-header" data-toggle="${sec.key}">
+          <span class="section-toggle ${collapsed ? 'collapsed' : ''}">&#9660;</span>
+          <span class="${sec.badge}">${sec.key.toUpperCase()}</span>
+          <span>${sec.label} (${sec.items.length})</span>
+        </div>
+        <div class="compare-section-body" ${collapsed ? 'style="display:none"' : ''} data-body="${sec.key}">
+          ${sec.items.map(f => renderCompareRow(f, sec.rowCls, sec.key === 'changed')).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  attachCompareListeners(el);
+}
+
+function renderCompareByGroup(el, data, groupField) {
+  // Merge all findings into one list with status tags
+  const all = [];
+  data.new_findings.forEach(f => all.push({ ...f, _status: 'new' }));
+  data.fixed_findings.forEach(f => all.push({ ...f, _status: 'fixed' }));
+  data.changed_findings.forEach(f => all.push({ ...f, _status: 'changed' }));
+  data.unchanged_findings.forEach(f => all.push({ ...f, _status: 'unchanged' }));
+
+  // Group by field
+  const groups = {};
+  all.forEach(f => {
+    const key = f[groupField] || f.finding?.[groupField] || '(unknown)';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(f);
+  });
+
+  const groupKeys = Object.keys(groups).sort();
+  el.innerHTML = groupKeys.map(key => {
+    const items = groups[key];
+    const counts = { new: 0, fixed: 0, changed: 0, unchanged: 0 };
+    items.forEach(f => counts[f._status]++);
+    const summary = [
+      counts.new > 0 ? `+${counts.new}` : '',
+      counts.fixed > 0 ? `-${counts.fixed}` : '',
+      counts.changed > 0 ? `~${counts.changed}` : '',
+    ].filter(Boolean).join(' ') || `${counts.unchanged} unchanged`;
+
+    return `
+      <div class="compare-section">
+        <div class="compare-group-header" data-toggle="${escHtml(key)}">
+          <span class="section-toggle">&#9660;</span>
+          <span style="font-family:var(--font-mono);font-size:var(--text-xs)">${escHtml(key)}</span>
+          <span class="compare-group-summary">${summary}</span>
+        </div>
+        <div class="compare-section-body" data-body="${escHtml(key)}">
+          ${items.map(f => {
+            const rowCls = `compare-finding-row--${f._status}`;
+            return renderCompareRow(f, rowCls, f._status === 'changed');
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  attachCompareListeners(el);
+}
+
+function renderCompareRow(f, rowCls, showChanges) {
+  const finding = f.finding || f;
+  const sevBadge = `<span class="badge badge-${(finding.severity || '').toLowerCase()}">${finding.severity || '-'}</span>`;
+  const confBadge = finding.confidence ? `<span class="badge badge-conf-${finding.confidence.toLowerCase()}">${finding.confidence}</span>` : '';
+
+  let changesHtml = '';
+  if (showChanges && f.changes && f.changes.length > 0) {
+    changesHtml = f.changes.map(c =>
+      `<span class="compare-delta-inline">${escHtml(c.field)}: ${escHtml(c.old_value)} <span class="delta-arrow">&rarr;</span> ${escHtml(c.new_value)}</span>`
+    ).join(' ');
+  }
+
+  return `
+    <div class="compare-finding-row ${rowCls}" data-finding-idx="${finding.index}">
+      ${sevBadge}
+      <span style="font-size:var(--text-xs)">${escHtml(finding.rule_id || '')}</span>
+      <span class="finding-path" title="${escHtml(finding.path || '')}">${escHtml(truncPath(finding.path || ''))}</span>
+      <span style="font-size:var(--text-xs);color:var(--text-secondary)">L${finding.line || '-'}</span>
+      ${confBadge}
+      ${changesHtml}
+    </div>
+  `;
+}
+
+function attachCompareListeners(el) {
+  // Toggle sections
+  $$('[data-toggle]', el).forEach(header => {
+    header.addEventListener('click', () => {
+      const key = header.dataset.toggle;
+      const body = $(`[data-body="${key}"]`, el);
+      const toggle = $('.section-toggle', header);
+      if (!body) return;
+      const visible = body.style.display !== 'none';
+      body.style.display = visible ? 'none' : '';
+      if (toggle) toggle.classList.toggle('collapsed', visible);
+    });
+  });
+
+  // Click findings to navigate
+  $$('.compare-finding-row[data-finding-idx]', el).forEach(row => {
+    row.addEventListener('click', () => navigate(`/findings/${row.dataset.findingIdx}`));
+  });
+}
+
 // ── New Scan Modal ───────────────────────────────────────────────────────────
 
 function openNewScanModal() {
@@ -1385,10 +1850,11 @@ function openNewScanModal() {
       const body = root && root !== defaultRoot
         ? JSON.stringify({ scan_root: root })
         : undefined;
-      await api('/scans', { method: 'POST', body });
+      await api('/scans', { method: 'POST', body, signal: null });
       close();
       navigate('/scans');
     } catch (e) {
+      if (isAbortError(e)) return;
       alert(e.message);
     }
   });
@@ -1440,6 +1906,264 @@ function updateProgressDisplay(data) {
     const temp = document.createElement('div');
     temp.innerHTML = renderProgressView(data);
     existing.replaceWith(temp.firstElementChild);
+  }
+}
+
+// ── Triage ───────────────────────────────────────────────────────────────────
+
+// Persistent filter state across re-renders within the same page visit
+let _triageFilter = 'all';
+
+async function renderTriage(el, params, match) {
+  el.innerHTML = '<div class="loading">Loading triage data...</div>';
+  try {
+    const [firstPage, auditData, suppressionData] = await Promise.all([
+      api('/findings?per_page=5000'),
+      api('/triage/audit?per_page=100'),
+      api('/triage/suppress'),
+    ]);
+
+    let findings = firstPage.findings || [];
+    const totalFindings = firstPage.total || findings.length;
+    if (totalFindings > findings.length) {
+      const pages = Math.ceil(totalFindings / 5000);
+      const remaining = [];
+      for (let p = 2; p <= pages; p++) {
+        remaining.push(api(`/findings?per_page=5000&page=${p}`));
+      }
+      const results = await Promise.all(remaining);
+      for (const r of results) {
+        findings = findings.concat(r.findings || []);
+      }
+    }
+    const auditEntries = auditData.entries || [];
+    const suppressionRules = suppressionData.rules || [];
+
+    // Compute summary stats
+    const allStates = ['open', 'investigating', 'false_positive', 'accepted_risk', 'suppressed', 'fixed'];
+    const stateCounts = {};
+    allStates.forEach(s => stateCounts[s] = 0);
+    findings.forEach(f => {
+      const ts = f.triage_state || 'open';
+      stateCounts[ts] = (stateCounts[ts] || 0) + 1;
+    });
+    const totalCount = findings.length;
+    const needsAttention = (stateCounts['open'] || 0) + (stateCounts['investigating'] || 0);
+
+    // Severity breakdown for open findings
+    const openBySev = {};
+    ['High', 'Medium', 'Low'].forEach(sev => {
+      openBySev[sev] = findings.filter(f => (f.triage_state || 'open') === 'open' && f.severity === sev).length;
+    });
+
+    // Top rules among open findings
+    const openRuleCounts = {};
+    findings.filter(f => (f.triage_state || 'open') === 'open').forEach(f => {
+      openRuleCounts[f.rule_id] = (openRuleCounts[f.rule_id] || 0) + 1;
+    });
+    const topRules = Object.entries(openRuleCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    // Filter findings by current _triageFilter
+    const activeFilter = _triageFilter;
+    const filtered = activeFilter === 'all'
+      ? findings
+      : activeFilter === 'needs_attention'
+        ? findings.filter(f => { const ts = f.triage_state || 'open'; return ts === 'open' || ts === 'investigating'; })
+        : findings.filter(f => (f.triage_state || 'open') === activeFilter);
+
+    // Triage actions appropriate for each state
+    function triageActionsFor(f) {
+      const ts = f.triage_state || 'open';
+      const btns = [];
+      if (ts === 'open') {
+        btns.push({ state: 'investigating', label: 'Investigate' });
+        btns.push({ state: 'false_positive', label: 'FP' });
+        btns.push({ state: 'suppressed', label: 'Suppress' });
+        btns.push({ state: 'accepted_risk', label: 'Accept' });
+      } else if (ts === 'investigating') {
+        btns.push({ state: 'false_positive', label: 'FP' });
+        btns.push({ state: 'suppressed', label: 'Suppress' });
+        btns.push({ state: 'accepted_risk', label: 'Accept' });
+        btns.push({ state: 'fixed', label: 'Fixed' });
+        btns.push({ state: 'open', label: 'Reopen' });
+      } else {
+        btns.push({ state: 'open', label: 'Reopen' });
+        btns.push({ state: 'investigating', label: 'Investigate' });
+      }
+      return btns.map(b =>
+        `<button class="btn btn-sm btn-triage-quick btn-triage-${b.state}" data-fp="${f.fingerprint}" data-state="${b.state}">${b.label}</button>`
+      ).join('');
+    }
+
+    const stateLabel = s => s.replace(/_/g, ' ');
+
+    el.innerHTML = `
+      <div class="triage-page">
+        <!-- Summary cards row -->
+        <div class="triage-summary-row">
+          <div class="triage-summary-card triage-card-clickable ${activeFilter === 'all' ? 'triage-card-active' : ''}" data-filter="all">
+            <div class="triage-card-count">${totalCount}</div>
+            <div class="triage-card-label">Total</div>
+          </div>
+          <div class="triage-summary-card triage-card-clickable triage-card-attention ${activeFilter === 'needs_attention' ? 'triage-card-active' : ''}" data-filter="needs_attention">
+            <div class="triage-card-count">${needsAttention}</div>
+            <div class="triage-card-label">Needs Attention</div>
+          </div>
+          ${allStates.map(s => `
+            <div class="triage-summary-card triage-card-clickable ${activeFilter === s ? 'triage-card-active' : ''}" data-filter="${s}">
+              <div class="triage-card-count">${stateCounts[s] || 0}</div>
+              <div class="triage-card-label"><span class="badge badge-triage-${s}">${stateLabel(s)}</span></div>
+            </div>
+          `).join('')}
+        </div>
+
+        <!-- Open findings breakdown -->
+        ${(stateCounts['open'] || 0) > 0 ? `
+        <div class="triage-open-summary">
+          <div class="triage-open-severity">
+            <span class="triage-open-label">Open by severity:</span>
+            ${['High', 'Medium', 'Low'].map(sev =>
+              `<span class="triage-sev-pill"><span class="badge badge-${sev.toLowerCase()}">${sev}</span> ${openBySev[sev]}</span>`
+            ).join('')}
+          </div>
+          ${topRules.length > 0 ? `
+          <div class="triage-top-rules">
+            <span class="triage-open-label">Top open rules:</span>
+            ${topRules.map(([rule, count]) =>
+              `<span class="triage-rule-pill"><code>${escHtml(rule)}</code> <span class="triage-rule-count">${count}</span></span>`
+            ).join('')}
+          </div>` : ''}
+        </div>` : ''}
+
+        <!-- Tabs for Findings vs Rules vs Audit -->
+        <div class="triage-tabs">
+          <button class="triage-tab active" data-tab="findings">Findings (${filtered.length})</button>
+          <button class="triage-tab" data-tab="rules">Suppression Rules (${suppressionRules.length})</button>
+          <button class="triage-tab" data-tab="audit">Audit Log (${auditEntries.length})</button>
+        </div>
+
+        <!-- Findings tab -->
+        <div class="triage-tab-content" id="tab-findings">
+          ${filtered.length === 0
+            ? `<div class="empty-state"><h3>No findings${activeFilter !== 'all' ? ' in this state' : ''}</h3>
+               <p>${activeFilter === 'all' ? 'Run a scan to see results.' : 'Click a different state card above to see other findings.'}</p></div>`
+            : `<div class="table-wrap"><table>
+                <thead><tr>
+                  <th>State</th><th>Severity</th><th>Confidence</th><th>Rule</th><th>File</th><th>Line</th><th>Actions</th>
+                </tr></thead>
+                <tbody>
+                ${filtered.slice(0, 200).map(f => `<tr>
+                  <td><span class="badge badge-triage-${f.triage_state || 'open'}">${stateLabel(f.triage_state || 'open')}</span></td>
+                  <td><span class="badge badge-${(f.severity || '').toLowerCase()}">${f.severity || '-'}</span></td>
+                  <td>${f.confidence ? `<span class="badge badge-conf-${f.confidence.toLowerCase()}">${f.confidence}</span>` : '-'}</td>
+                  <td>${escHtml(f.rule_id)}</td>
+                  <td class="cell-path" title="${escHtml(f.path)}">${escHtml(truncPath(f.path, 35))}</td>
+                  <td>${f.line}</td>
+                  <td class="triage-quick-actions">
+                    ${triageActionsFor(f)}
+                    <a href="/findings/${f.index}" class="btn btn-sm nav-link-internal">View</a>
+                  </td>
+                </tr>`).join('')}
+                </tbody></table></div>
+                ${filtered.length > 200 ? `<p class="triage-truncation-note">Showing first 200 of ${filtered.length} findings. Use the state cards above to narrow down.</p>` : ''}`
+          }
+        </div>
+
+        <!-- Suppression Rules tab -->
+        <div class="triage-tab-content" id="tab-rules" style="display:none">
+          ${suppressionRules.length === 0
+            ? '<div class="empty-state"><h3>No suppression rules</h3><p>Suppress findings by pattern from the Findings page bulk actions, or from individual finding detail pages.</p></div>'
+            : `<div class="table-wrap"><table>
+                <thead><tr><th>Type</th><th>Pattern</th><th>State</th><th>Note</th><th>Created</th><th></th></tr></thead>
+                <tbody>
+                ${suppressionRules.map(r => `<tr>
+                  <td><span class="badge">${escHtml(r.suppress_by)}</span></td>
+                  <td><code>${escHtml(r.match_value)}</code></td>
+                  <td><span class="badge badge-triage-${r.state}">${stateLabel(r.state)}</span></td>
+                  <td>${escHtml(r.note || '-')}</td>
+                  <td style="font-size:var(--text-xs);white-space:nowrap">${escHtml(r.created_at ? r.created_at.substring(0, 10) : '-')}</td>
+                  <td><button class="btn btn-sm btn-danger btn-delete-rule" data-rule-id="${r.id}">Delete</button></td>
+                </tr>`).join('')}
+                </tbody></table></div>`
+          }
+        </div>
+
+        <!-- Audit Log tab -->
+        <div class="triage-tab-content" id="tab-audit" style="display:none">
+          ${auditEntries.length === 0
+            ? '<div class="empty-state"><h3>No audit entries yet</h3><p>Every triage action will be logged here with a timestamp and state transition.</p></div>'
+            : `<div class="table-wrap"><table class="triage-audit-table">
+                <thead><tr><th>Time</th><th>Fingerprint</th><th>Action</th><th>Transition</th><th>Note</th></tr></thead>
+                <tbody>
+                ${auditEntries.map(e => `<tr>
+                  <td style="font-size:var(--text-xs);white-space:nowrap">${escHtml(e.timestamp ? e.timestamp.substring(0, 19).replace('T', ' ') : '-')}</td>
+                  <td style="font-size:var(--text-xs)"><code title="${escHtml(e.fingerprint)}">${escHtml(e.fingerprint.substring(0, 12))}</code></td>
+                  <td><span class="badge">${escHtml(e.action)}</span></td>
+                  <td>
+                    <span class="badge badge-triage-${e.previous_state}">${stateLabel(e.previous_state)}</span>
+                    <span class="triage-arrow">&rarr;</span>
+                    <span class="badge badge-triage-${e.new_state}">${stateLabel(e.new_state)}</span>
+                  </td>
+                  <td style="font-size:var(--text-xs)">${escHtml(e.note || '-')}</td>
+                </tr>`).join('')}
+                </tbody></table></div>`
+          }
+        </div>
+      </div>
+    `;
+
+    // ── Event wiring ──────────────────────────────────────────────────────
+
+    // Clickable state cards → filter
+    $$('.triage-card-clickable', el).forEach(card => {
+      card.addEventListener('click', () => {
+        _triageFilter = card.dataset.filter;
+        renderTriage(el, params, match);
+      });
+    });
+
+    // Tab switching
+    $$('.triage-tab', el).forEach(tab => {
+      tab.addEventListener('click', () => {
+        $$('.triage-tab', el).forEach(t => t.classList.remove('active'));
+        $$('.triage-tab-content', el).forEach(c => c.style.display = 'none');
+        tab.classList.add('active');
+        const target = $(`#tab-${tab.dataset.tab}`, el);
+        if (target) target.style.display = 'block';
+      });
+    });
+
+    // Quick triage buttons
+    $$('.btn-triage-quick', el).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api('/triage', {
+            method: 'POST',
+            body: JSON.stringify({ fingerprints: [btn.dataset.fp], state: btn.dataset.state, note: '' }),
+            signal: null,
+          });
+          renderTriage(el, params, match);
+        } catch (err) {
+          alert('Failed to update triage state: ' + err.message);
+        }
+      });
+    });
+
+    // Delete suppression rule
+    $$('.btn-delete-rule', el).forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api(`/triage/suppress?id=${btn.dataset.ruleId}`, { method: 'DELETE', signal: null });
+          renderTriage(el, params, match);
+        } catch (err) {
+          alert('Failed to delete rule: ' + err.message);
+        }
+      });
+    });
+
+  } catch (e) {
+    if (isAbortError(e)) return;
+    el.innerHTML = `<div class="error-state"><h3>Error loading triage data</h3><p>${escHtml(e.message)}</p></div>`;
   }
 }
 
@@ -1575,11 +2299,11 @@ async function renderSettings(el, params, match) {
       $('#rule-matcher').classList.remove('input-error');
       try {
         await api('/config/rules', {
-          method: 'POST',
+          method: 'POST', signal: null,
           body: JSON.stringify({ lang, matchers: [matcher], kind, cap }),
         });
         renderSettings(el, params, match);
-      } catch (e) { alert('Error: ' + e.message); }
+      } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
     });
 
     // Delete rule
@@ -1588,11 +2312,11 @@ async function renderSettings(el, params, match) {
         const r = rules[btn.dataset.idx];
         try {
           await api('/config/rules', {
-            method: 'DELETE',
+            method: 'DELETE', signal: null,
             body: JSON.stringify(r),
           });
           renderSettings(el, params, match);
-        } catch (e) { alert('Error: ' + e.message); }
+        } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
       });
     });
 
@@ -1609,11 +2333,11 @@ async function renderSettings(el, params, match) {
       $('#term-name').classList.remove('input-error');
       try {
         await api('/config/terminators', {
-          method: 'POST',
+          method: 'POST', signal: null,
           body: JSON.stringify({ lang, name }),
         });
         renderSettings(el, params, match);
-      } catch (e) { alert('Error: ' + e.message); }
+      } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
     });
 
     // Delete terminator
@@ -1622,15 +2346,16 @@ async function renderSettings(el, params, match) {
         const t = terminators[btn.dataset.idx];
         try {
           await api('/config/terminators', {
-            method: 'DELETE',
+            method: 'DELETE', signal: null,
             body: JSON.stringify(t),
           });
           renderSettings(el, params, match);
-        } catch (e) { alert('Error: ' + e.message); }
+        } catch (e) { if (!isAbortError(e)) alert('Error: ' + e.message); }
       });
     });
 
   } catch (e) {
+    if (isAbortError(e)) return;
     el.innerHTML = `<div class="error-state"><h3>Error</h3><p>${escHtml(e.message)}</p></div>`;
   }
 }
@@ -1647,20 +2372,20 @@ function connectSSE() {
   es.addEventListener('scan_completed', () => {
     window.activeScanProgress = null;
     setScanIndicator(false);
-    route(currentRoute);
+    scheduleRefresh();
   });
 
   es.addEventListener('scan_started', () => {
     setScanIndicator(true);
     if (currentRoute === '/scans' || currentRoute === '/') {
-      route(currentRoute);
+      scheduleRefresh();
     }
   });
 
   es.addEventListener('scan_failed', () => {
     window.activeScanProgress = null;
     setScanIndicator(false);
-    route(currentRoute);
+    scheduleRefresh();
   });
 
   es.addEventListener('scan_progress', (e) => {
@@ -1676,7 +2401,7 @@ function connectSSE() {
   });
 
   es.addEventListener('config_changed', () => {
-    if (currentRoute === '/settings') route(currentRoute);
+    if (currentRoute === '/settings') scheduleRefresh();
   });
 
   es.onerror = () => {

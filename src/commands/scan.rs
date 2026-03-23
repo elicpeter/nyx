@@ -49,37 +49,37 @@ pub struct Diag {
     pub category: FindingCategory,
     /// Whether the finding is guarded by a path validation predicate.
     /// Only set for taint findings; `false` for AST/CFG structural findings.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub path_validated: bool,
     /// The kind of validation guard protecting this path, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard_kind: Option<String>,
     /// Optional human-readable message with additional context (e.g. state analysis details).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// Structured evidence labels (e.g. Source, Sink) for console display.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<(String, String)>,
     /// Confidence level (Low / Medium / High).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<crate::evidence::Confidence>,
     /// Structured evidence (source/sink spans, state transitions, notes).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<crate::evidence::Evidence>,
     /// Attack-surface ranking score (higher = more exploitable / important).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank_score: Option<f64>,
     /// Breakdown of how the ranking score was computed.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank_reason: Option<Vec<(String, String)>>,
     /// Whether this finding was suppressed by an inline `nyx:ignore` directive.
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub suppressed: bool,
     /// Metadata about the suppression directive, if suppressed.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suppression: Option<crate::suppress::SuppressionMeta>,
     /// Rollup data when multiple occurrences are grouped into one finding.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollup: Option<RollupData>,
 }
 
