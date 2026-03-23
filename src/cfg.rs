@@ -1500,8 +1500,15 @@ fn push_node<'a>(
         && let Some(found) = first_member_label(ast, lang, code, extra)
     {
         labels.push(found);
-        // Update text so the callee name reflects the source
+        // Update text so the callee name reflects the source.
+        // Preserve the original callee in outer_callee so inter-procedural
+        // summary resolution can still find the wrapping function
+        // (e.g. `storeInto(req.query.input, items)` → callee="req.query.input"
+        // but outer_callee="storeInto").
         if let Some(member_text) = first_member_text(ast, code) {
+            if outer_callee.is_none() && text != member_text {
+                outer_callee = Some(text.clone());
+            }
             text = member_text;
         }
     }

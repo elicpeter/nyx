@@ -1,0 +1,28 @@
+{
+  "description": "XSS through inter-procedural container identity: addAndReturn returns same array, taint visible via returned container",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "array",
+    "container",
+    "heap",
+    "interproc"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "inter-procedural container identity: addAndReturn returns same array it received, so result shares pts with items"
+    }
+  ]
+}

@@ -619,3 +619,33 @@ fn ssa_summary_backward_compat_missing_param_to_sink_param() {
     let summary: SsaFuncSummary = serde_json::from_str(json).unwrap();
     assert!(summary.param_to_sink_param.is_empty());
 }
+
+#[test]
+fn ssa_summary_serde_round_trip_container_fields() {
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        param_to_sink: vec![],
+        source_caps: Cap::empty(),
+        param_to_sink_param: vec![],
+        param_container_to_return: vec![0],
+        param_to_container_store: vec![(1, 0)],
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+    assert_eq!(back.param_container_to_return, vec![0]);
+    assert_eq!(back.param_to_container_store, vec![(1, 0)]);
+}
+
+#[test]
+fn ssa_summary_backward_compat_missing_container_fields() {
+    // Old JSON without container fields should deserialize with empty vecs
+    let json = r#"{
+        "param_to_return": [[0, "Identity"]],
+        "param_to_sink": [],
+        "source_caps": 0
+    }"#;
+    let summary: SsaFuncSummary = serde_json::from_str(json).unwrap();
+    assert!(summary.param_container_to_return.is_empty());
+    assert!(summary.param_to_container_store.is_empty());
+}

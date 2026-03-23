@@ -40,6 +40,7 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         context_depth: 0,
         callback_bindings: None,
         points_to: None,
+        dynamic_pts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &transfer);
     let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
@@ -3306,6 +3307,7 @@ fn assert_ssa_integration(src: &[u8]) {
         context_depth: 0,
         callback_bindings: None,
         points_to: None,
+        dynamic_pts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
@@ -3417,6 +3419,7 @@ fn integ_php_echo_simple_var() {
         context_depth: 0,
         callback_bindings: None,
         points_to: None,
+        dynamic_pts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
@@ -3461,6 +3464,7 @@ fn integ_c_curl_handle_ssrf() {
         context_depth: 0,
         callback_bindings: None,
         points_to: None,
+        dynamic_pts: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
@@ -3843,6 +3847,49 @@ fn ssa_cross_function_taint_with_sanitizer_wrapper() {
     assert!(
         !clean_summary.param_to_return.is_empty(),
         "cleanHtml should propagate param to return"
+    );
+}
+
+// ── Inter-procedural container store tests ────────────────────────────────
+
+#[test]
+fn ssa_interproc_container_store_summary() {
+    // Verify that extract_container_flow_summary produces correct indices
+    // for storeInto(value, arr) { arr.push(value); } after param reordering.
+    use crate::state::symbol::SymbolInterner;
+
+    let src = b"var express = require('express');\nvar app = express();\n\nfunction storeInto(value, arr) {\n    arr.push(value);\n}\n\napp.get('/store', function(req, res) {\n    var items = [];\n    storeInto(req.query.input, items);\n    res.send(items.join(''));\n});\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let interner = SymbolInterner::from_cfg(&the_cfg);
+
+    // Extract SSA summaries (uses lower_to_ssa_with_params)
+    let ssa_summaries = super::extract_intra_file_ssa_summaries(
+        &the_cfg, &interner, Lang::JavaScript, "test.js",
+        &summaries, None,
+    );
+
+    assert!(
+        ssa_summaries.contains_key("storeInto"),
+        "storeInto should have an SSA summary"
+    );
+    let store_summary = &ssa_summaries["storeInto"];
+    assert!(
+        !store_summary.param_to_container_store.is_empty(),
+        "storeInto should have param_to_container_store (value stored into arr)"
+    );
+    // With correct param ordering: value=0, arr=1
+    assert_eq!(
+        store_summary.param_to_container_store,
+        vec![(0, 1)],
+        "param_to_container_store should map value(0) → arr(1)"
+    );
+
+    // Verify the full analysis produces a finding
+    let findings = analyse_file(&the_cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[], None);
+    assert!(
+        !findings.is_empty(),
+        "inter-procedural container store should produce a finding"
     );
 }
 

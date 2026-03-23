@@ -22,7 +22,21 @@ pub fn lower_to_ssa(
     scope: Option<&str>,
     scope_all: bool,
 ) -> Result<SsaBody, SsaError> {
-    lower_to_ssa_inner(cfg, entry, scope, scope_all, false)
+    lower_to_ssa_inner(cfg, entry, scope, scope_all, false, &[])
+}
+
+/// Like `lower_to_ssa` but with formal parameter names supplied in declaration
+/// order. External variables that match these names are placed first (in
+/// declaration order) so that `Param { index }` indices 0..N correspond to
+/// call-site argument positions.
+pub fn lower_to_ssa_with_params(
+    cfg: &Cfg,
+    entry: NodeIndex,
+    scope: Option<&str>,
+    scope_all: bool,
+    formal_params: &[String],
+) -> Result<SsaBody, SsaError> {
+    lower_to_ssa_inner(cfg, entry, scope, scope_all, false, formal_params)
 }
 
 /// Like `lower_to_ssa` but with `scope_nop`: when true, all nodes are included
@@ -34,7 +48,7 @@ pub fn lower_to_ssa_scoped_nop(
     entry: NodeIndex,
     scope: Option<&str>,
 ) -> Result<SsaBody, SsaError> {
-    lower_to_ssa_inner(cfg, entry, scope, false, true)
+    lower_to_ssa_inner(cfg, entry, scope, false, true, &[])
 }
 
 fn lower_to_ssa_inner(
@@ -43,6 +57,7 @@ fn lower_to_ssa_inner(
     scope: Option<&str>,
     scope_all: bool,
     scope_nop: bool,
+    formal_params: &[String],
 ) -> Result<SsaBody, SsaError> {
     if cfg.node_count() == 0 {
         return Err(SsaError::EmptyCfg);
@@ -97,8 +112,11 @@ fn lower_to_ssa_inner(
 
     // 4b. For per-function scope: identify external variables (used but not defined)
     //     and inject synthetic Param defs at entry block so rename can find them.
+    //     When formal_params is supplied, reorder so formal params come first in
+    //     declaration order — this makes Param indices correspond to call-site positions.
     let external_vars = if scope.is_some() && !scope_all && !scope_nop {
-        identify_external_uses(cfg, &blocks_nodes, &var_defs)
+        let raw = identify_external_uses(cfg, &blocks_nodes, &var_defs);
+        reorder_external_vars(raw, formal_params)
     } else {
         vec![]
     };
@@ -448,6 +466,32 @@ fn identify_external_uses(
         .collect();
     external.sort(); // deterministic order
     external
+}
+
+/// Reorder external variables so that formal function parameters come first
+/// in their declaration order, followed by remaining external vars in
+/// alphabetical order. This ensures `SsaOp::Param { index }` indices 0..N
+/// correspond to call-site argument positions rather than alphabetical order.
+fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec<String> {
+    if formal_params.is_empty() {
+        return external; // no reordering — preserve existing alphabetical sort
+    }
+    let ext_set: HashSet<&str> = external.iter().map(|s| s.as_str()).collect();
+    let formal_set: HashSet<&str> = formal_params.iter().map(|s| s.as_str()).collect();
+    let mut result = Vec::with_capacity(external.len());
+    // Formal params first, in declaration order (only those present in external set)
+    for p in formal_params {
+        if ext_set.contains(p.as_str()) {
+            result.push(p.clone());
+        }
+    }
+    // Remaining external vars alphabetically (external is already sorted)
+    for v in external {
+        if !formal_set.contains(v.as_str()) {
+            result.push(v);
+        }
+    }
+    result
 }
 
 /// Collect variable definitions per block: var_name → set of block indices.

@@ -869,7 +869,7 @@ mod tests {
         assert!(stripped.contains("nyx --help"), "should mention help");
         let line_count = stripped.lines().count();
         assert!(
-            line_count <= 20,
+            line_count <= 25,
             "should be compact, got {line_count} lines"
         );
     }

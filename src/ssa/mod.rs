@@ -15,6 +15,7 @@ pub mod type_facts;
 pub use ir::*;
 pub use lower::lower_to_ssa;
 pub use lower::lower_to_ssa_scoped_nop;
+pub use lower::lower_to_ssa_with_params;
 
 use crate::cfg::Cfg;
 use crate::symbol::Lang;

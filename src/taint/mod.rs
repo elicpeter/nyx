@@ -124,6 +124,7 @@ pub fn analyse_file(
                     dead_defs = opt.dead_defs_removed,
                     "SSA lowering + optimization succeeded"
                 );
+                let dynamic_pts = std::cell::RefCell::new(std::collections::HashMap::new());
                 let ssa_transfer = ssa_transfer::SsaTaintTransfer {
                     lang: caller_lang,
                     namespace: caller_namespace,
@@ -142,6 +143,7 @@ pub fn analyse_file(
                     context_depth: 0,
                     callback_bindings: None,
                     points_to: Some(&opt.points_to),
+                    dynamic_pts: Some(&dynamic_pts),
                 };
                 let events =
                     ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
@@ -200,6 +202,15 @@ fn find_function_entries(cfg: &Cfg) -> Vec<(String, NodeIndex)> {
     entries
 }
 
+/// Look up formal parameter names (in declaration order) for a function from
+/// the CFG-level local summaries. Returns empty vec if not found.
+fn lookup_formal_params(local_summaries: &FuncSummaries, func_name: &str) -> Vec<String> {
+    local_summaries.iter()
+        .find(|(k, _)| k.name == func_name)
+        .map(|(_, s)| s.param_names.clone())
+        .unwrap_or_default()
+}
+
 /// Extract precise SSA function summaries for all functions in a file.
 ///
 /// Lowers each function to SSA individually and runs per-parameter probing
@@ -216,16 +227,24 @@ pub(crate) fn extract_intra_file_ssa_summaries(
     let mut summaries = std::collections::HashMap::new();
 
     for (func_name, func_entry) in &func_entries {
-        let func_ssa = match crate::ssa::lower_to_ssa(cfg, *func_entry, Some(func_name), false) {
+        let formal_params = lookup_formal_params(local_summaries, func_name);
+        let func_ssa = match crate::ssa::lower_to_ssa_with_params(
+            cfg, *func_entry, Some(func_name), false, &formal_params,
+        ) {
             Ok(ssa) => ssa,
             Err(_) => continue,
         };
 
-        // Count params from SSA body
-        let param_count = func_ssa.blocks.iter()
-            .flat_map(|b| b.phis.iter().chain(b.body.iter()))
-            .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
-            .count();
+        // Param count = number of formal params (from CFG), falling back to
+        // counting all SsaOp::Param ops when no local summary is available.
+        let param_count = if !formal_params.is_empty() {
+            formal_params.len()
+        } else {
+            func_ssa.blocks.iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count()
+        };
 
         if param_count == 0 {
             continue; // No params → no per-parameter summary needed
@@ -240,6 +259,8 @@ pub(crate) fn extract_intra_file_ssa_summaries(
         if !summary.param_to_return.is_empty()
             || !summary.param_to_sink.is_empty()
             || !summary.source_caps.is_empty()
+            || !summary.param_container_to_return.is_empty()
+            || !summary.param_to_container_store.is_empty()
         {
             summaries.insert(func_name.clone(), summary);
         }
@@ -276,16 +297,24 @@ fn lower_all_functions(
     let mut bodies = std::collections::HashMap::new();
 
     for (func_name, func_entry) in &func_entries {
-        let mut func_ssa = match crate::ssa::lower_to_ssa(cfg, *func_entry, Some(func_name), false) {
+        let formal_params = lookup_formal_params(local_summaries, func_name);
+        let mut func_ssa = match crate::ssa::lower_to_ssa_with_params(
+            cfg, *func_entry, Some(func_name), false, &formal_params,
+        ) {
             Ok(ssa) => ssa,
             Err(_) => continue,
         };
 
-        // Count params from SSA body (before optimization, which may remove some)
-        let param_count = func_ssa.blocks.iter()
-            .flat_map(|b| b.phis.iter().chain(b.body.iter()))
-            .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
-            .count();
+        // Param count = number of formal params (from CFG), falling back to
+        // counting all SsaOp::Param ops when no local summary is available.
+        let param_count = if !formal_params.is_empty() {
+            formal_params.len()
+        } else {
+            func_ssa.blocks.iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count()
+        };
 
         // Extract summary from unoptimized SSA (matches original behavior)
         if param_count > 0 {
@@ -297,6 +326,8 @@ fn lower_all_functions(
             if !summary.param_to_return.is_empty()
                 || !summary.param_to_sink.is_empty()
                 || !summary.source_caps.is_empty()
+                || !summary.param_container_to_return.is_empty()
+                || !summary.param_to_container_store.is_empty()
             {
                 summaries.insert(func_name.clone(), summary);
             }
@@ -355,6 +386,7 @@ fn analyse_ssa_js_two_level(
         branches_pruned = toplevel_opt.branches_pruned,
         "SSA JS two-level: top-level lowering + optimization"
     );
+    let dynamic_pts = std::cell::RefCell::new(std::collections::HashMap::new());
     let toplevel_transfer = ssa_transfer::SsaTaintTransfer {
         lang,
         namespace,
@@ -373,6 +405,7 @@ fn analyse_ssa_js_two_level(
         context_depth: 0,
         callback_bindings: None,
         points_to: Some(&toplevel_opt.points_to),
+        dynamic_pts: Some(&dynamic_pts),
     };
     let (toplevel_events, toplevel_block_states) =
         ssa_transfer::run_ssa_taint_full(&toplevel_ssa, cfg, &toplevel_transfer);
@@ -398,11 +431,15 @@ fn analyse_ssa_js_two_level(
         let mut combined_exit = toplevel_seed.clone();
 
         for (func_name, func_entry) in &func_entries {
-            let mut func_ssa = match crate::ssa::lower_to_ssa(cfg, *func_entry, Some(func_name), false) {
+            let formal_params = lookup_formal_params(local_summaries, func_name);
+            let mut func_ssa = match crate::ssa::lower_to_ssa_with_params(
+                cfg, *func_entry, Some(func_name), false, &formal_params,
+            ) {
                 Ok(ssa) => ssa,
                 Err(_) => continue, // empty function → skip
             };
             let func_opt = crate::ssa::optimize_ssa(&mut func_ssa, cfg, Some(lang));
+            let func_dynamic_pts = std::cell::RefCell::new(std::collections::HashMap::new());
             let func_transfer = ssa_transfer::SsaTaintTransfer {
                 lang,
                 namespace,
@@ -421,6 +458,7 @@ fn analyse_ssa_js_two_level(
                 context_depth: 0,
                 callback_bindings: None,
                 points_to: Some(&func_opt.points_to),
+                dynamic_pts: Some(&func_dynamic_pts),
             };
             let (func_events, func_block_states) =
                 ssa_transfer::run_ssa_taint_full(&func_ssa, cfg, &func_transfer);

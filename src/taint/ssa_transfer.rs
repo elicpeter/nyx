@@ -2,7 +2,7 @@ use crate::callgraph::normalize_callee_name;
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
 use crate::interop::InteropEdge;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule, SourceKind};
-use crate::ssa::heap::{HeapState, PointsToResult};
+use crate::ssa::heap::{HeapState, PointsToResult, PointsToSet};
 use crate::ssa::ir::*;
 use crate::state::lattice::Lattice;
 use crate::summary::{CalleeResolution, GlobalSummaries};
@@ -310,6 +310,10 @@ pub struct SsaTaintTransfer<'a> {
     /// When present, container taint flows through heap objects instead of
     /// being merged directly into SSA values.
     pub points_to: Option<&'a PointsToResult>,
+    /// Dynamic points-to set: populated at call sites by inter-procedural
+    /// container identity propagation from `param_container_to_return` summaries.
+    /// Uses `RefCell` for interior mutability (same pattern as `inline_cache`).
+    pub dynamic_pts: Option<&'a RefCell<HashMap<SsaValue, PointsToSet>>>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -1057,6 +1061,7 @@ fn inline_analyse_callee(
         context_depth: transfer.context_depth + 1,
         callback_bindings: cb_ref,
         points_to: Some(&callee_body.opt.points_to),
+        dynamic_pts: None, // no inter-procedural container propagation at k>1
     };
 
     let (_, callee_block_states) =
@@ -1269,9 +1274,38 @@ fn transfer_inst(
                 }
             }
 
+            // Inter-procedural container fields: populated from resolve_callee
+            // even when inline analysis already handled return taint, since inline
+            // analysis doesn't model cross-parameter container stores.
+            let mut resolved_container_to_return: Vec<usize> = Vec::new();
+            let mut resolved_container_store: Vec<(usize, usize)> = Vec::new();
+
+            // Resolve callee summary (used for both taint propagation and container fields)
+            let callee_summary = resolve_callee(transfer, callee, caller_func, info.call_ordinal);
+
+            // Capture container fields regardless of whether inline analysis handled the call
+            if let Some(ref resolved) = callee_summary {
+                resolved_container_to_return = resolved.param_container_to_return.clone();
+                resolved_container_store = resolved.param_to_container_store.clone();
+            }
+
+            // When find_classifiable_inner_call overrides the callee (e.g.
+            // `storeInto(req.query.input, items)` → callee="req.query.input"),
+            // the outer_callee preserves the original. Resolve it too for
+            // container fields that depend on the wrapping function's summary.
+            if resolved_container_store.is_empty() {
+                if let Some(ref oc) = info.outer_callee {
+                    if let Some(ref resolved) = resolve_callee(transfer, oc, caller_func, info.call_ordinal) {
+                        if resolved_container_to_return.is_empty() {
+                            resolved_container_to_return = resolved.param_container_to_return.clone();
+                        }
+                        resolved_container_store = resolved.param_to_container_store.clone();
+                    }
+                }
+            }
+
             if !resolved_callee
-                && let Some(resolved) =
-                    resolve_callee(transfer, callee, caller_func, info.call_ordinal)
+                && let Some(resolved) = callee_summary
             {
                 resolved_callee = true;
 
@@ -1392,10 +1426,8 @@ fn transfer_inst(
                             recv_callee, receiver, args, ssa, transfer.lang,
                         ) {
                             // Also store into heap objects when available
-                            if let Some(pts_result) = transfer.points_to {
-                                if let Some(pts) = pts_result.get(container_val) {
-                                    state.heap.store_set(pts, return_bits, &return_origins);
-                                }
+                            if let Some(pts) = lookup_pts(transfer, container_val) {
+                                state.heap.store_set(&pts, return_bits, &return_origins);
                             }
                             merge_taint_into(state, container_val, return_bits, &return_origins);
                         }
@@ -1423,6 +1455,92 @@ fn transfer_inst(
                 if let Some(aliases) = transfer.base_aliases {
                     if !aliases.is_empty() {
                         propagate_sanitization_to_aliases(inst, state, sanitizer_bits, aliases, ssa);
+                    }
+                }
+            }
+
+            // Inter-procedural container identity propagation:
+            // If callee returns the same container it received, propagate
+            // the caller's points-to set for that argument to the call result.
+            // Uses precise positional matching: param indices correspond to
+            // call-site argument positions (ensured by lower_to_ssa_with_params).
+            if !resolved_container_to_return.is_empty() {
+                if let Some(dyn_ref) = transfer.dynamic_pts {
+                    let mut container_pts_list: SmallVec<[PointsToSet; 2]> = SmallVec::new();
+                    for &param_idx in &resolved_container_to_return {
+                        if let Some(arg_group) = args.get(param_idx) {
+                            for &arg_v in arg_group {
+                                if let Some(pts) = lookup_pts(transfer, arg_v) {
+                                    container_pts_list.push(pts);
+                                }
+                            }
+                        }
+                    }
+                    if !container_pts_list.is_empty() {
+                        let mut dyn_pts = dyn_ref.borrow_mut();
+                        for pts in &container_pts_list {
+                            match dyn_pts.get(&inst.value) {
+                                Some(existing) => {
+                                    let merged = existing.union(pts);
+                                    dyn_pts.insert(inst.value, merged);
+                                }
+                                None => {
+                                    dyn_pts.insert(inst.value, pts.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Inter-procedural container store propagation:
+            // If callee stores src_param taint into container_param's container,
+            // use precise positional matching: param indices correspond to
+            // call-site argument positions (ensured by lower_to_ssa_with_params).
+            if !resolved_container_store.is_empty() {
+                for &(src_param, container_param) in &resolved_container_store {
+                    // Collect container pts at the specific arg position
+                    let mut container_pts: SmallVec<[PointsToSet; 2]> = SmallVec::new();
+                    if let Some(arg_group) = args.get(container_param) {
+                        for &v in arg_group {
+                            if let Some(pts) = lookup_pts(transfer, v) {
+                                container_pts.push(pts);
+                            }
+                        }
+                    }
+                    if container_pts.is_empty() {
+                        continue;
+                    }
+                    // Collect source taint at the specific arg position
+                    let mut src_caps = Cap::empty();
+                    let mut src_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+                    if let Some(arg_group) = args.get(src_param) {
+                        for &v in arg_group {
+                            if let Some(taint) = state.get(v) {
+                                src_caps |= taint.caps;
+                                for orig in &taint.origins {
+                                    if src_origins.len() < MAX_ORIGINS
+                                        && !src_origins.iter().any(|o| o.node == orig.node)
+                                    {
+                                        src_origins.push(*orig);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // When the primary callee is a Source (e.g. req.query.input
+                    // overrode storeInto as the callee), the source taint is
+                    // produced as the call's return — not yet in args. Use
+                    // return_bits as the source taint for the container store.
+                    if src_caps.is_empty() && !return_bits.is_empty() {
+                        src_caps = return_bits;
+                        src_origins = return_origins.clone();
+                    }
+                    // Store source taint into container's heap objects
+                    if !src_caps.is_empty() {
+                        for pts in &container_pts {
+                            state.heap.store_set(pts, src_caps, &src_origins);
+                        }
                     }
                 }
             }
@@ -2041,21 +2159,19 @@ fn try_container_propagation(
             }
 
             // When points-to info available, store through heap objects
-            if let Some(pts_result) = transfer.points_to {
-                if let Some(pts) = pts_result.get(container_val) {
-                    state.heap.store_set(pts, val_caps, &val_origins);
-                    // For Go append, result also points to same heap objects
-                    if lang == Lang::Go && receiver.is_none() {
-                        if let Some(ht) = state.heap.load_set(pts) {
-                            state.set(inst.value, VarTaint {
-                                caps: ht.caps,
-                                origins: ht.origins,
-                                uses_summary: false,
-                            });
-                        }
+            if let Some(pts) = lookup_pts(transfer, container_val) {
+                state.heap.store_set(&pts, val_caps, &val_origins);
+                // For Go append, result also points to same heap objects
+                if lang == Lang::Go && receiver.is_none() {
+                    if let Some(ht) = state.heap.load_set(&pts) {
+                        state.set(inst.value, VarTaint {
+                            caps: ht.caps,
+                            origins: ht.origins,
+                            uses_summary: false,
+                        });
                     }
-                    return true;
                 }
+                return true;
             }
             // Fallback: direct SSA value taint (no pts info for this container)
             merge_taint_into(state, container_val, val_caps, &val_origins);
@@ -2075,17 +2191,15 @@ fn try_container_propagation(
                 None => return false,
             };
             // When points-to info available, load from heap objects
-            if let Some(pts_result) = transfer.points_to {
-                if let Some(pts) = pts_result.get(container_val) {
-                    if let Some(ht) = state.heap.load_set(pts) {
-                        state.set(inst.value, VarTaint {
-                            caps: ht.caps,
-                            origins: ht.origins,
-                            uses_summary: false,
-                        });
-                    }
-                    return true;
+            if let Some(pts) = lookup_pts(transfer, container_val) {
+                if let Some(ht) = state.heap.load_set(&pts) {
+                    state.set(inst.value, VarTaint {
+                        caps: ht.caps,
+                        origins: ht.origins,
+                        uses_summary: false,
+                    });
                 }
+                return true;
             }
             // Fallback: direct SSA value taint
             if let Some(taint) = state.get(container_val) {
@@ -2120,6 +2234,22 @@ fn find_container_receiver(
                     return Some(v);
                 }
             }
+        }
+    }
+    None
+}
+
+/// Look up points-to set for an SSA value, checking both the static
+/// pre-pass result and the dynamic inter-procedural set.
+fn lookup_pts(transfer: &SsaTaintTransfer, v: SsaValue) -> Option<PointsToSet> {
+    if let Some(pts_result) = transfer.points_to {
+        if let Some(pts) = pts_result.get(v) {
+            return Some(pts.clone());
+        }
+    }
+    if let Some(dyn_ref) = transfer.dynamic_pts {
+        if let Some(pts) = dyn_ref.borrow().get(&v) {
+            return Some(pts.clone());
         }
     }
     None
@@ -2194,13 +2324,11 @@ fn collect_tainted_sink_values(
     // Helper: check heap taint for an SSA value that may point to container(s).
     // Returns true if heap taint was found and added to result.
     let check_heap_taint = |v: SsaValue, result: &mut Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>| {
-        if let Some(pts_result) = transfer.points_to {
-            if let Some(pts) = pts_result.get(v) {
-                if let Some(ht) = state.heap.load_set(pts) {
-                    let effective = ht.caps & sink_caps;
-                    if !effective.is_empty() && !result.iter().any(|&(rv, _, _)| rv == v) {
-                        result.push((v, ht.caps, ht.origins));
-                    }
+        if let Some(pts) = lookup_pts(transfer, v) {
+            if let Some(ht) = state.heap.load_set(&pts) {
+                let effective = ht.caps & sink_caps;
+                if !effective.is_empty() && !result.iter().any(|&(rv, _, _)| rv == v) {
+                    result.push((v, ht.caps, ht.origins));
                 }
             }
         }
@@ -2539,6 +2667,10 @@ struct ResolvedSummary {
     sink_caps: Cap,
     propagates_taint: bool,
     propagating_params: Vec<usize>,
+    /// Parameter indices whose container identity flows to return value.
+    param_container_to_return: Vec<usize>,
+    /// (src_param, container_param) pairs: src taint stored into container.
+    param_to_container_store: Vec<(usize, usize)>,
 }
 
 fn resolve_callee(
@@ -2577,6 +2709,8 @@ fn resolve_callee(
                     sink_caps: ls.sink_caps,
                     propagates_taint: !ls.propagating_params.is_empty(),
                     propagating_params: ls.propagating_params.clone(),
+                    param_container_to_return: vec![],
+                    param_to_container_store: vec![],
                 });
             }
             // Try label classification for the bound function
@@ -2602,6 +2736,8 @@ fn resolve_callee(
                     sink_caps,
                     propagates_taint: false,
                     propagating_params: vec![],
+                    param_container_to_return: vec![],
+                    param_to_container_store: vec![],
                 });
             }
         }
@@ -2643,6 +2779,8 @@ fn resolve_callee(
             sink_caps: ls.sink_caps,
             propagates_taint: !ls.propagating_params.is_empty(),
             propagating_params: ls.propagating_params.clone(),
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
         });
     }
     if local_matches.len() > 1 {
@@ -2660,6 +2798,8 @@ fn resolve_callee(
                         sink_caps: fs.sink_caps(),
                         propagates_taint: fs.propagates_any(),
                         propagating_params: fs.propagating_params.clone(),
+                        param_container_to_return: vec![],
+                        param_to_container_store: vec![],
                     });
                 }
             }
@@ -2683,6 +2823,8 @@ fn resolve_callee(
                 sink_caps: fs.sink_caps(),
                 propagates_taint: fs.propagates_any(),
                 propagating_params: fs.propagating_params.clone(),
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
             });
         }
     }
@@ -2722,6 +2864,8 @@ fn convert_ssa_to_resolved(
         sink_caps,
         propagates_taint: !propagating_params.is_empty(),
         propagating_params,
+        param_container_to_return: ssa_sum.param_container_to_return.clone(),
+        param_to_container_store: ssa_sum.param_to_container_store.clone(),
     }
 }
 
@@ -3081,6 +3225,7 @@ pub fn extract_ssa_func_summary(
             context_depth: 0,
             callback_bindings: None,
             points_to: None,
+            dynamic_pts: None,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);
@@ -3172,12 +3317,172 @@ pub fn extract_ssa_func_summary(
         }
     }
 
+    let (param_container_to_return, param_to_container_store) =
+        extract_container_flow_summary(ssa, lang);
+
     SsaFuncSummary {
         param_to_return,
         param_to_sink,
         source_caps,
         param_to_sink_param,
-        param_container_to_return: Vec::new(),
-        param_to_container_store: Vec::new(),
+        param_container_to_return,
+        param_to_container_store,
     }
+}
+
+// ── Inter-procedural container flow detection (structural SSA analysis) ──
+
+/// Build a map from SsaValue to its defining instruction.
+fn build_inst_map(ssa: &SsaBody) -> HashMap<SsaValue, (SsaOp, Option<SsaValue>)> {
+    let mut map = HashMap::new();
+    for block in &ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            // Store the op and optionally the receiver for calls
+            map.insert(inst.value, (inst.op.clone(), None));
+        }
+    }
+    map
+}
+
+/// Trace an SSA value back through Assign/Phi chains to find if it originates
+/// from a `Param { index }`. Returns `Some(index)` if a param is found.
+/// Does NOT trace through Call, Const, Source, or other non-identity ops.
+fn trace_to_param(
+    v: SsaValue,
+    ssa: &SsaBody,
+    inst_map: &HashMap<SsaValue, (SsaOp, Option<SsaValue>)>,
+    visited: &mut HashSet<SsaValue>,
+) -> Option<usize> {
+    if !visited.insert(v) {
+        return None;
+    }
+    let (op, _) = inst_map.get(&v)?;
+    match op {
+        SsaOp::Param { index } => Some(*index),
+        SsaOp::Assign(uses) => {
+            for u in uses {
+                if let Some(idx) = trace_to_param(*u, ssa, inst_map, visited) {
+                    return Some(idx);
+                }
+            }
+            None
+        }
+        SsaOp::Phi(operands) => {
+            for (_, op_val) in operands {
+                if let Some(idx) = trace_to_param(*op_val, ssa, inst_map, visited) {
+                    return Some(idx);
+                }
+            }
+            None
+        }
+        // Don't trace through Call (new identity), Const, Source, Nop, CatchParam
+        _ => None,
+    }
+}
+
+/// Detect inter-procedural container flow patterns from SSA structure:
+/// - `param_container_to_return`: params whose container identity flows to return
+/// - `param_to_container_store`: (src_param, container_param) pairs where src taint
+///   is stored into container_param's contents
+pub(crate) fn extract_container_flow_summary(
+    ssa: &SsaBody,
+    lang: Lang,
+) -> (Vec<usize>, Vec<(usize, usize)>) {
+    use crate::ssa::pointsto::{classify_container_op, ContainerOp};
+
+    let inst_map = build_inst_map(ssa);
+    let mut container_to_return: HashSet<usize> = HashSet::new();
+    let mut container_store: Vec<(usize, usize)> = Vec::new();
+
+    // 1. param_container_to_return: trace Assign/Phi ops in return blocks to params
+    for block in &ssa.blocks {
+        if !matches!(block.terminator, Terminator::Return) {
+            continue;
+        }
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            match &inst.op {
+                // Only trace identity-preserving ops (Assign, Phi).
+                // Skip Param (would cause false positives in single-block functions),
+                // Call (new identity), Const, Source, Nop, CatchParam.
+                SsaOp::Assign(_) | SsaOp::Phi(_) => {
+                    if let Some(idx) = trace_to_param(inst.value, ssa, &inst_map, &mut HashSet::new()) {
+                        container_to_return.insert(idx);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 2. param_to_container_store: find container Store calls, trace args to params
+    for block in &ssa.blocks {
+        for inst in block.body.iter() {
+            if let SsaOp::Call { callee, args, receiver } = &inst.op {
+                let op = match classify_container_op(callee, lang) {
+                    Some(ContainerOp::Store { value_args }) => value_args,
+                    _ => continue,
+                };
+
+                // Resolve container SSA value (same logic as try_container_propagation)
+                let container_val = if let Some(v) = *receiver {
+                    Some(v)
+                } else if lang == Lang::Go {
+                    args.first().and_then(|a| a.first().copied())
+                } else if let Some(dot_pos) = callee.rfind('.') {
+                    let receiver_name = &callee[..dot_pos];
+                    args.iter()
+                        .flat_map(|a| a.iter())
+                        .find(|&&v| {
+                            ssa.value_defs.get(v.0 as usize)
+                                .and_then(|d| d.var_name.as_deref())
+                                == Some(receiver_name)
+                        })
+                        .copied()
+                } else {
+                    None
+                };
+
+                let container_val = match container_val {
+                    Some(v) => v,
+                    None => continue,
+                };
+
+                // Trace container to param
+                let container_param = match trace_to_param(container_val, ssa, &inst_map, &mut HashSet::new()) {
+                    Some(idx) => idx,
+                    None => continue,
+                };
+
+                // Compute arg offset (receiver-based languages prepend receiver to args)
+                let arg_offset = if lang == Lang::Go && receiver.is_none() {
+                    1usize
+                } else if receiver.is_some() {
+                    1usize
+                } else {
+                    0
+                };
+
+                // Trace each value arg to param
+                for &va_idx in &op {
+                    let effective_idx = va_idx + arg_offset;
+                    if let Some(arg_vals) = args.get(effective_idx) {
+                        for &av in arg_vals {
+                            if let Some(src_param) = trace_to_param(av, ssa, &inst_map, &mut HashSet::new()) {
+                                if src_param != container_param
+                                    && !container_store.contains(&(src_param, container_param))
+                                {
+                                    container_store.push((src_param, container_param));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut ctr: Vec<usize> = container_to_return.into_iter().collect();
+    ctr.sort();
+    container_store.sort();
+    (ctr, container_store)
 }

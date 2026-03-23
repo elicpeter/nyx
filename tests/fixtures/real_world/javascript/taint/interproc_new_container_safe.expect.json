@@ -1,0 +1,17 @@
+{
+  "description": "No XSS: copyToNew creates a fresh container (not caller's), passing safe constant means no taint flows to sink",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "array",
+    "container",
+    "heap",
+    "interproc",
+    "negative"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
+}
