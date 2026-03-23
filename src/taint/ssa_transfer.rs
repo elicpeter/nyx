@@ -1763,11 +1763,169 @@ fn block_distance(ssa: &SsaBody, source_node: NodeIndex, sink_node: NodeIndex) -
     0 // unreachable or not connected — conservative default
 }
 
+// ── Flow Path Reconstruction ─────────────────────────────────────────────
+
+/// Reconstruct the taint flow path from source to sink by walking backward
+/// through the SSA def-use chain.
+///
+/// Returns steps in source→sink order.
+fn reconstruct_flow_path(
+    tainted_val: SsaValue,
+    origin: &crate::taint::domain::TaintOrigin,
+    sink_node: NodeIndex,
+    ssa: &SsaBody,
+    cfg: &Cfg,
+) -> Vec<crate::taint::FlowStepRaw> {
+    use crate::evidence::FlowStepKind;
+    use crate::taint::FlowStepRaw;
+
+    const MAX_STEPS: usize = 64;
+
+    let mut steps = Vec::new();
+    let mut visited = HashSet::new();
+
+    // 1. Add sink step
+    steps.push(FlowStepRaw {
+        cfg_node: sink_node,
+        var_name: cfg.node_weight(sink_node).and_then(|n| n.callee.clone()),
+        op_kind: FlowStepKind::Sink,
+    });
+
+    // 2. Walk backward from tainted_val
+    let mut current = tainted_val;
+    for _ in 0..MAX_STEPS {
+        if !visited.insert(current) {
+            break;
+        }
+
+        let def = ssa.def_of(current);
+        let block = ssa.block(def.block);
+
+        // Find the instruction for this value
+        let inst = block
+            .phis
+            .iter()
+            .chain(block.body.iter())
+            .find(|i| i.value == current);
+
+        let inst = match inst {
+            Some(i) => i,
+            None => break,
+        };
+
+        // Skip if same cfg_node as previous step (dedup consecutive same-line)
+        if let Some(prev) = steps.last() {
+            if prev.cfg_node == inst.cfg_node {
+                // Still follow the chain, just don't add a duplicate step
+                match &inst.op {
+                    SsaOp::Source | SsaOp::Param { .. } | SsaOp::CatchParam => break,
+                    SsaOp::Assign(uses) => {
+                        current = pick_tainted_operand(uses, origin, ssa);
+                        continue;
+                    }
+                    SsaOp::Call { args, receiver, .. } => {
+                        current = pick_tainted_operand_call(args, receiver, origin, ssa);
+                        continue;
+                    }
+                    SsaOp::Phi(operands) => {
+                        let vals: SmallVec<[SsaValue; 4]> =
+                            operands.iter().map(|(_, v)| *v).collect();
+                        current = pick_tainted_operand(&vals, origin, ssa);
+                        continue;
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        match &inst.op {
+            SsaOp::Source | SsaOp::Param { .. } | SsaOp::CatchParam => {
+                steps.push(FlowStepRaw {
+                    cfg_node: inst.cfg_node,
+                    var_name: inst.var_name.clone(),
+                    op_kind: FlowStepKind::Source,
+                });
+                break;
+            }
+            SsaOp::Assign(uses) => {
+                steps.push(FlowStepRaw {
+                    cfg_node: inst.cfg_node,
+                    var_name: inst.var_name.clone(),
+                    op_kind: FlowStepKind::Assignment,
+                });
+                if uses.is_empty() {
+                    break;
+                }
+                current = pick_tainted_operand(uses, origin, ssa);
+            }
+            SsaOp::Call { args, receiver, .. } => {
+                steps.push(FlowStepRaw {
+                    cfg_node: inst.cfg_node,
+                    var_name: inst.var_name.clone(),
+                    op_kind: FlowStepKind::Call,
+                });
+                current = pick_tainted_operand_call(args, receiver, origin, ssa);
+            }
+            SsaOp::Phi(operands) => {
+                steps.push(FlowStepRaw {
+                    cfg_node: inst.cfg_node,
+                    var_name: inst.var_name.clone(),
+                    op_kind: FlowStepKind::Phi,
+                });
+                let vals: SmallVec<[SsaValue; 4]> =
+                    operands.iter().map(|(_, v)| *v).collect();
+                if vals.is_empty() {
+                    break;
+                }
+                current = pick_tainted_operand(&vals, origin, ssa);
+            }
+            SsaOp::Const(_) | SsaOp::Nop => break,
+        }
+    }
+
+    // 3. Reverse: was built sink→source, need source→sink
+    steps.reverse();
+    steps
+}
+
+/// Pick the operand whose definition is closest to the origin node (direct match preferred).
+fn pick_tainted_operand(
+    operands: &[SsaValue],
+    origin: &crate::taint::domain::TaintOrigin,
+    ssa: &SsaBody,
+) -> SsaValue {
+    // Prefer operand defined at the origin node
+    for &op in operands {
+        if ssa.def_of(op).cfg_node == origin.node {
+            return op;
+        }
+    }
+    // Fallback: pick first (heuristic)
+    operands.first().copied().unwrap_or(SsaValue(0))
+}
+
+/// Pick tainted operand for Call instructions (flatten args + receiver).
+fn pick_tainted_operand_call(
+    args: &[SmallVec<[SsaValue; 2]>],
+    receiver: &Option<SsaValue>,
+    origin: &crate::taint::domain::TaintOrigin,
+    ssa: &SsaBody,
+) -> SsaValue {
+    let mut all_vals: SmallVec<[SsaValue; 8]> = SmallVec::new();
+    for arg in args {
+        all_vals.extend_from_slice(arg);
+    }
+    if let Some(r) = receiver {
+        all_vals.push(*r);
+    }
+    pick_tainted_operand(&all_vals, origin, ssa)
+}
+
 /// Convert SSA taint events to the standard Finding struct.
 pub fn ssa_events_to_findings(
     events: &[SsaTaintEvent],
     ssa: &SsaBody,
-    _cfg: &Cfg,
+    cfg: &Cfg,
 ) -> Vec<crate::taint::Finding> {
     use std::collections::HashSet;
 
@@ -1780,11 +1938,13 @@ pub fn ssa_events_to_findings(
         if event.all_validated {
             continue;
         }
-        for (_val, caps, origins) in &event.tainted_values {
+        for (val, caps, origins) in &event.tainted_values {
             let cap_specificity = (*caps & event.sink_caps).bits().count_ones() as u8;
             for origin in origins {
                 if seen.insert((origin.node.index(), event.sink_node.index())) {
                     let hop_count = block_distance(ssa, origin.node, event.sink_node);
+                    let flow_steps =
+                        reconstruct_flow_path(*val, origin, event.sink_node, ssa, cfg);
                     findings.push(crate::taint::Finding {
                         sink: event.sink_node,
                         source: origin.node,
@@ -1795,6 +1955,7 @@ pub fn ssa_events_to_findings(
                         hop_count,
                         cap_specificity,
                         uses_summary: event.uses_summary,
+                        flow_steps,
                     });
                 }
             }

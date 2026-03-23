@@ -686,6 +686,7 @@ fn taint_and_unguarded_sink_deduped() {
         hop_count: 0,
         cap_specificity: 1,
         uses_summary: false,
+        flow_steps: vec![],
     }];
 
     let findings = parse_and_run_all_with_taint(

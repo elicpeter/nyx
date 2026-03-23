@@ -14,6 +14,14 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::IntoNodeReferences;
 use std::collections::HashSet;
 
+/// A raw flow step at CFG level (before line/col resolution).
+#[derive(Debug, Clone)]
+pub struct FlowStepRaw {
+    pub cfg_node: NodeIndex,
+    pub var_name: Option<String>,
+    pub op_kind: crate::evidence::FlowStepKind,
+}
+
 /// A detected taint finding with both source and sink locations.
 #[derive(Debug, Clone)]
 pub struct Finding {
@@ -29,10 +37,8 @@ pub struct Finding {
     pub source_kind: SourceKind,
     /// Whether all tainted sink variables are guarded by a validation
     /// predicate on this path (metadata only — does not change severity).
-    #[allow(dead_code)] // surfaced in Diag output (task 4)
     pub path_validated: bool,
     /// The kind of validation guard protecting this path, if any.
-    #[allow(dead_code)] // surfaced in Diag output (task 4)
     pub guard_kind: Option<PredicateKind>,
     /// Number of SSA blocks between source and sink (0 = same block).
     pub hop_count: u16,
@@ -42,6 +48,8 @@ pub struct Finding {
     /// Whether this finding was resolved via a function summary (cross-function)
     /// rather than direct intra-function flow.
     pub uses_summary: bool,
+    /// Reconstructed flow path from source to sink (CFG-level, pre-resolution).
+    pub flow_steps: Vec<FlowStepRaw>,
 }
 
 /// Run taint analysis on a single file's CFG.

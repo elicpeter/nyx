@@ -568,6 +568,7 @@ mod tests {
             sanitizers: vec![],
             state: None,
             notes: vec!["source_kind:UserInput".into()],
+            ..Default::default()
         });
 
         let legacy = make_diag(
@@ -614,6 +615,7 @@ mod tests {
             sanitizers: vec![span()],             // 1 sanitizer
             state: None,
             notes: vec![],
+            ..Default::default()
         });
 
         // item_count = 1 (source) + 1 (sink) + min(2, 3+1) = 4
@@ -643,6 +645,7 @@ mod tests {
             sanitizers: vec![],
             state: None,
             notes: vec!["path_validated".into()],
+            ..Default::default()
         });
 
         let rank = compute_attack_rank(&d);

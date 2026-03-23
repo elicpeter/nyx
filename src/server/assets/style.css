@@ -927,6 +927,84 @@ tr.selected td {
   padding: var(--space-1) 0;
 }
 
+/* ── Flow Timeline ───────────────────────────────────────────────── */
+.flow-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: var(--space-2) 0;
+}
+.flow-step {
+  display: flex;
+  gap: var(--space-3);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  transition: background var(--transition-base);
+}
+.flow-step:hover {
+  background: var(--bg-tertiary);
+}
+.flow-step.active {
+  background: var(--bg-tertiary);
+  outline: 1px solid var(--accent);
+}
+.flow-step-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 16px;
+  flex-shrink: 0;
+}
+.flow-step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.flow-step-line {
+  width: 2px;
+  flex: 1;
+  background: var(--border);
+  min-height: 8px;
+}
+.flow-step-card {
+  flex: 1;
+  min-width: 0;
+  padding-bottom: var(--space-2);
+}
+.flow-step-badge {
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  font-size: var(--text-xs);
+  letter-spacing: 0.3px;
+}
+.flow-step-snippet {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+  background: var(--bg);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  margin-top: 4px;
+  white-space: pre;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+}
+.flow-step-cross-file .flow-step-card {
+  border-left: 2px solid var(--sev-medium);
+}
+.confidence-limiters {
+  list-style: disc;
+  padding-left: 20px;
+  margin: var(--space-1) 0 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.confidence-limiters li {
+  padding: 2px 0;
+}
+
 /* ── Code Viewer Modal ────────────────────────────────────────────── */
 .code-modal-overlay {
   position: fixed;

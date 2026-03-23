@@ -2,7 +2,7 @@ use crate::cfg::{build_cfg, export_summaries, Cfg, FuncSummaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
-use crate::evidence::{Evidence, SpanEvidence, StateEvidence};
+use crate::evidence::{Evidence, FlowStep, SpanEvidence, StateEvidence};
 use crate::labels::{build_lang_rules, severity_for_source_kind, Cap, DataLabel, LangAnalysisRules};
 use crate::patterns::{FindingCategory, Severity};
 use crate::state;
@@ -32,6 +32,31 @@ fn byte_offset_to_point(tree: &tree_sitter::Tree, byte: usize) -> tree_sitter::P
         .unwrap_or_else(|| tree_sitter::Point { row: 0, column: 0 })
 }
 
+/// Extract the source line containing `byte_offset`, trimmed and capped at 120 chars.
+fn extract_line_snippet(src: &[u8], byte_offset: usize) -> Option<String> {
+    if byte_offset >= src.len() {
+        return None;
+    }
+    let line_start = src[..byte_offset]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |p| p + 1);
+    let line_end = src[byte_offset..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map_or(src.len(), |p| byte_offset + p);
+    let line = std::str::from_utf8(&src[line_start..line_end]).ok()?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() > 120 {
+        Some(format!("{}...", &trimmed[..120]))
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Build a [`Diag`] from a taint [`Finding`], the CFG that produced it,
 /// the parsed tree (for byte→line/col conversion) and the file path.
 fn build_taint_diag(
@@ -39,6 +64,7 @@ fn build_taint_diag(
     cfg_graph: &crate::cfg::Cfg,
     tree: &tree_sitter::Tree,
     path: &Path,
+    src: &[u8],
 ) -> Diag {
     let sink_byte = cfg_graph[finding.sink].span.0;
     let sink_point = byte_offset_to_point(tree, sink_byte);
@@ -87,7 +113,32 @@ fn build_taint_diag(
         evidence_notes.push("uses_summary".into());
     }
 
-    Diag {
+    // Convert raw flow steps to display FlowSteps
+    let flow_steps: Vec<FlowStep> = finding
+        .flow_steps
+        .iter()
+        .enumerate()
+        .map(|(i, raw)| {
+            let point = byte_offset_to_point(tree, cfg_graph[raw.cfg_node].span.0);
+            let snippet = extract_line_snippet(src, cfg_graph[raw.cfg_node].span.0);
+            let callee = cfg_graph[raw.cfg_node].callee.clone();
+            let function = cfg_graph[raw.cfg_node].enclosing_func.clone();
+            FlowStep {
+                step: (i + 1) as u32,
+                kind: raw.op_kind.clone(),
+                file: file_path_owned.clone(),
+                line: (point.row + 1) as u32,
+                col: (point.column + 1) as u32,
+                snippet,
+                variable: raw.var_name.clone(),
+                callee,
+                function,
+                is_cross_file: false,
+            }
+        })
+        .collect();
+
+    let mut diag = Diag {
         path: file_path_owned.clone(),
         line: sink_point.row + 1,
         col: sink_point.column + 1,
@@ -135,13 +186,26 @@ fn build_taint_diag(
             sanitizers: vec![],
             state: None,
             notes: evidence_notes,
+            flow_steps,
+            explanation: None,
+            confidence_limiters: vec![],
         }),
         rank_score: None,
         rank_reason: None,
         suppressed: false,
         suppression: None,
         rollup: None,
+    };
+
+    // Post-fill explanation and confidence limiters
+    let explanation = crate::evidence::generate_explanation(&diag);
+    let limiters = crate::evidence::compute_confidence_limiters(&diag);
+    if let Some(ref mut ev) = diag.evidence {
+        ev.explanation = explanation;
+        ev.confidence_limiters = limiters;
     }
+
+    diag
 }
 
 /// Resolve a file extension to a (tree‑sitter Language, slug) pair.
@@ -325,6 +389,7 @@ impl<'a> ParsedSource<'a> {
                             sanitizers: vec![],
                             state: None,
                             notes: vec![],
+                            ..Default::default()
                         }),
                         rank_score: None,
                         rank_reason: None,
@@ -493,6 +558,7 @@ impl<'a> ParsedFile<'a> {
                 &self.cfg_graph,
                 &self.source.tree,
                 self.source.path,
+                self.source.bytes,
             ));
         }
 
@@ -542,6 +608,7 @@ impl<'a> ParsedFile<'a> {
                     sanitizers: vec![],
                     state: None,
                     notes: vec![],
+                    ..Default::default()
                 }),
                 rank_score: None,
                 rank_reason: None,
@@ -598,6 +665,7 @@ impl<'a> ParsedFile<'a> {
                             to_state: sf.to_state.into(),
                         }),
                         notes: vec![],
+                        ..Default::default()
                     }),
                     rank_score: None,
                     rank_reason: None,

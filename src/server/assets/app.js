@@ -619,6 +619,7 @@ async function renderFindingDetail(el, params, match) {
     const confidenceHtml = buildConfidenceHtml(f);
     const relatedHtml = buildRelatedHtml(f);
     const notesHtml = buildNotesHtml(f);
+    const flowHtml = buildFlowHtml(f);
 
     el.innerHTML = `
       <div class="detail-panel">
@@ -639,11 +640,20 @@ async function renderFindingDetail(el, params, match) {
               <span class="toggle-arrow">&#9660;</span> Why Nyx Reported This
             </div>
             <div class="section-body" id="section-why">
+              ${f.evidence && f.evidence.explanation ? `<p style="margin-bottom:var(--space-3);line-height:1.5">${escHtml(f.evidence.explanation)}</p>` : ''}
               ${f.message ? `<p style="margin-bottom:var(--space-3)">${escHtml(f.message)}</p>` : ''}
               ${f.evidence && f.evidence.source ? `<p class="evidence-note">Tainted data flows from <strong>${escHtml(f.evidence.source.kind)}</strong> at line ${f.evidence.source.line} to a dangerous operation.</p>` : ''}
               ${f.evidence && f.evidence.sink ? `<p class="evidence-note">Sink at line ${f.evidence.sink.line}${f.evidence.sink.snippet ? ': <code>' + escHtml(f.evidence.sink.snippet) + '</code>' : ''}</p>` : ''}
               ${f.guard_kind ? `<p class="evidence-note">Guard: ${escHtml(f.guard_kind)}</p>` : ''}
             </div>
+          </div>` : ''}
+
+        ${flowHtml ? `
+          <div class="detail-section">
+            <div class="section-toggle" data-section="flow">
+              <span class="toggle-arrow">&#9660;</span> Taint Flow
+            </div>
+            <div class="section-body" id="section-flow">${flowHtml}</div>
           </div>` : ''}
 
         ${evidenceHtml ? `
@@ -724,6 +734,15 @@ async function renderFindingDetail(el, params, match) {
         const arrow = $('.toggle-arrow', toggle);
         if (body) body.classList.toggle('collapsed');
         if (arrow) arrow.classList.toggle('collapsed');
+      });
+    });
+
+    // Flow step clicks → open code modal at that line
+    $$('.flow-step', el).forEach(step => {
+      step.addEventListener('click', () => {
+        $$('.flow-step', el).forEach(s => s.classList.remove('active'));
+        step.classList.add('active');
+        openCodeModal({ path: step.dataset.path, line: parseInt(step.dataset.line), evidence: f.evidence, language: f.language });
       });
     });
 
@@ -818,6 +837,16 @@ function buildConfidenceHtml(f) {
     }
     html += '</div>';
   }
+  // Confidence limiters
+  const limiters = f.evidence && f.evidence.confidence_limiters;
+  if (limiters && limiters.length > 0 && f.confidence !== 'High') {
+    html += '<div style="margin-top:var(--space-3)"><strong style="font-size:var(--text-sm);color:var(--text-secondary)">Why not higher confidence?</strong>';
+    html += '<ul class="confidence-limiters">';
+    for (const l of limiters) {
+      html += `<li>${escHtml(l)}</li>`;
+    }
+    html += '</ul></div>';
+  }
   return html;
 }
 
@@ -830,6 +859,49 @@ function buildRelatedHtml(f) {
       <span class="cell-path" style="font-size:var(--text-xs);max-width:200px">${escHtml(truncPath(r.path, 30))}:${r.line}</span>
     </div>`
   ).join('');
+}
+
+function buildFlowHtml(f) {
+  if (!f.evidence || !f.evidence.flow_steps || f.evidence.flow_steps.length === 0) return '';
+
+  const kindColors = {
+    source: 'var(--success)',
+    assignment: 'var(--accent)',
+    call: 'var(--sev-medium)',
+    phi: 'var(--text-tertiary)',
+    sink: 'var(--sev-high)',
+  };
+  const kindLabels = {
+    source: 'Source',
+    assignment: 'Assign',
+    call: 'Call',
+    phi: 'Phi',
+    sink: 'Sink',
+  };
+
+  const steps = f.evidence.flow_steps.map((s, i) => {
+    const color = kindColors[s.kind] || 'var(--text-secondary)';
+    const label = kindLabels[s.kind] || s.kind;
+    const isLast = i === f.evidence.flow_steps.length - 1;
+    return `<div class="flow-step${s.is_cross_file ? ' flow-step-cross-file' : ''}" data-path="${escHtml(s.file)}" data-line="${s.line}">
+      <div class="flow-step-connector">
+        <div class="flow-step-dot" style="background:${color}"></div>
+        ${!isLast ? '<div class="flow-step-line"></div>' : ''}
+      </div>
+      <div class="flow-step-card">
+        <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:2px">
+          <span class="flow-step-badge" style="color:${color}">${label}</span>
+          <span style="font-size:var(--text-xs);color:var(--text-secondary)">#${s.step}</span>
+          ${s.variable ? `<span style="font-size:var(--text-sm);font-family:var(--font-mono)">${escHtml(s.variable)}</span>` : ''}
+          ${s.callee ? `<span style="font-size:var(--text-xs);color:var(--text-secondary)">${escHtml(s.callee)}</span>` : ''}
+        </div>
+        <div style="font-size:var(--text-xs);color:var(--text-tertiary)">${escHtml(s.file)}:${s.line}:${s.col}${s.function ? ` in ${escHtml(s.function)}` : ''}</div>
+        ${s.snippet ? `<div class="flow-step-snippet">${escHtml(s.snippet)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="flow-timeline">${steps}</div>`;
 }
 
 // ── Code Viewer Modal ────────────────────────────────────────────────────────

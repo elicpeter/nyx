@@ -52,11 +52,58 @@ impl FromStr for Confidence {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Flow Steps
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The kind of operation at a flow step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowStepKind {
+    Source,
+    Assignment,
+    Call,
+    Phi,
+    Sink,
+}
+
+impl fmt::Display for FlowStepKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source => write!(f, "source"),
+            Self::Assignment => write!(f, "assignment"),
+            Self::Call => write!(f, "call"),
+            Self::Phi => write!(f, "phi"),
+            Self::Sink => write!(f, "sink"),
+        }
+    }
+}
+
+/// A single step in a taint flow path (display-ready).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowStep {
+    pub step: u32,
+    pub kind: FlowStepKind,
+    pub file: String,
+    pub line: u32,
+    pub col: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variable: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callee: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_cross_file: bool,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Evidence
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Structured evidence for a diagnostic finding.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Evidence {
     /// Where tainted data originated.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,6 +128,18 @@ pub struct Evidence {
     /// Free-form notes for ranking and display.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+
+    /// Step-by-step taint flow from source to sink.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flow_steps: Vec<FlowStep>,
+
+    /// Human-readable explanation of the finding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+
+    /// Reasons why confidence is not higher.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub confidence_limiters: Vec<String>,
 }
 
 impl Evidence {
@@ -92,6 +151,9 @@ impl Evidence {
             && self.sanitizers.is_empty()
             && self.state.is_none()
             && self.notes.is_empty()
+            && self.flow_steps.is_empty()
+            && self.explanation.is_none()
+            && self.confidence_limiters.is_empty()
     }
 }
 
@@ -270,6 +332,152 @@ fn cap_specificity_score(notes: &[String]) -> i32 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Explanation & Confidence Limiters
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Generate a human-readable explanation of a taint finding from its evidence.
+pub fn generate_explanation(diag: &Diag) -> Option<String> {
+    let ev = diag.evidence.as_ref()?;
+    let source = ev.source.as_ref()?;
+    let sink = ev.sink.as_ref()?;
+
+    let source_callee = source
+        .snippet
+        .as_deref()
+        .unwrap_or("(unknown source)");
+    let sink_callee = sink
+        .snippet
+        .as_deref()
+        .unwrap_or("(unknown sink)");
+
+    // Extract source kind label
+    let source_kind = ev
+        .notes
+        .iter()
+        .find_map(|n| n.strip_prefix("source_kind:"))
+        .unwrap_or("unknown");
+    let source_kind_label = match source_kind {
+        "UserInput" => "user input",
+        "EnvironmentConfig" => "environment/config",
+        "Database" => "database",
+        "FileSystem" => "file system",
+        "CaughtException" => "caught exception",
+        _ => "unclassified",
+    };
+
+    // Extract category from rule ID
+    let category = diag
+        .id
+        .strip_prefix("taint-unsanitised-flow")
+        .map(|_| extract_category_from_id(&diag.id))
+        .unwrap_or_else(|| "injection".to_string());
+
+    let step_count = ev.flow_steps.len();
+    let mut explanation = if step_count > 2 {
+        format!(
+            "Unsanitised {source_kind_label} data flows from {source_callee} (line {}) through {} steps to {sink_callee} (line {}), creating a potential {category} vulnerability.",
+            source.line,
+            step_count - 2, // exclude source and sink themselves
+            sink.line,
+        )
+    } else {
+        format!(
+            "Unsanitised {source_kind_label} data flows from {source_callee} (line {}) to {sink_callee} (line {}), creating a potential {category} vulnerability.",
+            source.line,
+            sink.line,
+        )
+    };
+
+    // Conditional addenda
+    if diag.path_validated {
+        if let Some(ref guard) = diag.guard_kind {
+            explanation.push_str(&format!(
+                " A {guard} guard was detected but may not be sufficient."
+            ));
+        }
+    }
+    if ev.notes.iter().any(|n| n == "uses_summary") {
+        explanation
+            .push_str(" The flow crosses function boundaries via summary resolution.");
+    }
+
+    Some(explanation)
+}
+
+/// Extract a vulnerability category label from the Diag (used in explanation text).
+fn extract_category_from_id(id: &str) -> String {
+    // Rule IDs like "taint-unsanitised-flow (source 3:1)" — category comes
+    // from the finding category field, but we approximate from the ID here.
+    if id.contains("sql") || id.contains("SQL") {
+        "SQL injection".to_string()
+    } else if id.contains("xss") || id.contains("XSS") {
+        "XSS".to_string()
+    } else {
+        "injection".to_string()
+    }
+}
+
+/// Compute reasons why confidence is not higher.
+pub fn compute_confidence_limiters(diag: &Diag) -> Vec<String> {
+    let mut limiters = Vec::new();
+    let ev = match &diag.evidence {
+        Some(e) => e,
+        None => return limiters,
+    };
+
+    // Hop count
+    for note in &ev.notes {
+        if let Some(count_str) = note.strip_prefix("hop_count:") {
+            if let Ok(count) = count_str.parse::<u16>() {
+                if count >= 4 {
+                    limiters.push(format!(
+                        "Taint path spans {count} blocks, increasing chance of intermediate sanitization"
+                    ));
+                }
+            }
+        }
+    }
+
+    // Summary resolution
+    if ev.notes.iter().any(|n| n == "uses_summary") {
+        limiters.push(
+            "Flow resolved via cross-function summary (may be imprecise)".into(),
+        );
+    }
+
+    // Path validated
+    if ev.notes.iter().any(|n| n == "path_validated") {
+        limiters.push(
+            "Validation guard detected on path (may provide protection)".into(),
+        );
+    }
+
+    // Cap specificity
+    for note in &ev.notes {
+        if let Some(count_str) = note.strip_prefix("cap_specificity:") {
+            if let Ok(0) = count_str.parse::<u8>() {
+                limiters.push(
+                    "Source and sink capability types do not match specifically".into(),
+                );
+            }
+        }
+    }
+
+    // Source kind unknown
+    if ev
+        .notes
+        .iter()
+        .any(|n| n == "source_kind:Unknown")
+    {
+        limiters.push(
+            "Source type is unclassified (lower exploitation confidence)".into(),
+        );
+    }
+
+    limiters
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -326,6 +534,7 @@ mod tests {
                 "hop_count:1".into(),
                 "cap_specificity:1".into(),
             ],
+            ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::High);
     }
@@ -356,6 +565,7 @@ mod tests {
                 "source_kind:EnvironmentConfig".into(),
                 "hop_count:5".into(),
             ],
+            ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::Medium);
     }
@@ -387,6 +597,7 @@ mod tests {
                 "hop_count:12".into(),
                 "uses_summary".into(),
             ],
+            ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::Low);
     }
@@ -417,6 +628,7 @@ mod tests {
                 "path_validated".into(),
                 "source_kind:UserInput".into(),
             ],
+            ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::Medium);
     }
@@ -438,6 +650,7 @@ mod tests {
             sanitizers: vec![],
             state: None,
             notes: vec!["degraded:budget_exceeded".into()],
+            ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::Low);
     }
@@ -487,14 +700,7 @@ mod tests {
 
     #[test]
     fn evidence_is_empty() {
-        let ev = Evidence {
-            source: None,
-            sink: None,
-            guards: vec![],
-            sanitizers: vec![],
-            state: None,
-            notes: vec![],
-        };
+        let ev = Evidence::default();
         assert!(ev.is_empty());
 
         let ev2 = Evidence {
@@ -505,11 +711,7 @@ mod tests {
                 kind: "source".into(),
                 snippet: None,
             }),
-            sink: None,
-            guards: vec![],
-            sanitizers: vec![],
-            state: None,
-            notes: vec![],
+            ..Default::default()
         };
         assert!(!ev2.is_empty());
     }
@@ -548,14 +750,7 @@ mod tests {
 
     #[test]
     fn json_omits_none_fields() {
-        let ev = Evidence {
-            source: None,
-            sink: None,
-            guards: vec![],
-            sanitizers: vec![],
-            state: None,
-            notes: vec![],
-        };
+        let ev = Evidence::default();
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(json, "{}");
     }
