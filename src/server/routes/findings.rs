@@ -1,7 +1,7 @@
 use crate::server::app::AppState;
 use crate::server::models::{
-    finding_from_diag, finding_from_diag_with_context, summarize_findings, FindingSummary,
-    FindingView,
+    collect_filter_values, finding_from_diag, finding_from_diag_with_context, summarize_findings,
+    FilterValues, FindingSummary, FindingView,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -13,6 +13,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/findings", get(list_findings))
         .route("/findings/summary", get(findings_summary))
+        .route("/findings/filters", get(findings_filters))
         .route("/findings/{index}", get(get_finding))
 }
 
@@ -23,6 +24,9 @@ struct FindingsQuery {
     rule_id: Option<String>,
     path: Option<String>,
     search: Option<String>,
+    language: Option<String>,
+    confidence: Option<String>,
+    status: Option<String>,
     sort_by: Option<String>,
     sort_dir: Option<String>,
     page: Option<usize>,
@@ -61,6 +65,26 @@ async fn list_findings(
     if let Some(ref path_prefix) = query.path {
         views.retain(|f| f.path.starts_with(path_prefix.as_str()));
     }
+    if let Some(ref lang) = query.language {
+        let lang_lower = lang.to_ascii_lowercase();
+        views.retain(|f| {
+            f.language
+                .as_ref()
+                .is_some_and(|l| l.to_ascii_lowercase() == lang_lower)
+        });
+    }
+    if let Some(ref conf) = query.confidence {
+        let conf_lower = conf.to_ascii_lowercase();
+        views.retain(|f| {
+            f.confidence
+                .as_ref()
+                .is_some_and(|c| format!("{c:?}").to_ascii_lowercase() == conf_lower)
+        });
+    }
+    if let Some(ref status) = query.status {
+        let status_lower = status.to_ascii_lowercase();
+        views.retain(|f| f.status.to_ascii_lowercase() == status_lower);
+    }
     if let Some(ref search) = query.search {
         let needle = search.to_ascii_lowercase();
         views.retain(|f| {
@@ -75,7 +99,7 @@ async fn list_findings(
     // Sort.
     match query.sort_by.as_deref() {
         Some("severity") => views.sort_by(|a, b| a.severity.cmp(&b.severity)),
-        Some("path") => views.sort_by(|a, b| a.path.cmp(&b.path)),
+        Some("path") | Some("file") => views.sort_by(|a, b| a.path.cmp(&b.path)),
         Some("rule_id") => views.sort_by(|a, b| a.rule_id.cmp(&b.rule_id)),
         Some("score") => views.sort_by(|a, b| {
             b.rank_score
@@ -83,6 +107,22 @@ async fn list_findings(
                 .partial_cmp(&a.rank_score.unwrap_or(0.0))
                 .unwrap_or(std::cmp::Ordering::Equal)
         }),
+        Some("confidence") => views.sort_by(|a, b| {
+            let ca = a.confidence.map(|c| c as u8).unwrap_or(0);
+            let cb = b.confidence.map(|c| c as u8).unwrap_or(0);
+            ca.cmp(&cb)
+        }),
+        Some("line") => views.sort_by(|a, b| a.line.cmp(&b.line)),
+        Some("language") => views.sort_by(|a, b| {
+            a.language
+                .as_deref()
+                .unwrap_or("")
+                .cmp(b.language.as_deref().unwrap_or(""))
+        }),
+        Some("status") => views.sort_by(|a, b| a.status.cmp(&b.status)),
+        Some("category") => {
+            views.sort_by(|a, b| a.category.to_string().cmp(&b.category.to_string()))
+        }
         _ => {} // default order (by index)
     }
     if query.sort_dir.as_deref() == Some("desc") {
@@ -113,6 +153,17 @@ async fn findings_summary(
         .ok_or(StatusCode::NOT_FOUND)?;
     let findings = job.findings.as_deref().unwrap_or(&[]);
     Ok(Json(summarize_findings(findings)))
+}
+
+async fn findings_filters(
+    State(state): State<AppState>,
+) -> Result<Json<FilterValues>, StatusCode> {
+    let job = state
+        .job_manager
+        .get_latest_completed()
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let findings = job.findings.as_deref().unwrap_or(&[]);
+    Ok(Json(collect_filter_values(findings)))
 }
 
 async fn get_finding(

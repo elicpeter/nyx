@@ -2,7 +2,7 @@ use crate::commands::scan::Diag;
 use crate::evidence::Confidence;
 use crate::patterns::{FindingCategory, Severity};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -22,6 +22,8 @@ pub struct FindingView {
     pub labels: Vec<(String, String)>,
     pub path_validated: bool,
     pub suppressed: bool,
+    pub language: Option<String>,
+    pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_context: Option<CodeContextView>,
 }
@@ -73,6 +75,78 @@ pub struct TerminatorView {
     pub name: String,
 }
 
+/// Distinct filter values available in a set of findings.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct FilterValues {
+    pub severities: Vec<String>,
+    pub categories: Vec<String>,
+    pub confidences: Vec<String>,
+    pub languages: Vec<String>,
+    pub rules: Vec<String>,
+    pub statuses: Vec<String>,
+}
+
+/// Collect distinct filter values from a slice of diagnostics.
+pub fn collect_filter_values(findings: &[Diag]) -> FilterValues {
+    let mut severities = BTreeSet::new();
+    let mut categories = BTreeSet::new();
+    let mut confidences = BTreeSet::new();
+    let mut languages = BTreeSet::new();
+    let mut rules = BTreeSet::new();
+    let mut statuses = BTreeSet::new();
+
+    for d in findings {
+        severities.insert(d.severity.as_db_str().to_string());
+        categories.insert(d.category.to_string());
+        if let Some(c) = d.confidence {
+            confidences.insert(format!("{c:?}"));
+        }
+        if let Some(lang) = lang_for_finding_path(&d.path) {
+            languages.insert(lang);
+        }
+        rules.insert(d.id.clone());
+        statuses.insert(status_for_diag(d).to_string());
+    }
+
+    FilterValues {
+        severities: severities.into_iter().collect(),
+        categories: categories.into_iter().collect(),
+        confidences: confidences.into_iter().collect(),
+        languages: languages.into_iter().collect(),
+        rules: rules.into_iter().collect(),
+        statuses: statuses.into_iter().collect(),
+    }
+}
+
+/// Map a finding file path extension to a human-readable language name.
+pub fn lang_for_finding_path(path: &str) -> Option<String> {
+    let ext = path.rsplit('.').next()?;
+    match ext.to_ascii_lowercase().as_str() {
+        "rs" => Some("Rust".into()),
+        "c" => Some("C".into()),
+        "cpp" => Some("C++".into()),
+        "java" => Some("Java".into()),
+        "go" => Some("Go".into()),
+        "php" => Some("PHP".into()),
+        "py" => Some("Python".into()),
+        "ts" => Some("TypeScript".into()),
+        "js" => Some("JavaScript".into()),
+        "rb" => Some("Ruby".into()),
+        _ => None,
+    }
+}
+
+/// Compute the status string for a diagnostic.
+fn status_for_diag(d: &Diag) -> &'static str {
+    if d.suppressed {
+        "suppressed"
+    } else if d.path_validated {
+        "validated"
+    } else {
+        "open"
+    }
+}
+
 /// Convert a Diag to a FindingView at a given index.
 pub fn finding_from_diag(index: usize, d: &Diag) -> FindingView {
     FindingView {
@@ -89,6 +163,8 @@ pub fn finding_from_diag(index: usize, d: &Diag) -> FindingView {
         labels: d.labels.clone(),
         path_validated: d.path_validated,
         suppressed: d.suppressed,
+        language: lang_for_finding_path(&d.path),
+        status: status_for_diag(d).to_string(),
         code_context: None,
     }
 }
