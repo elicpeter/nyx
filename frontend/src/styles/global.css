@@ -2310,6 +2310,11 @@ tr.selected td {
 
 /* ── Explorer Page ─────────────────────────────────────────────────── */
 
+/* Override .content padding/max-width when explorer is inside it */
+.content:has(.explorer-page) {
+  padding: 0;
+  max-width: none;
+}
 .explorer-page {
   display: grid;
   grid-template-columns: 280px 1fr 300px;
@@ -2495,8 +2500,6 @@ tr.selected td {
 /* Right panel */
 .explorer-right {
   border-left: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
   overflow-y: auto;
   background: var(--bg);
 }
