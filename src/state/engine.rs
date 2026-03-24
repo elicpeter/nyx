@@ -71,6 +71,7 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
     states.insert(entry, initial);
 
     // ── Phase 1: fixed-point iteration (compute converged states) ─────
+    let _phase1_span = tracing::debug_span!("state_engine_phase1").entered();
     let mut worklist: VecDeque<NodeIndex> = VecDeque::new();
     worklist.push_back(entry);
 
@@ -134,7 +135,11 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
         }
     }
 
+    tracing::debug!(iterations, converged, "state_engine_phase1 complete");
+    drop(_phase1_span);
+
     // ── Phase 2: single pass over converged states to collect events ──
+    let _phase2_span = tracing::debug_span!("state_engine_phase2").entered();
     let mut events: Vec<T::Event> = Vec::new();
     let mut seen_edges: std::collections::HashSet<(NodeIndex, NodeIndex)> =
         std::collections::HashSet::new();

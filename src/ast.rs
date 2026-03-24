@@ -722,6 +722,24 @@ pub fn extract_summaries_from_file(path: &Path, cfg: &Config) -> NyxResult<Vec<F
     extract_summaries_from_bytes(&bytes, path, cfg)
 }
 
+/// Build a CFG from a file and return the graph, entry node, function summaries,
+/// and language.
+///
+/// Returns `None` for binary files or unsupported languages.
+/// Intended for benchmarks and isolated testing of state analysis.
+pub fn build_cfg_for_file(
+    path: &Path,
+    cfg: &Config,
+) -> NyxResult<Option<(Cfg, NodeIndex, FuncSummaries, Lang)>> {
+    let bytes = std::fs::read(path)?;
+    let Some(source) = ParsedSource::try_new(&bytes, path)? else {
+        return Ok(None);
+    };
+    let lang = Lang::from_slug(source.lang_slug).unwrap_or(Lang::C);
+    let parsed = ParsedFile::from_source(source, cfg);
+    Ok(Some((parsed.cfg_graph, parsed.entry, parsed.local_summaries, lang)))
+}
+
 /// Extract both `FuncSummary` and `SsaFuncSummary` from pre-read bytes.
 ///
 /// This is the shared pass-1 pipeline for indexed scans: parses once, builds

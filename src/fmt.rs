@@ -325,7 +325,76 @@ fn render_diag(d: &Diag, width: usize) -> String {
         ));
     }
 
+    // ── State evidence (resource lifecycle / auth) ────────────────────
+    if let Some(ev) = d.evidence.as_ref().and_then(|e| e.state.as_ref()) {
+        if d.labels.is_empty() && d.guard_kind.is_none() {
+            out.push('\n');
+        }
+        let arrow = format!("[{} \u{2192} {}]", ev.from_state, ev.to_state);
+        let subject_part = ev
+            .subject
+            .as_ref()
+            .map(|s| format!("  subject: {s}"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "{indent_str}{} {} {}{}\n",
+            style("State:").dim(),
+            style(&ev.machine).dim(),
+            style(&arrow).cyan(),
+            style(&subject_part).dim(),
+        ));
+
+        // For leak rules, show acquisition location from evidence.sink
+        if d.id == "state-resource-leak" || d.id == "state-resource-leak-possible" {
+            if let Some(sink) = d.evidence.as_ref().and_then(|e| e.sink.as_ref()) {
+                out.push_str(&format!(
+                    "{indent_str}{} {}:{}:{}\n",
+                    style("Acquired:").dim(),
+                    style(&sink.path).dim(),
+                    style(sink.line).dim(),
+                    style(sink.col).dim(),
+                ));
+            }
+        }
+    }
+
+    // ── Remediation hint (state rules only) ─────────────────────────
+    if let Some(hint) = state_remediation_hint(&d.id) {
+        let wrapped = wrap_text(hint, width, BODY_INDENT + 6);
+        out.push_str(&format!(
+            "{indent_str}{} {}\n",
+            style("Hint:").dim(),
+            style(&wrapped).dim(),
+        ));
+    }
+
     out
+}
+
+/// Return a remediation hint for state analysis rule IDs.
+fn state_remediation_hint(rule_id: &str) -> Option<&'static str> {
+    match rule_id {
+        "state-use-after-close" => Some(
+            "Ensure the resource is not accessed after calling close/free. \
+             Consider restructuring to use the resource before releasing it.",
+        ),
+        "state-double-close" => Some(
+            "Remove the duplicate close call, or guard with a null/closed check.",
+        ),
+        "state-resource-leak" => Some(
+            "Add a close/free call before the function exits, or use a \
+             language-specific cleanup pattern (defer, with, try-with-resources, RAII).",
+        ),
+        "state-resource-leak-possible" => Some(
+            "Ensure the resource is closed on all code paths, including \
+             error/early-return paths.",
+        ),
+        "state-unauthed-access" => Some(
+            "Add an authentication check before this operation, or move it \
+             behind an auth middleware/guard.",
+        ),
+        _ => None,
+    }
 }
 
 /// Colored severity tag with icon. The tag is the visual anchor of each finding.
@@ -1065,6 +1134,174 @@ mod tests {
         assert!(
             !json.contains("confidence"),
             "confidence should be omitted when None: {json}"
+        );
+    }
+
+    // ── state evidence rendering ─────────────────────────────────────
+
+    fn make_state_diag(
+        rule_id: &str,
+        machine: &str,
+        subject: Option<&str>,
+        from: &str,
+        to: &str,
+    ) -> Diag {
+        use crate::evidence::{Evidence, StateEvidence};
+        Diag {
+            path: "src/main.c".into(),
+            line: 12,
+            col: 5,
+            severity: Severity::High,
+            id: rule_id.into(),
+            category: crate::patterns::FindingCategory::Security,
+            path_validated: false,
+            guard_kind: None,
+            message: Some(format!("variable `f` {to} after {from}")),
+            labels: vec![],
+            confidence: Some(crate::evidence::Confidence::High),
+            evidence: Some(Evidence {
+                state: Some(StateEvidence {
+                    machine: machine.into(),
+                    subject: subject.map(|s| s.into()),
+                    from_state: from.into(),
+                    to_state: to.into(),
+                }),
+                ..Default::default()
+            }),
+            rank_score: Some(47.0),
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+            rollup: None,
+        }
+    }
+
+    #[test]
+    fn render_state_evidence_use_after_close() {
+        let d = make_state_diag(
+            "state-use-after-close",
+            "resource",
+            Some("f"),
+            "closed",
+            "used",
+        );
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(stripped.contains("State:"), "should contain State label");
+        assert!(stripped.contains("resource"), "should contain machine name");
+        assert!(
+            stripped.contains("[closed \u{2192} used]"),
+            "should contain transition: {stripped}"
+        );
+        assert!(
+            stripped.contains("subject: f"),
+            "should contain subject: {stripped}"
+        );
+    }
+
+    #[test]
+    fn render_state_evidence_leak_with_location() {
+        use crate::evidence::{Evidence, SpanEvidence, StateEvidence};
+        let d = Diag {
+            evidence: Some(Evidence {
+                state: Some(StateEvidence {
+                    machine: "resource".into(),
+                    subject: Some("f".into()),
+                    from_state: "open".into(),
+                    to_state: "leaked".into(),
+                }),
+                sink: Some(SpanEvidence {
+                    path: "src/main.c".into(),
+                    line: 5,
+                    col: 10,
+                    kind: "sink".into(),
+                    snippet: None,
+                }),
+                ..Default::default()
+            }),
+            ..make_state_diag("state-resource-leak", "resource", Some("f"), "open", "leaked")
+        };
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(
+            stripped.contains("Acquired:"),
+            "should contain Acquired label: {stripped}"
+        );
+        assert!(
+            stripped.contains("src/main.c"),
+            "should contain file path: {stripped}"
+        );
+    }
+
+    #[test]
+    fn render_state_evidence_no_subject() {
+        let d = make_state_diag("state-resource-leak", "resource", None, "open", "leaked");
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(
+            !stripped.contains("subject:"),
+            "should not contain subject: {stripped}"
+        );
+    }
+
+    #[test]
+    fn render_state_evidence_auth() {
+        let d = make_state_diag(
+            "state-unauthed-access",
+            "auth",
+            None,
+            "unauthed",
+            "access",
+        );
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(stripped.contains("auth"), "should contain auth: {stripped}");
+        assert!(
+            stripped.contains("[unauthed \u{2192} access]"),
+            "should contain transition: {stripped}"
+        );
+    }
+
+    #[test]
+    fn remediation_hint_present_for_state_rules() {
+        for id in &[
+            "state-use-after-close",
+            "state-double-close",
+            "state-resource-leak",
+            "state-resource-leak-possible",
+            "state-unauthed-access",
+        ] {
+            assert!(
+                state_remediation_hint(id).is_some(),
+                "should have hint for {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn remediation_hint_absent_for_non_state() {
+        assert!(state_remediation_hint("taint-unsanitised-flow").is_none());
+        assert!(state_remediation_hint("cfg-unguarded-sink").is_none());
+    }
+
+    #[test]
+    fn render_diag_shows_hint() {
+        let d = make_state_diag(
+            "state-resource-leak",
+            "resource",
+            Some("f"),
+            "open",
+            "leaked",
+        );
+        let output = render_diag(&d, 120);
+        let stripped = strip_ansi(&output);
+        assert!(
+            stripped.contains("Hint:"),
+            "should contain Hint label: {stripped}"
+        );
+        assert!(
+            stripped.contains("close/free"),
+            "should contain remediation text: {stripped}"
         );
     }
 }
