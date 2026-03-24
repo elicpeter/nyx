@@ -30,6 +30,13 @@ static RESOURCE_USE_PATTERNS: &[&str] = &[
     // Memory access functions (for malloc/free use-after-free detection)
     "strcpy", "strncpy", "strcat", "strncat", "memcpy", "memmove", "memset", "memcmp", "strcmp",
     "strncmp", "strlen", "sprintf", "snprintf",
+    // Dot-prefixed method patterns (cross-language method calls)
+    ".read", ".write", ".send", ".recv", ".query", ".execute", ".fetch",
+    // JS/TS Sync variants (suffix doesn't match plain "read"/"write")
+    "readSync", "writeSync", "readFileSync", "writeFileSync", "appendFileSync",
+    "ftruncateSync", "fsyncSync", "fstatSync",
+    // Stream operations
+    "pipe", "unpipe", "resume", "pause", "destroy",
 ];
 
 /// Auth-call matchers for admin-level privilege.
@@ -354,6 +361,27 @@ mod tests {
     fn callee_matches_dot_prefix() {
         assert!(callee_matches("file.close", ".close"));
         assert!(!callee_matches("file.close", ".open"));
+    }
+
+    #[test]
+    fn callee_matches_js_fd_use_patterns() {
+        assert!(callee_matches("fs.readsync", "fs.readSync"));
+        assert!(callee_matches("fs.writesync", "fs.writeSync"));
+        assert!(!callee_matches("fs.readsync", "fs.writeSync"));
+    }
+
+    #[test]
+    fn callee_matches_stream_method_patterns() {
+        assert!(callee_matches("reader.pipe", ".pipe"));
+        assert!(callee_matches("stream.write", ".write"));
+        assert!(!callee_matches("readstream", ".read")); // no dot, no match
+    }
+
+    #[test]
+    fn callee_matches_dot_prefix_no_c_interference() {
+        assert!(!callee_matches("fread", ".read"));
+        assert!(!callee_matches("fwrite", ".write"));
+        assert!(!callee_matches("send", ".send"));
     }
 
     #[test]

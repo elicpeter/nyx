@@ -369,6 +369,11 @@ fn js_fs_open_close() {
     assert_no_state_findings("js_fs_open_close.js");
 }
 
+#[test]
+fn js_fs_use_after_close() {
+    assert_has("js_fs_use_after_close.js", "state-use-after-close");
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // (8b) Java resource lifecycle
 // ═══════════════════════════════════════════════════════════════════════
@@ -654,6 +659,11 @@ fn ts_fs_open_no_close() {
 #[test]
 fn ts_fs_open_close() {
     assert_no_state_findings("ts_fs_open_close.ts");
+}
+
+#[test]
+fn ts_stream_use_after_destroy() {
+    assert_has("ts_stream_use_after_destroy.ts", "state-use-after-close");
 }
 
 // ═══════════════════════════════════════════════════════════════════════

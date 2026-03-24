@@ -389,14 +389,20 @@ static JS_RESOURCES: &[ResourcePair] = &[
         release: &["fs.close", "fs.closeSync"],
         exclude_acquire: &[],
         resource_name: "file descriptor",
-        use_patterns: &[],
+        use_patterns: &[
+            "fs.readSync",
+            "fs.writeSync",
+            "fs.fstatSync",
+            "fs.ftruncateSync",
+            "fs.fsyncSync",
+        ],
     },
     ResourcePair {
         acquire: &["createReadStream", "createWriteStream"],
         release: &[".close", ".destroy"],
         exclude_acquire: &[],
         resource_name: "stream",
-        use_patterns: &[],
+        use_patterns: &[".pipe", ".resume", ".write", ".read", ".push"],
     },
 ];
 
