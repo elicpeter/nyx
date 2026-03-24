@@ -1,0 +1,25 @@
+{
+  "description": "Sink eval() is inside the loop body. Tests that symex reaches the sink during unrolled iterations.",
+  "tags": [
+    "taint",
+    "cmdi",
+    "symex",
+    "loop"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.input flows directly to eval inside loop — reached during first unrolled iteration"
+    }
+  ]
+}

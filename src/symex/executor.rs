@@ -1,9 +1,15 @@
-//! Multi-path symbolic exploration with bounded forking (Phase 18b).
+//! Multi-path symbolic exploration with bounded forking and loop awareness
+//! (Phase 18b + Phase 20).
 //!
 //! Extends Phase 18a's single-path symbolic execution to explore multiple
 //! paths through the CFG from source to sink. At branch points where both
 //! successors lie on some source-to-sink CFG path, the executor forks the
 //! symbolic state and explores both branches independently.
+//!
+//! Phase 20 adds loop-aware execution: back edges are detected via dominator
+//! analysis, loops are unrolled up to `MAX_LOOP_UNROLL` iterations, then
+//! phi-defined values are widened to `Unknown` (preserving taint) and the
+//! executor jumps to the loop exit successor.
 //!
 //! Hard budgets on forks, paths, and total symbolic transfer steps guarantee
 //! termination. Verdict aggregation is sound: `Infeasible` is only returned
@@ -18,6 +24,7 @@ use crate::ssa::const_prop::ConstLattice;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue, Terminator};
 use crate::taint::Finding;
 
+use super::loops::LoopInfo;
 use super::state::{PathConstraint, SymbolicState};
 use super::transfer::{self, SymexSummaryCtx};
 use super::value::SymbolicValue;
@@ -60,6 +67,9 @@ struct ExplorationState {
     steps_taken: usize,
     /// Constraints checked on this path.
     constraints_checked: u32,
+    /// Per-block visit count for bounded loop unrolling (Phase 20).
+    /// Inherited at fork points — both branches share the visit history.
+    visit_counts: HashMap<BlockId, u8>,
 }
 
 /// Outcome of a single completed exploration path.
@@ -170,6 +180,9 @@ pub(super) fn explore_finding(
     let reachable = compute_source_sink_reachable(ssa, source_block, sink_block);
     let on_path: HashSet<BlockId> = path_blocks.iter().copied().collect();
 
+    // Compute loop information (Phase 20)
+    let loop_info = super::loops::analyse_loops(ssa);
+
     // Seed symbolic state (same as Phase 18a analyse_finding_path)
     let mut sym_state = SymbolicState::new();
     sym_state.seed_from_const_values(const_values);
@@ -195,6 +208,7 @@ pub(super) fn explore_finding(
         forks_used: 0,
         steps_taken: 0,
         constraints_checked: 0,
+        visit_counts: HashMap::new(),
     };
 
     let mut work_queue: VecDeque<ExplorationState> = VecDeque::new();
@@ -236,6 +250,7 @@ pub(super) fn explore_finding(
             const_values,
             &reachable,
             &on_path,
+            &loop_info,
             &mut work_queue,
             &mut outcomes,
             &mut total_steps,
@@ -269,6 +284,7 @@ fn run_path(
     const_values: &HashMap<SsaValue, ConstLattice>,
     reachable: &HashSet<BlockId>,
     on_path: &HashSet<BlockId>,
+    loop_info: &LoopInfo,
     work_queue: &mut VecDeque<ExplorationState>,
     outcomes: &mut Vec<PathOutcome>,
     total_steps: &mut usize,
@@ -295,6 +311,49 @@ fn run_path(
             }
         };
 
+        // Phase 20: Increment visit count and check bounded unrolling
+        let visit_count = {
+            let count = state.visit_counts.entry(block_id).or_insert(0);
+            *count = count.saturating_add(1);
+            *count
+        };
+
+        if loop_info.loop_heads.contains(&block_id)
+            && visit_count > super::loops::MAX_LOOP_UNROLL
+        {
+            // Widen symbolic precision but PRESERVE taint
+            state.sym_state.widen_at_loop_head(block_id, ssa);
+
+            // Skip to exit successor (natural-body-based)
+            if let Some(exit_blk) = loop_info.loop_exit_successor(ssa, block_id) {
+                if reachable.contains(&exit_blk) {
+                    state.predecessor = Some(block_id);
+                    state.current_block = exit_blk;
+                    continue;
+                }
+            }
+            // Fallback: try on_path successor not in loop body
+            if let Terminator::Branch {
+                true_blk,
+                false_blk,
+                ..
+            } = &block.terminator
+            {
+                let body = loop_info.loop_bodies.get(&block_id);
+                let candidates = [*true_blk, *false_blk];
+                let exit = candidates.iter().find(|blk| {
+                    on_path.contains(blk) && body.map_or(true, |b| !b.contains(blk))
+                });
+                if let Some(&exit_blk) = exit {
+                    state.predecessor = Some(block_id);
+                    state.current_block = exit_blk;
+                    continue;
+                }
+            }
+            // Stuck (infinite loop / nested loops with no exit)
+            return Some(record_outcome(state, finding, ssa, cfg));
+        }
+
         // Transfer this block's instructions
         transfer::transfer_block_with_predecessor(
             &mut state.sym_state,
@@ -304,6 +363,18 @@ fn run_path(
             state.predecessor,
             summary_ctx,
         );
+
+        // Phase 20: Collapse induction variables after re-visit to prevent
+        // expression tree growth like ((i+1)+1)+1. Only applied after the
+        // first re-visit (count > 1), not on the initial iteration.
+        if loop_info.loop_heads.contains(&block_id) && visit_count > 1 {
+            for phi in &block.phis {
+                if loop_info.induction_vars.contains(&phi.value) {
+                    state.sym_state.set(phi.value, SymbolicValue::Unknown);
+                }
+            }
+        }
+
         let step_count = block.phis.len() + block.body.len();
         state.steps_taken += step_count;
         *total_steps += step_count;
@@ -502,6 +573,7 @@ fn fork_at_branch(
         forks_used: state.forks_used + 1,
         steps_taken: state.steps_taken,
         constraints_checked: state.constraints_checked,
+        visit_counts: state.visit_counts.clone(),
     };
 
     if !is_unknown {
@@ -523,6 +595,7 @@ fn fork_at_branch(
         forks_used: state.forks_used + 1,
         steps_taken: state.steps_taken,
         constraints_checked: state.constraints_checked,
+        visit_counts: state.visit_counts.clone(),
     };
 
     if !is_unknown {

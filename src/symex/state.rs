@@ -85,6 +85,21 @@ impl SymbolicState {
         }
     }
 
+    /// Widen symbolic precision at a loop head after bounded unrolling.
+    ///
+    /// Sets all phi-defined values in the block to `Unknown` (we no longer
+    /// know the concrete shape after arbitrary loop iterations), but
+    /// **preserves taint**: if a phi value was tainted before widening, it
+    /// remains tainted. `Unknown + tainted` means "shape unknown but still
+    /// attacker-controlled."
+    pub fn widen_at_loop_head(&mut self, block: BlockId, ssa: &SsaBody) {
+        let block_data = &ssa.blocks[block.0 as usize];
+        for phi in &block_data.phis {
+            self.values.insert(phi.value, SymbolicValue::Unknown);
+            // PRESERVE taint — do NOT remove from tainted_roots.
+        }
+    }
+
     /// Seed symbolic values from SSA constant propagation results.
     ///
     /// Maps `ConstLattice::Int(i)` to `Concrete(i)` and
@@ -337,5 +352,128 @@ mod tests {
         };
 
         assert_eq!(state.get_sink_witness(&finding, &ssa), None);
+    }
+
+    // ─── widen_at_loop_head tests ────────────────────────────────────────
+
+    #[test]
+    fn widen_at_loop_head_sets_phi_to_unknown() {
+        use crate::ssa::ir::{SsaBlock, SsaInst, SsaOp, Terminator};
+        use smallvec::smallvec;
+
+        let mut state = SymbolicState::new();
+        state.set(SsaValue(0), SymbolicValue::Concrete(10));
+        state.set(SsaValue(1), SymbolicValue::Concrete(42));
+        // v1 is defined by a phi in block 0
+        let ssa = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![SsaInst {
+                    value: SsaValue(1),
+                    op: SsaOp::Phi(smallvec![
+                        (BlockId(0), SsaValue(0)),
+                        (BlockId(1), SsaValue(0))
+                    ]),
+                    cfg_node: petgraph::graph::NodeIndex::new(0),
+                    var_name: None,
+                    span: (0, 0),
+                }],
+                body: vec![],
+                terminator: Terminator::Return,
+                preds: smallvec![],
+                succs: smallvec![],
+            }],
+            entry: BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: HashMap::new(),
+            exception_edges: vec![],
+        };
+
+        state.widen_at_loop_head(BlockId(0), &ssa);
+
+        // Phi value widened to Unknown
+        assert_eq!(state.get(SsaValue(1)), SymbolicValue::Unknown);
+        // Non-phi value preserved
+        assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(10));
+    }
+
+    #[test]
+    fn widen_at_loop_head_preserves_taint() {
+        use crate::ssa::ir::{SsaBlock, SsaInst, SsaOp, Terminator};
+        use smallvec::smallvec;
+
+        let mut state = SymbolicState::new();
+        state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
+        state.mark_tainted(SsaValue(1));
+
+        let ssa = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![SsaInst {
+                    value: SsaValue(1),
+                    op: SsaOp::Phi(smallvec![
+                        (BlockId(0), SsaValue(0)),
+                        (BlockId(1), SsaValue(0))
+                    ]),
+                    cfg_node: petgraph::graph::NodeIndex::new(0),
+                    var_name: None,
+                    span: (0, 0),
+                }],
+                body: vec![],
+                terminator: Terminator::Return,
+                preds: smallvec![],
+                succs: smallvec![],
+            }],
+            entry: BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: HashMap::new(),
+            exception_edges: vec![],
+        };
+
+        state.widen_at_loop_head(BlockId(0), &ssa);
+
+        // Symbolic precision degraded
+        assert_eq!(state.get(SsaValue(1)), SymbolicValue::Unknown);
+        // Taint PRESERVED
+        assert!(state.is_tainted(SsaValue(1)));
+    }
+
+    #[test]
+    fn widen_at_loop_head_untainted_stays_untainted() {
+        use crate::ssa::ir::{SsaBlock, SsaInst, SsaOp, Terminator};
+        use smallvec::smallvec;
+
+        let mut state = SymbolicState::new();
+        state.set(SsaValue(1), SymbolicValue::Concrete(5));
+        // NOT tainted
+
+        let ssa = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![SsaInst {
+                    value: SsaValue(1),
+                    op: SsaOp::Phi(smallvec![
+                        (BlockId(0), SsaValue(0)),
+                        (BlockId(1), SsaValue(0))
+                    ]),
+                    cfg_node: petgraph::graph::NodeIndex::new(0),
+                    var_name: None,
+                    span: (0, 0),
+                }],
+                body: vec![],
+                terminator: Terminator::Return,
+                preds: smallvec![],
+                succs: smallvec![],
+            }],
+            entry: BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: HashMap::new(),
+            exception_edges: vec![],
+        };
+
+        state.widen_at_loop_head(BlockId(0), &ssa);
+
+        assert_eq!(state.get(SsaValue(1)), SymbolicValue::Unknown);
+        assert!(!state.is_tainted(SsaValue(1)));
     }
 }

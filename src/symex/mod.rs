@@ -14,6 +14,7 @@ pub mod state;
 pub mod transfer;
 pub mod executor;
 pub mod witness;
+pub mod loops;
 
 pub use value::{SymbolicValue, Op, MAX_EXPR_DEPTH};
 pub use state::{SymbolicState, PathConstraint};

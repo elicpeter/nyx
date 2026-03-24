@@ -1,0 +1,26 @@
+{
+  "description": "Loop with early break (multiple exits) and sink after loop. Tests that symex handles loops with break statements.",
+  "tags": [
+    "taint",
+    "cmdi",
+    "symex",
+    "loop",
+    "multi-exit"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.q flows through loop with break into eval — multi-exit loop pattern"
+    }
+  ]
+}

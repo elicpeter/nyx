@@ -1,0 +1,26 @@
+{
+  "description": "Taint enters before loop, loop modifies the value via concat, taint must survive widening and reach post-loop res.send XSS sink.",
+  "tags": [
+    "taint",
+    "xss",
+    "symex",
+    "loop",
+    "taint-survives"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.name flows through loop into res.send — taint must survive loop widening"
+    }
+  ]
+}
