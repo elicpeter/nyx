@@ -5,13 +5,17 @@ REPO="elicpeter/nyx"
 VERSION="${NYX_VERSION:-latest}"
 INSTALL_DIR="${RUNNER_TOOL_CACHE:-/tmp}/nyx"
 
-# ── Detect runner architecture ───────────────────────────────────────────────
+# ── Detect runner OS and architecture ─────────────────────────────────────────
+OS="$(uname -s)"
 ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64)       TARGET="x86_64-unknown-linux-gnu" ;;
-  aarch64|arm64) TARGET="aarch64-unknown-linux-gnu" ;;
+
+case "${OS}-${ARCH}" in
+  Linux-x86_64)        TARGET="x86_64-unknown-linux-gnu" ;;
+  Linux-aarch64)       TARGET="aarch64-unknown-linux-gnu" ;;
+  Darwin-x86_64)       TARGET="x86_64-apple-darwin" ;;
+  Darwin-arm64)        TARGET="aarch64-apple-darwin" ;;
   *)
-    echo "::error::Unsupported architecture: $ARCH"
+    echo "::error::Unsupported platform: ${OS} ${ARCH}"
     exit 1
     ;;
 esac

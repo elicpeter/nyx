@@ -1,5 +1,5 @@
 name: 'Nyx Security Scanner'
-description: 'Run the Nyx multi-language vulnerability scanner on your codebase'
+description: 'Run the Nyx multi-language vulnerability scanner on your codebase. Supports Linux and macOS runners (x86_64 and ARM64).'
 author: 'Eli Peter'
 
 branding:

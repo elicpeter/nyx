@@ -40,17 +40,32 @@ esac
 echo "::endgroup::"
 
 # ── Count findings ───────────────────────────────────────────────────────────
+count_findings() {
+  python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    fmt = sys.argv[2]
+    if fmt == 'sarif':
+        runs = data.get('runs', [])
+        print(len(runs[0].get('results', [])) if runs else 0)
+    else:
+        print(len(data) if isinstance(data, list) else 0)
+except Exception:
+    print(0)
+" "$1" "$2" 2>/dev/null || echo "0"
+}
+
 FINDING_COUNT="unknown"
 case "$FORMAT" in
   sarif)
     if [[ -f "$SARIF_FILE" ]]; then
-      # Count SARIF result entries by ruleId occurrences
-      FINDING_COUNT="$(grep -c '"ruleId"' "$SARIF_FILE" 2>/dev/null || echo "0")"
+      FINDING_COUNT="$(count_findings "$SARIF_FILE" sarif)"
     fi
     ;;
   json)
     if [[ -f "${OUTDIR}/nyx-results.json" ]]; then
-      FINDING_COUNT="$(grep -c '"id"' "${OUTDIR}/nyx-results.json" 2>/dev/null || echo "0")"
+      FINDING_COUNT="$(count_findings "${OUTDIR}/nyx-results.json" json)"
     fi
     ;;
 esac
