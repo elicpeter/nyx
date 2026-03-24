@@ -38,7 +38,7 @@ pub enum EdgeKind {
 const MAX_COND_VARS: usize = 8;
 const MAX_CONDITION_TEXT_LEN: usize = 256;
 
-/// Arithmetic binary operator extracted from the AST.
+/// Binary operator extracted from the AST.
 ///
 /// Only set when the SSA assignment maps one-to-one to a single
 /// binary expression. Left `None` for nested, compound, or boolean
@@ -50,6 +50,19 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
+    // Bitwise
+    BitAnd,
+    BitOr,
+    BitXor,
+    LeftShift,
+    RightShift,
+    // Comparison
+    Eq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +136,12 @@ pub struct NodeInfo {
     /// clear one-to-one operator mapping. `None` for nested, compound,
     /// boolean, or ambiguous expressions.
     pub bin_op: Option<BinOp>,
+    /// Parsed literal operand from a binary expression (Phase 26).
+    /// When `bin_op` is set and one operand is a numeric literal (the other
+    /// being an identifier captured in `uses`), this holds the parsed value.
+    /// Enables abstract-domain transfer even when the SSA instruction has
+    /// only one use (the literal isn't an identifier and isn't in `uses`).
+    pub bin_op_const: Option<i64>,
     /// True when this acquisition node is inside a language-managed cleanup
     /// scope (Python `with`, Java try-with-resources, C# `using`).
     /// Only meaningful on Call nodes that define a resource variable.
@@ -711,6 +730,7 @@ fn push_condition_node<'a>(
         outer_callee: None,
         cast_target_type: None,
         bin_op: None,
+        bin_op_const: None,
         managed_resource: false,
             in_defer: false,
     })
@@ -1456,13 +1476,14 @@ fn detect_negation<'a>(cond: Node<'a>, if_ast: Node<'a>, _lang: &str) -> (Node<'
     (cond, false)
 }
 
-/// Extract a binary arithmetic operator from an AST node.
+/// Extract a binary operator from an AST node.
 ///
-/// Conservative policy: only returns `Some(BinOp)` when the AST node
-/// directly IS a binary expression or is an assignment/expression wrapper
-/// containing a single binary expression as its immediate RHS. Returns
-/// `None` for nested binary expressions, compound assignments (`+=`),
-/// boolean operators (`&&`, `||`), and any ambiguous cases.
+/// Covers arithmetic, bitwise, and comparison operators. Conservative
+/// policy: only returns `Some(BinOp)` when the AST node directly IS a
+/// binary expression or is an assignment/expression wrapper containing
+/// a single binary expression as its immediate RHS. Returns `None` for
+/// nested binary expressions, compound assignments (`+=`), boolean
+/// operators (`&&`, `||`), and any ambiguous cases.
 fn extract_bin_op(ast: Node, lang: &str) -> Option<BinOp> {
     // Find the binary expression node: either ast itself or immediate child.
     let bin_expr = find_single_binary_expr(ast, lang)?;
@@ -1480,10 +1501,65 @@ fn extract_bin_op(ast: Node, lang: &str) -> Option<BinOp> {
             "*" => Some(BinOp::Mul),
             "/" => Some(BinOp::Div),
             "%" => Some(BinOp::Mod),
-            _ => None, // Boolean, bitwise, comparison, etc. → not arithmetic
+            // Bitwise (single-char tokens — no conflict with && / ||)
+            "&" => Some(BinOp::BitAnd),
+            "|" => Some(BinOp::BitOr),
+            "^" => Some(BinOp::BitXor),
+            "<<" => Some(BinOp::LeftShift),
+            ">>" => Some(BinOp::RightShift),
+            // Comparison (=== / !== are JS/TS strict equality)
+            "==" | "===" => Some(BinOp::Eq),
+            "!=" | "!==" => Some(BinOp::NotEq),
+            "<" => Some(BinOp::Lt),
+            "<=" => Some(BinOp::LtEq),
+            ">" => Some(BinOp::Gt),
+            ">=" => Some(BinOp::GtEq),
+            _ => None, // Boolean (&&, ||), assignment ops, etc.
         };
     }
     None
+}
+
+/// Extract the numeric literal operand from a binary expression (Phase 26).
+///
+/// When a binary expression has one identifier operand (captured in `uses`)
+/// and one numeric literal operand, this returns the parsed literal value.
+/// Used for abstract-domain transfer when the SSA only has the identifier use.
+fn extract_bin_op_const(ast: Node, lang: &str, code: &[u8]) -> Option<i64> {
+    let bin_expr = find_single_binary_expr(ast, lang)?;
+    // Look for a numeric literal child
+    let left = bin_expr.named_child(0)?;
+    let right = bin_expr.named_child(1)?;
+
+    fn try_parse_number(n: Node, code: &[u8]) -> Option<i64> {
+        let kind = n.kind();
+        if kind == "number" || kind == "integer" || kind == "integer_literal"
+            || kind == "number_literal" || kind == "float"
+        {
+            let text = std::str::from_utf8(&code[n.byte_range()]).ok()?.trim();
+            // Try standard decimal parse first
+            if let Ok(v) = text.parse::<i64>() {
+                return Some(v);
+            }
+            // Try hex (0x...), octal (0o...), binary (0b...) prefixed literals
+            if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+                return i64::from_str_radix(hex, 16).ok();
+            }
+            if let Some(oct) = text.strip_prefix("0o").or_else(|| text.strip_prefix("0O")) {
+                return i64::from_str_radix(oct, 8).ok();
+            }
+            if let Some(bin) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+                return i64::from_str_radix(bin, 2).ok();
+            }
+            None
+        } else {
+            None
+        }
+    }
+
+    // Try left, then right — one of them should be a literal
+    try_parse_number(left, code)
+        .or_else(|| try_parse_number(right, code))
 }
 
 /// Find a single binary expression node at or directly under `ast`.
@@ -1541,6 +1617,28 @@ fn find_single_binary_expr<'a>(ast: Node<'a>, lang: &str) -> Option<Node<'a>> {
                         found = Some(child);
                     }
                 }
+            } else if wrapper_kinds.contains(&child.kind()) {
+                // Recurse one more level into nested wrappers (e.g.,
+                // variable_declaration → variable_declarator → binary_expression)
+                let mut inner_cursor = child.walk();
+                for grandchild in child.named_children(&mut inner_cursor) {
+                    if is_binary_expr_kind(grandchild.kind(), lang) {
+                        if found.is_some() {
+                            return None;
+                        }
+                        if grandchild.named_child_count() == 2 {
+                            let l = grandchild.named_child(0);
+                            let r = grandchild.named_child(1);
+                            let l_bin =
+                                l.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+                            let r_bin =
+                                r.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+                            if !l_bin && !r_bin {
+                                found = Some(grandchild);
+                            }
+                        }
+                    }
+                }
             }
         }
         return found;
@@ -1550,9 +1648,14 @@ fn find_single_binary_expr<'a>(ast: Node<'a>, lang: &str) -> Option<Node<'a>> {
 }
 
 /// Check if an AST node kind is a binary expression in the given language.
+///
+/// Python uses `binary_operator` for arithmetic/bitwise and
+/// `comparison_operator` for comparisons. Chained Python comparisons
+/// (`a < b < c`) have 3+ named children and are rejected by the
+/// `named_child_count() == 2` guard in `find_single_binary_expr`.
 fn is_binary_expr_kind(kind: &str, lang: &str) -> bool {
     match lang {
-        "python" => kind == "binary_operator",
+        "python" => kind == "binary_operator" || kind == "comparison_operator",
         "ruby" => kind == "binary",
         _ => kind == "binary_expression",
     }
@@ -1969,6 +2072,7 @@ fn push_node<'a>(
         outer_callee,
         cast_target_type,
         bin_op: extract_bin_op(ast, lang),
+        bin_op_const: extract_bin_op_const(ast, lang, code),
         managed_resource: is_raii_managed || is_ruby_block_managed,
             in_defer: false,
     });
@@ -2233,6 +2337,7 @@ fn build_begin_rescue<'a>(
                 outer_callee: None,
                 cast_target_type: None,
                 bin_op: None,
+        bin_op_const: None,
                 managed_resource: false,
             in_defer: false,
             });
@@ -2545,6 +2650,7 @@ fn build_try<'a>(
                     outer_callee: None,
                     cast_target_type: None,
                     bin_op: None,
+        bin_op_const: None,
                     managed_resource: false,
             in_defer: false,
                 });
@@ -2821,6 +2927,7 @@ fn build_sub<'a>(
                     outer_callee: None,
                     cast_target_type: None,
                     bin_op: None,
+        bin_op_const: None,
                     managed_resource: false,
             in_defer: false,
                 });
@@ -3484,6 +3591,7 @@ fn build_sub<'a>(
                 outer_callee: None,
                 cast_target_type: None,
                 bin_op: None,
+        bin_op_const: None,
                 managed_resource: false,
             in_defer: false,
             });
@@ -3776,6 +3884,7 @@ pub(crate) fn build_cfg<'a>(
         outer_callee: None,
         cast_target_type: None,
         bin_op: None,
+        bin_op_const: None,
         managed_resource: false,
             in_defer: false,
     });
@@ -3802,6 +3911,7 @@ pub(crate) fn build_cfg<'a>(
         outer_callee: None,
         cast_target_type: None,
         bin_op: None,
+        bin_op_const: None,
         managed_resource: false,
             in_defer: false,
     });
@@ -4523,4 +4633,5 @@ mod cfg_tests {
         let ifs = if_nodes(&cfg);
         assert_eq!(ifs.len(), 3, "Expected 3 If nodes for `a || b && c`, got {}", ifs.len());
     }
+
 }

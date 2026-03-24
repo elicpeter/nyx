@@ -404,7 +404,7 @@ pub fn run_ssa_taint_full(
     if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
         if let Some(ref mut abs) = entry_state.abstract_state {
             if let Some(cv) = transfer.const_values {
-                use crate::abstract_interp::{AbstractValue, IntervalFact, StringFact};
+                use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, StringFact};
                 use crate::ssa::const_prop::ConstLattice;
                 for (v, cl) in cv {
                     match cl {
@@ -412,12 +412,14 @@ pub fn run_ssa_taint_full(
                             abs.set(*v, AbstractValue {
                                 interval: IntervalFact::exact(*n),
                                 string: StringFact::top(),
+                                bits: BitFact::from_const(*n),
                             });
                         }
                         ConstLattice::Str(s) => {
                             abs.set(*v, AbstractValue {
                                 interval: IntervalFact::top(),
                                 string: StringFact::exact(s),
+                                bits: BitFact::top(),
                             });
                         }
                         _ => {}
@@ -2021,7 +2023,7 @@ fn transfer_abstract(
     cfg: &Cfg,
     abs: &mut AbstractState,
 ) {
-    use crate::abstract_interp::{AbstractValue, IntervalFact, StringFact};
+    use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, StringFact};
     use crate::cfg::BinOp;
 
     let info = &cfg[inst.cfg_node];
@@ -2033,22 +2035,71 @@ fn transfer_abstract(
                 abs.set(inst.value, AbstractValue {
                     interval: IntervalFact::exact(n),
                     string: StringFact::top(),
+                    bits: BitFact::from_const(n),
                 });
             } else if is_string_const(trimmed) {
                 let s = strip_string_quotes(trimmed);
                 abs.set(inst.value, AbstractValue {
                     interval: IntervalFact::top(),
                     string: StringFact::exact(&s),
+                    bits: BitFact::top(),
                 });
             }
             // Bool/Null/other: leave as Top
         }
 
         SsaOp::Assign(uses) if uses.len() == 1 => {
-            // Copy: propagate abstract value
-            let src = abs.get(uses[0]);
-            if !src.is_top() {
-                abs.set(inst.value, src);
+            // Phase 26: single-use Assign with bin_op + literal operand.
+            // When a binary expression like `x & 0x07` has one identifier use
+            // and one numeric literal, the SSA sees only the identifier (1 use).
+            // Use bin_op_const from the CFG node to reconstruct the full binary
+            // operation for abstract transfer.
+            if let (Some(bin_op), Some(const_val)) = (info.bin_op, info.bin_op_const) {
+                let var_abs = abs.get(uses[0]);
+                let const_abs = AbstractValue {
+                    interval: IntervalFact::exact(const_val),
+                    string: StringFact::top(),
+                    bits: BitFact::from_const(const_val),
+                };
+                let result_interval = match bin_op {
+                    BinOp::Add => var_abs.interval.add(&const_abs.interval),
+                    BinOp::Sub => var_abs.interval.sub(&const_abs.interval),
+                    BinOp::Mul => var_abs.interval.mul(&const_abs.interval),
+                    BinOp::Div => var_abs.interval.div(&const_abs.interval),
+                    BinOp::Mod => var_abs.interval.modulo(&const_abs.interval),
+                    BinOp::BitAnd => var_abs.interval.bit_and(&const_abs.interval),
+                    BinOp::BitOr => var_abs.interval.bit_or(&const_abs.interval),
+                    BinOp::BitXor => var_abs.interval.bit_xor(&const_abs.interval),
+                    BinOp::LeftShift => var_abs.interval.left_shift(&const_abs.interval),
+                    BinOp::RightShift => var_abs.interval.right_shift(&const_abs.interval),
+                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq
+                    | BinOp::Gt | BinOp::GtEq => IntervalFact {
+                        lo: Some(0),
+                        hi: Some(1),
+                    },
+                };
+                let result_bits = match bin_op {
+                    BinOp::BitAnd => var_abs.bits.bit_and(&const_abs.bits),
+                    BinOp::BitOr => var_abs.bits.bit_or(&const_abs.bits),
+                    BinOp::BitXor => var_abs.bits.bit_xor(&const_abs.bits),
+                    BinOp::LeftShift => var_abs.bits.left_shift(&const_abs.interval),
+                    BinOp::RightShift => var_abs.bits.right_shift(&const_abs.interval),
+                    _ => BitFact::top(),
+                };
+                let val = AbstractValue {
+                    interval: result_interval,
+                    string: StringFact::top(),
+                    bits: result_bits,
+                };
+                if !val.is_top() {
+                    abs.set(inst.value, val);
+                }
+            } else {
+                // Copy: propagate abstract value (including bits)
+                let src = abs.get(uses[0]);
+                if !src.is_top() {
+                    abs.set(inst.value, src);
+                }
             }
         }
 
@@ -2057,13 +2108,24 @@ fn transfer_abstract(
             let rhs_abs = abs.get(uses[1]);
 
             if let Some(bin_op) = info.bin_op {
-                // Known arithmetic operator → apply transfer
+                // Known operator → apply interval transfer
                 let result_interval = match bin_op {
                     BinOp::Add => lhs_abs.interval.add(&rhs_abs.interval),
                     BinOp::Sub => lhs_abs.interval.sub(&rhs_abs.interval),
                     BinOp::Mul => lhs_abs.interval.mul(&rhs_abs.interval),
                     BinOp::Div => lhs_abs.interval.div(&rhs_abs.interval),
                     BinOp::Mod => lhs_abs.interval.modulo(&rhs_abs.interval),
+                    BinOp::BitAnd => lhs_abs.interval.bit_and(&rhs_abs.interval),
+                    BinOp::BitOr => lhs_abs.interval.bit_or(&rhs_abs.interval),
+                    BinOp::BitXor => lhs_abs.interval.bit_xor(&rhs_abs.interval),
+                    BinOp::LeftShift => lhs_abs.interval.left_shift(&rhs_abs.interval),
+                    BinOp::RightShift => lhs_abs.interval.right_shift(&rhs_abs.interval),
+                    // Comparisons produce boolean 0/1
+                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq
+                    | BinOp::Gt | BinOp::GtEq => IntervalFact {
+                        lo: Some(0),
+                        hi: Some(1),
+                    },
                 };
                 // For Add: also handle string concatenation (+ is overloaded)
                 let result_string = if bin_op == BinOp::Add {
@@ -2071,21 +2133,32 @@ fn transfer_abstract(
                 } else {
                     StringFact::top()
                 };
+                // Bitwise transfer via BitFact subdomain
+                let result_bits = match bin_op {
+                    BinOp::BitAnd => lhs_abs.bits.bit_and(&rhs_abs.bits),
+                    BinOp::BitOr => lhs_abs.bits.bit_or(&rhs_abs.bits),
+                    BinOp::BitXor => lhs_abs.bits.bit_xor(&rhs_abs.bits),
+                    BinOp::LeftShift => lhs_abs.bits.left_shift(&rhs_abs.interval),
+                    BinOp::RightShift => lhs_abs.bits.right_shift(&rhs_abs.interval),
+                    _ => BitFact::top(),
+                };
                 let val = AbstractValue {
                     interval: result_interval,
                     string: result_string,
+                    bits: result_bits,
                 };
                 if !val.is_top() {
                     abs.set(inst.value, val);
                 }
             } else {
-                // Unknown operator: conservative for interval,
+                // Unknown operator: conservative for interval and bits,
                 // but still propagate string concat (prefix from LHS, suffix from RHS)
                 let string_result = lhs_abs.string.concat(&rhs_abs.string);
                 if !string_result.is_top() {
                     abs.set(inst.value, AbstractValue {
                         interval: IntervalFact::top(),
                         string: string_result,
+                        bits: BitFact::top(),
                     });
                 }
             }
@@ -2101,6 +2174,7 @@ fn transfer_abstract(
                         hi: Some(i32::MAX as i64),
                     },
                     string: StringFact::top(),
+                    bits: BitFact::top(),
                 });
             }
             // Unknown calls: implicit Top (don't store)
@@ -2433,14 +2507,14 @@ fn collect_block_events(
         // Phase 17: Abstract-domain-aware sink suppression.
         // Includes SSRF prefix locking and dual-gate (type + interval) for SQL/FILE_IO.
         if let Some(ref abs) = state.abstract_state {
-            if is_abstract_safe_for_sink(inst, sink_caps, abs, transfer.type_facts, &state, ssa) {
+            if is_abstract_safe_for_sink(inst, sink_caps, abs, transfer.type_facts, &state, ssa, cfg) {
                 continue;
             }
         }
         // Phase 17: Call-site abstract suppression.
         if let SsaOp::Call { ref args, .. } = inst.op {
             if let Some(ref abs) = state.abstract_state {
-                if is_call_abstract_safe(inst, args, sink_caps, abs, transfer.type_facts, &state, ssa) {
+                if is_call_abstract_safe(inst, args, sink_caps, abs, transfer.type_facts, &state, ssa, cfg) {
                     continue;
                 }
             }
@@ -3508,6 +3582,7 @@ fn is_abstract_safe_for_sink(
     type_facts: Option<&crate::ssa::type_facts::TypeFactResult>,
     state: &SsaTaintState,
     ssa: &SsaBody,
+    cfg: &Cfg,
 ) -> bool {
     let used = inst_use_values(inst);
     if used.is_empty() {
@@ -3530,7 +3605,7 @@ fn is_abstract_safe_for_sink(
     // Traces through Assign chains so "const_string + tainted_int" is caught.
     if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO) {
         if let Some(tf) = type_facts {
-            let leaves = trace_tainted_leaf_values(inst, state, ssa);
+            let leaves = trace_tainted_leaf_values(inst, state, ssa, cfg);
             if !leaves.is_empty()
                 && leaves
                     .iter()
@@ -3553,6 +3628,7 @@ fn is_call_abstract_safe(
     type_facts: Option<&crate::ssa::type_facts::TypeFactResult>,
     state: &SsaTaintState,
     ssa: &SsaBody,
+    cfg: &Cfg,
 ) -> bool {
     // SSRF — check if the URL argument (first arg) has a safe prefix.
     if sink_caps.intersects(Cap::SSRF) {
@@ -3570,7 +3646,7 @@ fn is_call_abstract_safe(
     // Dual gate for Call sinks (same as non-Call path)
     if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO) {
         if let Some(tf) = type_facts {
-            let leaves = trace_tainted_leaf_values(inst, state, ssa);
+            let leaves = trace_tainted_leaf_values(inst, state, ssa, cfg);
             if !leaves.is_empty()
                 && leaves
                     .iter()
@@ -3597,12 +3673,13 @@ fn trace_tainted_leaf_values(
     inst: &SsaInst,
     state: &SsaTaintState,
     ssa: &SsaBody,
+    cfg: &Cfg,
 ) -> SmallVec<[SsaValue; 4]> {
     let mut leaves = SmallVec::new();
     let used = inst_use_values(inst);
     for &v in &used {
         if state.get(v).is_some() {
-            trace_single_leaf(v, state, ssa, &mut leaves, 0);
+            trace_single_leaf(v, state, ssa, cfg, &mut leaves, 0);
         }
     }
     leaves
@@ -3612,6 +3689,7 @@ fn trace_single_leaf(
     v: SsaValue,
     state: &SsaTaintState,
     ssa: &SsaBody,
+    cfg: &Cfg,
     leaves: &mut SmallVec<[SsaValue; 4]>,
     depth: usize,
 ) {
@@ -3632,10 +3710,31 @@ fn trace_single_leaf(
     };
     match &inst.op {
         SsaOp::Assign(uses) if uses.len() >= 2 => {
+            // Numeric binary operations (bitwise, arithmetic except Add, comparisons)
+            // always produce integers — treat the result as a leaf rather than tracing
+            // through to the string-typed operands. Add is excluded because it may be
+            // string concatenation.
+            let bin_op = cfg.node_weight(inst.cfg_node).and_then(|ni| ni.bin_op);
+            let is_numeric_op = matches!(
+                bin_op,
+                Some(crate::cfg::BinOp::Sub | crate::cfg::BinOp::Mul
+                    | crate::cfg::BinOp::Div | crate::cfg::BinOp::Mod
+                    | crate::cfg::BinOp::BitAnd | crate::cfg::BinOp::BitOr
+                    | crate::cfg::BinOp::BitXor | crate::cfg::BinOp::LeftShift
+                    | crate::cfg::BinOp::RightShift
+                    | crate::cfg::BinOp::Eq | crate::cfg::BinOp::NotEq
+                    | crate::cfg::BinOp::Lt | crate::cfg::BinOp::LtEq
+                    | crate::cfg::BinOp::Gt | crate::cfg::BinOp::GtEq)
+            );
+            if is_numeric_op {
+                leaves.push(v);
+                return;
+            }
+
             let mut found = false;
             for &u in uses {
                 if state.get(u).is_some() {
-                    trace_single_leaf(u, state, ssa, leaves, depth + 1);
+                    trace_single_leaf(u, state, ssa, cfg, leaves, depth + 1);
                     found = true;
                 }
             }

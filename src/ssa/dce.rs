@@ -135,6 +135,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op: None,
+            bin_op_const: None,
             managed_resource: false,
             in_defer: false,
         }

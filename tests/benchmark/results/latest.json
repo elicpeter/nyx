@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-24T19:22:21Z",
+  "timestamp": "2026-03-24T22:32:10Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -1436,13 +1436,17 @@
       "language": "java",
       "vuln_class": "path_traversal",
       "is_vulnerable": true,
-      "outcome_file_level": "FN",
+      "outcome_file_level": "TP",
       "outcome_rule_level": "FN",
       "outcome_location_level": "FN",
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [],
-      "all_finding_ids": [],
-      "security_finding_count": 0,
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -1451,13 +1455,17 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "TN",
-      "outcome_rule_level": "TN",
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [],
-      "all_finding_ids": [],
-      "security_finding_count": 0,
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -1545,13 +1553,17 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "TN",
-      "outcome_rule_level": "TN",
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [],
-      "all_finding_ids": [],
-      "security_finding_count": 0,
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -1575,13 +1587,17 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "TN",
-      "outcome_rule_level": "TN",
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [],
-      "all_finding_ids": [],
-      "security_finding_count": 0,
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -1597,12 +1613,15 @@
         "java.sqli.execute_concat",
         "taint-unsanitised-flow (source 6:9)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
       "all_finding_ids": [
+        "state-resource-leak",
         "java.sqli.execute_concat",
         "taint-unsanitised-flow (source 6:9)"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 3,
       "non_security_finding_count": 0
     },
     {
@@ -1617,11 +1636,14 @@
       "matched_rule_ids": [
         "taint-unsanitised-flow (source 6:9)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
       "all_finding_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 6:9)"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -1638,16 +1660,18 @@
         "taint-unsanitised-flow (source 7:9)"
       ],
       "unexpected_rule_ids": [
+        "state-resource-leak",
         "java.sqli.execute_concat",
         "java.xss.getwriter_print"
       ],
       "all_finding_ids": [
+        "state-resource-leak",
         "java.sqli.execute_concat",
         "taint-unsanitised-flow (source 7:9)",
         "java.xss.getwriter_print",
         "taint-unsanitised-flow (source 7:9)"
       ],
-      "security_finding_count": 4,
+      "security_finding_count": 5,
       "non_security_finding_count": 0
     },
     {
@@ -2507,13 +2531,17 @@
       "language": "php",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "TN",
-      "outcome_rule_level": "TN",
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [],
-      "all_finding_ids": [],
-      "security_finding_count": 0,
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -2558,11 +2586,14 @@
       "matched_rule_ids": [
         "taint-unsanitised-flow (source 2:1)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
       "all_finding_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 2:1)"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -2577,11 +2608,14 @@
       "matched_rule_ids": [
         "taint-unsanitised-flow (source 2:1)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
       "all_finding_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 2:1)"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -4004,22 +4038,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 119,
-    "fp": 24,
-    "fn_": 2,
-    "tn": 68,
-    "precision": 0.8321678321678322,
-    "recall": 0.9834710743801653,
-    "f1": 0.9015151515151516
+    "tp": 120,
+    "fp": 28,
+    "fn_": 1,
+    "tn": 64,
+    "precision": 0.8108108108108109,
+    "recall": 0.9917355371900827,
+    "f1": 0.892193308550186
   },
   "aggregate_rule_level": {
     "tp": 115,
-    "fp": 24,
+    "fp": 28,
     "fn_": 6,
-    "tn": 68,
-    "precision": 0.8273381294964028,
+    "tn": 64,
+    "precision": 0.8041958041958042,
     "recall": 0.9504132231404959,
-    "f1": 0.8846153846153847
+    "f1": 0.8712121212121212
   },
   "by_language": {
     "c": {
@@ -4051,12 +4085,12 @@
     },
     "java": {
       "tp": 11,
-      "fp": 1,
+      "fp": 4,
       "fn_": 2,
-      "tn": 9,
-      "precision": 0.9166666666666666,
+      "tn": 6,
+      "precision": 0.7333333333333333,
       "recall": 0.8461538461538461,
-      "f1": 0.8799999999999999
+      "f1": 0.7857142857142856
     },
     "javascript": {
       "tp": 15,
@@ -4069,12 +4103,12 @@
     },
     "php": {
       "tp": 13,
-      "fp": 2,
+      "fp": 3,
       "fn_": 0,
-      "tn": 9,
-      "precision": 0.8666666666666667,
+      "tn": 8,
+      "precision": 0.8125,
       "recall": 1.0,
-      "f1": 0.9285714285714286
+      "f1": 0.896551724137931
     },
     "python": {
       "tp": 17,
@@ -4161,9 +4195,9 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 24,
+      "fp": 28,
       "fn_": 0,
-      "tn": 68,
+      "tn": 64,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -4208,21 +4242,21 @@
     },
     ">=Low": {
       "tp": 83,
-      "fp": 50,
+      "fp": 52,
       "fn_": 38,
-      "tn": 42,
-      "precision": 0.6240601503759399,
+      "tn": 40,
+      "precision": 0.6148148148148148,
       "recall": 0.6859504132231405,
-      "f1": 0.6535433070866142
+      "f1": 0.6484375
     },
     ">=Medium": {
       "tp": 83,
-      "fp": 50,
+      "fp": 52,
       "fn_": 38,
-      "tn": 42,
-      "precision": 0.6240601503759399,
+      "tn": 40,
+      "precision": 0.6148148148148148,
       "recall": 0.6859504132231405,
-      "f1": 0.6535433070866142
+      "f1": 0.6484375
     }
   }
 }

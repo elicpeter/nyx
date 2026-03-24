@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use super::ir::*;
 use super::const_prop::ConstLattice;
-use crate::cfg::Cfg;
+use crate::cfg::{BinOp, Cfg};
 use crate::symbol::Lang;
 
 /// Inferred type kind for an SSA value.
@@ -247,7 +247,7 @@ pub fn is_int_producing_callee(callee: &str) -> bool {
 /// are mapped to security-relevant types when `lang` is provided.
 pub fn analyze_types(
     body: &SsaBody,
-    _cfg: &Cfg,
+    cfg: &Cfg,
     consts: &HashMap<SsaValue, ConstLattice>,
     lang: Option<Lang>,
 ) -> TypeFactResult {
@@ -284,7 +284,23 @@ pub fn analyze_types(
                     // Defer: will be filled in second pass
                     TypeFact::unknown()
                 }
-                SsaOp::Assign(_) => TypeFact::unknown(),
+                SsaOp::Assign(_uses) => {
+                    // Binary operations: check if the CFG node has a numeric BinOp.
+                    // All bitwise, arithmetic (except Add which may be string concat),
+                    // and comparison operators always produce integers.
+                    let bin_op = cfg.node_weight(inst.cfg_node).and_then(|ni| ni.bin_op);
+                    match bin_op {
+                        Some(BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+                           | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
+                           | BinOp::LeftShift | BinOp::RightShift
+                           | BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq
+                           | BinOp::Gt | BinOp::GtEq) => {
+                            TypeFact::from_kind(TypeKind::Int)
+                        }
+                        // Add could be string concatenation — defer to operand types
+                        _ => TypeFact::unknown(),
+                    }
+                }
                 SsaOp::Phi(_) => {
                     // Defer: will be filled in second pass
                     TypeFact::unknown()

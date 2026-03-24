@@ -642,7 +642,7 @@ fn ssa_summary_backward_compat_missing_container_fields() {
 
 #[test]
 fn ssa_summary_serde_round_trip_return_abstract() {
-    use crate::abstract_interp::{AbstractValue, IntervalFact, StringFact};
+    use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, StringFact};
 
     let summary = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::Identity)],
@@ -655,6 +655,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
         return_abstract: Some(AbstractValue {
             interval: IntervalFact { lo: Some(-2_147_483_648), hi: Some(2_147_483_647) },
             string: StringFact::top(),
+            bits: BitFact::top(),
         }),
     };
     let json = serde_json::to_string(&summary).unwrap();

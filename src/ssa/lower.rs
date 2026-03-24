@@ -763,11 +763,35 @@ fn rename_variables(
                 // prior tainted definition is implicitly dead.
                 SsaOp::Const(info.const_text.clone())
             } else if info.defines.is_some() {
-                let uses: SmallVec<[SsaValue; 4]> = info
+                let mut uses: SmallVec<[SsaValue; 4]> = info
                     .uses
                     .iter()
                     .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
                     .collect();
+                // Phase 26: inject Const for binary expression literal operand.
+                // When a binary expression has one identifier and one numeric literal
+                // (e.g., `flags & 0x07`), the literal isn't in `uses`. Inject a
+                // synthetic Const instruction so the Assign has 2 uses, preventing
+                // copy propagation from eliminating the operation.
+                if uses.len() == 1 && info.bin_op.is_some() && info.bin_op_const.is_some() {
+                    let const_val = info.bin_op_const.unwrap();
+                    let const_v = SsaValue(*next_value);
+                    *next_value += 1;
+                    let const_inst = SsaInst {
+                        value: const_v,
+                        op: SsaOp::Const(Some(const_val.to_string())),
+                        cfg_node: node,
+                        var_name: None,
+                        span: info.span,
+                    };
+                    ssa_blocks[block_idx].body.push(const_inst);
+                    value_defs.push(ValueDef {
+                        var_name: None,
+                        cfg_node: node,
+                        block: block_id,
+                    });
+                    uses.push(const_v);
+                }
                 SsaOp::Assign(uses)
             } else if matches!(info.kind, StmtKind::Entry | StmtKind::Exit | StmtKind::If | StmtKind::Loop | StmtKind::Break | StmtKind::Continue | StmtKind::Return) {
                 SsaOp::Nop
@@ -1133,6 +1157,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op: None,
+            bin_op_const: None,
             managed_resource: false,
             in_defer: false,
         }

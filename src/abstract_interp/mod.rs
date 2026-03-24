@@ -4,6 +4,7 @@
 //! subdomains:
 //! - [`IntervalFact`]: numeric interval `[lo, hi]` with arithmetic transfer
 //! - [`StringFact`]: string prefix + suffix with concatenation transfer
+//! - [`BitFact`]: known-zero/known-one bit masks for bitwise transfer
 //!
 //! Abstract values are stored per-SSA-value in [`AbstractState`], which is
 //! carried through the taint analysis worklist in `SsaTaintState`. The framework
@@ -14,9 +15,11 @@
 //!
 //! Enabled by default. Set `NYX_ABSTRACT_INTERP=0` to disable.
 
+pub mod bit_domain;
 pub mod interval;
 pub mod string_domain;
 
+pub use bit_domain::BitFact;
 pub use interval::IntervalFact;
 pub use string_domain::StringFact;
 
@@ -46,6 +49,7 @@ pub fn is_enabled() -> bool {
 pub struct AbstractValue {
     pub interval: IntervalFact,
     pub string: StringFact,
+    pub bits: BitFact,
 }
 
 impl AbstractValue {
@@ -53,6 +57,7 @@ impl AbstractValue {
         Self {
             interval: IntervalFact::top(),
             string: StringFact::top(),
+            bits: BitFact::top(),
         }
     }
 
@@ -60,21 +65,23 @@ impl AbstractValue {
         Self {
             interval: IntervalFact::bottom(),
             string: StringFact::bottom(),
+            bits: BitFact::bottom(),
         }
     }
 
     pub fn is_top(&self) -> bool {
-        self.interval.is_top() && self.string.is_top()
+        self.interval.is_top() && self.string.is_top() && self.bits.is_top()
     }
 
     pub fn is_bottom(&self) -> bool {
-        self.interval.is_bottom() && self.string.is_bottom()
+        self.interval.is_bottom() && self.string.is_bottom() && self.bits.is_bottom()
     }
 
     pub fn join(&self, other: &Self) -> Self {
         Self {
             interval: self.interval.join(&other.interval),
             string: self.string.join(&other.string),
+            bits: self.bits.join(&other.bits),
         }
     }
 
@@ -82,6 +89,7 @@ impl AbstractValue {
         Self {
             interval: self.interval.meet(&other.interval),
             string: self.string.meet(&other.string),
+            bits: <BitFact as AbstractDomain>::meet(&self.bits, &other.bits),
         }
     }
 
@@ -89,11 +97,14 @@ impl AbstractValue {
         Self {
             interval: self.interval.widen(&other.interval),
             string: self.string.widen(&other.string),
+            bits: self.bits.widen(&other.bits),
         }
     }
 
     pub fn leq(&self, other: &Self) -> bool {
-        self.interval.leq(&other.interval) && self.string.leq(&other.string)
+        self.interval.leq(&other.interval)
+            && self.string.leq(&other.string)
+            && self.bits.leq(&other.bits)
     }
 }
 
@@ -267,10 +278,12 @@ mod tests {
         let a = AbstractValue {
             interval: IntervalFact::exact(1),
             string: StringFact::from_prefix("https://a.com/"),
+            bits: BitFact::top(),
         };
         let b = AbstractValue {
             interval: IntervalFact::exact(5),
             string: StringFact::from_prefix("https://b.com/"),
+            bits: BitFact::top(),
         };
         let j = a.join(&b);
         assert_eq!(j.interval.lo, Some(1));
@@ -286,6 +299,7 @@ mod tests {
                 hi: Some(5),
             },
             string: StringFact::from_prefix("hello"),
+            bits: BitFact::top(),
         };
         let new = AbstractValue {
             interval: IntervalFact {
@@ -293,6 +307,7 @@ mod tests {
                 hi: Some(10),
             },
             string: StringFact::from_prefix("hello"),
+            bits: BitFact::top(),
         };
         let w = old.widen(&new);
         assert_eq!(w.interval.lo, Some(0)); // stable
@@ -312,6 +327,7 @@ mod tests {
         let val = AbstractValue {
             interval: IntervalFact::exact(10),
             string: StringFact::top(),
+            bits: BitFact::top(),
         };
         state.set(SsaValue(1), val.clone());
         assert_eq!(state.get(SsaValue(1)), val);
@@ -325,6 +341,7 @@ mod tests {
             AbstractValue {
                 interval: IntervalFact::exact(5),
                 string: StringFact::top(),
+                bits: BitFact::top(),
             },
         );
         assert!(!state.get(SsaValue(1)).is_top());
@@ -341,6 +358,7 @@ mod tests {
             AbstractValue {
                 interval: IntervalFact::exact(3),
                 string: StringFact::top(),
+                bits: BitFact::top(),
             },
         );
         a.set(
@@ -348,6 +366,7 @@ mod tests {
             AbstractValue {
                 interval: IntervalFact::exact(10),
                 string: StringFact::top(),
+                bits: BitFact::top(),
             },
         );
 
@@ -357,6 +376,7 @@ mod tests {
             AbstractValue {
                 interval: IntervalFact::exact(7),
                 string: StringFact::top(),
+                bits: BitFact::top(),
             },
         );
         // SsaValue(2) not in b → join drops it (Top)
@@ -381,6 +401,7 @@ mod tests {
                     hi: Some(5),
                 },
                 string: StringFact::top(),
+                bits: BitFact::top(),
             },
         );
 
@@ -393,6 +414,7 @@ mod tests {
                     hi: Some(10),
                 },
                 string: StringFact::top(),
+                bits: BitFact::top(),
             },
         );
 

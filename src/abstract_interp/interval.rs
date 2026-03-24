@@ -267,6 +267,210 @@ impl IntervalFact {
             _ => Self::top(),
         }
     }
+
+    // ── Bitwise transfer functions ──────────────────────────────────────
+
+    /// Bitwise AND: `a & b`.
+    ///
+    /// - Singletons: exact computation.
+    /// - `x & 0` or `0 & x` → `[0, 0]`.
+    /// - One non-negative singleton mask `m`: `[0, m]` regardless of other
+    ///   operand's sign (two's complement AND with a non-negative mask always
+    ///   produces a non-negative result bounded by the mask).
+    /// - Both non-negative: `[0, min(a.hi, b.hi)]` — AND can only clear bits.
+    pub fn bit_and(&self, other: &Self) -> Self {
+        if self.is_bottom() || other.is_bottom() {
+            return Self::bottom();
+        }
+        // Exact singletons
+        if let (Some(a), Some(b)) = (self.as_singleton(), other.as_singleton()) {
+            return Self::exact(a & b);
+        }
+        // x & 0 = 0
+        if self.as_singleton() == Some(0) || other.as_singleton() == Some(0) {
+            return Self::exact(0);
+        }
+        // Non-negative singleton mask: x & m is always in [0, m] regardless
+        // of x's sign (two's complement AND with non-negative mask clears
+        // the sign bit, producing a non-negative result ≤ mask).
+        if let Some(m) = other.as_singleton() {
+            if m >= 0 {
+                return Self { lo: Some(0), hi: Some(m) };
+            }
+        }
+        if let Some(m) = self.as_singleton() {
+            if m >= 0 {
+                return Self { lo: Some(0), hi: Some(m) };
+            }
+        }
+        // Both non-negative
+        let a_nonneg = self.lo.is_some_and(|l| l >= 0);
+        let b_nonneg = other.lo.is_some_and(|l| l >= 0);
+        if a_nonneg && b_nonneg {
+            let hi = match (self.hi, other.hi) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            };
+            return Self { lo: Some(0), hi };
+        }
+        Self::top()
+    }
+
+    /// Bitwise OR: `a | b`.
+    ///
+    /// - Singletons: exact computation.
+    /// - `x | 0` → `x`, `0 | x` → `x`.
+    /// - Both non-negative with known upper bounds: `[max(a.lo, b.lo),
+    ///   next_pow2_minus1(max(a.hi, b.hi))]` — OR can set any bit below
+    ///   the highest set bit of either operand.
+    pub fn bit_or(&self, other: &Self) -> Self {
+        if self.is_bottom() || other.is_bottom() {
+            return Self::bottom();
+        }
+        if let (Some(a), Some(b)) = (self.as_singleton(), other.as_singleton()) {
+            return Self::exact(a | b);
+        }
+        // x | 0 = x
+        if other.as_singleton() == Some(0) {
+            return self.clone();
+        }
+        if self.as_singleton() == Some(0) {
+            return other.clone();
+        }
+        // Both non-negative with bounded hi
+        let a_nonneg = self.lo.is_some_and(|l| l >= 0);
+        let b_nonneg = other.lo.is_some_and(|l| l >= 0);
+        if a_nonneg && b_nonneg {
+            if let (Some(a_hi), Some(b_hi)) = (self.hi, other.hi) {
+                let max_hi = a_hi.max(b_hi);
+                let lo = self.lo.unwrap_or(0).max(other.lo.unwrap_or(0));
+                return Self {
+                    lo: Some(lo),
+                    hi: Some(next_pow2_minus1(max_hi)),
+                };
+            }
+        }
+        Self::top()
+    }
+
+    /// Bitwise XOR: `a ^ b`.
+    ///
+    /// - Singletons: exact computation.
+    /// - `x ^ 0` → `x`, `0 ^ x` → `x`.
+    /// - Same singleton: `x ^ x` → `[0, 0]`.
+    /// - Both non-negative with known upper bounds:
+    ///   `[0, next_pow2_minus1(max(a.hi, b.hi))]`.
+    pub fn bit_xor(&self, other: &Self) -> Self {
+        if self.is_bottom() || other.is_bottom() {
+            return Self::bottom();
+        }
+        if let (Some(a), Some(b)) = (self.as_singleton(), other.as_singleton()) {
+            return Self::exact(a ^ b);
+        }
+        // x ^ 0 = x
+        if other.as_singleton() == Some(0) {
+            return self.clone();
+        }
+        if self.as_singleton() == Some(0) {
+            return other.clone();
+        }
+        // Both non-negative with bounded hi
+        let a_nonneg = self.lo.is_some_and(|l| l >= 0);
+        let b_nonneg = other.lo.is_some_and(|l| l >= 0);
+        if a_nonneg && b_nonneg {
+            if let (Some(a_hi), Some(b_hi)) = (self.hi, other.hi) {
+                let max_hi = a_hi.max(b_hi);
+                return Self {
+                    lo: Some(0),
+                    hi: Some(next_pow2_minus1(max_hi)),
+                };
+            }
+        }
+        Self::top()
+    }
+
+    /// Left shift: `a << b`.
+    ///
+    /// - Both singletons with shift in `0..63`: exact via `checked_shl`.
+    /// - Non-negative `a`, shift range in `0..63`:
+    ///   `[a.lo << b.lo, a.hi << b.hi]` with overflow checking.
+    pub fn left_shift(&self, shift: &Self) -> Self {
+        if self.is_bottom() || shift.is_bottom() {
+            return Self::bottom();
+        }
+        match (self.lo, self.hi, shift.lo, shift.hi) {
+            // Both bounded
+            (Some(a_lo), Some(a_hi), Some(s_lo), Some(s_hi))
+                if a_lo >= 0 && s_lo >= 0 && s_hi <= 63 =>
+            {
+                // lo: smallest value (a_lo) shifted by smallest amount (s_lo)
+                let result_lo = (a_lo as u64).checked_shl(s_lo as u32);
+                // hi: largest value (a_hi) shifted by largest amount (s_hi)
+                let result_hi = (a_hi as u64).checked_shl(s_hi as u32);
+                match (result_lo, result_hi) {
+                    (Some(lo), Some(hi)) if lo <= i64::MAX as u64 && hi <= i64::MAX as u64 => {
+                        Self {
+                            lo: Some(lo as i64),
+                            hi: Some(hi as i64),
+                        }
+                    }
+                    _ => Self::top(), // overflow
+                }
+            }
+            _ => Self::top(),
+        }
+    }
+
+    /// Right shift: `a >> b` (arithmetic).
+    ///
+    /// - Both singletons with shift in `0..63`: exact via `checked_shr`.
+    /// - Non-negative `a`, bounded shift: `[a.lo >> s.hi, a.hi >> s.lo]`.
+    pub fn right_shift(&self, shift: &Self) -> Self {
+        if self.is_bottom() || shift.is_bottom() {
+            return Self::bottom();
+        }
+        match (self.lo, self.hi, shift.lo, shift.hi) {
+            (Some(a_lo), Some(a_hi), Some(s_lo), Some(s_hi))
+                if a_lo >= 0 && s_lo >= 0 && s_hi <= 63 =>
+            {
+                // Right shift reduces magnitude:
+                // min result: largest dividend >> largest shift
+                // max result: largest dividend >> smallest shift
+                Self {
+                    lo: Some(a_lo >> s_hi), // max shift → min result
+                    hi: Some(a_hi >> s_lo), // min shift → max result
+                }
+            }
+            _ => Self::top(),
+        }
+    }
+
+    /// Extract singleton value if `lo == hi`.
+    fn as_singleton(&self) -> Option<i64> {
+        match (self.lo, self.hi) {
+            (Some(lo), Some(hi)) if lo == hi => Some(lo),
+            _ => None,
+        }
+    }
+}
+
+/// Smallest `2^k - 1 ≥ n` for non-negative `n`.
+///
+/// Used to bound OR and XOR results: the result of `a | b` or `a ^ b` where
+/// both operands are in `[0, n]` is at most `next_pow2_minus1(n)`.
+fn next_pow2_minus1(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    // Find the position of the highest set bit
+    let bits_needed = 64 - (n as u64).leading_zeros();
+    if bits_needed >= 63 {
+        // Would overflow i64 → use max positive i64
+        return i64::MAX;
+    }
+    (1i64 << bits_needed) - 1
 }
 
 impl Lattice for IntervalFact {
@@ -607,5 +811,167 @@ mod tests {
         let r = a.mul(&b);
         // At least one bound should be None due to overflow
         assert!(r.lo.is_none() || r.hi.is_none());
+    }
+
+    // ── Phase 26: Bitwise interval transfer tests ──────────────────────
+
+    #[test]
+    fn bit_and_constant_mask() {
+        let x = IntervalFact { lo: Some(0), hi: Some(1000) };
+        let mask = IntervalFact::exact(0xFF);
+        let r = x.bit_and(&mask);
+        assert_eq!(r.lo, Some(0));
+        assert_eq!(r.hi, Some(0xFF));
+    }
+
+    #[test]
+    fn bit_and_zero() {
+        let x = IntervalFact { lo: Some(0), hi: Some(1000) };
+        let zero = IntervalFact::exact(0);
+        assert_eq!(x.bit_and(&zero), IntervalFact::exact(0));
+        assert_eq!(zero.bit_and(&x), IntervalFact::exact(0));
+    }
+
+    #[test]
+    fn bit_and_negative_operand_with_nonneg_mask() {
+        // Even with negative input, AND with non-negative singleton mask
+        // always produces [0, mask] (two's complement guarantee).
+        let x = IntervalFact { lo: Some(-5), hi: Some(10) };
+        let mask = IntervalFact::exact(0xFF);
+        let r = x.bit_and(&mask);
+        assert_eq!(r.lo, Some(0));
+        assert_eq!(r.hi, Some(0xFF));
+    }
+
+    #[test]
+    fn bit_and_both_negative_no_singleton() {
+        // No singleton mask available and negative operands → Top
+        let a = IntervalFact { lo: Some(-100), hi: Some(-1) };
+        let b = IntervalFact { lo: Some(-50), hi: Some(-10) };
+        assert!(a.bit_and(&b).is_top());
+    }
+
+    #[test]
+    fn bit_and_singletons() {
+        assert_eq!(
+            IntervalFact::exact(0xFF).bit_and(&IntervalFact::exact(0x0F)),
+            IntervalFact::exact(0x0F)
+        );
+    }
+
+    #[test]
+    fn bit_or_basic() {
+        let a = IntervalFact { lo: Some(0), hi: Some(0xF0) };
+        let b = IntervalFact { lo: Some(0), hi: Some(0x0F) };
+        let r = a.bit_or(&b);
+        assert_eq!(r.lo, Some(0));
+        // next_pow2_minus1(0xF0) = 0xFF
+        assert_eq!(r.hi, Some(0xFF));
+    }
+
+    #[test]
+    fn bit_or_zero_identity() {
+        let x = IntervalFact { lo: Some(3), hi: Some(10) };
+        let zero = IntervalFact::exact(0);
+        assert_eq!(x.bit_or(&zero), x);
+        assert_eq!(zero.bit_or(&x), x);
+    }
+
+    #[test]
+    fn bit_or_concrete_singletons() {
+        assert_eq!(
+            IntervalFact::exact(0xF0).bit_or(&IntervalFact::exact(0x0F)),
+            IntervalFact::exact(0xFF)
+        );
+    }
+
+    #[test]
+    fn bit_xor_basic() {
+        let a = IntervalFact { lo: Some(0), hi: Some(255) };
+        let b = IntervalFact { lo: Some(0), hi: Some(255) };
+        let r = a.bit_xor(&b);
+        assert_eq!(r.lo, Some(0));
+        assert_eq!(r.hi, Some(255)); // next_pow2_minus1(255) = 255
+    }
+
+    #[test]
+    fn bit_xor_zero_identity() {
+        let x = IntervalFact { lo: Some(3), hi: Some(10) };
+        let zero = IntervalFact::exact(0);
+        assert_eq!(x.bit_xor(&zero), x);
+        assert_eq!(zero.bit_xor(&x), x);
+    }
+
+    #[test]
+    fn bit_xor_same_singleton_to_zero() {
+        assert_eq!(
+            IntervalFact::exact(42).bit_xor(&IntervalFact::exact(42)),
+            IntervalFact::exact(0)
+        );
+    }
+
+    #[test]
+    fn left_shift_basic() {
+        assert_eq!(
+            IntervalFact::exact(1).left_shift(&IntervalFact::exact(3)),
+            IntervalFact::exact(8)
+        );
+    }
+
+    #[test]
+    fn left_shift_range() {
+        let x = IntervalFact { lo: Some(0), hi: Some(7) };
+        let shift = IntervalFact { lo: Some(1), hi: Some(2) };
+        let r = x.left_shift(&shift);
+        assert_eq!(r.lo, Some(0));
+        assert_eq!(r.hi, Some(28)); // 7 << 2
+    }
+
+    #[test]
+    fn left_shift_invalid_shift() {
+        let x = IntervalFact::exact(1);
+        assert!(x.left_shift(&IntervalFact::exact(64)).is_top());
+        assert!(x.left_shift(&IntervalFact::exact(-1)).is_top());
+    }
+
+    #[test]
+    fn left_shift_overflow_behavior() {
+        // Large value shifted would overflow i64
+        let x = IntervalFact::exact(i64::MAX);
+        let shift = IntervalFact::exact(1);
+        assert!(x.left_shift(&shift).is_top());
+    }
+
+    #[test]
+    fn right_shift_basic() {
+        assert_eq!(
+            IntervalFact::exact(16).right_shift(&IntervalFact::exact(2)),
+            IntervalFact::exact(4)
+        );
+    }
+
+    #[test]
+    fn right_shift_singleton_exactness() {
+        assert_eq!(
+            IntervalFact::exact(255).right_shift(&IntervalFact::exact(4)),
+            IntervalFact::exact(15)
+        );
+    }
+
+    #[test]
+    fn right_shift_range() {
+        let x = IntervalFact { lo: Some(0), hi: Some(255) };
+        let shift = IntervalFact { lo: Some(1), hi: Some(3) };
+        let r = x.right_shift(&shift);
+        // lo: 0 >> 3 = 0, hi: 255 >> 1 = 127
+        assert_eq!(r.lo, Some(0));
+        assert_eq!(r.hi, Some(127));
+    }
+
+    #[test]
+    fn right_shift_negative_dividend() {
+        let x = IntervalFact { lo: Some(-10), hi: Some(10) };
+        let shift = IntervalFact::exact(1);
+        assert!(x.right_shift(&shift).is_top());
     }
 }

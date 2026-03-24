@@ -8,7 +8,7 @@ use crate::ssa::ir::{BlockId, SsaValue};
 /// Maximum expression tree depth before collapsing to `Unknown`.
 pub const MAX_EXPR_DEPTH: u32 = 32;
 
-/// Arithmetic operator for symbolic expressions.
+/// Binary operator for symbolic expressions.
 ///
 /// Local to the symex module; converted from `cfg::BinOp` via `From`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -18,6 +18,19 @@ pub enum Op {
     Mul,
     Div,
     Mod,
+    // Bitwise
+    BitAnd,
+    BitOr,
+    BitXor,
+    LeftShift,
+    RightShift,
+    // Comparison (produce 1/0 as integer values)
+    Eq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
 }
 
 impl From<cfg::BinOp> for Op {
@@ -28,6 +41,17 @@ impl From<cfg::BinOp> for Op {
             cfg::BinOp::Mul => Op::Mul,
             cfg::BinOp::Div => Op::Div,
             cfg::BinOp::Mod => Op::Mod,
+            cfg::BinOp::BitAnd => Op::BitAnd,
+            cfg::BinOp::BitOr => Op::BitOr,
+            cfg::BinOp::BitXor => Op::BitXor,
+            cfg::BinOp::LeftShift => Op::LeftShift,
+            cfg::BinOp::RightShift => Op::RightShift,
+            cfg::BinOp::Eq => Op::Eq,
+            cfg::BinOp::NotEq => Op::NotEq,
+            cfg::BinOp::Lt => Op::Lt,
+            cfg::BinOp::LtEq => Op::LtEq,
+            cfg::BinOp::Gt => Op::Gt,
+            cfg::BinOp::GtEq => Op::GtEq,
         }
     }
 }
@@ -40,6 +64,17 @@ impl fmt::Display for Op {
             Op::Mul => write!(f, "*"),
             Op::Div => write!(f, "/"),
             Op::Mod => write!(f, "%"),
+            Op::BitAnd => write!(f, "&"),
+            Op::BitOr => write!(f, "|"),
+            Op::BitXor => write!(f, "^"),
+            Op::LeftShift => write!(f, "<<"),
+            Op::RightShift => write!(f, ">>"),
+            Op::Eq => write!(f, "=="),
+            Op::NotEq => write!(f, "!="),
+            Op::Lt => write!(f, "<"),
+            Op::LtEq => write!(f, "<="),
+            Op::Gt => write!(f, ">"),
+            Op::GtEq => write!(f, ">="),
         }
     }
 }
@@ -169,6 +204,32 @@ pub fn mk_binop(op: Op, lhs: SymbolicValue, rhs: SymbolicValue) -> SymbolicValue
                     a.checked_rem(*b)
                 }
             }
+            // Bitwise — &, |, ^ cannot overflow on i64
+            Op::BitAnd => Some(*a & *b),
+            Op::BitOr => Some(*a | *b),
+            Op::BitXor => Some(*a ^ *b),
+            // Shifts — bounds-checked to 0..=63 (i64 width)
+            Op::LeftShift => {
+                if *b < 0 || *b > 63 {
+                    None
+                } else {
+                    a.checked_shl(*b as u32)
+                }
+            }
+            Op::RightShift => {
+                if *b < 0 || *b > 63 {
+                    None
+                } else {
+                    a.checked_shr(*b as u32)
+                }
+            }
+            // Comparisons — produce 1 (true) or 0 (false)
+            Op::Eq => Some(if *a == *b { 1 } else { 0 }),
+            Op::NotEq => Some(if *a != *b { 1 } else { 0 }),
+            Op::Lt => Some(if *a < *b { 1 } else { 0 }),
+            Op::LtEq => Some(if *a <= *b { 1 } else { 0 }),
+            Op::Gt => Some(if *a > *b { 1 } else { 0 }),
+            Op::GtEq => Some(if *a >= *b { 1 } else { 0 }),
         };
         return match result {
             Some(n) => SymbolicValue::Concrete(n),
@@ -736,6 +797,154 @@ mod tests {
         assert_eq!(Op::from(cfg::BinOp::Mul), Op::Mul);
         assert_eq!(Op::from(cfg::BinOp::Div), Op::Div);
         assert_eq!(Op::from(cfg::BinOp::Mod), Op::Mod);
+    }
+
+    // ── Phase 26: Bitwise and comparison operation tests ──────────────
+
+    #[test]
+    fn op_from_cfg_binop_extended() {
+        assert_eq!(Op::from(cfg::BinOp::BitAnd), Op::BitAnd);
+        assert_eq!(Op::from(cfg::BinOp::BitOr), Op::BitOr);
+        assert_eq!(Op::from(cfg::BinOp::BitXor), Op::BitXor);
+        assert_eq!(Op::from(cfg::BinOp::LeftShift), Op::LeftShift);
+        assert_eq!(Op::from(cfg::BinOp::RightShift), Op::RightShift);
+        assert_eq!(Op::from(cfg::BinOp::Eq), Op::Eq);
+        assert_eq!(Op::from(cfg::BinOp::NotEq), Op::NotEq);
+        assert_eq!(Op::from(cfg::BinOp::Lt), Op::Lt);
+        assert_eq!(Op::from(cfg::BinOp::LtEq), Op::LtEq);
+        assert_eq!(Op::from(cfg::BinOp::Gt), Op::Gt);
+        assert_eq!(Op::from(cfg::BinOp::GtEq), Op::GtEq);
+    }
+
+    #[test]
+    fn display_bitwise_ops() {
+        assert_eq!(format!("{}", Op::BitAnd), "&");
+        assert_eq!(format!("{}", Op::BitOr), "|");
+        assert_eq!(format!("{}", Op::BitXor), "^");
+        assert_eq!(format!("{}", Op::LeftShift), "<<");
+        assert_eq!(format!("{}", Op::RightShift), ">>");
+    }
+
+    #[test]
+    fn display_comparison_ops() {
+        assert_eq!(format!("{}", Op::Eq), "==");
+        assert_eq!(format!("{}", Op::NotEq), "!=");
+        assert_eq!(format!("{}", Op::Lt), "<");
+        assert_eq!(format!("{}", Op::LtEq), "<=");
+        assert_eq!(format!("{}", Op::Gt), ">");
+        assert_eq!(format!("{}", Op::GtEq), ">=");
+    }
+
+    #[test]
+    fn concrete_fold_bit_and() {
+        assert_eq!(
+            mk_binop(Op::BitAnd, c(0xFF), c(0x0F)),
+            c(0x0F)
+        );
+        assert_eq!(mk_binop(Op::BitAnd, c(-1), c(0x07)), c(0x07));
+    }
+
+    #[test]
+    fn concrete_fold_bit_or() {
+        assert_eq!(
+            mk_binop(Op::BitOr, c(0xF0), c(0x0F)),
+            c(0xFF)
+        );
+    }
+
+    #[test]
+    fn concrete_fold_bit_xor() {
+        assert_eq!(
+            mk_binop(Op::BitXor, c(0xFF), c(0x0F)),
+            c(0xF0)
+        );
+        // x ^ x = 0
+        assert_eq!(mk_binop(Op::BitXor, c(42), c(42)), c(0));
+    }
+
+    #[test]
+    fn concrete_fold_left_shift() {
+        assert_eq!(mk_binop(Op::LeftShift, c(1), c(3)), c(8));
+        assert_eq!(mk_binop(Op::LeftShift, c(0x0F), c(4)), c(0xF0));
+    }
+
+    #[test]
+    fn concrete_fold_right_shift() {
+        assert_eq!(mk_binop(Op::RightShift, c(16), c(2)), c(4));
+        assert_eq!(mk_binop(Op::RightShift, c(0xFF), c(4)), c(0x0F));
+    }
+
+    #[test]
+    fn left_shift_negative_amount() {
+        assert_eq!(mk_binop(Op::LeftShift, c(1), c(-1)), SymbolicValue::Unknown);
+    }
+
+    #[test]
+    fn left_shift_amount_64() {
+        assert_eq!(mk_binop(Op::LeftShift, c(1), c(64)), SymbolicValue::Unknown);
+    }
+
+    #[test]
+    fn left_shift_amount_63() {
+        // Max valid shift — should not panic
+        let result = mk_binop(Op::LeftShift, c(1), c(63));
+        assert_eq!(result, c(1i64 << 63));
+    }
+
+    #[test]
+    fn right_shift_negative_amount() {
+        assert_eq!(mk_binop(Op::RightShift, c(1), c(-1)), SymbolicValue::Unknown);
+    }
+
+    #[test]
+    fn right_shift_amount_64() {
+        assert_eq!(mk_binop(Op::RightShift, c(1), c(64)), SymbolicValue::Unknown);
+    }
+
+    #[test]
+    fn concrete_fold_eq_true() {
+        assert_eq!(mk_binop(Op::Eq, c(5), c(5)), c(1));
+    }
+
+    #[test]
+    fn concrete_fold_eq_false() {
+        assert_eq!(mk_binop(Op::Eq, c(5), c(3)), c(0));
+    }
+
+    #[test]
+    fn concrete_fold_neq() {
+        assert_eq!(mk_binop(Op::NotEq, c(5), c(3)), c(1));
+        assert_eq!(mk_binop(Op::NotEq, c(5), c(5)), c(0));
+    }
+
+    #[test]
+    fn concrete_fold_lt() {
+        assert_eq!(mk_binop(Op::Lt, c(3), c(5)), c(1));
+        assert_eq!(mk_binop(Op::Lt, c(5), c(3)), c(0));
+        assert_eq!(mk_binop(Op::Lt, c(5), c(5)), c(0));
+    }
+
+    #[test]
+    fn concrete_fold_lteq() {
+        assert_eq!(mk_binop(Op::LtEq, c(3), c(3)), c(1));
+        assert_eq!(mk_binop(Op::LtEq, c(4), c(3)), c(0));
+    }
+
+    #[test]
+    fn concrete_fold_gt() {
+        assert_eq!(mk_binop(Op::Gt, c(5), c(3)), c(1));
+        assert_eq!(mk_binop(Op::Gt, c(3), c(5)), c(0));
+    }
+
+    #[test]
+    fn concrete_fold_gteq() {
+        assert_eq!(mk_binop(Op::GtEq, c(3), c(3)), c(1));
+        assert_eq!(mk_binop(Op::GtEq, c(2), c(3)), c(0));
+    }
+
+    /// Helper: shorthand for `SymbolicValue::Concrete`.
+    fn c(n: i64) -> SymbolicValue {
+        SymbolicValue::Concrete(n)
     }
 
     // ── Phase 22: String operation tests ──────────────────────────────
