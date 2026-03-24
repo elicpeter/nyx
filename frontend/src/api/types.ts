@@ -387,3 +387,192 @@ export interface ScanLogEntry {
   file_path?: string;
   detail?: string;
 }
+
+// ── Debug view types ─────────────────────────────────────────────────────────
+
+export interface FunctionInfo {
+  name: string;
+  namespace: string;
+  param_count: number;
+  line: number;
+  source_caps: string[];
+  sanitizer_caps: string[];
+  sink_caps: string[];
+}
+
+// CFG
+export interface CfgNodeView {
+  id: number;
+  kind: string;
+  span: [number, number];
+  line: number;
+  defines?: string;
+  uses: string[];
+  callee?: string;
+  labels: string[];
+  condition_text?: string;
+  enclosing_func?: string;
+}
+
+export interface CfgEdgeView {
+  source: number;
+  target: number;
+  kind: string;
+}
+
+export interface CfgGraphView {
+  nodes: CfgNodeView[];
+  edges: CfgEdgeView[];
+  entry: number;
+}
+
+// SSA
+export interface SsaInstView {
+  value: number;
+  op: string;
+  operands: string[];
+  var_name?: string;
+  span: [number, number];
+  line: number;
+}
+
+export interface SsaBlockView {
+  id: number;
+  phis: SsaInstView[];
+  body: SsaInstView[];
+  terminator: string;
+  preds: number[];
+  succs: number[];
+}
+
+export interface SsaBodyView {
+  blocks: SsaBlockView[];
+  entry: number;
+  num_values: number;
+}
+
+// Taint
+export interface TaintValueView {
+  ssa_value: number;
+  var_name?: string;
+  caps: string[];
+  uses_summary: boolean;
+}
+
+export interface TaintBlockStateView {
+  block_id: number;
+  values: TaintValueView[];
+  validated_must: number;
+  validated_may: number;
+}
+
+export interface TaintEventView {
+  sink_node: number;
+  sink_caps: string[];
+  tainted_values: TaintValueView[];
+  all_validated: boolean;
+  uses_summary: boolean;
+}
+
+export interface TaintAnalysisView {
+  block_states: TaintBlockStateView[];
+  events: TaintEventView[];
+}
+
+// Abstract Interpretation
+export interface AbstractValueView {
+  ssa_value: number;
+  var_name?: string;
+  interval_lo?: number;
+  interval_hi?: number;
+  string_prefix?: string;
+  string_suffix?: string;
+  known_zero: number;
+  known_one: number;
+}
+
+export interface AbstractBlockView {
+  block_id: number;
+  values: AbstractValueView[];
+}
+
+export interface AbstractInterpView {
+  blocks: AbstractBlockView[];
+}
+
+// Symbolic Execution
+export interface SymexValueView {
+  ssa_value: number;
+  var_name?: string;
+  expression: string;
+}
+
+export interface PathConstraintView {
+  block: number;
+  condition: string;
+  polarity: boolean;
+}
+
+export interface SymexView {
+  values: SymexValueView[];
+  path_constraints: PathConstraintView[];
+  tainted_roots: number[];
+}
+
+// Call Graph
+export interface CallGraphNodeView {
+  id: number;
+  name: string;
+  file: string;
+  lang: string;
+  namespace: string;
+  arity?: number;
+}
+
+export interface CallGraphEdgeView {
+  source: number;
+  target: number;
+  call_site: string;
+}
+
+export interface CallGraphView {
+  nodes: CallGraphNodeView[];
+  edges: CallGraphEdgeView[];
+  sccs: number[][];
+  unresolved_count: number;
+  ambiguous_count: number;
+}
+
+// Summaries
+export interface ParamReturnView {
+  param_index: number;
+  transform: string;
+}
+
+export interface ParamSinkView {
+  param_index: number;
+  sink_caps: string[];
+}
+
+export interface SsaSummaryView {
+  param_to_return: ParamReturnView[];
+  param_to_sink: ParamSinkView[];
+  source_caps: string[];
+}
+
+export interface FuncSummaryView {
+  name: string;
+  file_path: string;
+  lang: string;
+  namespace: string;
+  arity?: number;
+  param_count: number;
+  source_caps: string[];
+  sanitizer_caps: string[];
+  sink_caps: string[];
+  propagates_taint: boolean;
+  propagating_params: number[];
+  tainted_sink_params: number[];
+  callees: string[];
+  ssa_summary?: SsaSummaryView;
+}

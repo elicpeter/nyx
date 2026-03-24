@@ -1,5 +1,6 @@
 pub mod app;
 pub mod assets;
+pub mod debug;
 pub mod jobs;
 pub mod models;
 pub mod progress;

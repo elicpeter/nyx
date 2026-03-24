@@ -68,6 +68,11 @@ impl SmallBitSet {
     pub fn is_superset_of(self, other: Self) -> bool {
         other.is_subset_of(self)
     }
+
+    /// Raw bits for serialization/debug display.
+    pub fn bits(self) -> u64 {
+        self.0
+    }
 }
 
 /// Monotone predicate summary per variable.

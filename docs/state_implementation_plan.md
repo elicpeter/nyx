@@ -437,14 +437,9 @@ default enablement. This phase flips the default, adds per-language gating
 as a safety valve, and validates the full experience.
 
 ### Pre-Conditions (must be verified, not assumed)
-- [ ] Phase 1 complete: auth matching uses word-boundary logic
-- [ ] Phase 2 complete: Python `with` + Java TWR suppressed
-- [ ] Phase 3 complete: Go `defer` suppressed
-- [ ] Phase 4 complete: Rust RAII + C++ smart pointers suppressed
-- [ ] Phase 5 complete: console rendering + benchmark data available
-- [ ] Phase 6 complete: ≥60% hard expectations, all 10 languages tested
+- [ ] All other phases are complete (1 - 13 skipping 7 (this one))
 - [ ] Benchmark overhead: <10% of full scan time
-- [ ] Benchmark corpus: no new FPs from state analysis
+- [ ] Benchmark corpus: no new FPs from state analysis (there is fp's in tests/benchmark/... but they might be because the benchmark isn't expecting state, please look at state findings and determine if they are true fp or not)
 
 ### Deliverables
 
