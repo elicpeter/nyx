@@ -920,10 +920,28 @@ fn rename_variables(
                 }
             }
 
+            // Lower structured condition from CFG metadata
+            let cond_info = &cfg[cond_node];
+            let condition = if cond_info.condition_text.is_some()
+                && !cond_info.condition_vars.is_empty()
+            {
+                let expr = crate::constraint::lower::lower_condition_with_stacks(
+                    cond_info, var_stacks,
+                );
+                if matches!(expr, crate::constraint::lower::ConditionExpr::Unknown) {
+                    None
+                } else {
+                    Some(Box::new(expr))
+                }
+            } else {
+                None
+            };
+
             Terminator::Branch {
                 cond: cond_node,
                 true_blk: BlockId(true_blk as u32),
                 false_blk: BlockId(false_blk as u32),
+                condition,
             }
         } else {
             // More than 2 successors — use Goto to first (shouldn't happen in practice)

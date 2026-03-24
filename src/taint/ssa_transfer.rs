@@ -910,7 +910,7 @@ fn compute_succ_states(
     exit_state: &SsaTaintState,
 ) -> SmallVec<[(BlockId, SsaTaintState); 2]> {
     match &block.terminator {
-        Terminator::Branch { cond, true_blk, false_blk } => {
+        Terminator::Branch { cond, true_blk, false_blk, condition } => {
             let cond_info = &cfg[*cond];
             if cond_info.kind == crate::cfg::StmtKind::If && !cond_info.condition_vars.is_empty() {
                 let cond_text = cond_info.condition_text.as_deref().unwrap_or("");
@@ -980,9 +980,15 @@ fn compute_succ_states(
                 // that variable incorporates `has_semantic_negation` which is a
                 // predicate-system concern, not a constraint-system concern.
                 if true_state.path_env.is_some() || false_state.path_env.is_some() {
-                    let cond_expr = constraint::lower_condition(
-                        cond_info, ssa, block.id, transfer.const_values,
-                    );
+                    // Prefer pre-lowered structured condition from terminator;
+                    // fall back to text-based lowering for backward compat.
+                    let cond_expr = if let Some(pre_lowered) = condition {
+                        (**pre_lowered).clone()
+                    } else {
+                        constraint::lower_condition(
+                            cond_info, ssa, block.id, transfer.const_values,
+                        )
+                    };
                     if !matches!(cond_expr, constraint::ConditionExpr::Unknown) {
                         if let Some(ref mut env) = true_state.path_env {
                             *env = constraint::refine_env(env, &cond_expr, true);

@@ -806,3 +806,278 @@ fn pathenv_seed_from_optimization() {
     assert!(f1.types.contains(&TypeKind::String));
     assert_eq!(f1.null, Nullability::NonNull);
 }
+
+// ── Relational constraint tests ────────────────────────────────────────
+
+#[test]
+fn pathenv_relational_lt_lt_contradiction() {
+    // a < b then b < a → unsat (both strict)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    env.assert_relational(a, RelOp::Lt, b);
+    assert!(!env.is_unsat());
+    env.assert_relational(b, RelOp::Lt, a);
+    assert!(env.is_unsat());
+}
+
+#[test]
+fn pathenv_relational_lt_le_contradiction() {
+    // a < b then b <= a → unsat (one strict suffices)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    env.assert_relational(a, RelOp::Lt, b);
+    assert!(!env.is_unsat());
+    env.assert_relational(b, RelOp::Le, a);
+    assert!(env.is_unsat());
+}
+
+#[test]
+fn pathenv_relational_le_lt_contradiction() {
+    // a <= b then b < a → unsat (symmetric)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    env.assert_relational(a, RelOp::Le, b);
+    assert!(!env.is_unsat());
+    env.assert_relational(b, RelOp::Lt, a);
+    assert!(env.is_unsat());
+}
+
+#[test]
+fn pathenv_relational_le_le_not_contradiction() {
+    // a <= b then b <= a → NOT unsat (a == b is satisfiable)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    env.assert_relational(a, RelOp::Le, b);
+    assert!(!env.is_unsat());
+    env.assert_relational(b, RelOp::Le, a);
+    assert!(!env.is_unsat());
+}
+
+#[test]
+fn pathenv_relational_transitive_cycle() {
+    // a < b, b < c, c < a → unsat (cycle with strict edge)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    let c = SsaValue(2);
+    env.assert_relational(a, RelOp::Lt, b);
+    assert!(!env.is_unsat());
+    env.assert_relational(b, RelOp::Lt, c);
+    assert!(!env.is_unsat());
+    env.assert_relational(c, RelOp::Lt, a);
+    assert!(env.is_unsat());
+}
+
+#[test]
+fn pathenv_relational_transitive_all_le_cycle() {
+    // a <= b, b <= c, c <= a → NOT unsat (all equal is satisfiable)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    let c = SsaValue(2);
+    env.assert_relational(a, RelOp::Le, b);
+    env.assert_relational(b, RelOp::Le, c);
+    env.assert_relational(c, RelOp::Le, a);
+    assert!(!env.is_unsat());
+}
+
+#[test]
+fn pathenv_relational_cross_interval_refine_strict() {
+    // a < b with b ∈ [0, 10] → a.hi = 9 (strict: h-1)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    let mut b_fact = ValueFact::top();
+    b_fact.lo = Some(0);
+    b_fact.hi = Some(10);
+    env.refine(b, &b_fact);
+    env.assert_relational(a, RelOp::Lt, b);
+    let fa = env.get(a);
+    assert_eq!(fa.hi, Some(9));
+}
+
+#[test]
+fn pathenv_relational_cross_interval_refine_nonstrict() {
+    // a <= b with b ∈ [0, 10] → a.hi = 10 (non-strict)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    let mut b_fact = ValueFact::top();
+    b_fact.lo = Some(0);
+    b_fact.hi = Some(10);
+    env.refine(b, &b_fact);
+    env.assert_relational(a, RelOp::Le, b);
+    let fa = env.get(a);
+    assert_eq!(fa.hi, Some(10));
+}
+
+#[test]
+fn pathenv_relational_cross_interval_refine_reverse() {
+    // a < b with a ∈ [5, 20] → b.lo = 6 (strict: l+1)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    let mut a_fact = ValueFact::top();
+    a_fact.lo = Some(5);
+    a_fact.hi = Some(20);
+    env.refine(a, &a_fact);
+    env.assert_relational(a, RelOp::Lt, b);
+    let fb = env.get(b);
+    assert_eq!(fb.lo, Some(6));
+}
+
+#[test]
+fn pathenv_relational_join_intersection() {
+    // Only shared constraints survive join
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    let c = SsaValue(2);
+
+    let mut env1 = PathEnv::empty();
+    env1.assert_relational(a, RelOp::Lt, b);
+    env1.assert_relational(b, RelOp::Lt, c);
+
+    let mut env2 = PathEnv::empty();
+    env2.assert_relational(a, RelOp::Lt, b);
+    // env2 does NOT have b < c
+
+    let joined = env1.join(&env2);
+    assert!(!joined.is_unsat());
+    // The shared constraint a < b should survive;
+    // b < c should be lost. We can verify by adding c < a
+    // which would be contradictory with both a < b and b < c,
+    // but only the first matters here.
+    // (We can't directly inspect relational, but we can test behavior)
+}
+
+#[test]
+fn pathenv_relational_max_bounded() {
+    // Exceeding MAX_RELATIONAL doesn't panic
+    let mut env = PathEnv::empty();
+    for i in 0..MAX_RELATIONAL + 5 {
+        let a = SsaValue(i as u32 * 2);
+        let b = SsaValue(i as u32 * 2 + 1);
+        env.assert_relational(a, RelOp::Lt, b);
+        assert!(!env.is_unsat());
+    }
+}
+
+#[test]
+fn pathenv_relational_eq_then_strict_lt() {
+    // assert_equal(a, b) then a < b → unsat
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    env.assert_relational(a, RelOp::Lt, b);
+    assert!(!env.is_unsat());
+    env.assert_equal(a, b);
+    assert!(env.is_unsat());
+}
+
+#[test]
+fn pathenv_relational_eq_then_le_ok() {
+    // assert_equal(a, b) then a <= b is fine (Le compat with equality)
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    env.assert_relational(a, RelOp::Le, b);
+    assert!(!env.is_unsat());
+    env.assert_equal(a, b);
+    assert!(!env.is_unsat());
+}
+
+#[test]
+fn solver_value_lt_value() {
+    // End-to-end via refine_env with Comparison { Value(a), Lt, Value(b) }
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    let env = PathEnv::empty();
+
+    // True branch: a < b holds
+    let cond = ConditionExpr::Comparison {
+        lhs: Operand::Value(a),
+        op: CompOp::Lt,
+        rhs: Operand::Value(b),
+    };
+    let true_env = refine_env(&env, &cond, true);
+    assert!(!true_env.is_unsat());
+
+    // Now on true branch, assert b < a → should be unsat
+    let cond2 = ConditionExpr::Comparison {
+        lhs: Operand::Value(b),
+        op: CompOp::Lt,
+        rhs: Operand::Value(a),
+    };
+    let nested = refine_env(&true_env, &cond2, true);
+    assert!(nested.is_unsat());
+}
+
+#[test]
+fn solver_value_gt_value_contradiction() {
+    // a > b on true branch, then b > a → unsat (via Gt → Lt flip)
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    let env = PathEnv::empty();
+
+    let cond1 = ConditionExpr::Comparison {
+        lhs: Operand::Value(a),
+        op: CompOp::Gt,
+        rhs: Operand::Value(b),
+    };
+    let env1 = refine_env(&env, &cond1, true);
+    assert!(!env1.is_unsat());
+
+    let cond2 = ConditionExpr::Comparison {
+        lhs: Operand::Value(b),
+        op: CompOp::Gt,
+        rhs: Operand::Value(a),
+    };
+    let env2 = refine_env(&env1, &cond2, true);
+    assert!(env2.is_unsat());
+}
+
+#[test]
+fn solver_value_le_ge_not_contradiction() {
+    // a <= b then a >= b (i.e. b <= a) → NOT unsat (a == b)
+    let a = SsaValue(0);
+    let b = SsaValue(1);
+    let env = PathEnv::empty();
+
+    let cond1 = ConditionExpr::Comparison {
+        lhs: Operand::Value(a),
+        op: CompOp::Le,
+        rhs: Operand::Value(b),
+    };
+    let env1 = refine_env(&env, &cond1, true);
+    assert!(!env1.is_unsat());
+
+    let cond2 = ConditionExpr::Comparison {
+        lhs: Operand::Value(a),
+        op: CompOp::Ge,
+        rhs: Operand::Value(b),
+    };
+    let env2 = refine_env(&env1, &cond2, true);
+    assert!(!env2.is_unsat());
+}
+
+#[test]
+fn pathenv_relational_self_lt_unsat() {
+    // a < a → unsat immediately
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    env.assert_relational(a, RelOp::Lt, a);
+    assert!(env.is_unsat());
+}
+
+#[test]
+fn pathenv_relational_self_le_ok() {
+    // a <= a → trivially true, not unsat
+    let mut env = PathEnv::empty();
+    let a = SsaValue(0);
+    env.assert_relational(a, RelOp::Le, a);
+    assert!(!env.is_unsat());
+}

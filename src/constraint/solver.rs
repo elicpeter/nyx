@@ -6,7 +6,7 @@
 
 use crate::ssa::type_facts::TypeKind;
 
-use super::domain::{BoolState, ConstValue, Nullability, PathEnv, TypeSet, ValueFact};
+use super::domain::{BoolState, ConstValue, Nullability, PathEnv, RelOp, TypeSet, ValueFact};
 use super::lower::{CompOp, ConditionExpr, Operand};
 
 /// Apply a condition to a [`PathEnv`], producing the refined environment
@@ -114,11 +114,10 @@ fn apply_comparison(env: &mut PathEnv, lhs: &Operand, op: CompOp, rhs: &Operand)
         (Operand::Value(a), Operand::Value(b)) => match op {
             CompOp::Eq => env.assert_equal(*a, *b),
             CompOp::Neq => env.assert_not_equal(*a, *b),
-            CompOp::Lt | CompOp::Gt | CompOp::Le | CompOp::Ge => {
-                // V1 limitation: no relational constraints beyond eq/neq.
-                // Could transfer known bounds if one side has an interval,
-                // but deferred to V2.
-            }
+            CompOp::Lt => env.assert_relational(*a, RelOp::Lt, *b),
+            CompOp::Gt => env.assert_relational(*b, RelOp::Lt, *a),
+            CompOp::Le => env.assert_relational(*a, RelOp::Le, *b),
+            CompOp::Ge => env.assert_relational(*b, RelOp::Le, *a),
         },
         // At least one Unknown operand: no refinement
         _ => {}

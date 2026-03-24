@@ -1,3 +1,4 @@
+use crate::constraint::lower::ConditionExpr;
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 
@@ -60,6 +61,10 @@ pub enum Terminator {
         cond: NodeIndex,
         true_blk: BlockId,
         false_blk: BlockId,
+        /// Structured condition lowered from CFG metadata during SSA construction.
+        /// `None` when the condition could not be lowered (falls back to text-based
+        /// lowering in taint transfer).
+        condition: Option<Box<ConditionExpr>>,
     },
     Return,
     Unreachable,

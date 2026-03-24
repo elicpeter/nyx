@@ -26,8 +26,25 @@ pub const MAX_DISEQUALITY_EDGES: usize = 32;
 pub const MAX_REFINE_PER_BLOCK: usize = 128;
 /// After this many meets on the same key, apply widening.
 pub const WIDEN_THRESHOLD: u8 = 3;
+/// Maximum relational constraints tracked (a < b, a <= b).
+pub const MAX_RELATIONAL: usize = 16;
 /// Maximum excluded constants per value (Neq set bound).
 const MAX_NEQ: usize = 8;
+
+// ── Relational operator ────────────────────────────────────────────────
+
+/// Relational operator for value-vs-value constraints.
+///
+/// Only strict/non-strict less-than. Greater-than variants are normalized
+/// by flipping operands at the solver level (CompOp::Gt → assert_relational(b, Lt, a)).
+/// Equality is handled by [`UnionFind`]; disequality by the `disequalities` set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RelOp {
+    /// Strict less-than: `a < b`
+    Lt,
+    /// Non-strict less-than-or-equal: `a <= b`
+    Le,
+}
 
 // ── ConstValue ──────────────────────────────────────────────────────────
 
@@ -763,6 +780,10 @@ pub struct PathEnv {
     /// Known not-equal pairs (stored as canonical representative pairs,
     /// sorted for deterministic comparison).
     disequalities: SmallVec<[(SsaValue, SsaValue); 4]>,
+    /// Relational constraints between SSA values (a < b, a <= b).
+    /// Stored as `(lhs, op, rhs)` meaning `lhs op rhs`.
+    /// Bounded by [`MAX_RELATIONAL`]; overflow drops the constraint (conservative).
+    relational: SmallVec<[(SsaValue, RelOp, SsaValue); 8]>,
     /// Permanently unsatisfiable once set.
     unsat: bool,
     /// Per-key meet count for widening decisions.
@@ -777,6 +798,7 @@ impl PathEnv {
             facts: SmallVec::new(),
             uf: UnionFind::new(),
             disequalities: SmallVec::new(),
+            relational: SmallVec::new(),
             unsat: false,
             meet_counts: SmallVec::new(),
             refine_count: 0,
@@ -890,6 +912,14 @@ impl PathEnv {
             return;
         }
 
+        // Check for strict relational contradiction: a == b but a < b or b < a
+        for &(lhs, op, rhs) in &self.relational {
+            if op == RelOp::Lt && ((lhs == ra && rhs == rb) || (lhs == rb && rhs == ra)) {
+                self.unsat = true;
+                return;
+            }
+        }
+
         // Merge equality classes
         let fa = self.get(ra);
         let fb = self.get(rb);
@@ -947,6 +977,166 @@ impl PathEnv {
             let mut neq_fact = ValueFact::top();
             neq_fact.excluded.push(cv.clone());
             self.refine_single(ra, &neq_fact);
+        }
+    }
+
+    /// Assert a relational constraint between two SSA values.
+    ///
+    /// `a op b` where `op` is `Lt` (a < b) or `Le` (a <= b).
+    /// Detects direct contradictions and bounded transitive cycles,
+    /// then propagates interval refinements between the two sides.
+    pub fn assert_relational(&mut self, a: SsaValue, op: RelOp, b: SsaValue) {
+        if self.unsat {
+            return;
+        }
+
+        // Step 1: canonicalize via union-find
+        let ra = self.uf.find_immutable(a);
+        let rb = self.uf.find_immutable(b);
+
+        // Self-comparison: x < x is impossible, x <= x is trivially true
+        if ra == rb {
+            if op == RelOp::Lt {
+                self.unsat = true;
+            }
+            return;
+        }
+
+        // Step 2: check for direct contradiction against existing relationals.
+        // Contradiction when new (ra op rb) conflicts with existing (rb op2 ra)
+        // where at least one of op, op2 is strict (Lt).
+        for &(lhs, existing_op, rhs) in &self.relational {
+            if lhs == rb && rhs == ra {
+                // Existing: rb existing_op ra. New: ra op rb.
+                // Contradiction if either is strict.
+                if op == RelOp::Lt || existing_op == RelOp::Lt {
+                    self.unsat = true;
+                    return;
+                }
+                // Both Le: a <= b and b <= a → satisfiable (a == b)
+            }
+        }
+
+        // Step 3: bounded transitive cycle detection (conservative, depth 4).
+        // Walk forward from rb following relational edges. If we reach ra,
+        // we have a cycle. Unsat if any edge in the chain is strict.
+        if self.check_relational_cycle(ra, rb, op) {
+            self.unsat = true;
+            return;
+        }
+
+        // Step 4: dedup check — if this exact constraint already exists, skip
+        let already_present = self.relational.iter().any(|&(l, o, r)| l == ra && o == op && r == rb);
+        if already_present {
+            // Still do interval refinement (may have new facts since last time)
+        } else {
+            // Insert if within bounds
+            if self.relational.len() < MAX_RELATIONAL {
+                self.relational.push((ra, op, rb));
+            }
+            // If at capacity, skip — conservative: losing a constraint only
+            // loses pruning power, never introduces unsoundness.
+        }
+
+        // Step 5: cross-domain interval refinement.
+        self.refine_relational_intervals(ra, op, rb);
+    }
+
+    /// Bounded transitive cycle detection.
+    ///
+    /// Starting from `start`, follow relational edges forward up to 4 hops.
+    /// If we reach `target`, a cycle exists. Returns true if the cycle
+    /// contains at least one strict (Lt) edge, making it contradictory.
+    ///
+    /// This is conservative, not complete: chains longer than 4 hops are
+    /// missed. Missing a cycle means we fail to prune an infeasible path,
+    /// not that we wrongly prune a feasible one.
+    fn check_relational_cycle(&self, target: SsaValue, start: SsaValue, new_edge_op: RelOp) -> bool {
+        const MAX_DEPTH: u8 = 4;
+        // Track whether any edge in the chain is strict
+        let mut has_strict = new_edge_op == RelOp::Lt;
+
+        let mut current = start;
+        for _ in 0..MAX_DEPTH {
+            let mut found_next = false;
+            for &(lhs, op, rhs) in &self.relational {
+                if lhs == current {
+                    if rhs == target {
+                        // Cycle closed. Contradictory only if at least one strict edge.
+                        if has_strict || op == RelOp::Lt {
+                            return true;
+                        }
+                        // All Le: a <= b <= ... <= a means all equal — satisfiable
+                        return false;
+                    }
+                    // Continue walking (take first outgoing edge)
+                    if op == RelOp::Lt {
+                        has_strict = true;
+                    }
+                    current = rhs;
+                    found_next = true;
+                    break;
+                }
+            }
+            if !found_next {
+                break;
+            }
+        }
+        false
+    }
+
+    /// Propagate interval refinements from a relational constraint.
+    ///
+    /// For integer intervals: `a < b` with `b ∈ [_, h]` → `a.hi ≤ h-1` (strict).
+    /// `a <= b` with `b ∈ [_, h]` → `a.hi ≤ h` (non-strict).
+    fn refine_relational_intervals(&mut self, a: SsaValue, op: RelOp, b: SsaValue) {
+        let fact_a = self.get(a);
+        let fact_b = self.get(b);
+
+        // Refine a's upper bound from b's upper bound
+        if let Some(hi_b) = fact_b.hi {
+            let new_hi = match op {
+                RelOp::Lt => {
+                    // a < b ∧ b ≤ hi_b → a ≤ hi_b - 1 (for integers)
+                    if hi_b != i64::MIN {
+                        Some(hi_b - 1)
+                    } else {
+                        None // underflow guard
+                    }
+                }
+                RelOp::Le => {
+                    // a <= b ∧ b ≤ hi_b → a ≤ hi_b
+                    Some(hi_b)
+                }
+            };
+            if let Some(h) = new_hi {
+                let mut refine_fact = ValueFact::top();
+                refine_fact.hi = Some(h);
+                self.refine(a, &refine_fact);
+            }
+        }
+
+        // Refine b's lower bound from a's lower bound
+        if let Some(lo_a) = fact_a.lo {
+            let new_lo = match op {
+                RelOp::Lt => {
+                    // a < b ∧ a ≥ lo_a → b ≥ lo_a + 1 (for integers)
+                    if lo_a != i64::MAX {
+                        Some(lo_a + 1)
+                    } else {
+                        None // overflow guard
+                    }
+                }
+                RelOp::Le => {
+                    // a <= b ∧ a ≥ lo_a → b ≥ lo_a
+                    Some(lo_a)
+                }
+            };
+            if let Some(l) = new_lo {
+                let mut refine_fact = ValueFact::top();
+                refine_fact.lo = Some(l);
+                self.refine(b, &refine_fact);
+            }
         }
     }
 
@@ -1010,10 +1200,19 @@ impl PathEnv {
             .cloned()
             .collect();
 
+        // Relationals: intersection (keep only constraints both sides agree on)
+        let relational: SmallVec<[(SsaValue, RelOp, SsaValue); 8]> = self
+            .relational
+            .iter()
+            .filter(|rel| other.relational.contains(rel))
+            .cloned()
+            .collect();
+
         PathEnv {
             facts,
             uf,
             disequalities,
+            relational,
             unsat: false,
             meet_counts: SmallVec::new(), // reset after join
             refine_count: 0,

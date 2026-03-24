@@ -19,8 +19,8 @@
 //!   does not decompose individual comparisons into structured operations;
 //!   condition_text parsing is the only way to extract operator and literal.
 //!   This is isolated in [`lower`].
-//! - **Limited relational reasoning.** Only equality/disequality between
-//!   SSA values. No `a < b` relational constraints.
+//! - **Bounded transitive cycle detection.** Relational constraint cycle
+//!   detection walks at most 4 hops. Longer chains are missed (conservative).
 //! - **No cast/conversion modeling.** `parseInt`, `int()`, `parseFloat`
 //!   etc. yield Top for the result's ValueFact.
 //! - **BoolTest is conservative.** Does not infer NonNull from truthiness
@@ -41,9 +41,9 @@ pub mod solver;
 mod tests;
 
 pub use domain::{
-    BoolState, ConstValue, Nullability, PathEnv, TypeSet, ValueFact,
+    BoolState, ConstValue, Nullability, PathEnv, RelOp, TypeSet, ValueFact,
     MAX_DISEQUALITY_EDGES, MAX_EQUALITY_EDGES, MAX_PATH_ENV_ENTRIES,
-    MAX_REFINE_PER_BLOCK, WIDEN_THRESHOLD,
+    MAX_REFINE_PER_BLOCK, MAX_RELATIONAL, WIDEN_THRESHOLD,
 };
 pub use lower::{lower_condition, CompOp, ConditionExpr, Operand};
 pub use solver::{is_satisfiable, refine_env};

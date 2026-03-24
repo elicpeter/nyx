@@ -36,6 +36,7 @@ pub enum EdgeKind {
 
 /// Maximum number of identifiers to store from a condition expression.
 const MAX_COND_VARS: usize = 8;
+const MAX_CONDITION_TEXT_LEN: usize = 256;
 
 /// Arithmetic binary operator extracted from the AST.
 ///
@@ -70,7 +71,7 @@ pub struct NodeInfo {
     pub enclosing_func: Option<String>,
     /// Per-function call ordinal (0-based, only meaningful for Call nodes).
     pub call_ordinal: u32,
-    /// For If nodes: raw condition text (truncated to 128 chars). None for non-If nodes.
+    /// For If nodes: raw condition text (truncated to 256 chars). None for non-If nodes.
     pub condition_text: Option<String>,
     /// For If nodes: identifiers referenced in the condition (sorted, deduped, max 8).
     pub condition_vars: Vec<String>,
@@ -597,8 +598,8 @@ fn push_condition_node<'a>(
     vars.dedup();
     vars.truncate(MAX_COND_VARS);
     let text = text_of(cond_ast, code).map(|t| {
-        if t.len() > 128 {
-            t[..128].to_string()
+        if t.len() > MAX_CONDITION_TEXT_LEN {
+            t[..MAX_CONDITION_TEXT_LEN].to_string()
         } else {
             t
         }
@@ -1292,8 +1293,8 @@ fn extract_condition_raw<'a>(
 
     // 4. Extract text, truncated.
     let text = text_of(cond, code).map(|t| {
-        if t.len() > 128 {
-            t[..128].to_string()
+        if t.len() > MAX_CONDITION_TEXT_LEN {
+            t[..MAX_CONDITION_TEXT_LEN].to_string()
         } else {
             t
         }

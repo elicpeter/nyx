@@ -305,7 +305,7 @@ fn process_terminator(
         Terminator::Goto(target) => {
             mark_edge_executable(block.id, *target, executable_edges, executable_blocks, cfg_worklist);
         }
-        Terminator::Branch { cond, true_blk, false_blk } => {
+        Terminator::Branch { cond, true_blk, false_blk, condition: _ } => {
             // Try to resolve the condition to a known boolean
             let cond_val = body.cfg_node_map.get(cond)
                 .and_then(|v| values.get(v))
@@ -355,7 +355,7 @@ pub fn apply_const_prop(body: &mut SsaBody, result: &ConstPropResult) -> usize {
     let mut prune_ops: Vec<(usize, BlockId, BlockId)> = Vec::new();
 
     for (block_idx, block) in body.blocks.iter().enumerate() {
-        if let Terminator::Branch { cond, true_blk, false_blk } = &block.terminator {
+        if let Terminator::Branch { cond, true_blk, false_blk, condition: _ } = &block.terminator {
             let cond_val = body.cfg_node_map.get(cond)
                 .and_then(|v| result.values.get(v))
                 .and_then(|c| c.as_bool());

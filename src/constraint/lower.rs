@@ -198,6 +198,72 @@ pub fn lower_condition(
     }
 }
 
+/// Lower a branch condition using var_stacks from SSA construction.
+///
+/// Called during SSA lowering when the full [`SsaBody`] is not yet available.
+/// Resolves variables via `var_stacks[name].last()` (the current reaching
+/// definition) instead of scanning `value_defs`. Does not use `const_values`
+/// (unavailable at lowering time); constants are seeded into [`PathEnv`]
+/// separately via `seed_from_optimization`.
+pub fn lower_condition_with_stacks(
+    cond_info: &NodeInfo,
+    var_stacks: &HashMap<String, Vec<SsaValue>>,
+) -> ConditionExpr {
+    let text = match cond_info.condition_text.as_deref() {
+        Some(t) if !t.is_empty() => t,
+        _ => return ConditionExpr::Unknown,
+    };
+
+    if cond_info.condition_vars.is_empty() {
+        return ConditionExpr::Unknown;
+    }
+
+    // Resolve via var_stacks: each var's current reaching definition
+    let resolved: Vec<(String, SsaValue)> = cond_info
+        .condition_vars
+        .iter()
+        .filter_map(|name| {
+            var_stacks
+                .get(name)
+                .and_then(|stack| stack.last().copied())
+                .map(|v| (name.clone(), v))
+        })
+        .collect();
+
+    if resolved.is_empty() {
+        return ConditionExpr::Unknown;
+    }
+
+    let var_lookup: HashMap<&str, SsaValue> = resolved
+        .iter()
+        .map(|(name, val)| (name.as_str(), *val))
+        .collect();
+
+    // No const_values at lowering time — empty lookup
+    let const_lookup: HashMap<SsaValue, super::domain::ConstValue> = HashMap::new();
+
+    let lower = text.to_ascii_lowercase();
+
+    let expr = try_lower_null_check(text, &lower, &var_lookup)
+        .or_else(|| try_lower_type_check(text, &lower, &var_lookup))
+        .or_else(|| try_lower_comparison(text, &var_lookup, &const_lookup))
+        .unwrap_or_else(|| {
+            if resolved.len() == 1 {
+                ConditionExpr::BoolTest {
+                    var: resolved[0].1,
+                }
+            } else {
+                ConditionExpr::Unknown
+            }
+        });
+
+    if cond_info.condition_negated {
+        expr.negate()
+    } else {
+        expr
+    }
+}
+
 // ── Variable resolution ─────────────────────────────────────────────────
 
 /// Resolve condition variable names to their reaching SSA definitions.
