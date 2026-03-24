@@ -84,6 +84,14 @@ impl Transfer<ProductState> for DefaultTransfer<'_> {
 }
 
 impl DefaultTransfer<'_> {
+    /// Look up a variable's [`SymbolId`] using the node's enclosing function
+    /// as scope context.  This ensures same-name variables in different
+    /// functions resolve to distinct IDs.
+    fn get_sym(&self, info: &NodeInfo, name: &str) -> Option<SymbolId> {
+        self.interner
+            .get_scoped(info.enclosing_func.as_deref(), name)
+    }
+
     fn apply_call(
         &self,
         node_idx: NodeIndex,
@@ -107,7 +115,7 @@ impl DefaultTransfer<'_> {
             if is_acquire
                 && !is_excluded
                 && let Some(ref def) = info.defines
-                && let Some(sym) = self.interner.get(def)
+                && let Some(sym) = self.get_sym(info, def)
             {
                 state.resource.set(sym, ResourceLifecycle::OPEN);
             }
@@ -127,7 +135,7 @@ impl DefaultTransfer<'_> {
                     continue;
                 }
                 for used in &info.uses {
-                    if let Some(sym) = self.interner.get(used) {
+                    if let Some(sym) = self.get_sym(info, used) {
                         if released.contains(&sym) {
                             continue;
                         }
@@ -154,7 +162,7 @@ impl DefaultTransfer<'_> {
             if pair.use_patterns.iter().any(|p| callee_matches(&callee, p)) {
                 use_checked = true;
                 for used in &info.uses {
-                    if let Some(sym) = self.interner.get(used) {
+                    if let Some(sym) = self.get_sym(info, used) {
                         if state.resource.get(sym) == ResourceLifecycle::CLOSED {
                             events.push(TransferEvent {
                                 kind: TransferEventKind::UseAfterClose,
@@ -172,7 +180,7 @@ impl DefaultTransfer<'_> {
                 .any(|p| callee_matches(&callee, p));
             if is_use {
                 for used in &info.uses {
-                    if let Some(sym) = self.interner.get(used) {
+                    if let Some(sym) = self.get_sym(info, used) {
                         if state.resource.get(sym) == ResourceLifecycle::CLOSED {
                             events.push(TransferEvent {
                                 kind: TransferEventKind::UseAfterClose,
@@ -207,7 +215,7 @@ impl DefaultTransfer<'_> {
         // ── Validation call (guard) ──────────────────────────────────────
         if is_guard_like(&callee) {
             for used in &info.uses {
-                if let Some(sym) = self.interner.get(used) {
+                if let Some(sym) = self.get_sym(info, used) {
                     state.auth.validated.insert(sym);
                 }
             }
@@ -248,7 +256,7 @@ impl DefaultTransfer<'_> {
             // Validation-related condition
             if is_guard_like(&cond_lower) && !info.condition_negated {
                 for var in &info.condition_vars {
-                    if let Some(sym) = self.interner.get(var) {
+                    if let Some(sym) = self.get_sym(info, var) {
                         state.auth.validated.insert(sym);
                     }
                 }
@@ -260,11 +268,11 @@ impl DefaultTransfer<'_> {
         // Ownership transfer: if `defines` reassigns a tracked resource
         // variable from a `uses` variable, transfer the lifecycle.
         if let Some(ref def) = info.defines
-            && let Some(def_sym) = self.interner.get(def)
+            && let Some(def_sym) = self.get_sym(info, def)
         {
             // If the RHS is a tracked resource, transfer its state
             for used in &info.uses {
-                if let Some(use_sym) = self.interner.get(used) {
+                if let Some(use_sym) = self.get_sym(info, used) {
                     let lc = state.resource.get(use_sym);
                     if lc.contains(ResourceLifecycle::OPEN) {
                         state.resource.set(def_sym, lc);

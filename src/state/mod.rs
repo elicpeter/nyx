@@ -37,7 +37,7 @@ pub fn run_state_analysis(
     // Variables from unreachable functions may be interned but are never
     // set in ResourceDomainState (the forward engine only reaches nodes
     // connected from `entry`).
-    let interner = SymbolInterner::from_cfg(cfg);
+    let interner = SymbolInterner::from_cfg_scoped(cfg);
 
     // Guarded degradation: cap tracked variables
     if interner.len() > MAX_TRACKED_VARS {

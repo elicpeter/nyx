@@ -694,10 +694,54 @@ fn ts_stream_use_after_destroy() {
 
 #[test]
 fn variable_shadowing_known_limitation() {
-    // Inner scope fclose(f) masks outer scope f due to name-based interning.
-    // Known limitation: SymbolInterner keys by name, not scope.
-    // Result: zero findings (false negative for the outer leak).
+    // Inner-scope fclose(f) masks outer-scope f within the same function.
+    // Known limitation: SymbolInterner scopes by enclosing function, not
+    // lexical block.  Block-level shadowing is out of scope for Phase 11.
     assert_no_state_findings("variable_shadowing.c");
+}
+
+#[test]
+fn multi_function_isolation_c() {
+    // funcA opens f and never closes it (leak).
+    // funcB opens f and closes it (clean).
+    // With function-scoped interning, funcB's close must NOT mask funcA's leak.
+    let ids = state_ids_for("multi_function_isolation.c");
+
+    // funcA's leak must be detected
+    assert!(
+        ids.iter().any(|id| id.starts_with("state-resource-leak")),
+        "expected state-resource-leak for funcA, got: {ids:?}"
+    );
+
+    // funcB must NOT produce false positives (no double-close, no use-after-close)
+    assert!(
+        !ids.iter().any(|id| id == "state-double-close"),
+        "funcB must not produce state-double-close: {ids:?}"
+    );
+    assert!(
+        !ids.iter().any(|id| id == "state-use-after-close"),
+        "funcB must not produce state-use-after-close: {ids:?}"
+    );
+}
+
+#[test]
+fn multi_function_isolation_rb() {
+    // func_a opens f and never closes it (leak).
+    // func_b opens f and closes it (clean).
+    let ids = state_ids_for("multi_function_isolation.rb");
+
+    assert!(
+        ids.iter().any(|id| id.starts_with("state-resource-leak")),
+        "expected state-resource-leak for func_a, got: {ids:?}"
+    );
+    assert!(
+        !ids.iter().any(|id| id == "state-double-close"),
+        "func_b must not produce state-double-close: {ids:?}"
+    );
+    assert!(
+        !ids.iter().any(|id| id == "state-use-after-close"),
+        "func_b must not produce state-use-after-close: {ids:?}"
+    );
 }
 
 #[test]

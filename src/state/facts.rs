@@ -97,7 +97,12 @@ pub fn extract_findings(
                         })
                     })
             })
-            .flat_map(|(_, ni)| ni.uses.iter().filter_map(|v| interner.get(v)))
+            .flat_map(|(_, ni)| {
+                let scope = ni.enclosing_func.clone();
+                ni.uses
+                    .iter()
+                    .filter_map(move |v| interner.get_scoped(scope.as_deref(), v))
+            })
             .collect()
     };
 
