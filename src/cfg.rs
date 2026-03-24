@@ -128,6 +128,11 @@ pub struct NodeInfo {
     /// Only meaningful on Call nodes that define a resource variable.
     /// Leak detectors check this flag on the acquire site, not the variable.
     pub managed_resource: bool,
+    /// True when this Call node is a deferred release (Go `defer f.Close()`).
+    /// Deferred releases are not processed as immediate closes; instead they
+    /// suppress leak findings (defer guarantees cleanup at function exit).
+    /// Only set on Call nodes, not on all nodes within a defer_statement.
+    pub in_defer: bool,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -639,6 +644,7 @@ fn push_condition_node<'a>(
         cast_target_type: None,
         bin_op: None,
         managed_resource: false,
+            in_defer: false,
     })
 }
 
@@ -1857,6 +1863,7 @@ fn push_node<'a>(
         cast_target_type,
         bin_op: extract_bin_op(ast, lang),
         managed_resource: false,
+            in_defer: false,
     });
 
     debug!(
@@ -2120,6 +2127,7 @@ fn build_begin_rescue<'a>(
                 cast_target_type: None,
                 bin_op: None,
                 managed_resource: false,
+            in_defer: false,
             });
 
             // Wire exception edges from every exception source → synthetic node
@@ -2431,6 +2439,7 @@ fn build_try<'a>(
                     cast_target_type: None,
                     bin_op: None,
                     managed_resource: false,
+            in_defer: false,
                 });
 
                 // Wire exception edges from every exception source → synthetic node
@@ -2706,6 +2715,7 @@ fn build_sub<'a>(
                     cast_target_type: None,
                     bin_op: None,
                     managed_resource: false,
+            in_defer: false,
                 });
                 connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
@@ -3084,6 +3094,11 @@ fn build_sub<'a>(
                     frontier.clone()
                 };
 
+                // Go `defer`: record node count before recursing so we can
+                // mark the deferred Call node(s) afterward.
+                let is_defer = lang == "go" && child.kind() == "defer_statement";
+                let defer_first_idx = if is_defer { g.node_count() } else { 0 };
+
                 let child_exits = build_sub(
                     child,
                     &child_preds,
@@ -3099,6 +3114,16 @@ fn build_sub<'a>(
                     continue_targets,
                     throw_targets,
                 );
+
+                // Mark only Call nodes inside the defer as deferred releases.
+                if is_defer {
+                    for raw in defer_first_idx..g.node_count() {
+                        let idx = NodeIndex::new(raw);
+                        if g[idx].kind == StmtKind::Call {
+                            g[idx].in_defer = true;
+                        }
+                    }
+                }
 
                 let is_preproc = child.kind().starts_with("preproc_");
                 if !child_exits.is_empty() {
@@ -3353,6 +3378,7 @@ fn build_sub<'a>(
                 cast_target_type: None,
                 bin_op: None,
                 managed_resource: false,
+            in_defer: false,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -3644,6 +3670,7 @@ pub(crate) fn build_cfg<'a>(
         cast_target_type: None,
         bin_op: None,
         managed_resource: false,
+            in_defer: false,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -3669,6 +3696,7 @@ pub(crate) fn build_cfg<'a>(
         cast_target_type: None,
         bin_op: None,
         managed_resource: false,
+            in_defer: false,
     });
 
     // Build the body below the synthetic ENTRY.

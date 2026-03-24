@@ -394,6 +394,29 @@ fn java_twr_no_false_leak() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// (8c) Go resource lifecycle — defer
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn go_defer_close_no_findings() {
+    // Go `defer f.Close()` guarantees cleanup at function exit.
+    // Should produce zero state findings (no use-after-close, no leak).
+    assert_no_state_findings("go_defer_close.go");
+}
+
+#[test]
+fn go_defer_missing_leak() {
+    // No close at all — should produce resource leak.
+    assert_has_prefix("go_defer_missing.go", "state-resource-leak");
+}
+
+#[test]
+fn go_no_defer_manual_close_clean() {
+    // Manual close at end of function — no leak.
+    assert_no_state_findings("go_no_defer_manual_close.go");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // (9) Auth — unauthed access detection
 // ═══════════════════════════════════════════════════════════════════════
 

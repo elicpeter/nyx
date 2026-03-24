@@ -73,6 +73,34 @@ pub fn extract_findings(
     }
 
     // ── 2. Resource leaks at Exit and function-Return nodes ──────────────
+
+    // Collect variables with a deferred release call (Go `defer f.Close()`).
+    // These remain OPEN at function exit because transfer skips deferred
+    // releases, but the runtime guarantees cleanup.
+    let deferred_close_vars: std::collections::HashSet<super::symbol::SymbolId> = {
+        let pairs = crate::cfg_analysis::rules::resource_pairs(lang);
+        cfg.node_references()
+            .filter(|(_, ni)| {
+                ni.in_defer
+                    && ni.kind == StmtKind::Call
+                    && ni.callee.as_ref().is_some_and(|c| {
+                        let cl = c.to_ascii_lowercase();
+                        pairs.iter().any(|p| {
+                            p.release.iter().any(|r| {
+                                let rl = r.to_ascii_lowercase();
+                                if rl.starts_with('.') {
+                                    cl.ends_with(&rl)
+                                } else {
+                                    cl.ends_with(&rl) || cl == rl
+                                }
+                            })
+                        })
+                    })
+            })
+            .flat_map(|(_, ni)| ni.uses.iter().filter_map(|v| interner.get(v)))
+            .collect()
+    };
+
     for (idx, info) in cfg.node_references() {
         // Check both the file-level Exit node and the *synthesised* function
         // exit node (a Return node).  Skip early-return nodes — they flow
@@ -114,6 +142,13 @@ pub fn extract_findings(
                 if cfg[acq].managed_resource {
                     continue;
                 }
+            }
+
+            // Suppress leaks for variables with a deferred close call
+            // (Go `defer f.Close()`). The deferred call guarantees cleanup
+            // at function exit even though transfer didn't mark it CLOSED.
+            if deferred_close_vars.contains(&sym) {
+                continue;
             }
 
             let acquire_span = acquire_node.map(|n| cfg[n].span);
@@ -306,6 +341,7 @@ mod tests {
             cast_target_type: None,
             bin_op: None,
             managed_resource: false,
+            in_defer: false,
         }
     }
 

@@ -18,28 +18,6 @@
       ],
       "evidence_contains": [],
       "notes": "readLeaky returns on line 32 error path without closing f \u2014 missing defer f.Close()"
-    },
-    {
-      "rule_id": "state-resource-leak-possible",
-      "severity": "LOW",
-      "must_match": false,
-      "line_range": [
-        8,
-        8
-      ],
-      "evidence_contains": [],
-      "notes": "noise: os.Open on line 8 in readSafe \u2014 f.Close() is properly deferred on line 12"
-    },
-    {
-      "rule_id": "state-use-after-close",
-      "severity": "HIGH",
-      "must_match": false,
-      "line_range": [
-        15,
-        15
-      ],
-      "evidence_contains": [],
-      "notes": "noise: f.Read on line 15 in readSafe \u2014 f.Close() is deferred (runs at function exit), f is still open here"
     }
   ]
 }

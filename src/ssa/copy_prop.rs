@@ -145,6 +145,7 @@ mod tests {
             cast_target_type: None,
             bin_op: None,
             managed_resource: false,
+            in_defer: false,
         }
     }
 

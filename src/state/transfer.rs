@@ -113,6 +113,12 @@ impl DefaultTransfer<'_> {
         for pair in self.resource_pairs {
             let is_release = pair.release.iter().any(|r| callee_matches(&callee, r));
             if is_release {
+                // Go `defer f.Close()`: skip the CLOSED transition so the
+                // variable stays OPEN mid-function.  Leak suppression is
+                // handled separately in extract_findings().
+                if info.in_defer {
+                    continue;
+                }
                 for used in &info.uses {
                     if let Some(sym) = self.interner.get(used) {
                         if released.contains(&sym) {
@@ -367,6 +373,7 @@ mod tests {
             cast_target_type: None,
             bin_op: None,
             managed_resource: false,
+            in_defer: false,
         };
 
         let (state, events) =
@@ -413,6 +420,7 @@ mod tests {
             cast_target_type: None,
             bin_op: None,
             managed_resource: false,
+            in_defer: false,
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -458,6 +466,7 @@ mod tests {
             cast_target_type: None,
             bin_op: None,
             managed_resource: false,
+            in_defer: false,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -504,6 +513,7 @@ mod tests {
             cast_target_type: None,
             bin_op: None,
             managed_resource: false,
+            in_defer: false,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);
