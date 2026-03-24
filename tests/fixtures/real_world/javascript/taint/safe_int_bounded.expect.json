@@ -1,0 +1,15 @@
+{
+  "description": "SQL safe: offset is computed via integer arithmetic (page * 10). The abstract interval domain tracks it as a bounded integer, suppressing SQL injection.",
+  "tags": ["taint", "sqli", "abstract-interp", "interval-domain"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [6, 7],
+      "evidence_contains": [],
+      "notes": "TN: offset is a bounded integer from arithmetic — cannot carry SQL injection payload"
+    }
+  ]
+}

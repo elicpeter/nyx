@@ -10,6 +10,7 @@ use crate::symbol::Lang;
 use crate::state::symbol::{SymbolId, SymbolInterner};
 use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint, predicate_kind_bit};
 use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
+use crate::abstract_interp::{self, AbstractState};
 use crate::constraint;
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
@@ -39,6 +40,9 @@ pub struct SsaTaintState {
     /// Path constraint environment (Phase 15). `None` when constraint
     /// solving is disabled via `NYX_CONSTRAINT=0`.
     pub path_env: Option<constraint::PathEnv>,
+    /// Per-SSA-value abstract domain state (Phase 17). `None` when
+    /// abstract interpretation is disabled via `NYX_ABSTRACT_INTERP=0`.
+    pub abstract_state: Option<AbstractState>,
 }
 
 impl SsaTaintState {
@@ -51,6 +55,11 @@ impl SsaTaintState {
             heap: HeapState::empty(),
             path_env: if constraint::is_enabled() {
                 Some(constraint::PathEnv::empty())
+            } else {
+                None
+            },
+            abstract_state: if abstract_interp::is_enabled() {
+                Some(AbstractState::empty())
             } else {
                 None
             },
@@ -99,7 +108,11 @@ impl Lattice for SsaTaintState {
             (Some(a), Some(b)) => Some(a.join(b)),
             _ => None, // absent = Top, Top.join(x) = Top
         };
-        SsaTaintState { values, validated_must, validated_may, predicates, heap, path_env }
+        let abstract_state = match (&self.abstract_state, &other.abstract_state) {
+            (Some(a), Some(b)) => Some(a.join(b)),
+            _ => None,
+        };
+        SsaTaintState { values, validated_must, validated_may, predicates, heap, path_env, abstract_state }
     }
 
     fn leq(&self, other: &Self) -> bool {
@@ -132,6 +145,16 @@ impl Lattice for SsaTaintState {
                     return false;
                 }
             }
+        }
+        // Phase 17: abstract_state
+        match (&self.abstract_state, &other.abstract_state) {
+            (None, Some(_)) => return false,
+            (Some(a), Some(b)) => {
+                if !a.leq(b) {
+                    return false;
+                }
+            }
+            _ => {}
         }
         true
     }
@@ -377,6 +400,39 @@ pub fn run_ssa_taint_full(
         }
     }
 
+    // Phase 17: Seed entry block's AbstractState from optimization results
+    if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
+        if let Some(ref mut abs) = entry_state.abstract_state {
+            if let Some(cv) = transfer.const_values {
+                use crate::abstract_interp::{AbstractValue, IntervalFact, StringFact};
+                use crate::ssa::const_prop::ConstLattice;
+                for (v, cl) in cv {
+                    match cl {
+                        ConstLattice::Int(n) => {
+                            abs.set(*v, AbstractValue {
+                                interval: IntervalFact::exact(*n),
+                                string: StringFact::top(),
+                            });
+                        }
+                        ConstLattice::Str(s) => {
+                            abs.set(*v, AbstractValue {
+                                interval: IntervalFact::top(),
+                                string: StringFact::exact(s),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 17: Compute loop heads for widening
+    let loop_heads: HashSet<usize> = back_edges
+        .iter()
+        .map(|(_, target)| target.0 as usize)
+        .collect();
+
     // Per-predecessor exit states for path-sensitive phi evaluation
     let mut pred_states: PredStates = HashMap::new();
 
@@ -433,7 +489,19 @@ pub fn run_ssa_taint_full(
             let succ_idx = succ_id.0 as usize;
 
             let new_succ_state = match &block_states[succ_idx] {
-                Some(existing) => existing.join(&succ_state),
+                Some(existing) => {
+                    let mut joined = existing.join(&succ_state);
+                    // Phase 17: Widen abstract values at loop heads
+                    if loop_heads.contains(&succ_idx) {
+                        if let (Some(new_abs), Some(old_abs)) =
+                            (&joined.abstract_state, &existing.abstract_state)
+                        {
+                            let widened = old_abs.widen(new_abs);
+                            joined.abstract_state = Some(widened);
+                        }
+                    }
+                    joined
+                }
                 None => succ_state,
             };
 
@@ -775,6 +843,46 @@ fn transfer_block(
                             state.validated_may.insert(sym);
                             state.validated_must.insert(sym);
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 17: Abstract value phi join (from predecessor exit states)
+    if state.abstract_state.is_some() {
+        for phi in &block.phis {
+            if let SsaOp::Phi(ref operands) = phi.op {
+                use crate::abstract_interp::AbstractValue;
+                let is_induction = induction_vars.contains(&phi.value);
+                let mut joined = AbstractValue::bottom();
+                let mut any_operand = false;
+
+                for &(pred_blk, operand_val) in operands {
+                    if is_induction && pred_blk.0 >= block.id.0 {
+                        continue;
+                    }
+                    // Skip infeasible predecessors
+                    if let Some(ps) = pred_states {
+                        if let Some(pred_st) = ps.get(&(block_idx, pred_blk.0 as usize)) {
+                            if pred_st.path_env.as_ref().is_some_and(|e| e.is_unsat()) {
+                                continue;
+                            }
+                        }
+                    }
+                    // Look up operand abstract value from predecessor exit state
+                    let pred_abs = pred_states
+                        .and_then(|ps| ps.get(&(block_idx, pred_blk.0 as usize)))
+                        .and_then(|s| s.abstract_state.as_ref())
+                        .map(|a| a.get(operand_val))
+                        .unwrap_or_else(AbstractValue::top);
+                    joined = joined.join(&pred_abs);
+                    any_operand = true;
+                }
+
+                if any_operand {
+                    if let Some(ref mut abs) = state.abstract_state {
+                        abs.set(phi.value, joined);
                     }
                 }
             }
@@ -1828,6 +1936,118 @@ fn transfer_inst(
             }
         }
     }
+
+    // Phase 17: Forward abstract value transfer
+    if let Some(ref mut abs) = state.abstract_state {
+        transfer_abstract(inst, cfg, abs);
+    }
+}
+
+/// Phase 17: Compute abstract values for an SSA instruction.
+///
+/// Propagates interval and string domain facts forward through constants,
+/// copies, binary arithmetic, and concatenation. Conservative (Top) for
+/// unknown operations (calls, sources, params).
+fn transfer_abstract(
+    inst: &SsaInst,
+    cfg: &Cfg,
+    abs: &mut AbstractState,
+) {
+    use crate::abstract_interp::{AbstractValue, IntervalFact, StringFact};
+    use crate::cfg::BinOp;
+
+    let info = &cfg[inst.cfg_node];
+    match &inst.op {
+        SsaOp::Const(Some(text)) => {
+            let trimmed = text.trim();
+            // Try integer
+            if let Ok(n) = trimmed.parse::<i64>() {
+                abs.set(inst.value, AbstractValue {
+                    interval: IntervalFact::exact(n),
+                    string: StringFact::top(),
+                });
+            } else if is_string_const(trimmed) {
+                let s = strip_string_quotes(trimmed);
+                abs.set(inst.value, AbstractValue {
+                    interval: IntervalFact::top(),
+                    string: StringFact::exact(&s),
+                });
+            }
+            // Bool/Null/other: leave as Top
+        }
+
+        SsaOp::Assign(uses) if uses.len() == 1 => {
+            // Copy: propagate abstract value
+            let src = abs.get(uses[0]);
+            if !src.is_top() {
+                abs.set(inst.value, src);
+            }
+        }
+
+        SsaOp::Assign(uses) if uses.len() == 2 => {
+            let lhs_abs = abs.get(uses[0]);
+            let rhs_abs = abs.get(uses[1]);
+
+            if let Some(bin_op) = info.bin_op {
+                // Known arithmetic operator → apply transfer
+                let result_interval = match bin_op {
+                    BinOp::Add => lhs_abs.interval.add(&rhs_abs.interval),
+                    BinOp::Sub => lhs_abs.interval.sub(&rhs_abs.interval),
+                    BinOp::Mul => lhs_abs.interval.mul(&rhs_abs.interval),
+                    BinOp::Div => lhs_abs.interval.div(&rhs_abs.interval),
+                    BinOp::Mod => lhs_abs.interval.modulo(&rhs_abs.interval),
+                };
+                // For Add: also handle string concatenation (+ is overloaded)
+                let result_string = if bin_op == BinOp::Add {
+                    lhs_abs.string.concat(&rhs_abs.string)
+                } else {
+                    StringFact::top()
+                };
+                let val = AbstractValue {
+                    interval: result_interval,
+                    string: result_string,
+                };
+                if !val.is_top() {
+                    abs.set(inst.value, val);
+                }
+            } else {
+                // Unknown operator: conservative for interval,
+                // but still propagate string concat (prefix from LHS, suffix from RHS)
+                let string_result = lhs_abs.string.concat(&rhs_abs.string);
+                if !string_result.is_top() {
+                    abs.set(inst.value, AbstractValue {
+                        interval: IntervalFact::top(),
+                        string: string_result,
+                    });
+                }
+            }
+        }
+
+        SsaOp::Source | SsaOp::CatchParam | SsaOp::Param { .. } | SsaOp::Call { .. } => {
+            // Untrusted / unknown: Top (no abstract knowledge)
+            // Don't store Top — AbstractState.get() already returns Top for absent keys
+        }
+
+        _ => {}
+    }
+}
+
+/// Check if a constant text is a string literal (quoted).
+fn is_string_const(text: &str) -> bool {
+    (text.starts_with('"') && text.ends_with('"') && text.len() >= 2)
+        || (text.starts_with('\'') && text.ends_with('\'') && text.len() >= 2)
+}
+
+/// Strip surrounding quotes from a string literal.
+fn strip_string_quotes(text: &str) -> String {
+    if text.len() >= 2
+        && ((text.starts_with('"') && text.ends_with('"'))
+            || (text.starts_with('\'') && text.ends_with('\'')))
+    {
+        text[1..text.len() - 1].to_string()
+    } else {
+        text.to_string()
+    }
 }
 
 /// Collect events from a block (Phase 2).
@@ -2075,6 +2295,21 @@ fn collect_block_events(
         if !matches!(inst.op, SsaOp::Call { .. }) {
             if let Some(ref env) = state.path_env {
                 if is_path_type_safe_for_sink(inst, sink_caps, env) {
+                    continue;
+                }
+            }
+        }
+
+        // Phase 17: Abstract-domain-aware sink suppression.
+        if let Some(ref abs) = state.abstract_state {
+            if is_abstract_safe_for_sink(inst, sink_caps, abs) {
+                continue;
+            }
+        }
+        // Phase 17: Call-site abstract suppression (check URL argument for SSRF).
+        if let SsaOp::Call { ref args, .. } = inst.op {
+            if let Some(ref abs) = state.abstract_state {
+                if is_call_abstract_safe(args, sink_caps, abs) {
                     continue;
                 }
             }
@@ -2976,6 +3211,83 @@ fn is_path_type_safe_for_sink(
         Some(ref kind) => type_safe_for_taint_sink(kind, sink_caps),
         None => false, // Multiple possible types → not safe
     })
+}
+
+// ── Phase 17: Abstract-Domain Sink Suppression ─────────────────────────
+
+/// Check if abstract domain facts prove a sink is safe.
+///
+/// Suppression 1: SSRF — URL prefix proves host is locked.
+/// Suppression 2: SQL_QUERY/FILE_IO — forward-propagated bounded integer.
+fn is_abstract_safe_for_sink(
+    inst: &SsaInst,
+    sink_caps: Cap,
+    abs: &AbstractState,
+) -> bool {
+    let used = inst_use_values(inst);
+    if used.is_empty() {
+        return false;
+    }
+
+    // Suppression 1: SSRF — string prefix with locked host
+    if sink_caps.intersects(Cap::SSRF) {
+        if used
+            .iter()
+            .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string))
+        {
+            return true;
+        }
+    }
+
+    // Suppression 2: Proven-bounded integer cannot carry injection payload.
+    // Matches existing is_type_safe_for_sink policy: SQL_QUERY + FILE_IO only.
+    if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO) {
+        if used
+            .iter()
+            .all(|v| abs.get(*v).interval.is_proven_bounded())
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Check if call arguments prove a sink is safe via abstract domain.
+fn is_call_abstract_safe(
+    args: &[SmallVec<[SsaValue; 2]>],
+    sink_caps: Cap,
+    abs: &AbstractState,
+) -> bool {
+    if !sink_caps.intersects(Cap::SSRF) {
+        return false;
+    }
+    // For SSRF sinks, check if the URL argument (first arg) has a safe prefix
+    if let Some(first_arg) = args.first() {
+        return first_arg
+            .iter()
+            .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string));
+    }
+    false
+}
+
+/// SSRF safety: prefix includes scheme + full host + path separator.
+///
+/// Soundness: if the prefix contains `scheme://host/`, the attacker cannot
+/// control the destination host. They can only influence the path/query,
+/// which is not SSRF.
+fn is_string_safe_for_ssrf(sf: &crate::abstract_interp::StringFact) -> bool {
+    let prefix = match &sf.prefix {
+        Some(p) => p.as_str(),
+        None => return false,
+    };
+    if let Some(after_scheme) = prefix.find("://") {
+        let host_and_rest = &prefix[after_scheme + 3..];
+        if let Some(slash_pos) = host_and_rest.find('/') {
+            return slash_pos > 0; // non-empty host + path separator
+        }
+    }
+    false
 }
 
 // ── Callee Resolution (mirrors TaintTransfer::resolve_callee) ───────────

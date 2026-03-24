@@ -39,6 +39,7 @@
 //! See the [`docs/`](https://github.com/elicpeter/nyx/tree/master/docs) directory
 //! for user and contributor documentation.
 
+pub mod abstract_interp;
 pub mod ast;
 pub mod callgraph;
 pub mod cfg;

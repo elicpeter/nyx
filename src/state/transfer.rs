@@ -318,6 +318,7 @@ mod tests {
             arg_callees: Vec::new(),
             outer_callee: None,
             cast_target_type: None,
+            bin_op: None,
         };
 
         let (state, events) =
@@ -362,6 +363,7 @@ mod tests {
             arg_callees: Vec::new(),
             outer_callee: None,
             cast_target_type: None,
+            bin_op: None,
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -405,6 +407,7 @@ mod tests {
             arg_callees: Vec::new(),
             outer_callee: None,
             cast_target_type: None,
+            bin_op: None,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -449,6 +452,7 @@ mod tests {
             arg_callees: Vec::new(),
             outer_callee: None,
             cast_target_type: None,
+            bin_op: None,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);

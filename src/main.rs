@@ -1,3 +1,4 @@
+mod abstract_interp;
 mod ast;
 mod callgraph;
 mod cfg;

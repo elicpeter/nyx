@@ -37,6 +37,20 @@ pub enum EdgeKind {
 /// Maximum number of identifiers to store from a condition expression.
 const MAX_COND_VARS: usize = 8;
 
+/// Arithmetic binary operator extracted from the AST.
+///
+/// Only set when the SSA assignment maps one-to-one to a single
+/// binary expression. Left `None` for nested, compound, or boolean
+/// expressions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+}
+
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     pub kind: StmtKind,
@@ -103,6 +117,11 @@ pub struct NodeInfo {
     /// `x.(io.Reader)` → `"io.Reader"`.  Used by type-flow constraint solving
     /// to refine the type environment at the SSA level.
     pub cast_target_type: Option<String>,
+    /// Arithmetic operator for binary expression assignments (Phase 17).
+    /// Only set when the CFG node is a single binary expression with a
+    /// clear one-to-one operator mapping. `None` for nested, compound,
+    /// boolean, or ambiguous expressions.
+    pub bin_op: Option<BinOp>,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -607,6 +626,7 @@ fn push_condition_node<'a>(
         arg_callees: Vec::new(),
         outer_callee: None,
         cast_target_type: None,
+        bin_op: None,
     })
 }
 
@@ -1341,6 +1361,108 @@ fn detect_negation<'a>(cond: Node<'a>, if_ast: Node<'a>, _lang: &str) -> (Node<'
     (cond, false)
 }
 
+/// Extract a binary arithmetic operator from an AST node.
+///
+/// Conservative policy: only returns `Some(BinOp)` when the AST node
+/// directly IS a binary expression or is an assignment/expression wrapper
+/// containing a single binary expression as its immediate RHS. Returns
+/// `None` for nested binary expressions, compound assignments (`+=`),
+/// boolean operators (`&&`, `||`), and any ambiguous cases.
+fn extract_bin_op(ast: Node, lang: &str) -> Option<BinOp> {
+    // Find the binary expression node: either ast itself or immediate child.
+    let bin_expr = find_single_binary_expr(ast, lang)?;
+
+    // Walk children to find the operator token (anonymous node between operands).
+    let mut cursor = bin_expr.walk();
+    for child in bin_expr.children(&mut cursor) {
+        if child.is_named() {
+            continue; // Skip named children (operands)
+        }
+        let kind = child.kind();
+        return match kind {
+            "+" => Some(BinOp::Add),
+            "-" => Some(BinOp::Sub),
+            "*" => Some(BinOp::Mul),
+            "/" => Some(BinOp::Div),
+            "%" => Some(BinOp::Mod),
+            _ => None, // Boolean, bitwise, comparison, etc. → not arithmetic
+        };
+    }
+    None
+}
+
+/// Find a single binary expression node at or directly under `ast`.
+///
+/// Returns `None` if there are zero or multiple binary expressions
+/// (ambiguous). Only descends one level into assignment/expression wrappers.
+fn find_single_binary_expr<'a>(ast: Node<'a>, lang: &str) -> Option<Node<'a>> {
+    let ast_kind = ast.kind();
+
+    // Check if ast itself is a binary expression
+    if is_binary_expr_kind(ast_kind, lang) {
+        // Verify it has exactly 2 named children (left, right) — no nesting
+        let named_count = ast.named_child_count();
+        if named_count == 2 {
+            // Ensure neither child is itself a binary expression (that would
+            // mean the operator is for a compound expression like `a + b * c`)
+            let left = ast.named_child(0);
+            let right = ast.named_child(1);
+            let left_is_bin =
+                left.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+            let right_is_bin =
+                right.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+            if !left_is_bin && !right_is_bin {
+                return Some(ast);
+            }
+        }
+        return None; // Nested or complex
+    }
+
+    // Check one level down for assignment wrappers, expression statements, etc.
+    let wrapper_kinds = [
+        "expression_statement",
+        "assignment_expression",
+        "assignment",
+        "variable_declaration",
+        "variable_declarator",
+        "short_var_declaration",
+        "lexical_declaration",
+    ];
+    if wrapper_kinds.contains(&ast_kind) || ast_kind.ends_with("_statement") {
+        let mut found: Option<Node<'a>> = None;
+        let mut cursor = ast.walk();
+        for child in ast.named_children(&mut cursor) {
+            if is_binary_expr_kind(child.kind(), lang) {
+                if found.is_some() {
+                    return None; // Multiple binary expressions → ambiguous
+                }
+                // Same check: must have exactly 2 non-binary named children
+                if child.named_child_count() == 2 {
+                    let l = child.named_child(0);
+                    let r = child.named_child(1);
+                    let l_bin = l.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+                    let r_bin = r.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+                    if !l_bin && !r_bin {
+                        found = Some(child);
+                    }
+                }
+            }
+        }
+        return found;
+    }
+
+    None
+}
+
+/// Check if an AST node kind is a binary expression in the given language.
+fn is_binary_expr_kind(kind: &str, lang: &str) -> bool {
+    match lang {
+        "python" => kind == "binary_operator",
+        "ruby" => kind == "binary",
+        _ => kind == "binary_expression",
+    }
+}
+
 /// Create a node in one short borrow and optionally attach a taint label.
 #[allow(clippy::too_many_arguments)]
 fn push_node<'a>(
@@ -1718,6 +1840,7 @@ fn push_node<'a>(
         arg_callees,
         outer_callee,
         cast_target_type,
+        bin_op: extract_bin_op(ast, lang),
     });
 
     debug!(
@@ -2001,6 +2124,7 @@ fn build_try<'a>(
                     arg_callees: Vec::new(),
                     outer_callee: None,
                     cast_target_type: None,
+                    bin_op: None,
                 });
 
                 // Wire exception edges from every exception source → synthetic node
@@ -2274,6 +2398,7 @@ fn build_sub<'a>(
                     arg_callees: Vec::new(),
                     outer_callee: None,
                     cast_target_type: None,
+                    bin_op: None,
                 });
                 connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
@@ -2894,6 +3019,7 @@ fn build_sub<'a>(
                 arg_callees: Vec::new(),
                 outer_callee: None,
                 cast_target_type: None,
+                bin_op: None,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -3173,6 +3299,7 @@ pub(crate) fn build_cfg<'a>(
         arg_callees: Vec::new(),
         outer_callee: None,
         cast_target_type: None,
+        bin_op: None,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -3196,6 +3323,7 @@ pub(crate) fn build_cfg<'a>(
         arg_callees: Vec::new(),
         outer_callee: None,
         cast_target_type: None,
+        bin_op: None,
     });
 
     // Build the body below the synthetic ENTRY.
