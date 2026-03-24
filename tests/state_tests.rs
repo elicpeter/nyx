@@ -786,3 +786,113 @@ fn loop_reopen_clean() {
     // Each loop iteration opens and closes the file — clean at exit.
     assert_no_state_findings("loop_reopen.c");
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// (16) Phase 13: Expanded resource pairs
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn java_prepared_stmt_leak() {
+    assert_has_prefix("java_prepared_stmt_leak.java", "state-resource-leak");
+}
+
+#[test]
+fn java_prepared_stmt_clean() {
+    assert_no_state_findings("java_prepared_stmt_clean.java");
+}
+
+#[test]
+fn java_server_socket_leak() {
+    assert_has_prefix("java_server_socket_leak.java", "state-resource-leak");
+}
+
+#[test]
+fn python_sqlite_leak() {
+    assert_has_prefix("python_sqlite_leak.py", "state-resource-leak");
+}
+
+#[test]
+fn python_sqlite_clean() {
+    assert_no_state_findings("python_sqlite_clean.py");
+}
+
+#[test]
+fn js_mysql_connection_leak() {
+    assert_has_prefix("js_mysql_connection_leak.js", "state-resource-leak");
+}
+
+#[test]
+fn js_mysql_connection_clean() {
+    assert_no_state_findings("js_mysql_connection_clean.js");
+}
+
+#[test]
+fn js_websocket_leak() {
+    assert_has_prefix("js_websocket_leak.js", "state-resource-leak");
+}
+
+#[test]
+fn go_sql_open_leak() {
+    assert_has_prefix("go_sql_open_leak.go", "state-resource-leak");
+}
+
+#[test]
+fn go_sql_open_clean() {
+    assert_no_state_findings("go_sql_open_clean.go");
+}
+
+#[test]
+fn php_pg_connect_leak() {
+    assert_has_prefix("php_pg_connect_leak.php", "state-resource-leak");
+}
+
+#[test]
+fn php_fsockopen_leak() {
+    assert_has_prefix("php_fsockopen_leak.php", "state-resource-leak");
+}
+
+#[test]
+fn ruby_tempfile_leak() {
+    assert_has_prefix("ruby_tempfile_leak.rb", "state-resource-leak");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// (17) Phase 13: Expanded auth detection
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn auth_false_positive_token() {
+    // generateToken() is NOT an auth check — finding should fire
+    assert_has("auth_false_positive_token.js", "state-unauthed-access");
+}
+
+#[test]
+fn auth_decode_token_not_auth() {
+    // decodeToken() parses but does not enforce auth — finding should fire
+    assert_has("auth_decode_token_not_auth.js", "state-unauthed-access");
+}
+
+#[test]
+fn auth_jwt_verify_protected() {
+    // jwt.verify() in condition is a recognized auth check
+    assert_absent("auth_jwt_verify_protected.js", "state-unauthed-access");
+}
+
+#[test]
+fn auth_ensure_authenticated() {
+    // ensureAuthenticated() call is a recognized auth check
+    assert_absent("auth_ensure_authenticated.js", "state-unauthed-access");
+}
+
+#[test]
+fn auth_require_role_protected() {
+    // requireRole() call is a recognized auth check
+    assert_absent("auth_require_role_protected.js", "state-unauthed-access");
+}
+
+#[test]
+fn auth_decorator_python_aspirational() {
+    // @login_required decorator detection NOT implemented yet.
+    // The finding fires because decorator is not inspected.
+    assert_has("auth_decorator_python.py", "state-unauthed-access");
+}

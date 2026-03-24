@@ -295,6 +295,7 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                         .or_else(|| c.child_by_field_name("method"))
                         .or_else(|| c.child_by_field_name("name"))
                         .or_else(|| c.child_by_field_name("type"))
+                        .or_else(|| c.child_by_field_name("constructor"))
                         // Fallback for constructors whose grammar lacks field names
                         // (e.g. PHP `object_creation_expression` has positional children).
                         .or_else(|| find_constructor_type_child(c))
@@ -1683,6 +1684,8 @@ fn push_node<'a>(
             .or_else(|| ast.child_by_field_name("method"))
             .or_else(|| ast.child_by_field_name("name"))
             .or_else(|| ast.child_by_field_name("type"))
+            // JS/TS `new_expression` uses `constructor` field.
+            .or_else(|| ast.child_by_field_name("constructor"))
             // Fallback for constructors whose grammar lacks field names
             // (e.g. PHP `object_creation_expression` has positional children).
             .or_else(|| find_constructor_type_child(ast))

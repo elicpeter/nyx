@@ -587,6 +587,49 @@ mod tests {
         assert!(!is_guard_like("open_file"));
     }
 
+    // ── Phase 13: callee_matches for new resource patterns ─────────────
+
+    #[test]
+    fn callee_matches_js_end_release() {
+        assert!(callee_matches("conn.end", ".end"));
+        assert!(callee_matches("pool.end", ".end"));
+        assert!(!callee_matches("backend", ".end")); // no dot
+    }
+
+    #[test]
+    fn callee_matches_go_sql_open() {
+        assert!(callee_matches("sql.open", "sql.Open")); // case-insensitive
+    }
+
+    #[test]
+    fn callee_matches_php_pg() {
+        assert!(callee_matches("pg_connect", "pg_connect"));
+        assert!(callee_matches("pg_close", "pg_close"));
+        assert!(!callee_matches("pg_query", "pg_connect"));
+    }
+
+    #[test]
+    fn callee_matches_java_prepare_statement() {
+        assert!(callee_matches("conn.preparestatement", "prepareStatement"));
+        assert!(callee_matches("preparestatement", "prepareStatement"));
+    }
+
+    #[test]
+    fn callee_matches_websocket() {
+        assert!(callee_matches("websocket", "WebSocket"));
+    }
+
+    #[test]
+    fn callee_matches_mysql_create_connection() {
+        assert!(callee_matches("mysql.createconnection", "mysql.createConnection"));
+    }
+
+    #[test]
+    fn callee_matches_finish_release() {
+        assert!(callee_matches("http.finish", ".finish"));
+        assert!(!callee_matches("finish_setup", ".finish")); // no dot
+    }
+
     // ── condition_contains_auth_token ────────────────────────────────────
 
     #[test]
@@ -655,6 +698,62 @@ mod tests {
         assert!(!condition_contains_auth_token("middleware.authz()", "middleware.auth"));
         // "middleware.auth.check" — matcher ends at '.', which is non-ident → matches.
         assert!(condition_contains_auth_token("middleware.auth.check()", "middleware.auth"));
+    }
+
+    // ── Phase 13: condition_contains_auth_token for new auth patterns ──
+
+    #[test]
+    fn auth_token_jwt_verify() {
+        assert!(condition_contains_auth_token("jwt.verify(token)", "jwt.verify"));
+        assert!(!condition_contains_auth_token(
+            "jwt.verifyAsync(token)",
+            "jwt.verify"
+        ));
+    }
+
+    #[test]
+    fn auth_token_passport() {
+        assert!(condition_contains_auth_token(
+            "passport.authenticate('local')",
+            "passport.authenticate"
+        ));
+    }
+
+    #[test]
+    fn auth_token_generate_not_auth() {
+        assert!(!condition_contains_auth_token(
+            "generateToken(secret)",
+            "verify_token"
+        ));
+        assert!(!condition_contains_auth_token(
+            "generateToken(secret)",
+            "validate_token"
+        ));
+        assert!(!condition_contains_auth_token(
+            "generateToken(secret)",
+            "authenticate"
+        ));
+    }
+
+    #[test]
+    fn auth_token_ensure_authenticated() {
+        // condition_contains_auth_token expects pre-lowered condition text
+        assert!(condition_contains_auth_token(
+            "ensureauthenticated(req)",
+            "ensureAuthenticated"
+        ));
+    }
+
+    #[test]
+    fn auth_token_require_role_not_substring() {
+        assert!(condition_contains_auth_token(
+            "requirerole('admin')",
+            "requireRole"
+        ));
+        assert!(!condition_contains_auth_token(
+            "prerequirerole()",
+            "requireRole"
+        ));
     }
 
     #[test]

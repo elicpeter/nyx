@@ -86,6 +86,12 @@ static COMMON_AUTH: &[AuthRule] = &[AuthRule {
         "check_auth",
         "verify_token",
         "validate_token",
+        // Phase 13 additions
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
     ],
 }];
 
@@ -103,6 +109,12 @@ static GO_AUTH: &[AuthRule] = &[AuthRule {
         "validate_token",
         "middleware.auth",
         "auth.required",
+        // Phase 13 additions
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
     ],
 }];
 
@@ -122,6 +134,61 @@ static JAVA_AUTH: &[AuthRule] = &[AuthRule {
         "checkPermission",
         "hasAuthority",
         "hasRole",
+        // Phase 13 additions
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
+    ],
+}];
+
+static JS_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Phase 13: JS/TS middleware & JWT
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
+        "checkRole",
+        "passport.authenticate",
+        "jwt.verify",
+    ],
+}];
+
+static PYTHON_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Phase 13: Python-specific
+        "ensureAuthenticated",
+        "ensureAuth",
+        "requireAuth",
+        "hasPermission",
+        "requireRole",
+        "login_required",
+        "permission_required",
+        "has_permission",
+        "check_permissions",
     ],
 }];
 
@@ -129,6 +196,8 @@ pub fn auth_rules(lang: Lang) -> &'static [AuthRule] {
     match lang {
         Lang::Go => GO_AUTH,
         Lang::Java => JAVA_AUTH,
+        Lang::JavaScript | Lang::TypeScript => JS_AUTH,
+        Lang::Python => PYTHON_AUTH,
         _ => COMMON_AUTH,
     }
 }
@@ -267,6 +336,21 @@ static GO_RESOURCES: &[ResourcePair] = &[
         resource_name: "mutex",
         use_patterns: &[],
     },
+    // Phase 13 additions
+    ResourcePair {
+        acquire: &["sql.Open"],
+        release: &[".Close"],
+        exclude_acquire: &[],
+        resource_name: "db connection",
+        use_patterns: &[".Query", ".Exec", ".Prepare", ".Begin"],
+    },
+    ResourcePair {
+        acquire: &["net.Listen"],
+        release: &[".Close"],
+        exclude_acquire: &[],
+        resource_name: "listener",
+        use_patterns: &[".Accept", ".Addr"],
+    },
 ];
 
 static RUST_RESOURCES: &[ResourcePair] = &[
@@ -302,6 +386,49 @@ static JAVA_RESOURCES: &[ResourcePair] = &[
         resource_name: "socket",
         use_patterns: &[".getInputStream", ".getOutputStream", ".connect"],
     },
+    // Phase 13 additions
+    ResourcePair {
+        acquire: &["prepareStatement"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "prepared statement",
+        use_patterns: &[".executeQuery", ".executeUpdate", ".setString", ".setInt"],
+    },
+    ResourcePair {
+        acquire: &["executeQuery"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "result set",
+        use_patterns: &[".next", ".getString", ".getInt", ".getBoolean"],
+    },
+    ResourcePair {
+        acquire: &["ServerSocket"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "server socket",
+        use_patterns: &[".accept", ".bind"],
+    },
+    ResourcePair {
+        acquire: &["DatagramSocket"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "datagram socket",
+        use_patterns: &[".send", ".receive"],
+    },
+    ResourcePair {
+        acquire: &["RandomAccessFile"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "random access file",
+        use_patterns: &[".read", ".write", ".seek", ".length"],
+    },
+    ResourcePair {
+        acquire: &["Channel.open", "FileChannel.open", "SocketChannel.open"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "NIO channel",
+        use_patterns: &[".read", ".write", ".position"],
+    },
 ];
 
 static PYTHON_RESOURCES: &[ResourcePair] = &[
@@ -332,6 +459,42 @@ static PYTHON_RESOURCES: &[ResourcePair] = &[
         exclude_acquire: &[],
         resource_name: "mutex",
         use_patterns: &[],
+    },
+    // Phase 13 additions
+    ResourcePair {
+        acquire: &["urllib.request.urlopen", "urlopen"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "url handle",
+        use_patterns: &[".read", ".readline", ".readlines"],
+    },
+    ResourcePair {
+        acquire: &["http.client.HTTPConnection", "HTTPConnection", "HTTPSConnection"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "http connection",
+        use_patterns: &[".request", ".getresponse"],
+    },
+    ResourcePair {
+        acquire: &["sqlite3.connect"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "sqlite connection",
+        use_patterns: &[".execute", ".cursor", ".commit"],
+    },
+    ResourcePair {
+        acquire: &["tempfile.NamedTemporaryFile", "NamedTemporaryFile"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "temp file",
+        use_patterns: &[".write", ".read", ".seek"],
+    },
+    ResourcePair {
+        acquire: &["zipfile.ZipFile", "ZipFile"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "zip file",
+        use_patterns: &[".read", ".write", ".extractall", ".namelist"],
     },
 ];
 
@@ -368,6 +531,21 @@ static RUBY_RESOURCES: &[ResourcePair] = &[
         resource_name: "db connection",
         use_patterns: &[".exec", ".query", ".exec_params", ".prepare", ".execute"],
     },
+    // Phase 13 additions
+    ResourcePair {
+        acquire: &["Net::HTTP.start"],
+        release: &[".finish"],
+        exclude_acquire: &[],
+        resource_name: "http connection",
+        use_patterns: &[".get", ".post", ".request"],
+    },
+    ResourcePair {
+        acquire: &["Tempfile.new", "Tempfile.open"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "temp file",
+        use_patterns: &[".write", ".read", ".path"],
+    },
 ];
 
 static PHP_RESOURCES: &[ResourcePair] = &[
@@ -392,6 +570,28 @@ static PHP_RESOURCES: &[ResourcePair] = &[
         resource_name: "curl handle",
         use_patterns: &["curl_exec", "curl_getinfo", "curl_setopt"],
     },
+    // Phase 13 additions
+    ResourcePair {
+        acquire: &["pg_connect"],
+        release: &["pg_close"],
+        exclude_acquire: &[],
+        resource_name: "pg connection",
+        use_patterns: &["pg_query", "pg_fetch_array", "pg_fetch_row"],
+    },
+    ResourcePair {
+        acquire: &["fsockopen", "pfsockopen"],
+        release: &["fclose"],
+        exclude_acquire: &[],
+        resource_name: "socket",
+        use_patterns: &["fwrite", "fread", "fgets"],
+    },
+    ResourcePair {
+        acquire: &["stream_socket_client"],
+        release: &["fclose"],
+        exclude_acquire: &[],
+        resource_name: "stream socket",
+        use_patterns: &["fwrite", "fread", "stream_get_contents"],
+    },
 ];
 
 static JS_RESOURCES: &[ResourcePair] = &[
@@ -414,6 +614,42 @@ static JS_RESOURCES: &[ResourcePair] = &[
         exclude_acquire: &[],
         resource_name: "stream",
         use_patterns: &[".pipe", ".resume", ".write", ".read", ".push"],
+    },
+    // Phase 13 additions
+    ResourcePair {
+        acquire: &["net.createConnection", "net.connect"],
+        release: &[".end", ".destroy"],
+        exclude_acquire: &[],
+        resource_name: "net socket",
+        use_patterns: &[".write", ".read", ".pipe"],
+    },
+    ResourcePair {
+        acquire: &["http.request", "https.request"],
+        release: &[".end", ".destroy"],
+        exclude_acquire: &[],
+        resource_name: "http request",
+        use_patterns: &[".write"],
+    },
+    ResourcePair {
+        acquire: &["WebSocket"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "websocket",
+        use_patterns: &[".send"],
+    },
+    ResourcePair {
+        acquire: &["mysql.createConnection", "mysql.createPool"],
+        release: &[".end", ".destroy"],
+        exclude_acquire: &[],
+        resource_name: "mysql connection",
+        use_patterns: &[".query", ".execute"],
+    },
+    ResourcePair {
+        acquire: &["pg.Pool", "pg.Client"],
+        release: &[".end", ".release"],
+        exclude_acquire: &[],
+        resource_name: "pg connection",
+        use_patterns: &[".query"],
     },
 ];
 
