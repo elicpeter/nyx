@@ -2,51 +2,21 @@
 
 This is the execution-order roadmap for completing Nyx's remaining static analysis capabilities after the SSA IR milestone. Each phase is sized for one Claude Code implementation pass.
 
-## Current State
+## Current State (as of Phase 17 completion — 2026-03-24)
 
-**Engine:** SSA-only taint analysis across 10 languages. Two-pass scanning with cross-file summaries (SQLite persistence). Call graph with SCC/topological analysis (constructed but not yet used for scheduling). SSA optimizations: constant propagation, copy propagation, dead code elimination, branch pruning. JS/TS two-level solve for cross-scope taint.
+**Engine:** SSA-only taint analysis across 10 languages. Two-pass scanning with cross-file summaries (both `FuncSummary` and `SsaFuncSummary` persisted to SQLite). Call graph with Tarjan SCC + topological ordering used for pass 2 scheduling (callee-first batch processing with SCC fixed-point iteration, max 3 iterations). SSA optimizations: constant propagation, copy propagation, alias analysis, dead code elimination, type fact inference, points-to analysis. JS/TS two-level solve for cross-scope taint. k=1 call-site-sensitive inline analysis with caching. Abstract interpretation (interval + string product domain) with widening at loop heads. Constraint solving (PathEnv with equality/relational/disequality constraints). Symbolic feasibility checking (single-path, constraint-based, produces Infeasible/Confirmed/Inconclusive verdicts). Points-based confidence scoring integrating all evidence sources.
 
-**Precision:** 67.1% precision / 96.6% recall / 79.2% F1 on 103-case benchmark (Phase 30). 28 false positives out of 44 safe cases. Recall is strong; precision is the bottleneck.
+**Test infrastructure:** 880+ tests (795 lib + 85 integration/fixture), 0 failures. 265 SSA corpus fixtures. 6 cross-file integration test projects. Real-world fixtures verify specific rule IDs, line ranges, and must_match semantics. Negative tests (e.g., `unsafe_string_bounded.js`) prove suppression does NOT over-fire.
 
-**Test infrastructure:** 439 lib tests, 268 real-world fixtures (10 languages), 103 benchmark cases (6 languages), 265 SSA corpus fixtures, 8 integration test projects. Benchmark has regression thresholds enforced in CI (P≥60.4%, R≥91.4%, F1≥72.9%).
+**Implemented phases (1-17):** All implemented and wired into the default scan pipeline. See phase-by-phase sections below for details. All features default ON except state analysis (`cfg.scanner.enable_state_analysis`). Feature gates: `NYX_CONTEXT_SENSITIVE`, `NYX_ABSTRACT_INTERP`, `NYX_CONSTRAINT`, `NYX_SYMEX` (all default ON).
 
-**False positive root causes (observed from benchmark):**
-- Allowlist/dominated-check patterns not recognized as validation (10 FP across 5 languages)
-- Interprocedural sanitizer calls not resolved (5 FP — sanitizer applied via helper function)
-- Non-security sinks flagged (5 FP — console.log, Logger.info, etc.)
-- Type-check guards not recognized (5 FP — typeof, isinstance, strconv.Atoi, is_numeric, regex)
-- Inline sanitizers partially missed (3 FP — some languages work, others don't)
-
-**One false negatives:** Java `HttpClient.send()` (variable receiver doesn't match type-qualified sink).
-
-**Language coverage disparity:**
-
-| Language | Rules | Sanitizers | Framework Support | Benchmark Cases |
-|----------|-------|------------|-------------------|-----------------|
-| Python | 24 | 6 | Flask, Django, Jinja2, pickle | 21 |
-| Java | 18 | 1 | Spring, Hibernate, JPA, JNDI | 19 |
-| JavaScript | 16+2 gated | 5 | Express, DOM APIs | 21 |
-| TypeScript | 15+2 gated | 4 | (shares JS rules) | 0 |
-| Ruby | 14 | 3 | Rails (basic) | 1 |
-| Go | 14 | 3 | (stdlib only) | 21 |
-| PHP | 13 | 3 | (no framework) | 20 |
-| C | 10 | 1 | N/A | 0 |
-| C++ | 10 | 1 | N/A | 0 |
-| Rust | 10 | 3 | (stub) | 0 |
-
-Java has only 1 sanitizer rule (HtmlUtils.htmlEscape + StringEscapeUtils.escapeHtml4) despite 18 total rules — explaining its 12.5% TN rate (worst of any language). Go, C, C++, Rust have no framework-specific models. TypeScript, C, C++, Rust have zero benchmark cases.
-
-**Architectural debt (from audit):**
-- Call graph built but topo order not used for pass 2 scheduling
-- `SsaFuncSummary` computed intra-file but not persisted to SQLite for cross-file use
-- `Diag.confidence` field exists but is `None` for taint findings
-- Type facts computed but only used for SQL injection suppression on int-typed values
-- No field sensitivity — `obj.safe_field` and `obj.tainted_field` conflated
-- No alias tracking — sanitization of aliased references not propagated
-- No widening — loops with growing taint sets rely on MAX_ORIGINS=4 cap
-- `find_call_node` search depth fixed at 2 levels — misses deeply wrapped calls
-- Member expression classification uses suffix-matching — false positive risk on nested objects
+**Remaining architectural debt:**
+- SSA summaries discarded during SCC fixed-point iteration (only `FuncSummary` caps updated between iterations — precision loss for mutually recursive functions)
+- Alias analysis is copy-propagation-based, not field/reference-sensitive
+- Gated sinks only for JS/TS and Python (Java/Go/Ruby/etc. have no gated sink rules)
+- Guard detection is name-based pattern matching ("validate", "sanitize", "check_"), not semantic
 - Callee normalization discards module path (`std::env::var` → `var`) — overload ambiguity
+- Single-path symbolic execution (no forking) — Phase 18b addresses this
 
 ---
 
@@ -814,49 +784,420 @@ Phase 15 (constraint solving). Phase 10 (type facts). Phase 12 (field sensitivit
 
 ---
 
-## Phase 18: Symbolic Execution (Targeted)
+## Phase 18a: Symbolic Value Representation and Expression Trees
 
-**Category:** Analysis Depth — Symbolic Execution
+**Category:** Analysis Depth — Symbolic Execution Foundation
 
-**Why now:** With abstract interpretation, constraint solving, and rich summaries in place, targeted symbolic execution can explore specific paths to confirm or deny vulnerability reachability. This is the deepest analysis layer — use sparingly for high-value confirmation.
+**Why now:** The current `src/symex.rs` (470 lines) performs single-path constraint-based feasibility checking using `PathEnv` — a concrete value-fact domain. This is useful but limited: it can detect contradictory equality constraints but cannot reason about symbolic relationships between values, track how tainted input transforms through arithmetic/string operations, or represent the symbolic conditions under which a vulnerability is reachable. A proper symbolic execution engine requires symbolic expression trees that preserve the structure of computations rather than collapsing them into concrete bounds.
+
+### Current state (what exists)
+- `src/symex.rs`: `annotate_findings()` walks a single path through SSA blocks, applies branch constraints via `constraint::refine_env()`, detects unsatisfiability. Produces `SymbolicVerdict` (Confirmed/Infeasible/Inconclusive). Bounded by `MAX_CANDIDATES=50`, `MAX_PATH_BLOCKS=100`. Integrated into taint pipeline at 3 call sites in `taint/mod.rs`.
+- `src/constraint/`: `PathEnv` (1432 LOC domain), `refine_env()` solver, `lower_condition()` for CFG-to-constraint lowering. Tracks `ValueFact` per SSA value (exact, lo, hi, null, types, bool_state), equality/disequality/relational constraints. 100+ solver tests.
+- `src/abstract_interp/`: `IntervalFact` + `StringFact` product domain with proper lattice ops. Integrated into `SsaTaintState.abstract_state`. Widened at loop heads. Used for sink suppression.
+- `src/evidence.rs`: `SymbolicVerdict` struct with `verdict`, `constraints_checked`, `paths_explored`, `witness: Option<String>`. Confidence scoring: Infeasible → -5 points, Confirmed → +2 points.
 
 ### Goals
-- Implement targeted symbolic execution for confirming taint findings
-- Use symbolic execution to verify that a taint path is feasible (not pruned by constraints)
-- Generate concrete inputs that trigger the vulnerability (proof of exploitability)
-- Limit scope: only symbolically execute high-confidence findings, not the entire program
+- Define `SymbolicValue` — a symbolic expression tree that preserves computation structure (not just concrete bounds)
+- Define `SymbolicState` — mapping from SSA values to symbolic values + accumulated path constraints
+- Implement forward symbolic transfer over SSA instructions (constants, assignments, binary ops, calls, phis, sources)
+- Restructure `src/symex.rs` into `src/symex/` module directory for the growing engine
+- Replace the current `PathEnv`-only approach with symbolic expressions that feed into constraint solving
+- Maintain backward compatibility: the existing `annotate_findings()` API and `SymbolicVerdict` output remain unchanged
 
-### Files/systems likely to be touched
-- New: `src/symex/` — symbolic execution engine
-- `src/symex/state.rs` — symbolic state
-- `src/symex/executor.rs` — path explorer
-- `src/constraint.rs` — integration with constraint solver
-- `src/taint/ssa_transfer.rs` — trigger symbolic execution for high-value findings
+### Files/systems to be touched
+- Restructure: `src/symex.rs` → `src/symex/mod.rs` (public API, `annotate_findings`)
+- New: `src/symex/value.rs` — `SymbolicValue` enum and expression constructors
+- New: `src/symex/state.rs` — `SymbolicState` mapping + path constraint accumulation
+- New: `src/symex/transfer.rs` — forward symbolic transfer over `SsaInst` / `SsaOp`
+- Modify: `src/symex/mod.rs` — `analyse_finding_path()` upgraded to use `SymbolicState` instead of raw `PathEnv`
+- Modify: `src/constraint/solver.rs` — accept symbolic expressions as constraint operands (extend `refine_env` or add `refine_symbolic`)
+- Modify: `src/lib.rs` or `src/main.rs` — update module declaration from `mod symex;` to `mod symex;` (directory)
 
 ### Concrete implementation tasks
-1. Define `SymbolicValue` — symbolic representation of values (concrete, symbolic variable, expression tree)
-2. Define `SymbolicState` — mapping from SSA values to symbolic values + path constraints
-3. Implement forward symbolic execution over SSA blocks, collecting path constraints at branches
-4. At sink nodes: check if path constraints are satisfiable with tainted symbolic source
-5. If satisfiable: upgrade finding confidence to High with proof witness
-6. If unsatisfiable: downgrade finding confidence to Low (infeasible path)
-7. Limit: max 100 blocks per symbolic execution; max 3 path forks per finding
-8. Add test fixtures demonstrating symbolic execution confirmation
+
+1. **Restructure into module directory.** Move `src/symex.rs` to `src/symex/mod.rs`. Verify all imports and call sites (`taint/mod.rs` lines ~154, ~434, ~485) still compile. Add `pub mod value; pub mod state; pub mod transfer;` declarations.
+
+2. **Define `SymbolicValue` enum** in `src/symex/value.rs`:
+   ```
+   SymbolicValue:
+     Concrete(i64)                         — known integer constant
+     ConcreteStr(String)                   — known string constant
+     Symbol(SsaValue)                      — unconstrained symbolic input (taint source or unknown param)
+     BinOp(Op, Box<SymbolicValue>, Box<SymbolicValue>)  — arithmetic: Add, Sub, Mul, Div, Mod
+     Concat(Box<SymbolicValue>, Box<SymbolicValue>)     — string concatenation
+     Call(String, Vec<SymbolicValue>)      — uninterpreted function application
+     Phi(Vec<(BlockId, SymbolicValue)>)    — phi: predecessor-conditional value
+     Unknown                               — no information (top)
+   ```
+   Implement: `Display` for human-readable printing, `Clone`, `PartialEq`, `Eq`, `Hash`. Add `fn is_concrete(&self) -> bool`, `fn as_concrete_int(&self) -> Option<i64>`, `fn depth(&self) -> usize` (for expression tree depth bounding). Add `const MAX_EXPR_DEPTH: usize = 32` — if building an expression would exceed this, collapse to `Unknown` to prevent blowup.
+
+3. **Define `SymbolicState`** in `src/symex/state.rs`:
+   ```
+   SymbolicState:
+     values: HashMap<SsaValue, SymbolicValue>     — current symbolic value per SSA value
+     path_constraints: Vec<PathConstraint>         — accumulated branch conditions on this path
+     tainted_symbols: HashSet<SsaValue>            — which symbols represent tainted input
+   ```
+   Where `PathConstraint` wraps a `ConditionExpr` + polarity (true/false branch taken).
+   Implement: `fn new() -> Self`, `fn get(&self, v: SsaValue) -> &SymbolicValue` (returns `Unknown` for unmapped), `fn set(&mut self, v: SsaValue, val: SymbolicValue)`, `fn add_constraint(&mut self, cond: ConditionExpr, polarity: bool)`, `fn is_tainted(&self, v: SsaValue) -> bool` (checks if value transitively depends on any tainted symbol).
+
+4. **Implement forward symbolic transfer** in `src/symex/transfer.rs`:
+   - `fn transfer_inst(state: &mut SymbolicState, inst: &SsaInst, cfg: &Cfg)` — process one SSA instruction:
+     - `SsaOp::Const` → `Concrete(n)` or `ConcreteStr(s)` from `NodeInfo.const_text`
+     - `SsaOp::Assign { src, .. }` with single operand → copy symbolic value
+     - `SsaOp::Assign { src, .. }` with `bin_op` → `BinOp(op, lhs_sym, rhs_sym)` (if depth < MAX_EXPR_DEPTH, else `Unknown`)
+     - `SsaOp::Call { args, result, .. }` → For known pure functions (parseInt, int, ord, len, etc.): model return symbolically. For unknown: `Call(callee_name, arg_syms)`. For sanitizers: `Unknown` (strips symbolic taint info — conservative).
+     - `SsaOp::Source` → `Symbol(result_value)` + mark as tainted
+     - `SsaOp::Param { index }` → `Symbol(result_value)` (external input)
+     - `SsaOp::Phi { operands }` → `Phi([(pred_block, operand_sym), ...])` — preserve structure for path-conditional resolution during exploration
+     - `SsaOp::Nop` / `SsaOp::CatchParam` → no-op / `Symbol(result_value)`
+   - `fn transfer_block(state: &mut SymbolicState, block: &SsaBlock, cfg: &Cfg)` — process all instructions in a block sequentially
+
+5. **Seed `SymbolicState` from optimization results.** At entry block:
+   - Seed from `const_values: HashMap<SsaValue, ConstLattice>` — map `ConstLattice::Int(n)` → `Concrete(n)`, `ConstLattice::Str(s)` → `ConcreteStr(s)`
+   - Seed from `type_facts` — record type constraints for future path refinement
+   - Mark source SSA values from the finding's flow steps as tainted symbols
+
+6. **Upgrade `analyse_finding_path()`** in `src/symex/mod.rs`:
+   - Create `SymbolicState` at entry, seed from const_values + type_facts + finding source
+   - Walk path blocks: for each block, run `transfer_block()` to build symbolic values, then at branch terminators build `PathConstraint` from `ConditionExpr` + polarity
+   - After each constraint: extract concrete bounds from symbolic state and check satisfiability using existing `constraint::refine_env()` (bridge: convert `SymbolicValue` constraints to `PathEnv` refinements)
+   - Preserve existing `Verdict` semantics: `Infeasible` if UNSAT detected, `Confirmed` if path traversed without contradiction, `Inconclusive` if too many unknowns
+   - **Critical**: the `SymbolicVerdict` output format does NOT change — same struct, same fields, same integration with `Evidence` and confidence scoring
+
+7. **Add unit tests** in `src/symex/value.rs` and `src/symex/state.rs`:
+   - Expression depth bounding: verify `MAX_EXPR_DEPTH` prevents blowup
+   - Concrete folding: `BinOp(Add, Concrete(3), Concrete(5))` simplifies to `Concrete(8)` during construction
+   - Taint tracking: `is_tainted(v)` returns true when v depends on a source symbol through any expression tree
+   - State seeding: verify const_values correctly map to symbolic values
+
+8. **Add integration fixture** `tests/fixtures/real_world/javascript/taint/symex_expression_tree.js`:
+   ```javascript
+   const express = require("express");
+   const app = express();
+   app.get("/api", (req, res) => {
+       const x = parseInt(req.query.offset);  // tainted, but int-typed
+       const y = x * 2 + 1;                   // symbolic: (Symbol(x) * 2) + 1
+       const query = "SELECT * FROM t LIMIT " + y;
+       connection.query(query);                // sink — should be suppressed (int arithmetic on int-typed value)
+   });
+   ```
+   This tests that symbolic expressions preserve arithmetic structure through the taint path, enabling type+interval suppression to work on derived values (not just direct sources).
+
+### Architecture notes
+
+- **Expression simplification**: Implement basic constant folding during construction (`Concrete + Concrete → Concrete`). Do NOT implement a full simplifier — that's premature optimization. The constraint solver handles reasoning; the expression tree just preserves structure.
+- **Phi handling**: Store phi operands symbolically but do NOT resolve them during single-path exploration. Phase 18b's multi-path forking will resolve phis by choosing the predecessor-specific operand on each explored path.
+- **No forking yet**: This phase stays single-path. The symbolic state enriches what the single-path explorer can reason about, but does not add path splitting. That's Phase 18b.
+- **Backward compatibility**: `annotate_findings()` signature, `SymbolicVerdict` struct, confidence scoring integration, and all 3 call sites in `taint/mod.rs` remain unchanged.
 
 ### Validation requirements
-- Symbolic execution terminates on all triggered findings
-- No TP regressions
-- At least 1 finding upgraded with proof witness
-- At least 1 finding downgraded as infeasible
+- All 880+ existing tests pass (`cargo test`)
+- SSA corpus (265 fixtures) terminates without panics
+- Existing symex tests continue to pass (feature gate, path extraction, skip-validated, skip-short)
+- New unit tests for SymbolicValue, SymbolicState, and transfer pass
+- Integration fixture demonstrates symbolic expression tracking through arithmetic
+- No TP regressions on real-world fixtures
 
 ### Exit criteria
-- Targeted symbolic execution implemented for SSA taint findings
-- Path feasibility checked via constraint solving
-- Proof witnesses generated for confirmed findings
-- Bounded: execution limited by block count and fork count
+- `src/symex/` module directory with `value.rs`, `state.rs`, `transfer.rs`, `mod.rs`
+- `SymbolicValue` enum with expression tree, depth bounding, concrete folding
+- `SymbolicState` with value mapping, path constraint accumulation, taint tracking
+- Forward symbolic transfer over all `SsaOp` variants
+- `analyse_finding_path()` upgraded to build and use `SymbolicState`
+- Existing `SymbolicVerdict` output unchanged — drop-in replacement for current approach
 
 ### Dependencies
-Phase 17 (abstract interpretation). Phase 15 (constraint solving). Phase 8 (summaries for interprocedural symbolic execution).
+Phase 17 (abstract interpretation — provides `AbstractState` on `SsaTaintState` and interval/string domains that symbolic expressions can be compared against). Phase 15 (constraint solving — `PathEnv` + `refine_env()` used for satisfiability checking of symbolic constraints). Phase 8 (SSA summaries — `SsaFuncSummary` provides interprocedural callee modeling for `Call` symbolic values).
+
+---
+
+## Phase 18b: Multi-Path Symbolic Exploration with Bounded Forking
+
+**Category:** Analysis Depth — Symbolic Execution Core
+
+**Why now:** Phase 18a gives us symbolic expression trees and a `SymbolicState` that tracks how tainted input transforms through computation — but only along a single path. The real power of symbolic execution comes from exploring multiple paths through the program to determine which are feasible and which are not. A taint finding that reports "source reaches sink" may have 3 possible paths, 2 of which are infeasible. Without multi-path exploration, we can only check the single reported path. With forking, we can explore alternatives, confirm the one true feasible path, and produce stronger verdicts.
+
+### Current state (after Phase 18a)
+- `src/symex/`: Module directory with `SymbolicValue` expression trees, `SymbolicState` (value map + path constraints + taint tracking), forward symbolic transfer over all SSA ops.
+- `analyse_finding_path()`: Single-path exploration using `SymbolicState`. Walks the reported taint path, builds symbolic expressions, checks constraints. Produces `SymbolicVerdict`.
+- `src/constraint/`: `PathEnv` solver with `refine_env()` — detects unsatisfiability for equality/comparison constraints.
+- Budgets: `MAX_CANDIDATES=50` per file, `MAX_PATH_BLOCKS=100` per path, `MAX_EXPR_DEPTH=32` per expression.
+
+### Goals
+- Implement bounded path forking at branch points where both successors are taint-reachable
+- Explore up to N paths per finding (configurable, default 8) with depth and fork budgets
+- Resolve phi nodes path-sensitively: on each explored path, select the predecessor-specific phi operand
+- Produce aggregate verdicts: if ANY explored path is feasible → `Confirmed`; if ALL paths are infeasible → `Infeasible`; mixed → `Confirmed` (conservative)
+- Implement work queue with priority (shorter paths first) and subsumption pruning
+- Maintain termination guarantees: hard caps on forks, paths, and total symbolic steps
+
+### Files/systems to be touched
+- New: `src/symex/executor.rs` — multi-path exploration engine with work queue
+- Modify: `src/symex/mod.rs` — `analyse_finding_path()` delegates to executor
+- Modify: `src/symex/state.rs` — add `clone()` for forking, phi resolution helper
+- Modify: `src/symex/transfer.rs` — phi transfer resolves to predecessor-specific operand when exploring a known predecessor edge
+- Modify: `src/evidence.rs` — `SymbolicVerdict.paths_explored` reflects actual count
+
+### Concrete implementation tasks
+
+1. **Define exploration budgets** in `src/symex/executor.rs`:
+   ```
+   const MAX_FORKS_PER_FINDING: usize = 3;   — max branch forks before stopping
+   const MAX_PATHS_PER_FINDING: usize = 8;   — max total paths explored
+   const MAX_TOTAL_STEPS: usize = 500;        — max symbolic transfer steps across all paths
+   ```
+   These prevent exponential blowup. When any budget is exhausted, stop exploring and produce verdict from what's been seen so far.
+
+2. **Define `ExplorationState`** in `src/symex/executor.rs`:
+   ```
+   ExplorationState:
+     sym_state: SymbolicState              — current symbolic state for this path
+     remaining_blocks: Vec<BlockId>        — blocks still to visit on this path
+     forks_used: usize                     — forks consumed by this path's ancestors
+     steps_taken: usize                    — symbolic transfer steps on this path
+   ```
+
+3. **Define `ExplorationResult`** in `src/symex/executor.rs`:
+   ```
+   ExplorationResult:
+     paths_completed: Vec<PathOutcome>     — outcomes of all fully explored paths
+     paths_pruned: usize                   — paths abandoned due to budget or subsumption
+     total_steps: usize                    — total symbolic steps across all paths
+   ```
+   Where `PathOutcome` is `{ verdict: Verdict, constraints_checked: u32, witness_state: Option<SymbolicState> }`.
+
+4. **Implement `explore_finding()`** — the multi-path engine:
+   ```
+   fn explore_finding(
+       finding: &Finding,
+       ssa: &SsaBody,
+       cfg: &Cfg,
+       const_values: &HashMap<SsaValue, ConstLattice>,
+       type_facts: &TypeFactResult,
+   ) -> ExplorationResult
+   ```
+   Algorithm:
+   - Compute taint-reachable blocks: BFS/DFS from source block to sink block using SSA block successors, collecting all blocks that are on SOME path from source to sink.
+   - Seed initial `ExplorationState` with entry symbolic state and full path from source block to first branch.
+   - **Work queue** (VecDeque or BinaryHeap sorted by remaining_blocks.len() — shorter paths first):
+     - Pop next state from queue.
+     - Process blocks sequentially: run `transfer_block()` for each.
+     - At `Terminator::Branch`: check if both successors are taint-reachable.
+       - If only one successor is reachable: continue on that successor (no fork).
+       - If both are reachable AND `forks_used < MAX_FORKS_PER_FINDING` AND `queue.len() + 1 < MAX_PATHS_PER_FINDING`:
+         - **Fork**: clone `SymbolicState`, apply true-branch constraint to one copy, false-branch constraint to the other.
+         - Check each for unsatisfiability immediately — if UNSAT, record as `Infeasible` and don't enqueue.
+         - Enqueue both feasible successors with updated `remaining_blocks`.
+         - Increment `forks_used` on both.
+       - If budget exhausted: pick the successor that's on the originally-reported path (fall back to single-path behavior).
+     - At `Terminator::Goto`: continue to successor.
+     - At `Terminator::Return` or end of path: record `PathOutcome`.
+   - After queue is drained or total_steps exceeded: aggregate results.
+
+5. **Aggregate verdict logic**:
+   - If ALL completed paths are `Infeasible` → verdict `Infeasible` (no feasible path exists)
+   - If ANY completed path is `Confirmed` (reached sink without contradiction) → verdict `Confirmed`
+   - If some paths are `Confirmed` and some `Infeasible` → verdict `Confirmed` (at least one feasible path)
+   - If queue was exhausted by budget → verdict `Inconclusive` (couldn't prove either way)
+   - `paths_explored` = total completed paths (not pruned)
+   - `constraints_checked` = sum across all paths
+
+6. **Path-sensitive phi resolution** in `src/symex/transfer.rs`:
+   - When processing a phi node and the exploration knows which predecessor block we arrived from (tracked in `ExplorationState`), resolve to that predecessor's operand's symbolic value.
+   - If predecessor is unknown (shouldn't happen in well-formed SSA), fall back to `Phi(...)` expression (preserve structure).
+
+7. **Subsumption pruning** (optional, for efficiency):
+   - Before enqueueing a new path state, check if an already-completed path with the same block sequence had a superset of constraints. If so, the new path is subsumed — skip it.
+   - Simple implementation: hash the `(remaining_blocks, path_constraints.len())` tuple. If seen before with fewer constraints, skip.
+   - This is optional — the hard budget caps already prevent blowup. Only implement if test fixtures show redundant exploration.
+
+8. **Wire into `analyse_finding_path()`** in `src/symex/mod.rs`:
+   - Replace the current single-path loop with a call to `explore_finding()`.
+   - Map `ExplorationResult` to `SymbolicVerdict` using the aggregation logic above.
+   - The `annotate_findings()` entry point remains unchanged.
+
+9. **Add unit tests** in `src/symex/executor.rs`:
+   - Budget enforcement: verify MAX_FORKS, MAX_PATHS, MAX_TOTAL_STEPS all cap exploration
+   - Diamond CFG: source → branch → {A, B} → merge → sink. Both paths feasible → `Confirmed` with 2 paths explored.
+   - Contradictory branches: source → branch → {true_path (x==1), false_path (x==2)} → each has sink. Verify both paths explored independently with correct constraints.
+   - Infeasible-only: all paths to sink are infeasible → `Infeasible` verdict.
+   - Mixed: one path feasible, one infeasible → `Confirmed` verdict.
+   - Budget exhaustion: create a CFG with many branches, verify exploration stops at budget and returns `Inconclusive`.
+
+10. **Add integration fixture** `tests/fixtures/real_world/javascript/taint/symex_multipath.js`:
+    ```javascript
+    const express = require("express");
+    const app = express();
+    app.get("/api", (req, res) => {
+        const mode = req.query.mode;
+        let result;
+        if (mode === "safe") {
+            result = "constant";         // not tainted — this path is safe
+        } else {
+            result = req.query.payload;  // tainted — this path is dangerous
+        }
+        eval(result);                    // sink — one path feasible, one not
+    });
+    ```
+    Expected: finding should be `Confirmed` (the else-branch path is feasible). With multi-path, the engine explores both branches and confirms at least one reaches the sink with tainted data.
+
+### Architecture notes
+
+- **Taint-reachable block computation**: This is a lightweight pre-pass (BFS from source block, intersected with reverse-BFS from sink block). It prevents exploring branches that can never reach the sink, dramatically reducing fork count.
+- **State cloning cost**: `SymbolicState` contains a `HashMap<SsaValue, SymbolicValue>` + `Vec<PathConstraint>`. Cloning is O(state_size). With `MAX_EXPR_DEPTH=32` and typical SSA bodies of 50-200 values, this is small. No optimization needed.
+- **No loop handling in executor**: The executor walks a DAG of blocks from source to sink. If the path passes through a loop, the loop body is traversed once (the SSA blocks along the taint path). The executor does NOT iterate loops — that's the taint engine's job (with widening). Symbolic execution only checks path feasibility, not loop invariants.
+- **Interaction with existing taint analysis**: The symex executor runs AFTER taint analysis has produced findings. It does not replace taint analysis — it refines findings by checking path feasibility. The taint engine's worklist, convergence, and abstract interpretation remain unchanged.
+
+### Validation requirements
+- All existing tests pass (`cargo test`)
+- Existing single-path fixtures still produce correct verdicts (no regression)
+- New multi-path fixtures demonstrate forked exploration
+- Budget enforcement tests prove termination on adversarial inputs
+- `paths_explored` in `SymbolicVerdict` correctly reflects actual exploration count
+- No TP regressions on real-world fixtures
+
+### Exit criteria
+- `src/symex/executor.rs` implements bounded multi-path exploration
+- Fork/path/step budgets enforced, termination guaranteed
+- Phi nodes resolved path-sensitively during exploration
+- Aggregate verdicts correctly combine per-path outcomes
+- `SymbolicVerdict.paths_explored` reflects real count
+- At least 1 fixture demonstrates multi-path exploration improving verdict quality
+
+### Dependencies
+Phase 18a (symbolic value representation — required for `SymbolicState` cloning and path-sensitive phi resolution). Phase 15 (constraint solving — `refine_env()` used for constraint checking at each fork).
+
+---
+
+## Phase 18c: Witness Generation and Cross-File Symbolic Summaries
+
+**Category:** Analysis Depth — Symbolic Execution Payoff
+
+**Why now:** Phase 18b gives us multi-path exploration with bounded forking. The engine can now confirm or deny path feasibility. But two capabilities are missing for production-grade symbolic execution: (1) when a path IS feasible, generate a concrete proof witness — an actual input value that would trigger the vulnerability, and (2) when a taint path crosses file boundaries, model callee behavior symbolically using SSA summaries rather than treating calls as opaque. Witnesses are the user-facing payoff (actionable proof). Cross-file symbolic summaries are the precision multiplier (fewer Inconclusive verdicts on real codebases).
+
+### Current state (after Phase 18b)
+- `src/symex/`: Full module with `SymbolicValue` expression trees, `SymbolicState`, forward transfer, and multi-path `explore_finding()` with bounded forking.
+- Multi-path exploration produces aggregate `SymbolicVerdict` with accurate `paths_explored` count.
+- `witness: Option<String>` field on `SymbolicVerdict` exists but is always `None`.
+- Cross-file calls during symbolic execution are treated as `Call(callee, args)` → `Unknown` (no interprocedural modeling).
+- `SsaFuncSummary` exists with `param_to_return: Vec<(usize, TaintTransform)>` and `param_to_sink: Vec<(usize, Cap)>` — rich per-parameter transforms available but not used by symex.
+
+### Goals
+- Generate human-readable proof witnesses for `Confirmed` findings — concrete input values that satisfy all path constraints and trigger the vulnerability
+- Model cross-file callee behavior during symbolic execution using `SsaFuncSummary` transforms
+- Produce actionable output: "input `x = '<script>alert(1)</script>'` at line 5 reaches `eval()` at line 15 via path: source → branch(mode != 'safe') → assignment → sink"
+- Calibrate confidence scoring weights based on witness quality
+- Integrate witnesses into Evidence flow steps for structured output (JSON/SARIF)
+
+### Files/systems to be touched
+- New: `src/symex/witness.rs` — witness extraction and formatting
+- Modify: `src/symex/executor.rs` — capture `SymbolicState` at sink for witness extraction
+- Modify: `src/symex/transfer.rs` — model known callee summaries symbolically during transfer
+- Modify: `src/symex/mod.rs` — wire witness generation into verdict production
+- Modify: `src/evidence.rs` — extend `SymbolicVerdict.witness` format, add witness to `FlowStep` output
+- Modify: `src/taint/ssa_transfer.rs` — pass `GlobalSummaries` (or a symbolic summary subset) to symex when available
+- Modify: `src/taint/mod.rs` — thread summary context to `annotate_findings()`
+
+### Concrete implementation tasks
+
+1. **Witness extraction** in `src/symex/witness.rs`:
+   - `fn extract_witness(state: &SymbolicState, finding: &Finding, ssa: &SsaBody) -> Option<String>`:
+     - Identify the tainted source symbol(s) from `state.tainted_symbols`
+     - Walk path constraints backward from sink to source, collecting concrete bounds on the source symbol
+     - If source is string-typed: generate a concrete string that satisfies all constraints (e.g., `"<script>alert(1)</script>"` for XSS, `"'; DROP TABLE users; --"` for SQL injection, `"$(whoami)"` for command injection)
+     - If source is int-typed: pick a concrete integer within the proven bounds
+     - If constraints are too complex for concrete generation: produce a descriptive witness instead (`"any string where mode != 'safe'"`)
+   - Witness templates per vulnerability class (keyed by `Cap`):
+     - `Cap::CODE_EXEC` / XSS → `"<script>alert('xss')</script>"`
+     - `Cap::SQL_QUERY` → `"' OR 1=1 --"`
+     - `Cap::SHELL_ESCAPE` → `"$(id)"`
+     - `Cap::FILE_IO` → `"../../etc/passwd"`
+     - `Cap::SSRF` → `"http://169.254.169.254/metadata"`
+     - `Cap::DESERIALIZE` → `"malicious_serialized_object"`
+   - Templates are defaults — if constraints narrow the input (e.g., must start with "http://"), respect the constraints and adapt the template.
+
+2. **Witness formatting**:
+   - `fn format_witness(source_var: &str, witness_value: &str, sink_var: &str, sink_line: usize, cap: Cap) -> String`:
+   - Produce: `"input x = '$(id)' at source (line 5) reaches exec() at sink (line 15)"`
+   - Include path summary: list branch conditions taken (e.g., `"via: mode != 'safe' (line 8)"`)
+   - Keep it concise — one line for simple paths, multi-line for complex ones
+
+3. **Capture symbolic state at sink** in `src/symex/executor.rs`:
+   - When a path reaches the sink block with verdict `Confirmed`, capture a clone of `SymbolicState` as `witness_state` on `PathOutcome`.
+   - Pass the best witness state (shortest path, most constrained) to `extract_witness()`.
+
+4. **Cross-file symbolic summary modeling** in `src/symex/transfer.rs`:
+   - When processing `SsaOp::Call { callee, args, result, .. }`:
+     - Check if callee has an `SsaFuncSummary` available (via `GlobalSummaries.get_ssa()`)
+     - If summary has `param_to_return` with `Identity` for param i → return symbolic value = `args[i]`'s symbolic value (pass-through)
+     - If summary has `param_to_return` with `StripBits(caps)` for param i → return `Unknown` (sanitized — symbolic taint stripped)
+     - If summary has `param_to_return` with `AddBits(caps)` for param i → return `Symbol(fresh)` marked tainted (new taint introduced)
+     - If summary has `source_caps` → return `Symbol(fresh)` marked tainted (function is a source)
+     - If no summary or no matching transform → return `Call(callee, arg_syms)` (uninterpreted, as before)
+   - This requires threading a summary lookup function into the transfer context. Add `summary_lookup: Option<&dyn Fn(&str) -> Option<&SsaFuncSummary>>` to `transfer_block` or to a `TransferContext` struct.
+
+5. **Thread `GlobalSummaries` to symex** in `src/taint/mod.rs`:
+   - Extend `annotate_findings()` signature to accept optional summary context:
+     ```rust
+     pub fn annotate_findings(
+         findings: &mut [Finding],
+         ssa: &SsaBody,
+         cfg: &Cfg,
+         const_values: &HashMap<SsaValue, ConstLattice>,
+         type_facts: &TypeFactResult,
+         summaries: Option<&GlobalSummaries>,  // NEW
+     )
+     ```
+   - Update all 3 call sites in `taint/mod.rs` to pass the available `GlobalSummaries` (or `None` if not available).
+   - Inside `analyse_finding_path()`, pass the summary lookup to `explore_finding()`.
+
+6. **Confidence calibration**:
+   - Review the current scoring weights: Infeasible → -5, Confirmed → +2.
+   - With witnesses: Confirmed-with-witness → +3 (stronger than unwitnessed Confirmed).
+   - With cross-file summaries: if symex resolved a cross-file call via summary → confidence bonus +1 (more precise than opaque call).
+   - Update `compute_taint_confidence()` in `src/evidence.rs` accordingly.
+
+7. **Integrate witness into output** in `src/evidence.rs`:
+   - The `witness` field already exists on `SymbolicVerdict`. Just ensure it's serialized in JSON/SARIF output.
+   - Optionally: add witness text to the `explanation` field on `Evidence` for console output.
+
+8. **Add unit tests** in `src/symex/witness.rs`:
+   - Template selection per Cap: verify correct exploit template for each vulnerability class
+   - Constraint-aware witness: if path constraint says `x starts with "http://"`, verify witness respects prefix
+   - Integer witness: if constraint says `5 ≤ x ≤ 100`, verify witness is within bounds
+   - No-witness case: if source is fully unconstrained `Unknown`, verify descriptive fallback text
+
+9. **Add integration fixtures**:
+   - `tests/fixtures/real_world/javascript/taint/symex_witness.js` — simple path, expect witness text in verdict
+   - `tests/fixtures/real_world/python/taint/symex_cross_file_witness.py` (cross-file pair) — taint flows through helper function, expect witness and cross-file summary resolution
+
+### Architecture notes
+
+- **Witness quality is best-effort.** Not all paths can produce clean concrete witnesses. The fallback is always a descriptive string explaining the symbolic constraint. Never block a verdict on witness generation failure.
+- **Summary modeling is conservative.** If a summary transform is ambiguous or missing, treat the call as uninterpreted (`Unknown`). This is strictly more precise than the current approach (which also returns `Unknown`) — we only gain precision, never lose it.
+- **SARIF witness integration.** SARIF has `threadFlows` and `codeFlows` that can carry witness information. If Nyx already emits SARIF, extend the flow steps to include witness data. If not, this is a future enhancement — JSON output with the witness string is sufficient for now.
+- **Performance.** Witness generation is O(path_length × constraint_count) — negligible compared to the exploration itself. Cross-file summary lookup is a single HashMap get per call. No performance concerns.
+
+### Validation requirements
+- All existing tests pass
+- Witness generated for at least 3 different vulnerability classes (XSS, SQLi, CMDI)
+- Cross-file summary resolution reduces Inconclusive verdicts on cross-file fixtures
+- Confidence scoring correctly applies witness bonus
+- Witness text is human-readable and actionable
+- No TP regressions
+
+### Exit criteria
+- `src/symex/witness.rs` generates concrete proof witnesses for Confirmed findings
+- Witness templates cover all 6 major Cap classes (CODE_EXEC, SQL_QUERY, SHELL_ESCAPE, FILE_IO, SSRF, DESERIALIZE)
+- Cross-file callee behavior modeled via `SsaFuncSummary` during symbolic transfer
+- `annotate_findings()` accepts optional `GlobalSummaries` for cross-file resolution
+- `SymbolicVerdict.witness` populated with actionable text
+- Confidence scoring calibrated for witnessed vs unwitnessed verdicts
+- At least 1 cross-file fixture demonstrates summary-aware symbolic execution
+
+### Dependencies
+Phase 18b (multi-path exploration — required for `witness_state` capture on completed paths). Phase 8 (SSA summaries — `SsaFuncSummary` with `TaintTransform` provides the interprocedural modeling basis). Phase 11 (context sensitivity — `GlobalSummaries` already threaded through taint; extend to symex).
 
 ---
 
@@ -1008,6 +1349,14 @@ Alias analysis is only useful if the taint state has field-level granularity. Al
 
 ### Why abstract interpretation and symbolic execution are last (Phases 17-18)
 These are the most expensive analysis features and provide diminishing returns if the underlying precision is poor. They build on constraint solving (Phase 15), type-flow (Phase 16), alias analysis (Phase 13), and points-to (Phase 14). Without these foundations, abstract interpretation would over-approximate wildly and symbolic execution would explore infeasible paths.
+
+### Why symbolic execution is split into three sub-phases (18a, 18b, 18c)
+Full symbolic execution is the single most complex analysis capability in the engine. Building it monolithically would risk a half-baked solution where expression trees, multi-path exploration, and witness generation are all partially implemented but none work end-to-end. The three-phase split follows a strict dependency chain:
+- **18a (expression trees)** is foundational — you cannot fork paths or generate witnesses without symbolic value representations. It also restructures the module directory, which is disruptive to do mid-feature.
+- **18b (multi-path forking)** is the core capability gain. It depends on 18a's expression trees for path-sensitive phi resolution and meaningful constraint checking at fork points. Shipping 18a alone is still useful (richer single-path constraints), but 18b is where symbolic execution becomes genuinely more powerful than the existing constraint checker.
+- **18c (witnesses + cross-file summaries)** is the user-facing payoff. Witnesses require completed exploration paths from 18b. Cross-file summaries require the symbolic transfer infrastructure from 18a. Neither can be built until the exploration engine is stable.
+
+Each sub-phase is independently testable and shippable. After 18a the scanner has richer constraint reasoning. After 18b it can prove paths infeasible that the old approach couldn't. After 18c it produces proof-of-concept exploits and handles cross-file taint symbolically.
 
 ### Why benchmark expansion is a checkpoint, not a prerequisite (Phase 19)
 Individual phases add benchmark fixtures as needed. The expansion phase consolidates, fills gaps for underserved languages, and establishes comprehensive regression thresholds for the complete analysis stack.
