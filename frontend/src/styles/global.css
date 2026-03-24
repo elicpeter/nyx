@@ -2832,11 +2832,16 @@ tr.selected td {
    Debug Views
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Override .content padding/max-width when debug layout is inside it */
+.content:has(.debug-layout) {
+  padding: var(--space-3) var(--space-4);
+  max-width: none;
+}
 .debug-layout {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  height: 100%;
+  height: calc(100vh - var(--header-height) - var(--space-3) * 2);
 }
 
 /* Tab navigation */
@@ -2892,6 +2897,10 @@ tr.selected td {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
+}
+.function-selector-error {
+  font-size: var(--text-xs);
+  color: var(--sev-high);
 }
 .function-selector-select {
   min-width: 300px;

@@ -223,26 +223,19 @@ async fn get_symex(
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
     let config = state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let analysis = debug::analyse_file(&path, &config)?;
-    let (ssa, _opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
+    let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
-    // Build a basic symbolic view from the SSA body
-    // For now, show SSA value symbolic representations
-    let values: Vec<SymexValueView> = (0..ssa.num_values() as u32)
-        .filter_map(|v| {
-            let def = ssa.value_defs.get(v as usize)?;
-            Some(SymexValueView {
-                ssa_value: v,
-                var_name: def.var_name.clone(),
-                expression: format!("v{}", v),
-            })
-        })
-        .collect();
+    let global = load_global_summaries(&state);
 
-    Ok(Json(SymexView {
-        values,
-        path_constraints: vec![],
-        tainted_roots: vec![],
-    }))
+    let sym_state = debug::analyse_function_symex(
+        &ssa,
+        &analysis.cfg,
+        analysis.lang,
+        &opt,
+        global.as_ref(),
+    );
+
+    Ok(Json(SymexView::from_symbolic_state(&sym_state, &ssa)))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

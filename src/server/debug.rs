@@ -8,6 +8,7 @@
 use crate::ast::build_cfg_for_file;
 use crate::callgraph::{CallGraph, CallGraphAnalysis};
 use crate::cfg::{Cfg, EdgeKind, FuncSummaries, StmtKind};
+use crate::constraint::{CompOp, ConditionExpr, ConstValue, Operand};
 use crate::labels::{Cap, DataLabel};
 use crate::ssa::ir::*;
 use crate::ssa::{self, OptimizeResult};
@@ -15,6 +16,7 @@ use crate::state::symbol::SymbolInterner;
 use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
 use crate::summary::GlobalSummaries;
 use crate::symbol::{FuncKey, Lang};
+use crate::symex::state::SymbolicState;
 use crate::taint::domain::VarTaint;
 use crate::taint::ssa_transfer::{SsaTaintEvent, SsaTaintState, SsaTaintTransfer};
 use crate::utils::config::Config;
@@ -22,6 +24,7 @@ use axum::http::StatusCode;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::{EdgeRef, IntoNodeReferences};
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::path::Path;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -599,6 +602,40 @@ pub struct SymexView {
     pub tainted_roots: Vec<u32>,
 }
 
+impl SymexView {
+    pub fn from_symbolic_state(state: &SymbolicState, ssa: &SsaBody) -> Self {
+        let mut values: Vec<SymexValueView> = state
+            .iter_values()
+            .map(|(&v, sym)| SymexValueView {
+                ssa_value: v.0,
+                var_name: ssa.value_defs.get(v.0 as usize).and_then(|d| d.var_name.clone()),
+                expression: format!("{}", sym),
+            })
+            .collect();
+        values.sort_by_key(|v| v.ssa_value);
+
+        let path_constraints = state
+            .path_constraints()
+            .iter()
+            .map(|pc| PathConstraintView {
+                block: pc.block.0,
+                condition: format_condition_expr(&pc.condition),
+                polarity: pc.polarity,
+            })
+            .collect();
+
+        let mut tainted_roots: Vec<u32> =
+            state.tainted_values().iter().map(|v| v.0).collect();
+        tainted_roots.sort();
+
+        SymexView {
+            values,
+            path_constraints,
+            tainted_roots,
+        }
+    }
+}
+
 // ── Call Graph ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -808,7 +845,7 @@ pub fn function_list(analysis: &FileAnalysis) -> Vec<FunctionInfo> {
             name: key.name.clone(),
             namespace: key.namespace.clone(),
             param_count: summary.param_count,
-            line: byte_offset_to_line(&analysis.bytes, summary.entry.index()),
+            line: byte_offset_to_line(&analysis.bytes, analysis.cfg[summary.entry].span.0),
             source_caps: cap_names(summary.source_caps),
             sanitizer_caps: cap_names(summary.sanitizer_caps),
             sink_caps: cap_names(summary.sink_caps),
@@ -876,4 +913,107 @@ pub fn analyse_function_taint(
     };
 
     crate::taint::ssa_transfer::run_ssa_taint_full(ssa, cfg, &transfer)
+}
+
+/// Run symbolic execution on a function's SSA body and return the final state.
+pub fn analyse_function_symex(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    lang: Lang,
+    opt: &OptimizeResult,
+    global_summaries: Option<&GlobalSummaries>,
+) -> SymbolicState {
+    let mut state = SymbolicState::new();
+    state.seed_from_const_values(&opt.const_values);
+
+    let summary_ctx = global_summaries.map(|gs| {
+        crate::symex::transfer::SymexSummaryCtx {
+            global_summaries: gs,
+            lang,
+            namespace: "",
+            type_facts: Some(&opt.type_facts),
+        }
+    });
+    let heap_ctx = crate::symex::transfer::SymexHeapCtx {
+        points_to: &opt.points_to,
+        ssa,
+        lang,
+    };
+
+    // BFS over blocks from entry to cover all reachable blocks.
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(ssa.entry);
+    visited.insert(ssa.entry);
+
+    while let Some(bid) = queue.pop_front() {
+        let block = ssa.block(bid);
+        crate::symex::transfer::transfer_block(
+            &mut state,
+            block,
+            cfg,
+            ssa,
+            summary_ctx.as_ref(),
+            Some(&heap_ctx),
+            None, // no interproc context
+            Some(lang),
+        );
+        for &succ in &block.succs {
+            if visited.insert(succ) {
+                queue.push_back(succ);
+            }
+        }
+    }
+
+    state
+}
+
+/// Format a `ConditionExpr` as a human-readable string.
+fn format_condition_expr(cond: &ConditionExpr) -> String {
+    match cond {
+        ConditionExpr::Comparison { lhs, op, rhs } => {
+            let op_str = match op {
+                CompOp::Eq => "==",
+                CompOp::Neq => "!=",
+                CompOp::Lt => "<",
+                CompOp::Gt => ">",
+                CompOp::Le => "<=",
+                CompOp::Ge => ">=",
+            };
+            format!("{} {} {}", format_operand(lhs), op_str, format_operand(rhs))
+        }
+        ConditionExpr::NullCheck { var, is_null } => {
+            if *is_null {
+                format!("v{} == null", var.0)
+            } else {
+                format!("v{} != null", var.0)
+            }
+        }
+        ConditionExpr::TypeCheck {
+            var,
+            type_name,
+            positive,
+        } => {
+            if *positive {
+                format!("typeof v{} === \"{}\"", var.0, type_name)
+            } else {
+                format!("typeof v{} !== \"{}\"", var.0, type_name)
+            }
+        }
+        ConditionExpr::BoolTest { var } => format!("v{}", var.0),
+        ConditionExpr::Unknown => "?".to_string(),
+    }
+}
+
+fn format_operand(op: &Operand) -> String {
+    match op {
+        Operand::Value(v) => format!("v{}", v.0),
+        Operand::Const(c) => match c {
+            ConstValue::Int(n) => format!("{}", n),
+            ConstValue::Str(s) => format!("\"{}\"", s),
+            ConstValue::Bool(b) => format!("{}", b),
+            ConstValue::Null => "null".to_string(),
+        },
+        Operand::Unknown => "?".to_string(),
+    }
 }

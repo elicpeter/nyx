@@ -46,7 +46,15 @@ export function DebugLayout() {
       <FunctionSelector
         file={file}
         selectedFunction={fn_name}
-        onFileChange={(f) => updateParam('file', f)}
+        onFileChange={(f) => {
+          setParams((prev) => {
+            const next = new URLSearchParams(prev);
+            if (f) next.set('file', f);
+            else next.delete('file');
+            next.delete('function');
+            return next;
+          });
+        }}
         onFunctionChange={(f) => updateParam('function', f)}
       />
       <div className="debug-content">

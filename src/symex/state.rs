@@ -85,6 +85,11 @@ impl SymbolicState {
         &self.path_constraints
     }
 
+    /// Iterate over all (SsaValue, SymbolicValue) entries in the state.
+    pub fn iter_values(&self) -> impl Iterator<Item = (&SsaValue, &SymbolicValue)> {
+        self.values.iter()
+    }
+
     /// Mark an SSA value as tainted (adds to the root set).
     pub fn mark_tainted(&mut self, v: SsaValue) {
         self.tainted_roots.insert(v);
