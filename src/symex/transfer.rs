@@ -2,13 +2,36 @@
 //!
 //! Walks SSA blocks and builds `SymbolicValue` expression trees for each
 //! defined SSA value, while eagerly propagating taint through the root-set.
+//!
+//! Phase 18c adds cross-file symbolic summary modeling: when a callee has an
+//! `SsaFuncSummary` available via `GlobalSummaries`, the Call instruction's
+//! return value is modeled symbolically instead of being treated as opaque.
 
 use crate::cfg::Cfg;
 use crate::ssa::const_prop::ConstLattice;
-use crate::ssa::ir::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp};
+use crate::ssa::ir::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue};
+use crate::summary::ssa_summary::TaintTransform;
+use crate::summary::{CalleeResolution, GlobalSummaries};
+use crate::symbol::Lang;
 
 use super::state::SymbolicState;
 use super::value::{mk_binop, mk_call, mk_phi, Op, SymbolicValue};
+
+/// Context for cross-file symbolic summary modeling during transfer.
+///
+/// When provided, Call instructions attempt to resolve callee behavior
+/// via `SsaFuncSummary` before falling back to the opaque `mk_call`.
+pub struct SymexSummaryCtx<'a> {
+    pub global_summaries: &'a GlobalSummaries,
+    pub lang: Lang,
+    pub namespace: &'a str,
+}
+
+/// Result of resolving a callee symbolically via its summary.
+struct SymbolicCallResult {
+    value: SymbolicValue,
+    tainted: bool,
+}
 
 /// Transfer a single SSA instruction: set the symbolic value and propagate taint.
 pub fn transfer_inst(
@@ -16,6 +39,7 @@ pub fn transfer_inst(
     inst: &SsaInst,
     cfg: &Cfg,
     _ssa: &SsaBody,
+    summary_ctx: Option<&SymexSummaryCtx>,
 ) {
     match &inst.op {
         SsaOp::Const(text) => {
@@ -100,6 +124,20 @@ pub fn transfer_inst(
                 }
             }
 
+            // Try cross-file summary modeling before falling back to mk_call
+            if let Some(ctx) = summary_ctx {
+                if let Some(result) = resolve_callee_symbolically(
+                    ctx, callee, &arg_syms, &all_operands, state, inst.value,
+                ) {
+                    state.set(inst.value, result.value);
+                    if result.tainted {
+                        state.mark_tainted(inst.value);
+                    }
+                    return;
+                }
+            }
+
+            // Fallback: opaque call
             let sym = mk_call(callee.clone(), arg_syms);
             state.set(inst.value, sym);
             state.propagate_taint(inst.value, &all_operands);
@@ -131,6 +169,7 @@ pub fn transfer_inst_with_predecessor(
     cfg: &Cfg,
     ssa: &SsaBody,
     predecessor: Option<BlockId>,
+    summary_ctx: Option<&SymexSummaryCtx>,
 ) {
     match (&inst.op, predecessor) {
         (SsaOp::Phi(operands), Some(pred)) => {
@@ -148,7 +187,7 @@ pub fn transfer_inst_with_predecessor(
             state.propagate_taint(inst.value, &operand_vals);
         }
         _ => {
-            transfer_inst(state, inst, cfg, ssa);
+            transfer_inst(state, inst, cfg, ssa, summary_ctx);
         }
     }
 }
@@ -163,12 +202,13 @@ pub fn transfer_block_with_predecessor(
     cfg: &Cfg,
     ssa: &SsaBody,
     predecessor: Option<BlockId>,
+    summary_ctx: Option<&SymexSummaryCtx>,
 ) {
     for inst in &block.phis {
-        transfer_inst_with_predecessor(state, inst, cfg, ssa, predecessor);
+        transfer_inst_with_predecessor(state, inst, cfg, ssa, predecessor, summary_ctx);
     }
     for inst in &block.body {
-        transfer_inst(state, inst, cfg, ssa);
+        transfer_inst(state, inst, cfg, ssa, summary_ctx);
     }
 }
 
@@ -178,13 +218,123 @@ pub fn transfer_block(
     block: &SsaBlock,
     cfg: &Cfg,
     ssa: &SsaBody,
+    summary_ctx: Option<&SymexSummaryCtx>,
 ) {
     for inst in &block.phis {
-        transfer_inst(state, inst, cfg, ssa);
+        transfer_inst(state, inst, cfg, ssa, summary_ctx);
     }
     for inst in &block.body {
-        transfer_inst(state, inst, cfg, ssa);
+        transfer_inst(state, inst, cfg, ssa, summary_ctx);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Cross-file symbolic summary resolution
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Attempt to resolve a callee's return value symbolically using its
+/// `SsaFuncSummary` from `GlobalSummaries`.
+///
+/// Returns `Some(SymbolicCallResult)` if the summary provides actionable
+/// modeling. Returns `None` to fall through to the opaque `mk_call` path.
+///
+/// Resolution rules:
+/// - **Exactly one `Identity`**: pass through that argument's symbolic value
+/// - **Multiple `Identity` entries**: ambiguous → fall back (do NOT pick arbitrarily)
+/// - **`StripBits`**: sanitizer → `Unknown`, not tainted
+/// - **`AddBits` or `source_caps != empty`**: source → fresh tainted Symbol
+///   (conservative: loses concrete structure from callee body)
+/// - **`NotFound` / `Ambiguous`**: hard fallback to mk_call
+fn resolve_callee_symbolically(
+    ctx: &SymexSummaryCtx,
+    callee: &str,
+    arg_syms: &[SymbolicValue],
+    all_operands: &[SsaValue],
+    state: &SymbolicState,
+    result_value: SsaValue,
+) -> Option<SymbolicCallResult> {
+    let normalized = crate::callgraph::normalize_callee_name(callee);
+    let resolution = ctx.global_summaries.resolve_callee_key(
+        normalized,
+        ctx.lang,
+        ctx.namespace,
+        Some(all_operands.len()),
+    );
+
+    let key = match resolution {
+        CalleeResolution::Resolved(k) => k,
+        // NotFound or Ambiguous: hard fallback — never pretend precision
+        CalleeResolution::NotFound | CalleeResolution::Ambiguous(_) => return None,
+    };
+
+    let summary = ctx.global_summaries.get_ssa(&key)?;
+
+    // Check for source-producing function
+    if !summary.source_caps.is_empty() {
+        return Some(SymbolicCallResult {
+            value: SymbolicValue::Symbol(result_value),
+            tainted: true,
+        });
+    }
+
+    // Inspect param_to_return transforms
+    if summary.param_to_return.is_empty() {
+        // No information about return value — fall back to mk_call
+        return None;
+    }
+
+    // Collect identity mappings
+    let identities: Vec<_> = summary
+        .param_to_return
+        .iter()
+        .filter(|(_, t)| matches!(t, TaintTransform::Identity))
+        .collect();
+
+    // Check for StripBits (sanitizer)
+    let has_strip = summary
+        .param_to_return
+        .iter()
+        .any(|(_, t)| matches!(t, TaintTransform::StripBits(_)));
+
+    // Check for AddBits (source introduction)
+    let has_add = summary
+        .param_to_return
+        .iter()
+        .any(|(_, t)| matches!(t, TaintTransform::AddBits(_)));
+
+    if has_add {
+        // AddBits: function introduces new taint on return
+        return Some(SymbolicCallResult {
+            value: SymbolicValue::Symbol(result_value),
+            tainted: true,
+        });
+    }
+
+    if has_strip && identities.is_empty() {
+        // Pure sanitizer: return value is cleaned
+        return Some(SymbolicCallResult {
+            value: SymbolicValue::Unknown,
+            tainted: false,
+        });
+    }
+
+    if identities.len() == 1 {
+        // Exactly one Identity: pass through the argument's symbolic value
+        let (param_idx, _) = identities[0];
+        if let Some(sym) = arg_syms.get(*param_idx) {
+            let is_tainted = all_operands
+                .get(*param_idx)
+                .map(|v| state.is_tainted(*v))
+                .unwrap_or(false);
+            return Some(SymbolicCallResult {
+                value: sym.clone(),
+                tainted: is_tainted,
+            });
+        }
+    }
+
+    // Multiple Identity entries or other ambiguous cases: fall back
+    None
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -258,7 +408,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("42".into())), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(42));
         assert!(!state.is_tainted(SsaValue(0)));
@@ -271,7 +421,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("\"hello\"".into())), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         assert_eq!(
             state.get(SsaValue(0)),
@@ -286,7 +436,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("true".into())), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Unknown);
     }
@@ -298,7 +448,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(None), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Unknown);
     }
@@ -310,7 +460,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Source, node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Symbol(SsaValue(0)));
         assert!(state.is_tainted(SsaValue(0)));
@@ -323,7 +473,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Param { index: 0 }, node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Symbol(SsaValue(0)));
         assert!(!state.is_tainted(SsaValue(0)));
@@ -340,7 +490,7 @@ mod tests {
         state.mark_tainted(SsaValue(0));
 
         let inst = make_inst(1, SsaOp::Assign(smallvec![SsaValue(0)]), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Concrete(7));
         assert!(state.is_tainted(SsaValue(1)));
@@ -361,7 +511,7 @@ mod tests {
             SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]),
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         let expected = SymbolicValue::BinOp(
             Op::Mul,
@@ -386,7 +536,7 @@ mod tests {
             SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]),
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Unknown);
     }
@@ -409,7 +559,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         let expected = SymbolicValue::Call(
             "parseInt".into(),
@@ -437,7 +587,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         let expected = SymbolicValue::Call(
             "send".into(),
@@ -461,7 +611,7 @@ mod tests {
             SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         let expected = SymbolicValue::Phi(vec![
             (BlockId(0), SymbolicValue::Concrete(1)),
@@ -530,17 +680,17 @@ mod tests {
 
         // v0: source (tainted)
         let i0 = make_inst(0, SsaOp::Source, node_plain);
-        transfer_inst(&mut state, &i0, &cfg, &ssa);
+        transfer_inst(&mut state, &i0, &cfg, &ssa, None);
         assert!(state.is_tainted(SsaValue(0)));
 
         // v1: copy of v0
         let i1 = make_inst(1, SsaOp::Assign(smallvec![SsaValue(0)]), node_plain);
-        transfer_inst(&mut state, &i1, &cfg, &ssa);
+        transfer_inst(&mut state, &i1, &cfg, &ssa, None);
         assert!(state.is_tainted(SsaValue(1)));
 
         // v2: constant (not tainted)
         let i2 = make_inst(2, SsaOp::Const(Some("3".into())), node_plain);
-        transfer_inst(&mut state, &i2, &cfg, &ssa);
+        transfer_inst(&mut state, &i2, &cfg, &ssa, None);
         assert!(!state.is_tainted(SsaValue(2)));
 
         // v3: v1 * v2 (tainted because v1 is tainted)
@@ -549,7 +699,7 @@ mod tests {
             SsaOp::Assign(smallvec![SsaValue(1), SsaValue(2)]),
             node_mul,
         );
-        transfer_inst(&mut state, &i3, &cfg, &ssa);
+        transfer_inst(&mut state, &i3, &cfg, &ssa, None);
         assert!(state.is_tainted(SsaValue(3)));
         let expected = SymbolicValue::BinOp(
             Op::Mul,
@@ -568,7 +718,7 @@ mod tests {
             },
             node_plain,
         );
-        transfer_inst(&mut state, &i4, &cfg, &ssa);
+        transfer_inst(&mut state, &i4, &cfg, &ssa, None);
         assert!(state.is_tainted(SsaValue(4)));
     }
 
@@ -580,7 +730,7 @@ mod tests {
 
         state.set(SsaValue(0), SymbolicValue::Concrete(99));
         let inst = make_inst(0, SsaOp::Nop, node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
 
         // Nop does not overwrite existing value
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(99));
@@ -609,7 +759,7 @@ mod tests {
             succs: smallvec![],
         };
 
-        transfer_block(&mut state, &block, &cfg, &ssa);
+        transfer_block(&mut state, &block, &cfg, &ssa, None);
 
         // Phi with all-same should fold to Concrete(1)
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Concrete(1));
@@ -634,7 +784,7 @@ mod tests {
         );
 
         // With predecessor B1, should resolve to SsaValue(1) → Concrete(20)
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)));
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None);
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Concrete(20));
     }
 
@@ -656,7 +806,7 @@ mod tests {
         );
 
         // With predecessor B0 (untainted), result should NOT be tainted
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(0)));
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(0)), None);
         assert!(!state.is_tainted(SsaValue(2)));
     }
 
@@ -677,7 +827,7 @@ mod tests {
         );
 
         // With predecessor B1 (tainted), result SHOULD be tainted
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)));
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None);
         assert!(state.is_tainted(SsaValue(2)));
     }
 
@@ -697,7 +847,7 @@ mod tests {
         );
 
         // Without predecessor (None), falls back to Phi(...) expression
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, None, None);
         let expected = SymbolicValue::Phi(vec![
             (BlockId(0), SymbolicValue::Concrete(10)),
             (BlockId(1), SymbolicValue::Concrete(20)),
@@ -713,7 +863,310 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("42".into())), node);
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(5)));
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(5)), None);
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(42));
+    }
+
+    // ─── Cross-file summary resolution tests ─────────────────────────
+
+    use crate::labels::Cap;
+    use crate::summary::GlobalSummaries;
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+    use crate::symbol::{FuncKey, Lang};
+    use crate::ssa::type_facts::TypeKind;
+    use crate::abstract_interp::AbstractValue;
+
+    use crate::summary::FuncSummary;
+
+    fn make_summary_ctx(gs: &GlobalSummaries) -> SymexSummaryCtx {
+        SymexSummaryCtx {
+            global_summaries: gs,
+            lang: Lang::JavaScript,
+            namespace: "test.js",
+        }
+    }
+
+    fn make_func_key(name: &str, arity: usize) -> FuncKey {
+        FuncKey {
+            lang: Lang::JavaScript,
+            namespace: "helper.js".into(),
+            name: name.into(),
+            arity: Some(arity),
+        }
+    }
+
+    /// Insert both a regular FuncSummary (for resolve_callee_key lookup) and
+    /// an SsaFuncSummary (for the actual symbolic modeling).
+    fn insert_summary(gs: &mut GlobalSummaries, name: &str, arity: usize, ssa: SsaFuncSummary) {
+        let key = make_func_key(name, arity);
+        // Regular summary needed for by_lang_name index used by resolve_callee_key
+        gs.insert(
+            key.clone(),
+            FuncSummary {
+                name: name.into(),
+                file_path: "helper.js".into(),
+                lang: "javascript".into(),
+                param_count: arity,
+                param_names: vec![],
+                source_caps: 0,
+                sanitizer_caps: 0,
+                sink_caps: 0,
+                propagating_params: vec![],
+                propagates_taint: false,
+                tainted_sink_params: vec![],
+                callees: vec![],
+            },
+        );
+        gs.insert_ssa(key, ssa);
+    }
+
+    #[test]
+    fn transfer_call_identity_summary() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        // Arg v0 is tainted
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+        state.mark_tainted(SsaValue(0));
+
+        // Build GlobalSummaries with exactly one Identity(param 0)
+        let mut gs = GlobalSummaries::new();
+        insert_summary(&mut gs, "passthrough", 1, SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+        let ctx = make_summary_ctx(&gs);
+
+        let inst = make_inst(
+            1,
+            SsaOp::Call {
+                callee: "passthrough".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: None,
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+
+        // Should pass through arg's symbolic value
+        assert_eq!(state.get(SsaValue(1)), SymbolicValue::Symbol(SsaValue(0)));
+        assert!(state.is_tainted(SsaValue(1)));
+    }
+
+    #[test]
+    fn transfer_call_multiple_identity_fallback() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+        state.mark_tainted(SsaValue(0));
+        state.set(SsaValue(1), SymbolicValue::Concrete(42));
+
+        // Two Identity entries — should fall back to mk_call, NOT pick one
+        let mut gs = GlobalSummaries::new();
+        insert_summary(&mut gs, "ambig", 2, SsaFuncSummary {
+            param_to_return: vec![
+                (0, TaintTransform::Identity),
+                (1, TaintTransform::Identity),
+            ],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+        let ctx = make_summary_ctx(&gs);
+
+        let inst = make_inst(
+            2,
+            SsaOp::Call {
+                callee: "ambig".into(),
+                args: vec![smallvec![SsaValue(0)], smallvec![SsaValue(1)]],
+                receiver: None,
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+
+        // Should fall back to Call expression, not Symbol pass-through
+        match state.get(SsaValue(2)) {
+            SymbolicValue::Call(name, _) => assert_eq!(name, "ambig"),
+            other => panic!("expected Call fallback, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn transfer_call_stripbits_summary() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+        state.mark_tainted(SsaValue(0));
+
+        let mut gs = GlobalSummaries::new();
+        insert_summary(&mut gs, "sanitize", 1, SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::StripBits(Cap::SQL_QUERY))],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+        let ctx = make_summary_ctx(&gs);
+
+        let inst = make_inst(
+            1,
+            SsaOp::Call {
+                callee: "sanitize".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: None,
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+
+        // StripBits → Unknown, not tainted
+        assert_eq!(state.get(SsaValue(1)), SymbolicValue::Unknown);
+        assert!(!state.is_tainted(SsaValue(1)));
+    }
+
+    #[test]
+    fn transfer_call_addbits_summary() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        let mut gs = GlobalSummaries::new();
+        insert_summary(&mut gs, "enrich", 1, SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::AddBits(Cap::ENV_VAR))],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+        let ctx = make_summary_ctx(&gs);
+
+        let inst = make_inst(
+            1,
+            SsaOp::Call {
+                callee: "enrich".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: None,
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+
+        // AddBits → fresh Symbol, tainted
+        assert_eq!(state.get(SsaValue(1)), SymbolicValue::Symbol(SsaValue(1)));
+        assert!(state.is_tainted(SsaValue(1)));
+    }
+
+    #[test]
+    fn transfer_call_source_summary() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        let mut gs = GlobalSummaries::new();
+        insert_summary(&mut gs, "readEnv", 0, SsaFuncSummary {
+            param_to_return: vec![],
+            param_to_sink: vec![],
+            source_caps: Cap::ENV_VAR,
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+        let ctx = make_summary_ctx(&gs);
+
+        let inst = make_inst(
+            0,
+            SsaOp::Call {
+                callee: "readEnv".into(),
+                args: vec![],
+                receiver: None,
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+
+        // source_caps non-empty → tainted Symbol
+        assert_eq!(state.get(SsaValue(0)), SymbolicValue::Symbol(SsaValue(0)));
+        assert!(state.is_tainted(SsaValue(0)));
+    }
+
+    #[test]
+    fn transfer_call_no_summary_fallback() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+
+        // Empty GlobalSummaries → NotFound → mk_call fallback
+        let gs = GlobalSummaries::new();
+        let ctx = make_summary_ctx(&gs);
+
+        let inst = make_inst(
+            1,
+            SsaOp::Call {
+                callee: "unknown_func".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: None,
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+
+        match state.get(SsaValue(1)) {
+            SymbolicValue::Call(name, _) => assert_eq!(name, "unknown_func"),
+            other => panic!("expected Call fallback, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn transfer_call_none_summary_ctx_fallback() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+        state.mark_tainted(SsaValue(0));
+
+        // No summary ctx at all → mk_call
+        let inst = make_inst(
+            1,
+            SsaOp::Call {
+                callee: "foo".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: None,
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+
+        match state.get(SsaValue(1)) {
+            SymbolicValue::Call(name, _) => assert_eq!(name, "foo"),
+            other => panic!("expected Call fallback, got {:?}", other),
+        }
+        assert!(state.is_tainted(SsaValue(1)));
     }
 }

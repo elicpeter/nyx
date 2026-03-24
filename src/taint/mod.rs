@@ -152,9 +152,16 @@ pub fn analyse_file(
                 let mut f =
                     ssa_transfer::ssa_events_to_findings(&events, &ssa_body, cfg);
                 if crate::symex::is_enabled() {
-                    crate::symex::annotate_findings(
-                        &mut f, &ssa_body, cfg, &opt.const_values, &opt.type_facts,
-                    );
+                    let symex_ctx = crate::symex::SymexContext {
+                        ssa: &ssa_body,
+                        cfg,
+                        const_values: &opt.const_values,
+                        type_facts: &opt.type_facts,
+                        global_summaries,
+                        lang: caller_lang,
+                        namespace: caller_namespace,
+                    };
+                    crate::symex::annotate_findings(&mut f, &symex_ctx);
                 }
                 f
             }
@@ -431,10 +438,16 @@ fn analyse_ssa_js_two_level(
     // Collect top-level findings
     let mut all_findings = ssa_transfer::ssa_events_to_findings(&toplevel_events, &toplevel_ssa, cfg);
     if crate::symex::is_enabled() {
-        crate::symex::annotate_findings(
-            &mut all_findings, &toplevel_ssa, cfg,
-            &toplevel_opt.const_values, &toplevel_opt.type_facts,
-        );
+        let symex_ctx = crate::symex::SymexContext {
+            ssa: &toplevel_ssa,
+            cfg,
+            const_values: &toplevel_opt.const_values,
+            type_facts: &toplevel_opt.type_facts,
+            global_summaries,
+            lang,
+            namespace,
+        };
+        crate::symex::annotate_findings(&mut all_findings, &symex_ctx);
     }
 
     let func_entries = find_function_entries(cfg);
@@ -482,10 +495,16 @@ fn analyse_ssa_js_two_level(
             let mut func_findings =
                 ssa_transfer::ssa_events_to_findings(&func_events, &func_ssa, cfg);
             if crate::symex::is_enabled() {
-                crate::symex::annotate_findings(
-                    &mut func_findings, &func_ssa, cfg,
-                    &func_opt.const_values, &func_opt.type_facts,
-                );
+                let symex_ctx = crate::symex::SymexContext {
+                    ssa: &func_ssa,
+                    cfg,
+                    const_values: &func_opt.const_values,
+                    type_facts: &func_opt.type_facts,
+                    global_summaries,
+                    lang,
+                    namespace,
+                };
+                crate::symex::annotate_findings(&mut func_findings, &symex_ctx);
             }
             round_findings.extend(func_findings);
 

@@ -1,0 +1,605 @@
+//! Witness generation for confirmed symbolic findings (Phase 18c).
+//!
+//! When the multi-path explorer confirms a finding as feasible, this module
+//! generates a concrete proof witness — an actual input value that would
+//! trigger the vulnerability. Witnesses are best-effort: if the expression
+//! is not string-renderable or constraints are too complex, a generic
+//! description is produced instead.
+
+use std::collections::HashSet;
+
+use crate::cfg::Cfg;
+use crate::labels::{Cap, DataLabel};
+use crate::ssa::ir::{SsaBody, SsaValue};
+use crate::taint::Finding;
+
+use super::state::SymbolicState;
+use super::value::SymbolicValue;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Public API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Extract a human-readable witness string for a confirmed finding.
+///
+/// Returns `None` if:
+/// - The sink's symbolic expression is `Unknown`
+/// - The sink node is not mapped in the SSA
+///
+/// The witness is **sink-shape-aware**: specialized exploit payloads are only
+/// substituted when the sink expression is string-renderable. For non-string
+/// expressions, a generic description is produced instead.
+pub fn extract_witness(
+    state: &SymbolicState,
+    finding: &Finding,
+    ssa: &SsaBody,
+    cfg: &Cfg,
+) -> Option<String> {
+    // 1. Get sink's symbolic expression
+    let ssa_val = ssa.cfg_node_map.get(&finding.sink)?;
+    let sym = state.get(*ssa_val);
+    if matches!(sym, SymbolicValue::Unknown) {
+        return None;
+    }
+
+    // 2. Derive sink cap from CFG labels
+    let cap = sink_cap(finding, cfg);
+
+    // 3. Extract source variable name
+    let source_var = finding
+        .flow_steps
+        .iter()
+        .find(|s| matches!(s.op_kind, crate::evidence::FlowStepKind::Source))
+        .and_then(|s| s.var_name.as_deref())
+        .unwrap_or("input");
+
+    // 4. Extract sink callee name
+    let sink_callee = if finding.sink.index() < cfg.node_count() {
+        cfg[finding.sink].callee.as_deref().unwrap_or("sink")
+    } else {
+        "sink"
+    };
+
+    // 5. Find tainted symbols in expression tree
+    let tainted = collect_tainted_symbols(&sym, state);
+
+    // 6. Branch on string-renderability
+    if tainted.is_empty() {
+        // No tainted symbols — expression is fully concrete or opaque
+        let concrete = evaluate_concrete(&sym);
+        Some(format!(
+            "input '{}' flows to {}(\"{}\")",
+            source_var, sink_callee, concrete
+        ))
+    } else if is_string_renderable(&sym) {
+        // String-renderable: substitute tainted symbols with exploit payload
+        let payload = witness_payload(cap);
+        let substituted = substitute_tainted(&sym, &tainted, payload);
+        let concrete = evaluate_concrete(&substituted);
+        Some(format!(
+            "input '{}' = \"{}\" flows to {}(\"{}\")",
+            source_var, payload, sink_callee, concrete
+        ))
+    } else {
+        // Not string-renderable: generic witness
+        Some(format!(
+            "tainted input '{}' reaches {}() unsanitized",
+            source_var, sink_callee
+        ))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Derive the sink's capability bits from CFG node labels.
+fn sink_cap(finding: &Finding, cfg: &Cfg) -> Cap {
+    if finding.sink.index() >= cfg.node_count() {
+        return Cap::empty();
+    }
+    let info = &cfg[finding.sink];
+    let mut caps = Cap::empty();
+    for lbl in &info.labels {
+        if let DataLabel::Sink(bits) = *lbl {
+            caps |= bits;
+        }
+    }
+    caps
+}
+
+/// Select a witness payload string based on the vulnerability class.
+fn witness_payload(cap: Cap) -> &'static str {
+    // Check bits in priority order (most specific first)
+    if cap.intersects(Cap::CODE_EXEC) || cap.intersects(Cap::HTML_ESCAPE) {
+        "<script>alert('xss')</script>"
+    } else if cap.intersects(Cap::SQL_QUERY) {
+        "' OR 1=1 --"
+    } else if cap.intersects(Cap::SHELL_ESCAPE) {
+        "$(id)"
+    } else if cap.intersects(Cap::FILE_IO) {
+        "../../etc/passwd"
+    } else if cap.intersects(Cap::SSRF) {
+        "http://169.254.169.254/metadata"
+    } else if cap.intersects(Cap::DESERIALIZE) {
+        "malicious_serialized_object"
+    } else {
+        "TAINTED"
+    }
+}
+
+/// Check if a symbolic expression is string-renderable.
+///
+/// String-renderable expressions produce meaningful witness strings when
+/// tainted symbols are substituted with exploit payloads. Non-string
+/// expressions (arithmetic, opaque calls) would produce misleading output.
+fn is_string_renderable(expr: &SymbolicValue) -> bool {
+    match expr {
+        SymbolicValue::ConcreteStr(_) => true,
+        SymbolicValue::Symbol(_) => true,
+        SymbolicValue::Concat(l, r) => is_string_renderable(l) && is_string_renderable(r),
+        // Arithmetic, opaque calls, phis, integers, unknown — not string-renderable
+        SymbolicValue::Concrete(_)
+        | SymbolicValue::BinOp(_, _, _)
+        | SymbolicValue::Call(_, _)
+        | SymbolicValue::Phi(_)
+        | SymbolicValue::Unknown => false,
+    }
+}
+
+/// Collect all tainted SSA symbols from an expression tree.
+fn collect_tainted_symbols(expr: &SymbolicValue, state: &SymbolicState) -> HashSet<SsaValue> {
+    let mut tainted = HashSet::new();
+    collect_tainted_inner(expr, state, &mut tainted);
+    tainted
+}
+
+fn collect_tainted_inner(
+    expr: &SymbolicValue,
+    state: &SymbolicState,
+    out: &mut HashSet<SsaValue>,
+) {
+    match expr {
+        SymbolicValue::Symbol(v) => {
+            if state.is_tainted(*v) {
+                out.insert(*v);
+            }
+        }
+        SymbolicValue::BinOp(_, l, r) | SymbolicValue::Concat(l, r) => {
+            collect_tainted_inner(l, state, out);
+            collect_tainted_inner(r, state, out);
+        }
+        SymbolicValue::Call(_, args) => {
+            for arg in args {
+                collect_tainted_inner(arg, state, out);
+            }
+        }
+        SymbolicValue::Phi(ops) => {
+            for (_, v) in ops {
+                collect_tainted_inner(v, state, out);
+            }
+        }
+        SymbolicValue::Concrete(_) | SymbolicValue::ConcreteStr(_) | SymbolicValue::Unknown => {}
+    }
+}
+
+/// Substitute tainted symbols with a concrete payload string.
+fn substitute_tainted(
+    expr: &SymbolicValue,
+    tainted: &HashSet<SsaValue>,
+    payload: &str,
+) -> SymbolicValue {
+    match expr {
+        SymbolicValue::Symbol(v) if tainted.contains(v) => {
+            SymbolicValue::ConcreteStr(payload.to_owned())
+        }
+        SymbolicValue::Concat(l, r) => {
+            let new_l = substitute_tainted(l, tainted, payload);
+            let new_r = substitute_tainted(r, tainted, payload);
+            // Try to fold if both sides are concrete strings
+            if let (SymbolicValue::ConcreteStr(a), SymbolicValue::ConcreteStr(b)) =
+                (&new_l, &new_r)
+            {
+                SymbolicValue::ConcreteStr(format!("{}{}", a, b))
+            } else {
+                SymbolicValue::Concat(Box::new(new_l), Box::new(new_r))
+            }
+        }
+        SymbolicValue::BinOp(op, l, r) => {
+            let new_l = substitute_tainted(l, tainted, payload);
+            let new_r = substitute_tainted(r, tainted, payload);
+            SymbolicValue::BinOp(*op, Box::new(new_l), Box::new(new_r))
+        }
+        SymbolicValue::Call(name, args) => {
+            let new_args: Vec<_> = args
+                .iter()
+                .map(|a| substitute_tainted(a, tainted, payload))
+                .collect();
+            SymbolicValue::Call(name.clone(), new_args)
+        }
+        SymbolicValue::Phi(ops) => {
+            let new_ops: Vec<_> = ops
+                .iter()
+                .map(|(bid, v)| (*bid, substitute_tainted(v, tainted, payload)))
+                .collect();
+            SymbolicValue::Phi(new_ops)
+        }
+        // Leaf nodes that are not tainted symbols — return unchanged
+        other => other.clone(),
+    }
+}
+
+/// Attempt to fold a symbolic expression to a concrete string.
+///
+/// For fully concrete expressions, returns the string value. For mixed
+/// expressions, falls back to the Display representation.
+fn evaluate_concrete(expr: &SymbolicValue) -> String {
+    match expr {
+        SymbolicValue::ConcreteStr(s) => s.clone(),
+        SymbolicValue::Concrete(n) => n.to_string(),
+        SymbolicValue::Concat(l, r) => {
+            let left = evaluate_concrete(l);
+            let right = evaluate_concrete(r);
+            format!("{}{}", left, right)
+        }
+        // For non-foldable expressions, use Display
+        other => format!("{}", other),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cfg::StmtKind;
+    use crate::ssa::ir::{BlockId, SsaValue};
+    use petgraph::graph::NodeIndex;
+    use smallvec::smallvec;
+
+    /// Construct a minimal NodeInfo with the given labels and optional callee.
+    fn make_node_info(
+        labels: smallvec::SmallVec<[DataLabel; 2]>,
+        callee: Option<String>,
+    ) -> crate::cfg::NodeInfo {
+        crate::cfg::NodeInfo {
+            kind: StmtKind::Seq,
+            span: (0, 0),
+            labels,
+            defines: None,
+            extra_defines: Vec::new(),
+            uses: Vec::new(),
+            callee,
+            receiver: None,
+            enclosing_func: None,
+            call_ordinal: 0,
+            const_text: None,
+            condition_vars: Vec::new(),
+            condition_text: None,
+            condition_negated: false,
+            arg_uses: Vec::new(),
+            sink_payload_args: None,
+            all_args_literal: false,
+            catch_param: false,
+            arg_callees: Vec::new(),
+            outer_callee: None,
+            cast_target_type: None,
+            bin_op: None,
+            managed_resource: false,
+        }
+    }
+
+    #[test]
+    fn test_sink_cap_extraction() {
+        let mut cfg = Cfg::new();
+        let n = cfg.add_node(make_node_info(
+            smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+            None,
+        ));
+        let finding = Finding {
+            sink: n,
+            source: NodeIndex::new(0),
+            path: vec![],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 0,
+            cap_specificity: 0,
+            uses_summary: false,
+            flow_steps: vec![],
+            symbolic: None,
+        };
+        assert_eq!(sink_cap(&finding, &cfg), Cap::SQL_QUERY);
+    }
+
+    #[test]
+    fn test_sink_cap_multiple_labels() {
+        let mut cfg = Cfg::new();
+        let n = cfg.add_node(make_node_info(
+            smallvec![
+                DataLabel::Sink(Cap::SQL_QUERY),
+                DataLabel::Source(Cap::ENV_VAR),
+                DataLabel::Sink(Cap::FILE_IO),
+            ],
+            None,
+        ));
+        let finding = Finding {
+            sink: n,
+            source: NodeIndex::new(0),
+            path: vec![],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 0,
+            cap_specificity: 0,
+            uses_summary: false,
+            flow_steps: vec![],
+            symbolic: None,
+        };
+        let cap = sink_cap(&finding, &cfg);
+        assert!(cap.contains(Cap::SQL_QUERY));
+        assert!(cap.contains(Cap::FILE_IO));
+        assert!(!cap.contains(Cap::ENV_VAR)); // Source, not Sink
+    }
+
+    #[test]
+    fn test_witness_payload_per_cap() {
+        assert_eq!(witness_payload(Cap::CODE_EXEC), "<script>alert('xss')</script>");
+        assert_eq!(witness_payload(Cap::SQL_QUERY), "' OR 1=1 --");
+        assert_eq!(witness_payload(Cap::SHELL_ESCAPE), "$(id)");
+        assert_eq!(witness_payload(Cap::FILE_IO), "../../etc/passwd");
+        assert_eq!(witness_payload(Cap::SSRF), "http://169.254.169.254/metadata");
+        assert_eq!(witness_payload(Cap::DESERIALIZE), "malicious_serialized_object");
+        assert_eq!(witness_payload(Cap::CRYPTO), "TAINTED"); // fallback
+    }
+
+    #[test]
+    fn test_is_string_renderable() {
+        assert!(is_string_renderable(&SymbolicValue::ConcreteStr("hello".into())));
+        assert!(is_string_renderable(&SymbolicValue::Symbol(SsaValue(0))));
+        assert!(is_string_renderable(&SymbolicValue::Concat(
+            Box::new(SymbolicValue::ConcreteStr("a".into())),
+            Box::new(SymbolicValue::Symbol(SsaValue(1))),
+        )));
+        // Not string-renderable
+        assert!(!is_string_renderable(&SymbolicValue::Concrete(42)));
+        assert!(!is_string_renderable(&SymbolicValue::BinOp(
+            super::super::value::Op::Add,
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+            Box::new(SymbolicValue::Concrete(5)),
+        )));
+        assert!(!is_string_renderable(&SymbolicValue::Call(
+            "foo".into(),
+            vec![],
+        )));
+        assert!(!is_string_renderable(&SymbolicValue::Unknown));
+    }
+
+    #[test]
+    fn test_substitute_tainted_concat() {
+        let expr = SymbolicValue::Concat(
+            Box::new(SymbolicValue::ConcreteStr("SELECT * FROM t WHERE id = ".into())),
+            Box::new(SymbolicValue::Symbol(SsaValue(5))),
+        );
+        let mut tainted = HashSet::new();
+        tainted.insert(SsaValue(5));
+
+        let result = substitute_tainted(&expr, &tainted, "' OR 1=1 --");
+        assert_eq!(
+            evaluate_concrete(&result),
+            "SELECT * FROM t WHERE id = ' OR 1=1 --"
+        );
+    }
+
+    #[test]
+    fn test_extract_witness_sqli() {
+        use crate::taint::FlowStepRaw;
+
+        let mut state = SymbolicState::new();
+        let sink_val = SsaValue(10);
+        let tainted_val = SsaValue(5);
+
+        // Set up: "SELECT ... " ++ tainted_val
+        state.set(
+            sink_val,
+            SymbolicValue::Concat(
+                Box::new(SymbolicValue::ConcreteStr("SELECT * FROM t WHERE id = ".into())),
+                Box::new(SymbolicValue::Symbol(tainted_val)),
+            ),
+        );
+        state.mark_tainted(tainted_val);
+
+        // Build a CFG with a Sink(SQL_QUERY) label
+        let mut cfg = Cfg::new();
+        let sink_node = cfg.add_node(make_node_info(
+            smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+            Some("query".into()),
+        ));
+        let source_node = cfg.add_node(make_node_info(smallvec![], None));
+
+        let ssa = SsaBody {
+            blocks: vec![],
+            entry: BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
+            exception_edges: vec![],
+        };
+
+        let finding = Finding {
+            sink: sink_node,
+            source: source_node,
+            path: vec![source_node, sink_node],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 1,
+            cap_specificity: 1,
+            uses_summary: false,
+            flow_steps: vec![
+                FlowStepRaw {
+                    cfg_node: source_node,
+                    var_name: Some("userInput".into()),
+                    op_kind: crate::evidence::FlowStepKind::Source,
+                },
+                FlowStepRaw {
+                    cfg_node: sink_node,
+                    var_name: Some("userInput".into()),
+                    op_kind: crate::evidence::FlowStepKind::Sink,
+                },
+            ],
+            symbolic: None,
+        };
+
+        let witness = extract_witness(&state, &finding, &ssa, &cfg);
+        assert!(witness.is_some());
+        let w = witness.unwrap();
+        assert!(w.contains("' OR 1=1 --"), "witness: {}", w);
+        assert!(w.contains("flows to"), "witness: {}", w);
+        assert!(w.contains("query"), "witness: {}", w);
+    }
+
+    #[test]
+    fn test_extract_witness_unknown_returns_none() {
+        let state = SymbolicState::new();
+        let sink_node = NodeIndex::new(10);
+        let ssa = SsaBody {
+            blocks: vec![],
+            entry: BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: [(sink_node, SsaValue(5))].into_iter().collect(),
+            exception_edges: vec![],
+        };
+        let cfg = Cfg::new();
+        let finding = Finding {
+            sink: sink_node,
+            source: NodeIndex::new(0),
+            path: vec![],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 0,
+            cap_specificity: 0,
+            uses_summary: false,
+            flow_steps: vec![],
+            symbolic: None,
+        };
+
+        assert!(extract_witness(&state, &finding, &ssa, &cfg).is_none());
+    }
+
+    #[test]
+    fn test_non_string_renderable_generic_witness() {
+        use crate::taint::FlowStepRaw;
+
+        let mut state = SymbolicState::new();
+        let sink_val = SsaValue(10);
+        let tainted_val = SsaValue(5);
+
+        // BinOp(Add, tainted, 5) — not string-renderable
+        state.set(
+            sink_val,
+            SymbolicValue::BinOp(
+                super::super::value::Op::Add,
+                Box::new(SymbolicValue::Symbol(tainted_val)),
+                Box::new(SymbolicValue::Concrete(5)),
+            ),
+        );
+        state.mark_tainted(tainted_val);
+
+        let mut cfg = Cfg::new();
+        let sink_node = cfg.add_node(make_node_info(
+            smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+            Some("execute".into()),
+        ));
+        let source_node = cfg.add_node(make_node_info(smallvec![], None));
+
+        let ssa = SsaBody {
+            blocks: vec![],
+            entry: BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
+            exception_edges: vec![],
+        };
+
+        let finding = Finding {
+            sink: sink_node,
+            source: source_node,
+            path: vec![source_node, sink_node],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 1,
+            cap_specificity: 1,
+            uses_summary: false,
+            flow_steps: vec![FlowStepRaw {
+                cfg_node: source_node,
+                var_name: Some("count".into()),
+                op_kind: crate::evidence::FlowStepKind::Source,
+            }],
+            symbolic: None,
+        };
+
+        let witness = extract_witness(&state, &finding, &ssa, &cfg);
+        assert!(witness.is_some());
+        let w = witness.unwrap();
+        assert!(w.contains("reaches"), "witness: {}", w);
+        assert!(w.contains("unsanitized"), "witness: {}", w);
+        assert!(w.contains("execute"), "witness: {}", w);
+        // Should NOT contain exploit payload for non-string expression
+        assert!(!w.contains("' OR 1=1"), "witness: {}", w);
+    }
+
+    #[test]
+    fn test_no_tainted_symbols() {
+        use crate::taint::FlowStepRaw;
+
+        let mut state = SymbolicState::new();
+        let sink_val = SsaValue(10);
+        // Fully concrete — no taint
+        state.set(
+            sink_val,
+            SymbolicValue::ConcreteStr("SELECT 1".into()),
+        );
+
+        let mut cfg = Cfg::new();
+        let sink_node = cfg.add_node(make_node_info(
+            smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+            Some("query".into()),
+        ));
+        let source_node = cfg.add_node(make_node_info(smallvec![], None));
+
+        let ssa = SsaBody {
+            blocks: vec![],
+            entry: BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: [(sink_node, sink_val)].into_iter().collect(),
+            exception_edges: vec![],
+        };
+
+        let finding = Finding {
+            sink: sink_node,
+            source: source_node,
+            path: vec![source_node, sink_node],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 1,
+            cap_specificity: 1,
+            uses_summary: false,
+            flow_steps: vec![FlowStepRaw {
+                cfg_node: source_node,
+                var_name: Some("x".into()),
+                op_kind: crate::evidence::FlowStepKind::Source,
+            }],
+            symbolic: None,
+        };
+
+        let witness = extract_witness(&state, &finding, &ssa, &cfg);
+        assert!(witness.is_some());
+        let w = witness.unwrap();
+        assert!(w.contains("flows to"), "witness: {}", w);
+        assert!(w.contains("SELECT 1"), "witness: {}", w);
+    }
+}

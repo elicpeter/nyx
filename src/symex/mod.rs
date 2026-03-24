@@ -13,6 +13,7 @@ pub mod value;
 pub mod state;
 pub mod transfer;
 pub mod executor;
+pub mod witness;
 
 pub use value::{SymbolicValue, Op, MAX_EXPR_DEPTH};
 pub use state::{SymbolicState, PathConstraint};
@@ -24,7 +25,27 @@ use crate::evidence::{SymbolicVerdict, Verdict};
 use crate::ssa::const_prop::ConstLattice;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue};
 use crate::ssa::type_facts::TypeFactResult;
+use crate::summary::GlobalSummaries;
+use crate::symbol::Lang;
 use crate::taint::Finding;
+
+/// Context for symbolic execution analysis.
+///
+/// Bundles all parameters needed by the symex pipeline: SSA body, CFG,
+/// optimization results, and optional cross-file summary context for
+/// interprocedural symbolic modeling.
+pub struct SymexContext<'a> {
+    pub ssa: &'a SsaBody,
+    pub cfg: &'a Cfg,
+    pub const_values: &'a HashMap<SsaValue, ConstLattice>,
+    pub type_facts: &'a TypeFactResult,
+    /// Cross-file summaries for interprocedural symbolic modeling.
+    /// When `Some`, callee calls can be modeled via `SsaFuncSummary`
+    /// instead of being treated as opaque `Unknown`.
+    pub global_summaries: Option<&'a GlobalSummaries>,
+    pub lang: Lang,
+    pub namespace: &'a str,
+}
 
 /// Maximum candidates to analyse per file (budget bound).
 const MAX_CANDIDATES: usize = 50;
@@ -47,10 +68,7 @@ pub fn is_enabled() -> bool {
 /// flow steps. Respects the per-file candidate budget.
 pub fn annotate_findings(
     findings: &mut [Finding],
-    ssa: &SsaBody,
-    cfg: &Cfg,
-    const_values: &HashMap<SsaValue, ConstLattice>,
-    type_facts: &TypeFactResult,
+    ctx: &SymexContext,
 ) {
     let mut budget = MAX_CANDIDATES;
     for finding in findings.iter_mut() {
@@ -60,9 +78,7 @@ pub fn annotate_findings(
         if finding.flow_steps.len() < 2 || finding.path_validated {
             continue;
         }
-        finding.symbolic = Some(analyse_finding_path(
-            finding, ssa, cfg, const_values, type_facts,
-        ));
+        finding.symbolic = Some(analyse_finding_path(finding, ctx));
         budget -= 1;
     }
 }
@@ -95,12 +111,9 @@ pub(super) fn extract_path_blocks(finding: &Finding, ssa: &SsaBody) -> Vec<Block
 /// verdict across all explored paths.
 fn analyse_finding_path(
     finding: &Finding,
-    ssa: &SsaBody,
-    cfg: &Cfg,
-    const_values: &HashMap<SsaValue, ConstLattice>,
-    type_facts: &TypeFactResult,
+    ctx: &SymexContext,
 ) -> SymbolicVerdict {
-    let path_blocks = extract_path_blocks(finding, ssa);
+    let path_blocks = extract_path_blocks(finding, ctx.ssa);
 
     if path_blocks.len() < 2 {
         return SymbolicVerdict {
@@ -120,7 +133,7 @@ fn analyse_finding_path(
         };
     }
 
-    let result = executor::explore_finding(finding, ssa, cfg, const_values, type_facts);
+    let result = executor::explore_finding(finding, ctx);
     result.aggregate_verdict()
 }
 
@@ -294,13 +307,16 @@ mod tests {
             symbolic: None,
         };
 
-        let verdict = analyse_finding_path(
-            &finding,
-            &ssa,
-            &Cfg::new(),
-            &HashMap::new(),
-            &empty_type_facts(),
-        );
+        let ctx = SymexContext {
+            ssa: &ssa,
+            cfg: &Cfg::new(),
+            const_values: &HashMap::new(),
+            type_facts: &empty_type_facts(),
+            global_summaries: None,
+            lang: crate::symbol::Lang::JavaScript,
+            namespace: "test.js",
+        };
+        let verdict = analyse_finding_path(&finding, &ctx);
         assert_eq!(verdict.verdict, Verdict::Confirmed);
         assert_eq!(verdict.constraints_checked, 0);
         assert_eq!(verdict.paths_explored, 1);
@@ -346,12 +362,18 @@ mod tests {
             exception_edges: vec![],
         };
 
+        let ctx = SymexContext {
+            ssa: &ssa,
+            cfg: &Cfg::new(),
+            const_values: &HashMap::new(),
+            type_facts: &empty_type_facts(),
+            global_summaries: None,
+            lang: crate::symbol::Lang::JavaScript,
+            namespace: "test.js",
+        };
         annotate_findings(
             std::slice::from_mut(&mut finding),
-            &ssa,
-            &Cfg::new(),
-            &HashMap::new(),
-            &empty_type_facts(),
+            &ctx,
         );
         // Should remain None — skipped due to path_validated
         assert!(finding.symbolic.is_none());
@@ -389,12 +411,18 @@ mod tests {
             exception_edges: vec![],
         };
 
+        let ctx = SymexContext {
+            ssa: &ssa,
+            cfg: &Cfg::new(),
+            const_values: &HashMap::new(),
+            type_facts: &empty_type_facts(),
+            global_summaries: None,
+            lang: crate::symbol::Lang::JavaScript,
+            namespace: "test.js",
+        };
         annotate_findings(
             std::slice::from_mut(&mut finding),
-            &ssa,
-            &Cfg::new(),
-            &HashMap::new(),
-            &empty_type_facts(),
+            &ctx,
         );
         // Should remain None — only 1 flow step
         assert!(finding.symbolic.is_none());

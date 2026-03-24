@@ -16,12 +16,12 @@ use crate::constraint;
 use crate::evidence::{SymbolicVerdict, Verdict};
 use crate::ssa::const_prop::ConstLattice;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue, Terminator};
-use crate::ssa::type_facts::TypeFactResult;
 use crate::taint::Finding;
 
 use super::state::{PathConstraint, SymbolicState};
-use super::transfer;
+use super::transfer::{self, SymexSummaryCtx};
 use super::value::SymbolicValue;
+use super::SymexContext;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Budget constants
@@ -145,11 +145,12 @@ fn compute_source_sink_reachable(
 /// transfer steps across all paths.
 pub(super) fn explore_finding(
     finding: &Finding,
-    ssa: &SsaBody,
-    cfg: &Cfg,
-    const_values: &HashMap<SsaValue, ConstLattice>,
-    type_facts: &TypeFactResult,
+    ctx: &SymexContext,
 ) -> ExplorationResult {
+    let ssa = ctx.ssa;
+    let cfg = ctx.cfg;
+    let const_values = ctx.const_values;
+    let type_facts = ctx.type_facts;
     let path_blocks = super::extract_path_blocks(finding, ssa);
     if path_blocks.len() < 2 {
         return ExplorationResult {
@@ -204,6 +205,14 @@ pub(super) fn explore_finding(
     let mut total_steps: usize = 0;
     let mut search_exhausted = true;
 
+    // Build summary context for cross-file symbolic modeling
+    let summary_ctx = ctx.global_summaries.map(|gs| SymexSummaryCtx {
+        global_summaries: gs,
+        lang: ctx.lang,
+        namespace: ctx.namespace,
+    });
+    let summary_ctx_ref = summary_ctx.as_ref();
+
     while let Some(mut state) = work_queue.pop_front() {
         // Global budget check: path count
         if outcomes.len() >= MAX_PATHS_PER_FINDING {
@@ -232,6 +241,7 @@ pub(super) fn explore_finding(
             &mut total_steps,
             &mut search_exhausted,
             finding,
+            summary_ctx_ref,
         );
 
         if let Some(outcome) = outcome {
@@ -264,12 +274,13 @@ fn run_path(
     total_steps: &mut usize,
     search_exhausted: &mut bool,
     finding: &Finding,
+    summary_ctx: Option<&SymexSummaryCtx>,
 ) -> Option<PathOutcome> {
     loop {
         // Global step budget
         if *total_steps >= MAX_TOTAL_STEPS {
             *search_exhausted = false;
-            return Some(record_outcome(state, finding, ssa));
+            return Some(record_outcome(state, finding, ssa, cfg));
         }
 
         let block_id = state.current_block;
@@ -291,6 +302,7 @@ fn run_path(
             cfg,
             ssa,
             state.predecessor,
+            summary_ctx,
         );
         let step_count = block.phis.len() + block.body.len();
         state.steps_taken += step_count;
@@ -403,7 +415,7 @@ fn run_path(
                 state.current_block = *target;
             }
             Terminator::Return | Terminator::Unreachable => {
-                return Some(record_outcome(state, finding, ssa));
+                return Some(record_outcome(state, finding, ssa, cfg));
             }
         }
     }
@@ -549,12 +561,18 @@ fn fork_at_branch(
 }
 
 /// Record the final outcome for a path that has reached its terminal state.
+///
+/// Tries cap-aware `extract_witness` first (produces concrete exploit payloads
+/// for string-renderable sinks). Falls back to raw expression-tree Display via
+/// `get_sink_witness` when no cap-aware witness is available.
 fn record_outcome(
     state: &ExplorationState,
     finding: &Finding,
     ssa: &SsaBody,
+    cfg: &Cfg,
 ) -> PathOutcome {
-    let witness = state.sym_state.get_sink_witness(finding, ssa);
+    let witness = super::witness::extract_witness(&state.sym_state, finding, ssa, cfg)
+        .or_else(|| state.sym_state.get_sink_witness(finding, ssa));
     // All constraints passed (or none on path) → feasible
     let verdict = Verdict::Confirmed;
     PathOutcome {
@@ -911,13 +929,16 @@ mod tests {
         };
 
         let finding = make_finding(n0, n1);
-        let result = explore_finding(
-            &finding,
-            &ssa,
-            &Cfg::new(),
-            &HashMap::new(),
-            &empty_type_facts(),
-        );
+        let ctx = super::SymexContext {
+            ssa: &ssa,
+            cfg: &Cfg::new(),
+            const_values: &HashMap::new(),
+            type_facts: &empty_type_facts(),
+            global_summaries: None,
+            lang: crate::symbol::Lang::JavaScript,
+            namespace: "test.js",
+        };
+        let result = explore_finding(&finding, &ctx);
 
         assert_eq!(result.paths_completed.len(), 1);
         assert_eq!(result.paths_completed[0].verdict, Verdict::Confirmed);
@@ -1060,13 +1081,16 @@ mod tests {
             symbolic: None,
         };
 
-        let result = explore_finding(
-            &finding,
-            &ssa,
-            &cfg_graph,
-            &HashMap::new(),
-            &empty_type_facts(),
-        );
+        let ctx = super::SymexContext {
+            ssa: &ssa,
+            cfg: &cfg_graph,
+            const_values: &HashMap::new(),
+            type_facts: &empty_type_facts(),
+            global_summaries: None,
+            lang: crate::symbol::Lang::JavaScript,
+            namespace: "test.js",
+        };
+        let result = explore_finding(&finding, &ctx);
 
         // Both branches should be explored (fork at B0)
         assert!(
@@ -1213,13 +1237,16 @@ mod tests {
             symbolic: None,
         };
 
-        let result = explore_finding(
-            &finding,
-            &ssa,
-            &cfg_graph,
-            &HashMap::new(),
-            &empty_type_facts(),
-        );
+        let ctx = super::SymexContext {
+            ssa: &ssa,
+            cfg: &cfg_graph,
+            const_values: &HashMap::new(),
+            type_facts: &empty_type_facts(),
+            global_summaries: None,
+            lang: crate::symbol::Lang::JavaScript,
+            namespace: "test.js",
+        };
+        let result = explore_finding(&finding, &ctx);
 
         // Only one path (B2 is not reachable from source to sink)
         assert_eq!(result.paths_completed.len(), 1);

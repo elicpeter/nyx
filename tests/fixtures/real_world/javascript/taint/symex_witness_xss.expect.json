@@ -1,0 +1,25 @@
+{
+  "description": "XSS via string concat — symex should generate witness with script tag payload.",
+  "tags": [
+    "taint",
+    "xss",
+    "symex",
+    "witness"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.name flows into res.send via string concat; symex witness should contain XSS payload"
+    }
+  ]
+}

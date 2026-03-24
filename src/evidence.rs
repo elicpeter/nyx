@@ -351,7 +351,16 @@ fn compute_taint_confidence(diag: &Diag) -> Confidence {
     if let Some(ref sv) = ev.symbolic {
         match sv.verdict {
             Verdict::Infeasible => score -= 5,
-            Verdict::Confirmed => score += 2,
+            Verdict::Confirmed => {
+                // Stronger bonus when extract_witness produced a concrete payload
+                // (contains "flows to" or "reaches"); raw Display-only fallback
+                // from get_sink_witness does not contain these phrases.
+                if sv.witness.as_ref().is_some_and(|w| w.contains("flows to") || w.contains("reaches")) {
+                    score += 3;
+                } else {
+                    score += 2;
+                }
+            }
             Verdict::Inconclusive | Verdict::NotAttempted => {}
         }
     }
