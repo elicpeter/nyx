@@ -99,6 +99,40 @@ pub struct FlowStep {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Symbolic verdict
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Symbolic verification verdict for a taint path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// Constraint solver confirmed the path is feasible.
+    Confirmed,
+    /// Constraint solver proved the path is infeasible.
+    Infeasible,
+    /// Constraint solver could not determine feasibility.
+    Inconclusive,
+    /// No symbolic analysis was attempted for this finding.
+    NotAttempted,
+}
+
+/// Summary of symbolic constraint analysis for a finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolicVerdict {
+    /// The outcome of symbolic path feasibility analysis.
+    pub verdict: Verdict,
+    /// Number of path constraints checked during analysis.
+    #[serde(default)]
+    pub constraints_checked: u32,
+    /// Number of distinct paths explored from source to sink.
+    #[serde(default)]
+    pub paths_explored: u32,
+    /// Human-readable witness or proof sketch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witness: Option<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Evidence
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -140,6 +174,10 @@ pub struct Evidence {
     /// Reasons why confidence is not higher.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub confidence_limiters: Vec<String>,
+
+    /// Symbolic constraint analysis verdict for this finding's taint path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbolic: Option<SymbolicVerdict>,
 }
 
 impl Evidence {
@@ -154,6 +192,7 @@ impl Evidence {
             && self.flow_steps.is_empty()
             && self.explanation.is_none()
             && self.confidence_limiters.is_empty()
+            && self.symbolic.is_none()
     }
 }
 
@@ -753,5 +792,57 @@ mod tests {
         let ev = Evidence::default();
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(json, "{}");
+    }
+
+    #[test]
+    fn symbolic_verdict_serde_round_trip() {
+        for verdict in [
+            Verdict::Confirmed,
+            Verdict::Infeasible,
+            Verdict::Inconclusive,
+            Verdict::NotAttempted,
+        ] {
+            let sv = SymbolicVerdict {
+                verdict,
+                constraints_checked: 42,
+                paths_explored: 7,
+                witness: Some("x=null forces false branch".into()),
+            };
+            let json = serde_json::to_string(&sv).unwrap();
+            let rt: SymbolicVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(rt.verdict, verdict);
+            assert_eq!(rt.constraints_checked, 42);
+            assert_eq!(rt.paths_explored, 7);
+            assert_eq!(rt.witness.as_deref(), Some("x=null forces false branch"));
+        }
+        // Verify snake_case serialization
+        let json = serde_json::to_string(&Verdict::NotAttempted).unwrap();
+        assert_eq!(json, "\"not_attempted\"");
+    }
+
+    #[test]
+    fn evidence_with_symbolic_not_empty() {
+        let ev = Evidence {
+            symbolic: Some(SymbolicVerdict {
+                verdict: Verdict::Confirmed,
+                constraints_checked: 1,
+                paths_explored: 1,
+                witness: None,
+            }),
+            ..Default::default()
+        };
+        assert!(!ev.is_empty());
+    }
+
+    #[test]
+    fn symbolic_witness_omitted_when_none() {
+        let sv = SymbolicVerdict {
+            verdict: Verdict::Inconclusive,
+            constraints_checked: 0,
+            paths_explored: 0,
+            witness: None,
+        };
+        let json = serde_json::to_string(&sv).unwrap();
+        assert!(!json.contains("witness"));
     }
 }

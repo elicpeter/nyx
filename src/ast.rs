@@ -187,8 +187,7 @@ fn build_taint_diag(
             state: None,
             notes: evidence_notes,
             flow_steps,
-            explanation: None,
-            confidence_limiters: vec![],
+            ..Default::default()
         }),
         rank_score: None,
         rank_reason: None,
