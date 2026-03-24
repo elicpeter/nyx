@@ -377,10 +377,6 @@ fn js_fs_open_close() {
 fn java_twr_no_false_leak() {
     // Java try-with-resources guarantees AutoCloseable.close() is called.
     // The managed_resource flag on the acquire node suppresses false leaks.
-    // Note: the state engine does not currently recognise Java constructor
-    // callees (e.g. "FileInputStream") against the resource pair patterns
-    // (which use "new FileInputStream"), so manual opens also don't fire.
-    // This test locks down that TWR resources produce zero false positives.
     let findings = state_diags_for("java_try_with_resources.java");
     let leaks: Vec<_> = findings
         .iter()
@@ -391,6 +387,30 @@ fn java_twr_no_false_leak() {
         "Expected zero resource-leak findings in TWR fixture, got: {:?}",
         leaks.iter().map(|d| &d.id).collect::<Vec<_>>()
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// (8b-2) Java constructor callee fix (Phase 8)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn java_file_stream_leak() {
+    assert_has_prefix("java_file_stream_leak.java", "state-resource-leak");
+}
+
+#[test]
+fn java_file_stream_clean() {
+    assert_no_state_findings("java_file_stream_clean.java");
+}
+
+#[test]
+fn java_double_close_constructor() {
+    assert_has("java_double_close.java", "state-double-close");
+}
+
+#[test]
+fn java_db_connection_leak() {
+    assert_has_prefix("java_db_connection_leak.java", "state-resource-leak");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -587,6 +607,25 @@ fn php_fopen_leak() {
 #[test]
 fn php_fopen_close() {
     assert_no_state_findings("php_fopen_close.php");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// (12b) PHP OOP constructor fix (Phase 8)
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn php_mysqli_leak() {
+    assert_has_prefix("php_mysqli_leak.php", "state-resource-leak");
+}
+
+#[test]
+fn php_mysqli_clean() {
+    assert_no_state_findings("php_mysqli_clean.php");
+}
+
+#[test]
+fn php_curl_use_after_close() {
+    assert_has("php_curl_use_after_close.php", "state-use-after-close");
 }
 
 // ═══════════════════════════════════════════════════════════════════════

@@ -499,6 +499,454 @@ as a safety valve, and validates the full experience.
 
 ---
 
+## Phase 8 — Java and PHP Constructor Callee Fix
+
+**Problem:** Java and PHP use constructor-based resource acquisition (`new
+FileInputStream(path)`, `new mysqli(host, ...)`), but the CFG's callee
+extraction produces only the type name (e.g. `"FileInputStream"`), while the
+resource pair patterns expect `"new FileInputStream"`. This mismatch means
+**zero** Java state findings fire. C++ already has special-case normalization
+for `new_expression` → `"new"`, but Java's `object_creation_expression` and
+PHP's OOP constructors are unhandled.
+
+### Root Cause
+
+In `cfg.rs:1561-1569`, `Kind::CallFn` extraction tries field `"type"` last
+and returns the bare type name. In `cfg.rs:1614-1618`, the C++ `new_expression`
+override produces `"new"` but is guarded by `lang == "cpp"`.
+
+Java patterns in `rules.rs:267-277` use `"new FileInputStream"` etc. The
+`callee_matches()` function in `transfer.rs:258-267` does exact-or-suffix
+matching, so `"fileinputstream"` never matches `"new fileinputstream"`.
+
+### Approach
+
+**Option A (preferred):** Fix the resource pair patterns to not include `"new "`.
+Change `"new FileInputStream"` to `"FileInputStream"` in `JAVA_RESOURCES`.
+This is simpler, requires no CFG changes, and callee_matches suffix semantics
+already handle it (`"fileinputstream".ends_with("fileinputstream")` → true).
+
+**Why not fix the callee?** Adding a `"new "` prefix to Java callees would
+affect taint analysis label matching, SSA lowering, and everything else that
+reads `info.callee`. Changing only the resource pair patterns is isolated to
+state analysis.
+
+For PHP, apply the same fix: add `"mysqli"` as an acquire alias alongside
+`"mysqli_connect"` in `PHP_RESOURCES`, since `new mysqli(...)` extracts as
+`"mysqli"`.
+
+### Deliverables
+
+1. **Fix Java resource pair patterns** (`src/cfg_analysis/rules.rs`)
+   - Change `JAVA_RESOURCES` acquire from `["new FileInputStream", ...]` to
+     `["FileInputStream", "FileOutputStream", "BufferedReader", "openConnection"]`
+   - Add `getConnection` if not already present
+
+2. **Add Java database resource pair** (`src/cfg_analysis/rules.rs`)
+   - New `ResourcePair`: acquire `["DriverManager.getConnection", "getConnection"]`,
+     release `[".close"]`, resource_name `"db connection"`
+   - New `ResourcePair`: acquire `["Socket"]`, release `[".close"]`,
+     resource_name `"socket"`
+
+3. **Fix PHP OOP constructor matching** (`src/cfg_analysis/rules.rs`)
+   - Add `"mysqli"` to the db connection acquire list alongside `"mysqli_connect"`
+   - This handles both procedural `mysqli_connect(...)` and OOP `new mysqli(...)`
+
+4. **Add per-language use patterns** (`src/cfg_analysis/rules.rs`,
+   `src/state/transfer.rs`)
+   - Add `use_patterns: &'static [&'static str]` field to `ResourcePair`
+   - PHP curl: `["curl_exec", "curl_getinfo", "curl_setopt"]`
+   - PHP mysqli: `["mysqli_query", "mysqli_fetch_array", ".query", ".fetch"]`
+   - Java: `[".read", ".write", ".flush", ".available"]`
+   - Keep the global `RESOURCE_USE_PATTERNS` as a fallback; check pair-specific
+     patterns first
+
+5. **Update test fixtures and expectations**
+   - Promote Java `stream_lifecycle.expect.json` entries to `must_match: true`
+   - Promote Java `connection_lifecycle.expect.json`, `double_close.expect.json`,
+     `branch_close.expect.json` where findings now fire
+   - Promote PHP `db_connection.expect.json` and `curl_state.expect.json`
+   - Add unit test fixtures: `java_file_stream_leak.java` (leak without TWR),
+     `java_file_stream_clean.java` (explicit close), `php_curl_use_after_close.php`,
+     `php_mysqli_leak.php`
+   - Add tests to `state_tests.rs` for Java and PHP lifecycle
+
+### Success Criteria
+- Java `new FileInputStream(path)` without close → `state-resource-leak`
+- Java `.close()` twice → `state-double-close`
+- PHP `curl_exec()` after `curl_close()` → `state-use-after-close`
+- PHP `new mysqli(...)` without close → `state-resource-leak`
+- All 4 Java real-world fixtures fire reliably (`must_match: true`)
+- Java row in accuracy table changes from "Limited" to "Yes" across all columns
+
+### Key Files
+- `src/cfg_analysis/rules.rs` — `JAVA_RESOURCES`, `PHP_RESOURCES`, `ResourcePair`
+- `src/state/transfer.rs` — `RESOURCE_USE_PATTERNS`, use detection logic
+- `tests/state_tests.rs` — new Java/PHP tests
+- `tests/fixtures/real_world/java/state/*.expect.json`
+- `tests/fixtures/real_world/php/state/*.expect.json`
+
+---
+
+## Phase 9 — JavaScript/TypeScript Use Pattern Completeness
+
+**Problem:** JavaScript and TypeScript have working acquire/release matching
+(`fs.openSync`/`fs.closeSync` fire correctly), but use-after-close detection
+is incomplete. The `RESOURCE_USE_PATTERNS` list uses suffix matching, and
+`"readSync"` does not end with `"read"` (it ends with `"Sync"`). Similarly,
+`"writeSync"` does not match `"write"`. This means `fs.readSync(fd, buf)`
+after `fs.closeSync(fd)` does not produce `state-use-after-close`.
+
+### Root Cause
+
+`callee_matches("fs.readsync", "read")` → checks:
+1. `"fs.readsync" == "read"` → false
+2. `"fs.readsync".ends_with("read")` → false (ends with "readsync")
+
+The `Sync` suffix breaks suffix matching for all Node.js `fs` module methods.
+
+### Deliverables
+
+1. **Extend `RESOURCE_USE_PATTERNS`** (`src/state/transfer.rs`)
+   - Add JS/TS-specific patterns: `"readSync"`, `"writeSync"`, `"readFileSync"`,
+     `"writeFileSync"`, `"appendFileSync"`, `"ftruncateSync"`, `"fsyncSync"`,
+     `"fstatSync"`
+   - Add stream operation patterns: `"pipe"`, `"unpipe"`, `"resume"`,
+     `"pause"`, `"destroy"` (for streams after `.close()`)
+   - Add generic method patterns that cover multiple languages: `".read"`,
+     `".write"`, `".send"`, `".recv"`, `".query"`, `".execute"`, `".fetch"`
+     (dot-prefix patterns catch method-call forms like `fd.read()`)
+
+2. **Add per-pair use patterns via Phase 8's `use_patterns` field**
+   - JS fd pair: `["fs.readSync", "fs.writeSync", "fs.fstatSync",
+     "fs.ftruncateSync", "fs.fsyncSync"]`
+   - JS stream pair: `[".pipe", ".resume", ".write", ".read", ".push"]`
+
+3. **Update test fixtures and expectations**
+   - Promote JS `handle_reuse.expect.json` use-after-close entry to
+     `must_match: true`
+   - Add unit test: `js_fs_use_after_close.js` — `fs.openSync` → `fs.closeSync`
+     → `fs.readSync` → expect `state-use-after-close`
+   - Add unit test: `ts_stream_use_after_destroy.ts` — stream `.destroy()` →
+     `.write()` → expect `state-use-after-close`
+
+### Success Criteria
+- `fs.readSync(fd, buf)` after `fs.closeSync(fd)` → `state-use-after-close`
+- JS/TS accuracy table changes from "Partial" to "Yes" for Use-After-Close
+- All existing JS/TS state tests still pass
+
+### Key Files
+- `src/state/transfer.rs` — `RESOURCE_USE_PATTERNS`
+- `src/cfg_analysis/rules.rs` — JS_RESOURCES (per-pair use patterns)
+- `tests/fixtures/real_world/javascript/state/handle_reuse.expect.json`
+- `tests/state_tests.rs`
+
+---
+
+## Phase 10 — Ruby State Detection Fix
+
+**Problem:** Ruby has the lowest state detection accuracy. The real-world
+fixture `file_lifecycle.rb` explicitly documents "state engine does not yet
+fire for Ruby" — all 3 state entries (leak, double-close, use-after-close)
+are soft misses. However, the unit test `ruby_file_open_no_close.rb` DOES
+fire `state-resource-leak`, and `ruby_file_open_close.rb` correctly produces
+no findings. This suggests acquire/release matching works for simple cases but
+fails for multi-function fixtures.
+
+### Investigation Steps (do before coding)
+
+1. Run the real-world `file_lifecycle.rb` through the scanner with debug output
+   to determine WHY the state engine misses:
+   - Does the CFG correctly extract `File.open` as the callee?
+   - Does `.close` match as a release?
+   - Are the receiver variables (`f`) in the `uses` field of release nodes?
+   - Is the `defines` field set on the acquire node?
+
+2. Compare the CFG output for the working unit test (`ruby_file_open_no_close.rb`)
+   vs the failing real-world fixture (`file_lifecycle.rb`)
+
+3. Check if multi-function files cause SymbolInterner name collisions (same
+   variable name `f` in multiple Ruby functions → same SymbolId → state
+   contamination across functions)
+
+### Likely Root Causes (based on code analysis)
+
+**A. Per-function scope isolation:** The state engine runs on the full-file
+CFG. If `file_lifecycle.rb` has multiple functions (`read_and_leak`,
+`read_and_close`, `double_close`, `use_after_close`), their variable states
+bleed into each other because `SymbolInterner` is name-based. Function
+`read_and_close` properly closing `f` may overwrite the OPEN state from
+`read_and_leak`, masking the leak.
+
+**B. Ruby `call` vs `method_call` dispatch:** Ruby's tree-sitter grammar uses
+`call` for `f.close` (receiver.method style). Check that `labels/ruby.rs`
+maps `call` to `Kind::CallMethod` so receiver extraction runs correctly.
+
+**C. Missing receiver in `uses`:** Even if callee is `"f.close"`, the
+transfer function checks `info.uses` for the variable name. If `"f"` is not
+in `uses`, the release won't mark `f` as CLOSED.
+
+### Deliverables
+
+1. **Diagnose the exact failure** — add tracing or run the scanner with
+   `NYX_LOG=debug` on `file_lifecycle.rb` to identify which step breaks
+
+2. **Fix scope contamination** (if cause A) — the cleanest fix is to run the
+   state engine per-function rather than per-file. The synthesized function
+   exit nodes already exist in the CFG. Alternative: reset `ResourceDomainState`
+   at function boundaries.
+
+3. **Fix receiver variable tracking** (if cause C) — in `push_node()` for
+   `Kind::CallMethod`, ensure the receiver identifier is added to `info.uses`
+   so the state transfer can find the variable being released.
+
+4. **Extend Ruby resource pairs** (`src/cfg_analysis/rules.rs`)
+   - Add use patterns: `[".read", ".write", ".gets", ".puts", ".each_line",
+     ".readline", ".readlines", ".sysread", ".syswrite"]`
+   - Add db pair: `PG.connect`/`.close` or `Sequel.connect`/`.disconnect`
+
+5. **Update test expectations**
+   - Promote Ruby `file_lifecycle.expect.json` state entries to `must_match: true`
+   - Promote Ruby `conditional_close.expect.json` secondary entry
+   - Add unit tests for Ruby double-close and use-after-close
+
+### Success Criteria
+- Ruby `File.open` without close → `state-resource-leak`
+- Ruby `.close` twice → `state-double-close`
+- Ruby read after close → `state-use-after-close`
+- Ruby accuracy table changes from "Partial" to "Yes" across all columns
+- Multi-function Ruby files produce correct per-function findings
+
+### Key Files
+- `src/cfg.rs` — `push_node()` receiver extraction for Ruby `call` nodes
+- `src/state/engine.rs` — per-function vs per-file execution scope
+- `src/state/symbol.rs` — `SymbolInterner` scope isolation
+- `src/cfg_analysis/rules.rs` — `RUBY_RESOURCES`
+- `tests/fixtures/real_world/ruby/state/file_lifecycle.rb`
+- `tests/state_tests.rs`
+
+---
+
+## Phase 11 — Scope-Aware Symbol Interning
+
+**Problem:** The `SymbolInterner` in `src/state/symbol.rs` maps variable names
+to `SymbolId` values using a flat `HashMap<String, SymbolId>`. This means:
+
+1. Same-name variables across different functions share a SymbolId, causing
+   state contamination (one function's close affects another function's leak
+   detection)
+2. Variable shadowing within a function — inner-scope `f` and outer-scope `f`
+   are the same symbol, so inner close masks outer leak
+
+Problem 1 is the primary cause of Ruby/PHP/Java detection failures in
+multi-function files (Phase 10 may partially address this). Problem 2 is a
+known false negative documented in Phase 6 edge-case tests.
+
+### Approach
+
+Add function-scoped interning: the SymbolId key becomes
+`(enclosing_function_name, variable_name)` rather than bare `variable_name`.
+
+### Deliverables
+
+1. **Add function context to SymbolInterner** (`src/state/symbol.rs`)
+   - Change `from_cfg()` to accept a mapping from `NodeIndex` →
+     `Option<String>` (enclosing function name)
+   - Build this mapping during CFG construction: track which function body
+     each node belongs to
+   - Intern as `format!("{}::{}", func_name, var_name)` or use a tuple key
+
+2. **Build enclosing-function map** (`src/cfg.rs` or `src/state/mod.rs`)
+   - During CFG construction, `build_sub()` already knows when it enters a
+     function definition (Kind::FnDef)
+   - Thread the current function name through `build_sub()` and store it on
+     each node's `NodeInfo` as `enclosing_func: Option<String>`
+   - Alternative: post-process the CFG to compute function ownership from
+     the dominator tree or node ranges
+
+3. **Update transfer and facts** (`src/state/transfer.rs`, `src/state/facts.rs`)
+   - Transfer: no changes needed — it uses SymbolId, which is now scoped
+   - Facts: leak detection at exit nodes now correctly scoped per-function
+   - Event messages: include function name for clarity
+
+4. **Handle top-level code** — nodes not inside any function get a synthetic
+   scope like `"<toplevel>"`. This is the fallback for languages like Python
+   where code can be at module level.
+
+5. **Test fixtures**
+   - Update `variable_shadowing.c` test — now outer leak SHOULD be detected
+     (change from `assert_no_state_findings` to `assert_has_prefix("state-resource-leak")`)
+   - Add `multi_function_isolation.c` — two functions, same variable name `f`,
+     one leaks and one doesn't → expect exactly 1 leak finding
+   - Add `multi_function_isolation.rb` — same for Ruby
+
+### Success Criteria
+- `variable_shadowing.c` now reports outer-scope leak (false negative fixed)
+- Multi-function files produce independent per-function findings
+- No regressions in existing tests
+- Variable name `f` in function A is independent of `f` in function B
+
+### Key Files
+- `src/state/symbol.rs` — `SymbolInterner` internals
+- `src/cfg.rs` — `NodeInfo` struct (new `enclosing_func` field), `build_sub()`
+- `src/state/transfer.rs` — transfer function
+- `src/state/facts.rs` — finding extraction
+- `tests/state_tests.rs` — updated shadowing test, new isolation tests
+
+---
+
+## Phase 12 — Factory Return Suppression and Cross-Function Hints
+
+**Problem:** Functions that open a resource and return it to the caller (factory
+pattern) produce false-positive `state-resource-leak` findings because the
+state engine has no model for cross-function ownership transfer. This is one
+of the two remaining "Common False Positives" documented in `state.md`.
+
+### Approach
+
+**Return-value suppression:** If a variable that is OPEN at function exit is
+also the return value of the function, suppress the leak finding. The
+resource's lifetime extends to the caller — the caller is responsible for
+closing it.
+
+This requires detecting which variable (if any) is returned. The CFG already
+has `Kind::Return` nodes. If the returned expression is a simple variable
+reference that matches an OPEN resource, suppress the leak.
+
+### Deliverables
+
+1. **Detect returned variables** (`src/state/facts.rs`)
+   - In the finding extraction pass, scan the function's return nodes for
+     returned variable names
+   - Build a `HashSet<SymbolId>` of returned variables
+   - In leak detection, if a variable is OPEN at exit AND in the returned set,
+     suppress `state-resource-leak` and `state-resource-leak-possible`
+
+2. **Identify return nodes in CFG** (`src/cfg.rs`)
+   - Return nodes already exist as `Kind::Return` in the CFG
+   - The returned expression is in `info.uses` or can be extracted from the
+     AST child of the return node
+   - Add `info.returned_var: Option<String>` to capture the simple variable
+     name being returned (only for single-variable returns — complex
+     expressions don't qualify)
+
+3. **Cross-function resource hints via summaries** (optional, stretch goal)
+   - Add `returns_resource: bool` to `FuncSummary`
+   - Set it during pass 1 when a function returns an OPEN variable
+   - In pass 2, callers that invoke a resource-returning function and don't
+     close the result can be flagged with higher confidence
+   - This inverts the current false positive into a true positive at the
+     call site
+
+4. **Test fixtures**
+   - Update `resource_returned.c` test — now should produce NO state findings
+     (change from `assert_has_prefix("state-resource-leak")` to
+     `assert_no_state_findings`)
+   - Add `factory_caller_leak.c` — calls `open_file()` but never closes result
+     → expect `state-resource-leak` (stretch: via cross-function hint)
+   - Add `factory_caller_clean.c` — calls `open_file()` and closes result →
+     no findings
+
+### Success Criteria
+- Factory function `open_file()` that returns `fopen()` result → no leak finding
+- Caller of factory that neglects close → still flagged (via summary, if implemented)
+- No regressions — functions that open and DON'T return still report leaks
+
+### Key Files
+- `src/state/facts.rs` — return-value suppression logic
+- `src/cfg.rs` — `NodeInfo` (optional `returned_var` field), return node handling
+- `src/summary/mod.rs` — `FuncSummary` (optional `returns_resource` field)
+- `tests/state_tests.rs` — updated factory test, new caller tests
+
+---
+
+## Phase 13 — Expanded Resource Pairs and Auth Improvements
+
+**Problem:** Current resource pair definitions cover the most common patterns
+per language, but miss many real-world APIs. Auth detection is limited to
+function name patterns and a small set of auth-call matchers. This phase
+expands coverage breadth.
+
+### Deliverables
+
+1. **Expand resource pairs per language** (`src/cfg_analysis/rules.rs`)
+
+   **Java additions:**
+   - `PreparedStatement`/`.close`, `ResultSet`/`.close`
+   - `ServerSocket`/`.close`, `DatagramSocket`/`.close`
+   - `RandomAccessFile`/`.close`
+   - `Channel`/`.close` (NIO)
+
+   **Python additions:**
+   - `urllib.request.urlopen`/`.close`
+   - `http.client.HTTPConnection`/`.close`
+   - `sqlite3.connect`/`.close`
+   - `tempfile.NamedTemporaryFile`/`.close`
+   - `zipfile.ZipFile`/`.close`
+
+   **Go additions:**
+   - `http.Get`/`resp.Body.Close()` — tricky: requires recognizing that
+     `resp.Body` is the resource, not `resp`
+   - `sql.Open`/`.Close` (database/sql)
+   - `net.Listen`/`.Close`
+   - `bufio.NewReader` → no close needed (wraps, doesn't own)
+
+   **JavaScript/TypeScript additions:**
+   - `net.createConnection`/`.end`, `.destroy`
+   - `http.request`/`.end`, `.destroy`
+   - `new WebSocket`/`.close`
+   - Database: `mysql.createConnection`/`.end`,
+     `pg.Pool`/`.end`, `new Client`/`.end`
+
+   **Ruby additions:**
+   - `Net::HTTP.start`/`.finish`
+   - `PG.connect`/`.close`, `PG::Connection.new`/`.close`
+   - `SQLite3::Database.new`/`.close`
+   - `Tempfile.new`/`.close`
+
+   **PHP additions:**
+   - `pg_connect`/`pg_close`
+   - `pdo` → `new PDO`/`null` (no explicit close, but connection lifecycle)
+   - `fsockopen`/`fclose`
+   - `stream_socket_client`/`fclose`
+
+2. **Expand auth detection** (`src/state/transfer.rs`)
+   - Add middleware-style patterns: `authenticate`, `authorize`, `requireAuth`,
+     `ensureAuthenticated`, `passport.authenticate`
+   - Add decorator patterns: recognize `@login_required`, `@requires_auth`
+     annotations in Python (requires AST inspection for decorators on the
+     function definition, not just call-level matching)
+   - Add JWT/token patterns: `verifyToken`, `validateToken`, `jwt.verify`,
+     `decodeToken`
+   - Add role-based patterns: `hasPermission`, `checkPermission`,
+     `requireRole`, `can`
+
+3. **Add negative tests for over-broad auth patterns**
+   - `auth_false_positive_token.js` — function named `generateToken()` should
+     NOT be treated as auth check
+   - `auth_decorator_python.py` — `@login_required` decorated handler should
+     suppress `state-unauthed-access`
+
+4. **Update real-world expectations**
+   - Re-audit Go `http_body.expect.json` — if `http.Get` pair is added, the
+     leak finding should now fire
+   - Re-audit JS `db_connection.expect.json` — if `mysql.createConnection` pair
+     is added, the leak should fire
+
+### Success Criteria
+- ≥80% of real-world state expectations are `must_match: true`
+- At least 3 new resource pairs per language
+- Auth detection covers JWT/token verification patterns
+- No new false positives from broader patterns (validated via negative tests)
+
+### Key Files
+- `src/cfg_analysis/rules.rs` — all `*_RESOURCES` definitions
+- `src/state/transfer.rs` — auth_rules, ADMIN_PATTERNS
+- `tests/state_tests.rs` — new auth and resource tests
+- `tests/fixtures/real_world/*/state/*.expect.json`
+
+---
+
 ## Phase Dependency Graph
 
 ```
@@ -514,13 +962,28 @@ Phase 5 (console rendering + benchmarks)
     |
 Phase 6 (harden expectations + validation)
     |
-Phase 7 (flip default)
+Phase 8 (Java + PHP constructor fix) ──┐
+    |                                   |
+Phase 9 (JS/TS use pattern fix) ───────┤
+    |                                   |
+Phase 10 (Ruby state detection fix) ───┤
+    |                                   |
+Phase 11 (scope-aware interning) ──────┘
+    |
+Phase 12 (factory return suppression)
+    |
+Phase 13 (expanded pairs + auth)
+    |
+Phase 7 (flip default) ← moved to end
 ```
 
-Phases 1-4 are strictly ordered (each adds NodeInfo fields or transfer logic
-that later phases build on). Phase 5 is semi-independent but benefits from
-Phases 1-4 being complete. Phase 6 requires all suppressions in place. Phase 7
-is the final gate.
+Phases 8-10 are independent of each other (each fixes a different language)
+and can be done in any order. Phase 11 (scope-aware interning) builds on the
+diagnostic work from Phase 10 and benefits all languages. Phase 12 (factory
+suppression) requires Phase 11's function-scoped symbols. Phase 13 (expanded
+pairs) is breadth expansion that benefits from all prior fixes. Phase 7
+(default-on flip) moves to the end as the final gate after all precision
+improvements.
 
 ## Risk Mitigations
 
@@ -531,14 +994,20 @@ is the final gate.
 | Auth matching too strict after fix | Test both positive (real handlers) and negative (non-handlers) cases |
 | Benchmark overhead >10% | Per-function analysis with bounded lattice; budget cap at 100K iterations |
 | Per-language gating adds config complexity | Make it optional (`Option<Vec>`); default `None` runs all languages |
+| Java pattern change affects taint analysis | Only change resource pair patterns, not callee extraction |
+| Use pattern expansion causes false use-after-close | Each new pattern must have positive+negative test |
+| Scope-aware interning changes finding counts | Run full test suite before/after; update expectations |
+| Factory suppression hides real leaks | Only suppress when return value IS the open resource; not for side effects |
+| Broad auth patterns cause false negatives | Add negative tests; use word-boundary matching for all new patterns |
 
 ## Metrics to Track Across Phases
 
-| Metric | Phase 1 | Phase 6 | Phase 7 |
-|--------|---------|---------|---------|
-| must_match true % | 31% (baseline) | ≥60% | ≥60% |
-| state_tests.rs test count | 28 | ≥42 | ≥42 |
-| Languages with basic tests | 3 (C, Py, JS) | 10 | 10 |
-| Auth test count | 0 | ≥6 | ≥6 |
-| Known FP categories | 6 | ≤2 | ≤2 |
-| Benchmark overhead | unmeasured | measured | <10% |
+| Metric | Phase 1 | Phase 6 | Phase 13 | Phase 7 |
+|--------|---------|---------|----------|---------|
+| must_match true % | 31% (baseline) | ≥60% | ≥80% | ≥80% |
+| state_tests.rs test count | 28 | ≥62 | ≥80 | ≥80 |
+| Languages with basic tests | 3 (C, Py, JS) | 10 | 10 | 10 |
+| Languages with "Yes" across all detection | 4 (C, C++, Py, Go) | 4 | 9 (all but Java limited→Yes) | 9 |
+| Auth test count | 0 | ≥7 | ≥12 | ≥12 |
+| Known FP categories | 6 | 4 | ≤1 | ≤1 |
+| Benchmark overhead | unmeasured | measured | measured | <10% |

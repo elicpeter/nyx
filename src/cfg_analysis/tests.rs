@@ -1846,3 +1846,4 @@ function run() {
         "PHP system() with interpolated string should produce a HIGH finding"
     );
 }
+

@@ -245,6 +245,17 @@ fn is_raii_factory(lang: &str, callee: &str) -> bool {
     }
 }
 
+/// Fallback for constructor expressions whose grammar lacks field names.
+/// For example, PHP `object_creation_expression` has positional children
+/// `new name arguments` where `name` is a node kind (not a field).
+/// Returns the first child whose kind is `"name"` or `"type_identifier"`.
+fn find_constructor_type_child(n: Node) -> Option<Node> {
+    let mut cursor = n.walk();
+    n.children(&mut cursor).find(|c| {
+        matches!(c.kind(), "name" | "type_identifier" | "qualified_name")
+    })
+}
+
 /// Return the callee identifier for the first call / method / macro inside `n`.
 /// Searches recursively through all descendants.
 fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
@@ -265,6 +276,9 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                         .or_else(|| c.child_by_field_name("method"))
                         .or_else(|| c.child_by_field_name("name"))
                         .or_else(|| c.child_by_field_name("type"))
+                        // Fallback for constructors whose grammar lacks field names
+                        // (e.g. PHP `object_creation_expression` has positional children).
+                        .or_else(|| find_constructor_type_child(c))
                         .and_then(|f| text_of(f, code)),
                     Kind::CallMethod => {
                         let func = c
@@ -1089,6 +1103,7 @@ fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> 
             .or_else(|| n.child_by_field_name("method"))
             .or_else(|| n.child_by_field_name("name"))
             .or_else(|| n.child_by_field_name("type"))
+            .or_else(|| find_constructor_type_child(n))
             .and_then(|f| text_of(f, code)),
         Kind::CallMethod => {
             let func = n
@@ -1565,6 +1580,9 @@ fn push_node<'a>(
             .or_else(|| ast.child_by_field_name("method"))
             .or_else(|| ast.child_by_field_name("name"))
             .or_else(|| ast.child_by_field_name("type"))
+            // Fallback for constructors whose grammar lacks field names
+            // (e.g. PHP `object_creation_expression` has positional children).
+            .or_else(|| find_constructor_type_child(ast))
             .and_then(|n| text_of(n, code))
             .unwrap_or_default(),
 

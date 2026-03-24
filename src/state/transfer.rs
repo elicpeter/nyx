@@ -141,20 +141,38 @@ impl DefaultTransfer<'_> {
             }
         }
 
-        // ── Resource use (read/write/etc.) ───────────────────────────────
-        let is_use = RESOURCE_USE_PATTERNS
-            .iter()
-            .any(|p| callee_matches(&callee, p));
-        if is_use {
-            for used in &info.uses {
-                if let Some(sym) = self.interner.get(used) {
-                    let current = state.resource.get(sym);
-                    if current == ResourceLifecycle::CLOSED {
-                        events.push(TransferEvent {
-                            kind: TransferEventKind::UseAfterClose,
-                            node: node_idx,
-                            var: sym,
-                        });
+        // ── Resource use (pair-specific patterns first, then global fallback)
+        let mut use_checked = false;
+        for pair in self.resource_pairs {
+            if pair.use_patterns.iter().any(|p| callee_matches(&callee, p)) {
+                use_checked = true;
+                for used in &info.uses {
+                    if let Some(sym) = self.interner.get(used) {
+                        if state.resource.get(sym) == ResourceLifecycle::CLOSED {
+                            events.push(TransferEvent {
+                                kind: TransferEventKind::UseAfterClose,
+                                node: node_idx,
+                                var: sym,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if !use_checked {
+            let is_use = RESOURCE_USE_PATTERNS
+                .iter()
+                .any(|p| callee_matches(&callee, p));
+            if is_use {
+                for used in &info.uses {
+                    if let Some(sym) = self.interner.get(used) {
+                        if state.resource.get(sym) == ResourceLifecycle::CLOSED {
+                            events.push(TransferEvent {
+                                kind: TransferEventKind::UseAfterClose,
+                                node: node_idx,
+                                var: sym,
+                            });
+                        }
                     }
                 }
             }

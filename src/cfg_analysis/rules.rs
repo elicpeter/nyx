@@ -25,6 +25,10 @@ pub struct ResourcePair {
     /// but should NOT be treated as acquisitions.
     pub exclude_acquire: &'static [&'static str],
     pub resource_name: &'static str,
+    /// Callee patterns that read/write/operate on this specific resource type,
+    /// triggering use-after-close if the handle is closed. Checked before the
+    /// global `RESOURCE_USE_PATTERNS` fallback.
+    pub use_patterns: &'static [&'static str],
 }
 
 // ── Guard rules ─────────────────────────────────────────────────────────
@@ -183,24 +187,28 @@ static C_RESOURCES: &[ResourcePair] = &[
         release: &["free"],
         exclude_acquire: &[],
         resource_name: "memory",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["fopen", "fdopen", "curlx_fopen", "curlx_fdopen"],
         release: &["fclose", "curlx_fclose"],
         exclude_acquire: &["freopen", "curlx_freopen"],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["open"],
         release: &["close"],
         exclude_acquire: &["freopen", "curlx_freopen"],
         resource_name: "file descriptor",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["pthread_mutex_lock"],
         release: &["pthread_mutex_unlock"],
         exclude_acquire: &[],
         resource_name: "mutex",
+        use_patterns: &[],
     },
 ];
 
@@ -211,24 +219,28 @@ static CPP_RESOURCES: &[ResourcePair] = &[
         release: &["free"],
         exclude_acquire: &[],
         resource_name: "memory",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["fopen", "fdopen", "curlx_fopen", "curlx_fdopen"],
         release: &["fclose", "curlx_fclose"],
         exclude_acquire: &["freopen", "curlx_freopen"],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["open"],
         release: &["close"],
         exclude_acquire: &["freopen", "curlx_freopen"],
         resource_name: "file descriptor",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["pthread_mutex_lock"],
         release: &["pthread_mutex_unlock"],
         exclude_acquire: &[],
         resource_name: "mutex",
+        use_patterns: &[],
     },
     // C++ new/delete (callee normalized to "new"/"delete" in cfg.rs)
     ResourcePair {
@@ -236,6 +248,7 @@ static CPP_RESOURCES: &[ResourcePair] = &[
         release: &["delete"],
         exclude_acquire: &[],
         resource_name: "heap object",
+        use_patterns: &[],
     },
 ];
 
@@ -245,12 +258,14 @@ static GO_RESOURCES: &[ResourcePair] = &[
         release: &[".Close"],
         exclude_acquire: &[],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &[".Lock"],
         release: &[".Unlock"],
         exclude_acquire: &[],
         resource_name: "mutex",
+        use_patterns: &[],
     },
 ];
 
@@ -261,20 +276,33 @@ static RUST_RESOURCES: &[ResourcePair] = &[
         release: &["dealloc"],
         exclude_acquire: &[],
         resource_name: "raw memory",
+        use_patterns: &[],
     },
 ];
 
-static JAVA_RESOURCES: &[ResourcePair] = &[ResourcePair {
-    acquire: &[
-        "new FileInputStream",
-        "new FileOutputStream",
-        "new BufferedReader",
-        "openConnection",
-    ],
-    release: &[".close"],
-    exclude_acquire: &[],
-    resource_name: "stream/connection",
-}];
+static JAVA_RESOURCES: &[ResourcePair] = &[
+    ResourcePair {
+        acquire: &["FileInputStream", "FileOutputStream", "BufferedReader", "openConnection"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "stream/connection",
+        use_patterns: &[".read", ".write", ".flush", ".available"],
+    },
+    ResourcePair {
+        acquire: &["DriverManager.getConnection", "getConnection"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "db connection",
+        use_patterns: &[".executeQuery", ".executeUpdate", ".createStatement", ".prepareStatement"],
+    },
+    ResourcePair {
+        acquire: &["Socket"],
+        release: &[".close"],
+        exclude_acquire: &[],
+        resource_name: "socket",
+        use_patterns: &[".getInputStream", ".getOutputStream", ".connect"],
+    },
+];
 
 static PYTHON_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
@@ -282,24 +310,28 @@ static PYTHON_RESOURCES: &[ResourcePair] = &[
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["socket.socket", "socket"],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "socket",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["connect", "cursor"],
         release: &[".close"],
         exclude_acquire: &["signal.connect", "event.connect", ".register"],
         resource_name: "db connection",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["threading.Lock", "threading.RLock"],
         release: &[".release"],
         exclude_acquire: &[],
         resource_name: "mutex",
+        use_patterns: &[],
     },
 ];
 
@@ -309,18 +341,21 @@ static RUBY_RESOURCES: &[ResourcePair] = &[
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["TCPSocket.new", "UDPSocket.new"],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "socket",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &[".lock"],
         release: &[".unlock"],
         exclude_acquire: &[],
         resource_name: "mutex",
+        use_patterns: &[],
     },
 ];
 
@@ -330,18 +365,21 @@ static PHP_RESOURCES: &[ResourcePair] = &[
         release: &["fclose"],
         exclude_acquire: &["freopen"],
         resource_name: "file handle",
+        use_patterns: &[],
     },
     ResourcePair {
-        acquire: &["mysqli_connect"],
-        release: &["mysqli_close"],
+        acquire: &["mysqli_connect", "mysqli"],
+        release: &["mysqli_close", ".close"],
         exclude_acquire: &[],
         resource_name: "db connection",
+        use_patterns: &["mysqli_query", "mysqli_fetch_array", ".query", ".fetch"],
     },
     ResourcePair {
         acquire: &["curl_init"],
         release: &["curl_close"],
         exclude_acquire: &[],
         resource_name: "curl handle",
+        use_patterns: &["curl_exec", "curl_getinfo", "curl_setopt"],
     },
 ];
 
@@ -351,12 +389,14 @@ static JS_RESOURCES: &[ResourcePair] = &[
         release: &["fs.close", "fs.closeSync"],
         exclude_acquire: &[],
         resource_name: "file descriptor",
+        use_patterns: &[],
     },
     ResourcePair {
         acquire: &["createReadStream", "createWriteStream"],
         release: &[".close", ".destroy"],
         exclude_acquire: &[],
         resource_name: "stream",
+        use_patterns: &[],
     },
 ];
 
