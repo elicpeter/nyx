@@ -79,6 +79,13 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
+    // Type-qualified sinks: resolves when receiver is typed as HttpClient via constructor_type().
+    // Handles instance-level calls (client.request) that direct matchers above don't cover.
+    LabelRule {
+        matchers: &["HttpClient.request", "HttpClient.get", "HttpClient.post"],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
     LabelRule {
         matchers: &["Marshal.load", "Marshal.restore", "YAML.load"],
         label: DataLabel::Sink(Cap::DESERIALIZE),

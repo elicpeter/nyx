@@ -133,6 +133,7 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
                 || callee == "urlopen"
                 || callee == "aiohttp.ClientSession"
                 || callee.starts_with("httpx.")
+                || callee == "urllib3.PoolManager"
             {
                 Some(TypeKind::HttpClient)
             } else if suffix == "connect"
@@ -175,8 +176,7 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
             _ => None,
         },
         Lang::Cpp => match suffix {
-            // Shares C FFI callees; C++ stream constructors deferred to Pass B
-            "fopen" => Some(TypeKind::FileHandle),
+            "fopen" | "ifstream" | "ofstream" | "fstream" => Some(TypeKind::FileHandle),
             "curl_easy_init" => Some(TypeKind::HttpClient),
             "mysql_real_connect" | "PQconnectdb" => Some(TypeKind::DatabaseConnection),
             _ => None,
@@ -190,6 +190,30 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
                 Some(TypeKind::FileHandle)
             } else if callee.ends_with("Url::parse") {
                 Some(TypeKind::Url)
+            } else if callee.ends_with("rusqlite::Connection::open") {
+                Some(TypeKind::DatabaseConnection)
+            } else if callee.ends_with("diesel::PgConnection::establish")
+                || callee.ends_with("diesel::SqliteConnection::establish")
+            {
+                Some(TypeKind::DatabaseConnection)
+            } else {
+                None
+            }
+        }
+        Lang::Ruby => {
+            // Ruby uses CallMethod for ALL calls → callee is "receiver.method".
+            // Suffix alone is too generic (new, get, open); match on full callee.
+            if callee.contains("Net::HTTP") || after_colons.starts_with("HTTParty") {
+                Some(TypeKind::HttpClient)
+            } else if after_colons.starts_with("URI") && matches!(suffix, "parse" | "URI") {
+                Some(TypeKind::Url)
+            } else if after_colons == "PG.connect"
+                || (after_colons.starts_with("Sequel") && suffix == "connect")
+                || callee.contains("Mysql2")
+            {
+                Some(TypeKind::DatabaseConnection)
+            } else if after_colons.starts_with("File.") && matches!(suffix, "open" | "new") {
+                Some(TypeKind::FileHandle)
             } else {
                 None
             }
@@ -417,6 +441,7 @@ impl GoInterfaceTable {
                     | TypeKind::String
                     | TypeKind::DatabaseConnection
                     | TypeKind::Url
+                    | TypeKind::HttpClient
             ),
             _ => false, // Unknown interface → conservative
         }
@@ -718,7 +743,31 @@ mod tests {
     fn constructor_type_cpp() {
         assert_eq!(constructor_type(Lang::Cpp, "fopen"), Some(TypeKind::FileHandle));
         assert_eq!(constructor_type(Lang::Cpp, "curl_easy_init"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Cpp, "ifstream"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::Cpp, "ofstream"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::Cpp, "fstream"), Some(TypeKind::FileHandle));
         assert_eq!(constructor_type(Lang::Cpp, "printf"), None);
+    }
+
+    #[test]
+    fn constructor_type_ruby() {
+        // HttpClient
+        assert_eq!(constructor_type(Lang::Ruby, "Net::HTTP.new"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Ruby, "Net::HTTP.get"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Ruby, "HTTParty.get"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Ruby, "HTTParty.post"), Some(TypeKind::HttpClient));
+        // Url
+        assert_eq!(constructor_type(Lang::Ruby, "URI.parse"), Some(TypeKind::Url));
+        // DatabaseConnection
+        assert_eq!(constructor_type(Lang::Ruby, "PG.connect"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(constructor_type(Lang::Ruby, "Sequel.connect"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(constructor_type(Lang::Ruby, "Mysql2::Client.new"), Some(TypeKind::DatabaseConnection));
+        // FileHandle
+        assert_eq!(constructor_type(Lang::Ruby, "File.open"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::Ruby, "File.new"), Some(TypeKind::FileHandle));
+        // Negative
+        assert_eq!(constructor_type(Lang::Ruby, "puts"), None);
+        assert_eq!(constructor_type(Lang::Ruby, "Array.new"), None);
     }
 
     #[test]
@@ -729,7 +778,11 @@ mod tests {
         assert_eq!(constructor_type(Lang::Rust, "File::create"), Some(TypeKind::FileHandle));
         assert_eq!(constructor_type(Lang::Rust, "std::fs::File::open"), Some(TypeKind::FileHandle));
         assert_eq!(constructor_type(Lang::Rust, "Url::parse"), Some(TypeKind::Url));
-        // Broad patterns deferred to Pass B
+        // Namespace-qualified database connections
+        assert_eq!(constructor_type(Lang::Rust, "rusqlite::Connection::open"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(constructor_type(Lang::Rust, "diesel::PgConnection::establish"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(constructor_type(Lang::Rust, "diesel::SqliteConnection::establish"), Some(TypeKind::DatabaseConnection));
+        // Bare Connection::open is still too broad
         assert_eq!(constructor_type(Lang::Rust, "Connection::open"), None);
         assert_eq!(constructor_type(Lang::Rust, "println!"), None);
     }
@@ -751,6 +804,7 @@ mod tests {
     fn constructor_type_python_aiohttp() {
         assert_eq!(constructor_type(Lang::Python, "aiohttp.ClientSession"), Some(TypeKind::HttpClient));
         assert_eq!(constructor_type(Lang::Python, "httpx.Client"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Python, "urllib3.PoolManager"), Some(TypeKind::HttpClient));
     }
 
     #[test]
@@ -773,6 +827,7 @@ mod tests {
         assert!(!GoInterfaceTable::satisfies(&TypeKind::Int, "io.ReadCloser"));
         assert!(GoInterfaceTable::definitely_not(&TypeKind::Int, "io.ReadCloser"));
         assert!(GoInterfaceTable::definitely_not(&TypeKind::DatabaseConnection, "io.ReadCloser"));
+        assert!(GoInterfaceTable::definitely_not(&TypeKind::HttpClient, "io.ReadCloser"));
         assert!(!GoInterfaceTable::definitely_not(&TypeKind::FileHandle, "io.ReadCloser"));
     }
 
