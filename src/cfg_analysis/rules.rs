@@ -204,6 +204,41 @@ static C_RESOURCES: &[ResourcePair] = &[
     },
 ];
 
+static CPP_RESOURCES: &[ResourcePair] = &[
+    // Inherited from C
+    ResourcePair {
+        acquire: &["malloc", "calloc", "realloc"],
+        release: &["free"],
+        exclude_acquire: &[],
+        resource_name: "memory",
+    },
+    ResourcePair {
+        acquire: &["fopen", "fdopen", "curlx_fopen", "curlx_fdopen"],
+        release: &["fclose", "curlx_fclose"],
+        exclude_acquire: &["freopen", "curlx_freopen"],
+        resource_name: "file handle",
+    },
+    ResourcePair {
+        acquire: &["open"],
+        release: &["close"],
+        exclude_acquire: &["freopen", "curlx_freopen"],
+        resource_name: "file descriptor",
+    },
+    ResourcePair {
+        acquire: &["pthread_mutex_lock"],
+        release: &["pthread_mutex_unlock"],
+        exclude_acquire: &[],
+        resource_name: "mutex",
+    },
+    // C++ new/delete (callee normalized to "new"/"delete" in cfg.rs)
+    ResourcePair {
+        acquire: &["new"],
+        release: &["delete"],
+        exclude_acquire: &[],
+        resource_name: "heap object",
+    },
+];
+
 static GO_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
         acquire: &["os.Open", "os.Create", "os.OpenFile"],
@@ -328,7 +363,7 @@ static JS_RESOURCES: &[ResourcePair] = &[
 pub fn resource_pairs(lang: Lang) -> &'static [ResourcePair] {
     match lang {
         Lang::C => C_RESOURCES,
-        Lang::Cpp => C_RESOURCES,
+        Lang::Cpp => CPP_RESOURCES,
         Lang::Go => GO_RESOURCES,
         Lang::Rust => RUST_RESOURCES,
         Lang::Java => JAVA_RESOURCES,

@@ -463,3 +463,114 @@ fn auth_substring_in_condition_no_false_elevate() {
     // Handler + sink + no real auth = finding fires (regression lock).
     assert_has("auth_substring_false_match.js", "state-unauthed-access");
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// (10) Rust RAII suppression
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn rust_raii_file_no_leak() {
+    // File::open uses RAII drop — managed_resource suppresses leak.
+    assert_no_state_findings("rust_raii_file_no_leak.rs");
+}
+
+#[test]
+fn rust_box_owned_no_leak() {
+    // Box::new owns the value, RAII cleans up.
+    assert_no_state_findings("rust_box_owned.rs");
+}
+
+#[test]
+fn rust_explicit_drop_no_leak() {
+    // drop(f) is an explicit release — no leak.
+    assert_no_state_findings("rust_explicit_drop.rs");
+}
+
+#[test]
+fn rust_unsafe_alloc_clean() {
+    // alloc + dealloc — properly paired, no findings.
+    assert_no_state_findings("rust_unsafe_alloc_clean.rs");
+}
+
+#[test]
+fn rust_unsafe_alloc_leak() {
+    // alloc without dealloc — NOT RAII-managed, leak expected.
+    assert_has_prefix("rust_unsafe_alloc_leak.rs", "state-resource-leak");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// (11) C++ new/delete lifecycle
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn cpp_new_leak() {
+    // new without delete → leak.
+    assert_has_prefix("cpp_new_delete_leak.cpp", "state-resource-leak");
+}
+
+#[test]
+fn cpp_new_delete_clean() {
+    // new + delete → no findings.
+    assert_no_state_findings("cpp_new_delete_clean.cpp");
+}
+
+#[test]
+fn cpp_smart_ptr_no_leak() {
+    // make_unique → managed_resource, no leak.
+    assert_no_state_findings("cpp_smart_ptr_no_leak.cpp");
+}
+
+#[test]
+fn cpp_smart_ptr_scope_exit() {
+    // make_unique with return — RAII cleanup at scope exit.
+    assert_no_state_findings("cpp_smart_ptr_scope_exit.cpp");
+}
+
+#[test]
+fn cpp_unique_ptr_from_raw() {
+    // unique_ptr(new int(42)) — the constructor wraps a raw new.
+    // The unique_ptr constructor is not a tracked acquire, so no leak
+    // from the outer call.  The inner `new` might or might not be visible
+    // depending on callee extraction depth.  At minimum: no false alarm.
+    let findings = state_diags_for("cpp_unique_ptr_from_raw.cpp");
+    let leaks: Vec<_> = findings
+        .iter()
+        .filter(|d| d.id.starts_with("state-resource-leak"))
+        .collect();
+    // We accept zero or one leak finding.  If the inner `new` is
+    // extracted, a leak is tolerable (the engine cannot see the
+    // unique_ptr ownership wrapper).  No double-count or crash.
+    assert!(
+        leaks.len() <= 1,
+        "Expected at most 1 leak finding, got {:?}",
+        leaks.iter().map(|d| &d.id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cpp_alias_before_delete() {
+    // p = new; q = p; delete q — tests ownership transfer semantics.
+    // The assignment transfer moves lifecycle from p to q.
+    // After delete q, the resource is closed.
+    // At exit: q = CLOSED, p = MOVED → no leak.
+    let findings = state_diags_for("cpp_alias_before_delete.cpp");
+    // Should not produce a definite leak for p (it was moved to q).
+    let definite_leaks: Vec<_> = findings
+        .iter()
+        .filter(|d| d.id == "state-resource-leak")
+        .collect();
+    assert!(
+        definite_leaks.is_empty(),
+        "Alias-then-delete should not produce definite leak, got {:?}",
+        definite_leaks
+            .iter()
+            .map(|d| d.message.as_deref().unwrap_or(""))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn cpp_new_double_delete() {
+    // new + delete + delete → double-close.
+    assert_has("cpp_new_double_delete.cpp", "state-double-close");
+}

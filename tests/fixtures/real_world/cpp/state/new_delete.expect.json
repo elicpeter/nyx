@@ -11,24 +11,24 @@
     {
       "rule_id": "state-resource-leak",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         2,
         7
       ],
       "evidence_contains": [],
-      "notes": "new char[1024] at line 4 never deleted \u2014 aspirational, requires new/delete tracking"
+      "notes": "new char[1024] at line 4 never deleted — detected via new/delete resource pair"
     },
     {
       "rule_id": "state-double-close",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         14,
         19
       ],
       "evidence_contains": [],
-      "notes": "delete[] called twice \u2014 aspirational, requires new/delete tracking"
+      "notes": "delete[] called twice — detected via new/delete resource pair"
     },
     {
       "rule_id": "cpp.memory.strcpy",

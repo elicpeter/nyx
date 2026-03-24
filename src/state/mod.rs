@@ -31,6 +31,12 @@ pub fn run_state_analysis(
     let _span = tracing::debug_span!("run_state_analysis").entered();
 
     // 1. Build symbol interner from CFG
+    //
+    // Safety: SymbolInterner, ProductState, and DataflowResult are all
+    // built fresh per call.  No resource state leaks across analyses.
+    // Variables from unreachable functions may be interned but are never
+    // set in ResourceDomainState (the forward engine only reaches nodes
+    // connected from `entry`).
     let interner = SymbolInterner::from_cfg(cfg);
 
     // Guarded degradation: cap tracked variables

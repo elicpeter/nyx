@@ -198,6 +198,53 @@ fn root_receiver_text(n: Node, lang: &str, code: &[u8]) -> Option<String> {
     }
 }
 
+/// Check if a callee represents an RAII-managed factory whose resources are
+/// automatically cleaned up by language semantics (Rust ownership/Drop, C++
+/// smart pointers).  Returns `true` to set `managed_resource` on the acquire
+/// node, suppressing false `state-resource-leak` findings.
+fn is_raii_factory(lang: &str, callee: &str) -> bool {
+    fn matches_any(callee: &str, patterns: &[&str]) -> bool {
+        let cl = callee.to_ascii_lowercase();
+        // Strip C++ template arguments: make_unique<int> → make_unique
+        let base = cl.split('<').next().unwrap_or(&cl);
+        patterns
+            .iter()
+            .any(|p| base == *p || base.ends_with(p))
+    }
+
+    match lang {
+        "cpp" => {
+            static CPP_RAII_FACTORIES: &[&str] = &[
+                "make_unique",
+                "make_shared",
+                "std::make_unique",
+                "std::make_shared",
+            ];
+            matches_any(callee, CPP_RAII_FACTORIES)
+        }
+        "rust" => {
+            static RUST_RAII_CONSTRUCTORS: &[&str] = &[
+                "file::open",
+                "file::create",
+                "box::new",
+                "bufwriter::new",
+                "bufreader::new",
+                "tcplistener::bind",
+                "tcpstream::connect",
+                "udpsocket::bind",
+                "mutex::new",
+                "rwlock::new",
+                "fs::file::open",
+                "fs::file::create",
+                "std::fs::file::open",
+                "std::fs::file::create",
+            ];
+            matches_any(callee, RUST_RAII_CONSTRUCTORS)
+        }
+        _ => false,
+    }
+}
+
 /// Return the callee identifier for the first call / method / macro inside `n`.
 /// Searches recursively through all descendants.
 fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
@@ -205,6 +252,13 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
     for c in n.children(&mut cursor) {
         match lookup(lang, c.kind()) {
             Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
+                // C++ new/delete: normalize callee before returning.
+                if lang == "cpp" && c.kind() == "new_expression" {
+                    return Some("new".to_string());
+                }
+                if lang == "cpp" && c.kind() == "delete_expression" {
+                    return Some("delete".to_string());
+                }
                 return match lookup(lang, c.kind()) {
                     Kind::CallFn => c
                         .child_by_field_name("function")
@@ -1022,6 +1076,13 @@ fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>> {
 /// `first_call_ident` only searches children, so when `n` IS the call
 /// expression (e.g. the argument `sanitize(cmd)`), this function catches it.
 fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
+    // C++ new/delete: normalize callee before field extraction.
+    if lang == "cpp" && n.kind() == "new_expression" {
+        return Some("new".to_string());
+    }
+    if lang == "cpp" && n.kind() == "delete_expression" {
+        return Some("delete".to_string());
+    }
     match lookup(lang, n.kind()) {
         Kind::CallFn => n
             .child_by_field_name("function")
@@ -1546,6 +1607,18 @@ fn push_node<'a>(
         _ => text_of(ast, code).unwrap_or_default(),
     };
 
+    // C++ new/delete: normalize callee to "new"/"delete" for resource pair
+    // matching.  Without this, new_expression extracts the type name (e.g.
+    // "int") and delete_expression extracts the full expression text.
+    // Guarded to C++ only so JS/TS `new_expression` is unaffected.
+    if lang == "cpp" {
+        if ast.kind() == "new_expression" {
+            text = "new".to_string();
+        } else if ast.kind() == "delete_expression" {
+            text = "delete".to_string();
+        }
+    }
+
     // If this is a declaration/expression wrapper or an assignment that
     // *contains* a call, prefer the first inner call identifier instead of
     // the whole line.
@@ -1839,6 +1912,12 @@ fn push_node<'a>(
         _ => None,
     };
 
+    // RAII-managed resource detection: tag acquire nodes whose resources
+    // are automatically cleaned up by language semantics (ownership/drop,
+    // smart pointers).  Follows the same pattern as `managed_resource` for
+    // Python `with` and Java try-with-resources.
+    let is_raii_managed = is_raii_factory(lang, &text);
+
     let idx = g.add_node(NodeInfo {
         kind,
         span,
@@ -1862,7 +1941,7 @@ fn push_node<'a>(
         outer_callee,
         cast_target_type,
         bin_op: extract_bin_op(ast, lang),
-        managed_resource: false,
+        managed_resource: is_raii_managed,
             in_defer: false,
     });
 
