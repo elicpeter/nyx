@@ -123,6 +123,11 @@ pub struct NodeInfo {
     /// clear one-to-one operator mapping. `None` for nested, compound,
     /// boolean, or ambiguous expressions.
     pub bin_op: Option<BinOp>,
+    /// True when this acquisition node is inside a language-managed cleanup
+    /// scope (Python `with`, Java try-with-resources, C# `using`).
+    /// Only meaningful on Call nodes that define a resource variable.
+    /// Leak detectors check this flag on the acquire site, not the variable.
+    pub managed_resource: bool,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -633,6 +638,7 @@ fn push_condition_node<'a>(
         outer_callee: None,
         cast_target_type: None,
         bin_op: None,
+        managed_resource: false,
     })
 }
 
@@ -1850,6 +1856,7 @@ fn push_node<'a>(
         outer_callee,
         cast_target_type,
         bin_op: extract_bin_op(ast, lang),
+        managed_resource: false,
     });
 
     debug!(
@@ -2112,6 +2119,7 @@ fn build_begin_rescue<'a>(
                 outer_callee: None,
                 cast_target_type: None,
                 bin_op: None,
+                managed_resource: false,
             });
 
             // Wire exception edges from every exception source → synthetic node
@@ -2322,7 +2330,8 @@ fn build_try<'a>(
 
     // For Java try-with-resources: build resources as sequential predecessors
     let try_preds = if let Some(resources) = ast.child_by_field_name("resources") {
-        build_sub(
+        let first_resource_idx = g.node_count();
+        let result = build_sub(
             resources,
             preds,
             g,
@@ -2336,7 +2345,16 @@ fn build_try<'a>(
             break_targets,
             continue_targets,
             throw_targets,
-        )
+        );
+        // Mark actual resource acquisition nodes (Call + defines) as managed.
+        // Java try-with-resources guarantees AutoCloseable.close() is called.
+        for raw in first_resource_idx..g.node_count() {
+            let idx = NodeIndex::new(raw);
+            if g[idx].kind == StmtKind::Call && g[idx].defines.is_some() {
+                g[idx].managed_resource = true;
+            }
+        }
+        result
     } else {
         preds.to_vec()
     };
@@ -2412,6 +2430,7 @@ fn build_try<'a>(
                     outer_callee: None,
                     cast_target_type: None,
                     bin_op: None,
+                    managed_resource: false,
                 });
 
                 // Wire exception edges from every exception source → synthetic node
@@ -2686,6 +2705,7 @@ fn build_sub<'a>(
                     outer_callee: None,
                     cast_target_type: None,
                     bin_op: None,
+                    managed_resource: false,
                 });
                 connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
@@ -3332,6 +3352,7 @@ fn build_sub<'a>(
                 outer_callee: None,
                 cast_target_type: None,
                 bin_op: None,
+                managed_resource: false,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -3433,6 +3454,16 @@ fn build_sub<'a>(
                 ord,
                 analysis_rules,
             );
+
+            // Python `with_item`: acquisition inside a context manager.
+            // Only mark if this is actually an acquisition (Call + defines).
+            if ast.kind() == "with_item"
+                && g[node].kind == StmtKind::Call
+                && g[node].defines.is_some()
+            {
+                g[node].managed_resource = true;
+            }
+
             connect_all(g, preds, node, EdgeKind::Seq);
 
             // If the callee is a configured terminator, treat as a dead end
@@ -3612,6 +3643,7 @@ pub(crate) fn build_cfg<'a>(
         outer_callee: None,
         cast_target_type: None,
         bin_op: None,
+        managed_resource: false,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -3636,6 +3668,7 @@ pub(crate) fn build_cfg<'a>(
         outer_callee: None,
         cast_target_type: None,
         bin_op: None,
+        managed_resource: false,
     });
 
     // Build the body below the synthetic ENTRY.

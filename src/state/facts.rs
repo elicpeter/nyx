@@ -105,13 +105,23 @@ pub fn extract_findings(
                 continue;
             }
             let var_name = interner.resolve(sym);
+            let acquire_node = find_acquire_node(cfg, sym, interner);
+
+            // Suppress leaks for resources acquired inside managed scopes
+            // (Python `with`, Java try-with-resources). The suppression is
+            // tied to the specific acquire site, not the variable name.
+            if let Some(acq) = acquire_node {
+                if cfg[acq].managed_resource {
+                    continue;
+                }
+            }
+
+            let acquire_span = acquire_node.map(|n| cfg[n].span);
 
             if !lifecycle.contains(ResourceLifecycle::CLOSED)
                 && !lifecycle.contains(ResourceLifecycle::MOVED)
             {
                 // Definite leak: open on all paths, never closed
-                // Find the acquire span by scanning backwards for this variable's define
-                let acquire_span = find_acquire_span(cfg, sym, interner);
                 findings.push(StateFinding {
                     rule_id: "state-resource-leak".into(),
                     severity: Severity::Medium,
@@ -124,7 +134,6 @@ pub fn extract_findings(
                 });
             } else if lifecycle.contains(ResourceLifecycle::CLOSED) {
                 // May-leak: open on some paths, closed on others
-                let acquire_span = find_acquire_span(cfg, sym, interner);
                 findings.push(StateFinding {
                     rule_id: "state-resource-leak-possible".into(),
                     severity: Severity::Low,
@@ -182,19 +191,19 @@ pub fn extract_findings(
     findings
 }
 
-/// Find the span where a variable was acquired (defined via Call node).
-fn find_acquire_span(
+/// Find the CFG node where a variable was acquired (defined via Call node).
+fn find_acquire_node(
     cfg: &Cfg,
     sym: super::symbol::SymbolId,
     interner: &SymbolInterner,
-) -> Option<(usize, usize)> {
+) -> Option<petgraph::graph::NodeIndex> {
     let var_name = interner.resolve(sym);
-    for (_idx, info) in cfg.node_references() {
+    for (idx, info) in cfg.node_references() {
         if info.kind == StmtKind::Call
             && let Some(ref def) = info.defines
             && def == var_name
         {
-            return Some(info.span);
+            return Some(idx);
         }
     }
     None
@@ -296,6 +305,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op: None,
+            managed_resource: false,
         }
     }
 

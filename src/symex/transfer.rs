@@ -225,6 +225,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op,
+            managed_resource: false,
         };
         let idx = cfg.add_node(info);
         (cfg, idx)
@@ -497,6 +498,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op: None,
+            managed_resource: false,
         });
         let node_mul = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
@@ -521,6 +523,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op: Some(BinOp::Mul),
+            managed_resource: false,
         });
         let ssa = empty_ssa();
         let mut state = SymbolicState::new();

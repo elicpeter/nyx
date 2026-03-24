@@ -345,6 +345,11 @@ impl CfgAnalysis for ResourceMisuse {
             let release_nodes = find_release_nodes(ctx, pair.release);
 
             for &acquire in &acquire_nodes {
+                // Suppress resources inside managed cleanup scopes
+                // (Python `with`, Java try-with-resources).
+                if ctx.cfg[acquire].managed_resource {
+                    continue;
+                }
                 if !release_on_all_exit_paths(ctx, acquire, &release_nodes, exit)
                     && !is_ownership_transferred(ctx, acquire)
                     && !is_consumed_by_owner(ctx, acquire)

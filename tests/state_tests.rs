@@ -330,12 +330,29 @@ fn python_use_after_close() {
 }
 
 #[test]
-fn python_with_statement_known_limitation() {
-    // Python `with` is a context manager that guarantees cleanup via __exit__.
-    // The CFG sees `open()` → acquire and the `as f` binding → defines,
-    // but has no model for the implicit __exit__ close — so it reports a
-    // false-positive leak.  Acceptable: better to over-report than miss the call.
-    assert_has_prefix("python_with_statement.py", "state-resource-leak");
+fn python_with_statement_suppressed() {
+    // Python `with` context manager guarantees cleanup via __exit__.
+    // The managed_resource flag on the acquire node suppresses false leaks.
+    assert_no_state_findings("python_with_statement.py");
+}
+
+#[test]
+fn python_with_nested_safe_and_leak() {
+    let findings = state_diags_for("python_with_nested.py");
+    let leaks: Vec<_> = findings
+        .iter()
+        .filter(|d| d.id.starts_with("state-resource-leak"))
+        .collect();
+    // The bare open() in outside_leak should still produce a leak.
+    assert!(!leaks.is_empty(), "Expected leak for bare open()");
+    // with-block resources should not appear in leak findings.
+    for leak in &leaks {
+        let msg = leak.message.as_deref().unwrap_or("");
+        assert!(
+            !msg.contains("reader") && !msg.contains("writer"),
+            "with-block resources should be suppressed, got: {msg}",
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -350,6 +367,30 @@ fn js_fs_open_no_close() {
 #[test]
 fn js_fs_open_close() {
     assert_no_state_findings("js_fs_open_close.js");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// (8b) Java resource lifecycle
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn java_twr_no_false_leak() {
+    // Java try-with-resources guarantees AutoCloseable.close() is called.
+    // The managed_resource flag on the acquire node suppresses false leaks.
+    // Note: the state engine does not currently recognise Java constructor
+    // callees (e.g. "FileInputStream") against the resource pair patterns
+    // (which use "new FileInputStream"), so manual opens also don't fire.
+    // This test locks down that TWR resources produce zero false positives.
+    let findings = state_diags_for("java_try_with_resources.java");
+    let leaks: Vec<_> = findings
+        .iter()
+        .filter(|d| d.id.starts_with("state-resource-leak"))
+        .collect();
+    assert!(
+        leaks.is_empty(),
+        "Expected zero resource-leak findings in TWR fixture, got: {:?}",
+        leaks.iter().map(|d| &d.id).collect::<Vec<_>>()
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════

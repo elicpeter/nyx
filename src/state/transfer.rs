@@ -366,6 +366,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op: None,
+            managed_resource: false,
         };
 
         let (state, events) =
@@ -411,6 +412,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op: None,
+            managed_resource: false,
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -455,6 +457,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op: None,
+            managed_resource: false,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -500,6 +503,7 @@ mod tests {
             outer_callee: None,
             cast_target_type: None,
             bin_op: None,
+            managed_resource: false,
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);
