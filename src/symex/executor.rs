@@ -365,6 +365,7 @@ fn run_path(
         }
 
         // Transfer this block's instructions
+        let lang = summary_ctx.map(|c| c.lang).or(heap_ctx.map(|c| c.lang));
         transfer::transfer_block_with_predecessor(
             &mut state.sym_state,
             block,
@@ -373,6 +374,7 @@ fn run_path(
             state.predecessor,
             summary_ctx,
             heap_ctx,
+            lang,
         );
 
         // Phase 20: Collapse induction variables after re-visit to prevent

@@ -18,7 +18,11 @@ use crate::symbol::Lang;
 
 use super::heap::{self, FieldAccessRecord, FieldSlot, HeapKey};
 use super::state::SymbolicState;
-use super::value::{mk_binop, mk_call, mk_phi, Op, SymbolicValue};
+use super::strings::{classify_string_method, StringOperandSource};
+use super::value::{
+    mk_binop, mk_call, mk_phi, mk_replace, mk_strlen, mk_substr, mk_to_lower, mk_to_upper,
+    mk_trim, Op, SymbolicValue,
+};
 
 /// Context for cross-file symbolic summary modeling during transfer.
 ///
@@ -54,6 +58,7 @@ pub fn transfer_inst(
     ssa: &SsaBody,
     summary_ctx: Option<&SymexSummaryCtx>,
     heap_ctx: Option<&SymexHeapCtx>,
+    lang: Option<Lang>,
 ) {
     match &inst.op {
         SsaOp::Const(text) => {
@@ -211,6 +216,17 @@ pub fn transfer_inst(
                         }
                     }
                 }
+            }
+
+            // Phase 22: String method recognition
+            if let Some(result) =
+                try_string_method(state, callee, receiver, &arg_syms, &all_operands, lang)
+            {
+                state.set(inst.value, result.value);
+                if result.tainted {
+                    state.mark_tainted(inst.value);
+                }
+                return;
             }
 
             // Try cross-file summary modeling before falling back to mk_call
@@ -390,6 +406,7 @@ pub fn transfer_inst_with_predecessor(
     predecessor: Option<BlockId>,
     summary_ctx: Option<&SymexSummaryCtx>,
     heap_ctx: Option<&SymexHeapCtx>,
+    lang: Option<Lang>,
 ) {
     match (&inst.op, predecessor) {
         (SsaOp::Phi(operands), Some(pred)) => {
@@ -407,7 +424,7 @@ pub fn transfer_inst_with_predecessor(
             state.propagate_taint(inst.value, &operand_vals);
         }
         _ => {
-            transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx);
+            transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx, lang);
         }
     }
 }
@@ -424,12 +441,15 @@ pub fn transfer_block_with_predecessor(
     predecessor: Option<BlockId>,
     summary_ctx: Option<&SymexSummaryCtx>,
     heap_ctx: Option<&SymexHeapCtx>,
+    lang: Option<Lang>,
 ) {
     for inst in &block.phis {
-        transfer_inst_with_predecessor(state, inst, cfg, ssa, predecessor, summary_ctx, heap_ctx);
+        transfer_inst_with_predecessor(
+            state, inst, cfg, ssa, predecessor, summary_ctx, heap_ctx, lang,
+        );
     }
     for inst in &block.body {
-        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx);
+        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx, lang);
     }
 }
 
@@ -441,13 +461,83 @@ pub fn transfer_block(
     ssa: &SsaBody,
     summary_ctx: Option<&SymexSummaryCtx>,
     heap_ctx: Option<&SymexHeapCtx>,
+    lang: Option<Lang>,
 ) {
     for inst in &block.phis {
-        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx);
+        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx, lang);
     }
     for inst in &block.body {
-        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx);
+        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx, lang);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Phase 22: String method dispatch
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Attempt to model a callee as a recognized string operation.
+///
+/// Returns `Some(SymbolicCallResult)` if the callee is a known string method
+/// with structurally-modelable arguments. Otherwise returns `None`.
+fn try_string_method(
+    state: &SymbolicState,
+    callee: &str,
+    receiver: &Option<SsaValue>,
+    arg_syms: &[SymbolicValue],
+    all_operands: &[SsaValue],
+    lang: Option<Lang>,
+) -> Option<SymbolicCallResult> {
+    let lang = lang?;
+    let info = classify_string_method(callee, arg_syms, lang)?;
+
+    // Get the string operand based on the operand source
+    let (string_sym, string_ssa) = match info.operand_source {
+        StringOperandSource::Receiver => {
+            let recv = (*receiver)?;
+            (state.get(recv), recv)
+        }
+        StringOperandSource::FirstArg => {
+            // For free functions, first arg is the string.
+            // If receiver was prepended to arg_syms, it's at index 0;
+            // otherwise first explicit arg is at index 0.
+            if let Some(recv) = receiver {
+                // Receiver was prepended — it IS the string operand
+                (state.get(*recv), *recv)
+            } else if let Some(&first_op) = all_operands.first() {
+                (arg_syms.first().cloned().unwrap_or(SymbolicValue::Unknown), first_op)
+            } else {
+                return None;
+            }
+        }
+    };
+
+    // Build the structured SymbolicValue via smart constructors
+    let value = match info.method {
+        super::strings::StringMethod::Trim => mk_trim(string_sym),
+        super::strings::StringMethod::ToLower => mk_to_lower(string_sym),
+        super::strings::StringMethod::ToUpper => mk_to_upper(string_sym),
+        super::strings::StringMethod::Replace { pattern, replacement } => {
+            mk_replace(string_sym, pattern, replacement)
+        }
+        super::strings::StringMethod::Substr => {
+            // Extract start and end indices from args
+            let arg_offset = match info.operand_source {
+                StringOperandSource::Receiver => 1, // args[0] = receiver, args[1] = start
+                StringOperandSource::FirstArg => {
+                    if receiver.is_some() { 1 } else { 1 } // args[0] = string, args[1] = start
+                }
+            };
+            let start = arg_syms.get(arg_offset).cloned().unwrap_or(SymbolicValue::Concrete(0));
+            let end = arg_syms.get(arg_offset + 1).cloned();
+            mk_substr(string_sym, start, end)
+        }
+        super::strings::StringMethod::StrLen => mk_strlen(string_sym),
+    };
+
+    // Taint: string operations preserve taint from the string operand
+    let tainted = state.is_tainted(string_ssa);
+
+    Some(SymbolicCallResult { value, tainted })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -631,7 +721,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("42".into())), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(42));
         assert!(!state.is_tainted(SsaValue(0)));
@@ -644,7 +734,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("\"hello\"".into())), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         assert_eq!(
             state.get(SsaValue(0)),
@@ -659,7 +749,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("true".into())), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Unknown);
     }
@@ -671,7 +761,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(None), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Unknown);
     }
@@ -683,7 +773,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Source, node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Symbol(SsaValue(0)));
         assert!(state.is_tainted(SsaValue(0)));
@@ -696,7 +786,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Param { index: 0 }, node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Symbol(SsaValue(0)));
         assert!(!state.is_tainted(SsaValue(0)));
@@ -713,7 +803,7 @@ mod tests {
         state.mark_tainted(SsaValue(0));
 
         let inst = make_inst(1, SsaOp::Assign(smallvec![SsaValue(0)]), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Concrete(7));
         assert!(state.is_tainted(SsaValue(1)));
@@ -734,7 +824,7 @@ mod tests {
             SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]),
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         let expected = SymbolicValue::BinOp(
             Op::Mul,
@@ -759,7 +849,7 @@ mod tests {
             SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]),
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Unknown);
     }
@@ -782,7 +872,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         let expected = SymbolicValue::Call(
             "parseInt".into(),
@@ -810,7 +900,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         let expected = SymbolicValue::Call(
             "send".into(),
@@ -834,7 +924,7 @@ mod tests {
             SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         let expected = SymbolicValue::Phi(vec![
             (BlockId(0), SymbolicValue::Concrete(1)),
@@ -905,17 +995,17 @@ mod tests {
 
         // v0: source (tainted)
         let i0 = make_inst(0, SsaOp::Source, node_plain);
-        transfer_inst(&mut state, &i0, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &i0, &cfg, &ssa, None, None, None);
         assert!(state.is_tainted(SsaValue(0)));
 
         // v1: copy of v0
         let i1 = make_inst(1, SsaOp::Assign(smallvec![SsaValue(0)]), node_plain);
-        transfer_inst(&mut state, &i1, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &i1, &cfg, &ssa, None, None, None);
         assert!(state.is_tainted(SsaValue(1)));
 
         // v2: constant (not tainted)
         let i2 = make_inst(2, SsaOp::Const(Some("3".into())), node_plain);
-        transfer_inst(&mut state, &i2, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &i2, &cfg, &ssa, None, None, None);
         assert!(!state.is_tainted(SsaValue(2)));
 
         // v3: v1 * v2 (tainted because v1 is tainted)
@@ -924,7 +1014,7 @@ mod tests {
             SsaOp::Assign(smallvec![SsaValue(1), SsaValue(2)]),
             node_mul,
         );
-        transfer_inst(&mut state, &i3, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &i3, &cfg, &ssa, None, None, None);
         assert!(state.is_tainted(SsaValue(3)));
         let expected = SymbolicValue::BinOp(
             Op::Mul,
@@ -943,7 +1033,7 @@ mod tests {
             },
             node_plain,
         );
-        transfer_inst(&mut state, &i4, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &i4, &cfg, &ssa, None, None, None);
         assert!(state.is_tainted(SsaValue(4)));
     }
 
@@ -955,7 +1045,7 @@ mod tests {
 
         state.set(SsaValue(0), SymbolicValue::Concrete(99));
         let inst = make_inst(0, SsaOp::Nop, node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         // Nop does not overwrite existing value
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(99));
@@ -984,7 +1074,7 @@ mod tests {
             succs: smallvec![],
         };
 
-        transfer_block(&mut state, &block, &cfg, &ssa, None, None);
+        transfer_block(&mut state, &block, &cfg, &ssa, None, None, None);
 
         // Phi with all-same should fold to Concrete(1)
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Concrete(1));
@@ -1009,7 +1099,7 @@ mod tests {
         );
 
         // With predecessor B1, should resolve to SsaValue(1) → Concrete(20)
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None, None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None, None, None);
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Concrete(20));
     }
 
@@ -1031,7 +1121,7 @@ mod tests {
         );
 
         // With predecessor B0 (untainted), result should NOT be tainted
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(0)), None, None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(0)), None, None, None);
         assert!(!state.is_tainted(SsaValue(2)));
     }
 
@@ -1052,7 +1142,7 @@ mod tests {
         );
 
         // With predecessor B1 (tainted), result SHOULD be tainted
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None, None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None, None, None);
         assert!(state.is_tainted(SsaValue(2)));
     }
 
@@ -1072,7 +1162,7 @@ mod tests {
         );
 
         // Without predecessor (None), falls back to Phi(...) expression
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, None, None, None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, None, None, None, None);
         let expected = SymbolicValue::Phi(vec![
             (BlockId(0), SymbolicValue::Concrete(10)),
             (BlockId(1), SymbolicValue::Concrete(20)),
@@ -1088,7 +1178,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("42".into())), node);
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(5)), None, None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(5)), None, None, None);
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(42));
     }
 
@@ -1178,7 +1268,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None);
 
         // Should pass through arg's symbolic value
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Symbol(SsaValue(0)));
@@ -1221,7 +1311,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None);
 
         // Should fall back to Call expression, not Symbol pass-through
         match state.get(SsaValue(2)) {
@@ -1261,7 +1351,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None);
 
         // StripBits → Unknown, not tainted
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Unknown);
@@ -1296,7 +1386,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None);
 
         // AddBits → fresh Symbol, tainted
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Symbol(SsaValue(1)));
@@ -1331,7 +1421,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None);
 
         // source_caps non-empty → tainted Symbol
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Symbol(SsaValue(0)));
@@ -1359,7 +1449,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None);
 
         match state.get(SsaValue(1)) {
             SymbolicValue::Call(name, _) => assert_eq!(name, "unknown_func"),
@@ -1386,7 +1476,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None);
 
         match state.get(SsaValue(1)) {
             SymbolicValue::Call(name, _) => assert_eq!(name, "foo"),

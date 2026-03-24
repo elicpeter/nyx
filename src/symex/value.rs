@@ -65,6 +65,19 @@ pub enum SymbolicValue {
     Call(String, Vec<SymbolicValue>),
     /// Phi merge (stored structurally; not resolved in Phase 18a single-path).
     Phi(Vec<(BlockId, SymbolicValue)>),
+    // ── Phase 22: String operations ─────────────────────────────────────
+    /// String substring extraction: `str.substring(start, end?)`.
+    Substr(Box<SymbolicValue>, Box<SymbolicValue>, Option<Box<SymbolicValue>>),
+    /// String replacement with concrete pattern/replacement: `str.replace(pat, rep)`.
+    Replace(Box<SymbolicValue>, String, String),
+    /// To lowercase: `str.toLowerCase()`.
+    ToLower(Box<SymbolicValue>),
+    /// To uppercase: `str.toUpperCase()`.
+    ToUpper(Box<SymbolicValue>),
+    /// Whitespace trim: `str.trim()`.
+    Trim(Box<SymbolicValue>),
+    /// String length (returns integer): `strlen(str)`.
+    StrLen(Box<SymbolicValue>),
     /// No information (top).
     Unknown,
 }
@@ -88,6 +101,18 @@ impl SymbolicValue {
             }
             SymbolicValue::Phi(operands) => {
                 1 + operands.iter().map(|(_, v)| v.depth()).max().unwrap_or(0)
+            }
+            SymbolicValue::ToLower(s)
+            | SymbolicValue::ToUpper(s)
+            | SymbolicValue::Trim(s)
+            | SymbolicValue::StrLen(s)
+            | SymbolicValue::Replace(s, _, _) => 1 + s.depth(),
+            SymbolicValue::Substr(s, start, end) => {
+                let max_child = s
+                    .depth()
+                    .max(start.depth())
+                    .max(end.as_ref().map(|e| e.depth()).unwrap_or(0));
+                1 + max_child
             }
         }
     }
@@ -216,6 +241,120 @@ pub fn mk_phi(operands: Vec<(BlockId, SymbolicValue)>) -> SymbolicValue {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Phase 22: String operation smart constructors
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build a `Trim` expression with concrete folding and depth bounding.
+pub fn mk_trim(s: SymbolicValue) -> SymbolicValue {
+    if let Some(result) = s
+        .as_concrete_str()
+        .and_then(|cs| super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::Trim, cs))
+    {
+        return result;
+    }
+    if 1 + s.depth() > MAX_EXPR_DEPTH {
+        return SymbolicValue::Unknown;
+    }
+    SymbolicValue::Trim(Box::new(s))
+}
+
+/// Build a `ToLower` expression with concrete folding and depth bounding.
+pub fn mk_to_lower(s: SymbolicValue) -> SymbolicValue {
+    if let Some(result) = s
+        .as_concrete_str()
+        .and_then(|cs| super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::ToLower, cs))
+    {
+        return result;
+    }
+    if 1 + s.depth() > MAX_EXPR_DEPTH {
+        return SymbolicValue::Unknown;
+    }
+    SymbolicValue::ToLower(Box::new(s))
+}
+
+/// Build a `ToUpper` expression with concrete folding and depth bounding.
+pub fn mk_to_upper(s: SymbolicValue) -> SymbolicValue {
+    if let Some(result) = s
+        .as_concrete_str()
+        .and_then(|cs| super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::ToUpper, cs))
+    {
+        return result;
+    }
+    if 1 + s.depth() > MAX_EXPR_DEPTH {
+        return SymbolicValue::Unknown;
+    }
+    SymbolicValue::ToUpper(Box::new(s))
+}
+
+/// Build a `Replace` expression with concrete folding and depth bounding.
+pub fn mk_replace(s: SymbolicValue, pattern: String, replacement: String) -> SymbolicValue {
+    if let Some(result) = s.as_concrete_str().and_then(|cs| {
+        super::strings::evaluate_string_op_concrete(
+            &super::strings::StringMethod::Replace {
+                pattern: pattern.clone(),
+                replacement: replacement.clone(),
+            },
+            cs,
+        )
+    }) {
+        return result;
+    }
+    if 1 + s.depth() > MAX_EXPR_DEPTH {
+        return SymbolicValue::Unknown;
+    }
+    SymbolicValue::Replace(Box::new(s), pattern, replacement)
+}
+
+/// Build a `Substr` expression with concrete folding and depth bounding.
+pub fn mk_substr(
+    s: SymbolicValue,
+    start: SymbolicValue,
+    end: Option<SymbolicValue>,
+) -> SymbolicValue {
+    // Concrete folding: all three are concrete
+    if let Some(cs) = s.as_concrete_str() {
+        if let Some(i) = start.as_concrete_int() {
+            let i = i.max(0) as usize;
+            match end.as_ref().and_then(|e| e.as_concrete_int()) {
+                Some(j) => {
+                    let j = j.max(0) as usize;
+                    let result = cs.get(i..j.min(cs.len())).unwrap_or("");
+                    return SymbolicValue::ConcreteStr(result.to_owned());
+                }
+                None if end.is_none() => {
+                    let result = cs.get(i..).unwrap_or("");
+                    return SymbolicValue::ConcreteStr(result.to_owned());
+                }
+                _ => {} // end is Some but not concrete — can't fold
+            }
+        }
+    }
+
+    let max_child = s
+        .depth()
+        .max(start.depth())
+        .max(end.as_ref().map(|e| e.depth()).unwrap_or(0));
+    if 1 + max_child > MAX_EXPR_DEPTH {
+        return SymbolicValue::Unknown;
+    }
+    SymbolicValue::Substr(Box::new(s), Box::new(start), end.map(Box::new))
+}
+
+/// Build a `StrLen` expression with concrete folding and depth bounding.
+pub fn mk_strlen(s: SymbolicValue) -> SymbolicValue {
+    if let Some(result) = s
+        .as_concrete_str()
+        .and_then(|cs| super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::StrLen, cs))
+    {
+        return result;
+    }
+    if 1 + s.depth() > MAX_EXPR_DEPTH {
+        return SymbolicValue::Unknown;
+    }
+    SymbolicValue::StrLen(Box::new(s))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Display — human-readable witness strings
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -264,6 +403,22 @@ fn display_inner(val: &SymbolicValue) -> String {
                 .collect();
             format!("phi({})", parts.join(", "))
         }
+        SymbolicValue::Trim(s) => format!("{}.trim()", display_inner(s)),
+        SymbolicValue::ToLower(s) => format!("{}.toLowerCase()", display_inner(s)),
+        SymbolicValue::ToUpper(s) => format!("{}.toUpperCase()", display_inner(s)),
+        SymbolicValue::Replace(s, pat, rep) => {
+            format!("{}.replace(\"{}\", \"{}\")", display_inner(s), pat, rep)
+        }
+        SymbolicValue::Substr(s, start, end) => match end {
+            Some(e) => format!(
+                "{}.substr({}, {})",
+                display_inner(s),
+                display_inner(start),
+                display_inner(e)
+            ),
+            None => format!("{}.substr({})", display_inner(s), display_inner(start)),
+        },
+        SymbolicValue::StrLen(s) => format!("strlen({})", display_inner(s)),
         SymbolicValue::Unknown => "?".to_string(),
     }
 }
@@ -581,5 +736,138 @@ mod tests {
         assert_eq!(Op::from(cfg::BinOp::Mul), Op::Mul);
         assert_eq!(Op::from(cfg::BinOp::Div), Op::Div);
         assert_eq!(Op::from(cfg::BinOp::Mod), Op::Mod);
+    }
+
+    // ── Phase 22: String operation tests ──────────────────────────────
+
+    #[test]
+    fn mk_trim_concrete_fold() {
+        assert_eq!(
+            mk_trim(SymbolicValue::ConcreteStr("  hello  ".into())),
+            SymbolicValue::ConcreteStr("hello".into())
+        );
+    }
+
+    #[test]
+    fn mk_trim_symbolic() {
+        let v = mk_trim(SymbolicValue::Symbol(SsaValue(0)));
+        assert!(matches!(v, SymbolicValue::Trim(_)));
+        assert_eq!(v.depth(), 1);
+    }
+
+    #[test]
+    fn mk_to_lower_concrete_fold() {
+        assert_eq!(
+            mk_to_lower(SymbolicValue::ConcreteStr("ABC".into())),
+            SymbolicValue::ConcreteStr("abc".into())
+        );
+    }
+
+    #[test]
+    fn mk_to_upper_concrete_fold() {
+        assert_eq!(
+            mk_to_upper(SymbolicValue::ConcreteStr("abc".into())),
+            SymbolicValue::ConcreteStr("ABC".into())
+        );
+    }
+
+    #[test]
+    fn mk_replace_concrete_fold() {
+        assert_eq!(
+            mk_replace(
+                SymbolicValue::ConcreteStr("a<script>b".into()),
+                "<script>".into(),
+                "".into(),
+            ),
+            SymbolicValue::ConcreteStr("ab".into())
+        );
+    }
+
+    #[test]
+    fn mk_replace_symbolic() {
+        let v = mk_replace(
+            SymbolicValue::Symbol(SsaValue(0)),
+            "<".into(),
+            "&lt;".into(),
+        );
+        assert!(matches!(v, SymbolicValue::Replace(_, _, _)));
+        assert_eq!(v.depth(), 1);
+    }
+
+    #[test]
+    fn mk_substr_concrete_fold() {
+        assert_eq!(
+            mk_substr(
+                SymbolicValue::ConcreteStr("hello world".into()),
+                SymbolicValue::Concrete(0),
+                Some(SymbolicValue::Concrete(5)),
+            ),
+            SymbolicValue::ConcreteStr("hello".into())
+        );
+    }
+
+    #[test]
+    fn mk_substr_no_end() {
+        assert_eq!(
+            mk_substr(
+                SymbolicValue::ConcreteStr("hello world".into()),
+                SymbolicValue::Concrete(6),
+                None,
+            ),
+            SymbolicValue::ConcreteStr("world".into())
+        );
+    }
+
+    #[test]
+    fn mk_strlen_concrete_fold() {
+        assert_eq!(
+            mk_strlen(SymbolicValue::ConcreteStr("hello".into())),
+            SymbolicValue::Concrete(5)
+        );
+    }
+
+    #[test]
+    fn mk_strlen_symbolic() {
+        let v = mk_strlen(SymbolicValue::Symbol(SsaValue(0)));
+        assert!(matches!(v, SymbolicValue::StrLen(_)));
+        assert_eq!(v.depth(), 1);
+    }
+
+    #[test]
+    fn string_ops_depth_bounding() {
+        let mut val = SymbolicValue::Symbol(SsaValue(0));
+        for _ in 0..MAX_EXPR_DEPTH {
+            val = mk_trim(val);
+        }
+        // At depth == MAX_EXPR_DEPTH, should still be fine
+        assert_eq!(val.depth(), MAX_EXPR_DEPTH);
+        // One more pushes past the limit
+        val = mk_trim(val);
+        assert_eq!(val, SymbolicValue::Unknown);
+    }
+
+    #[test]
+    fn display_string_ops() {
+        let v = mk_trim(SymbolicValue::Symbol(SsaValue(1)));
+        assert_eq!(format!("{}", v), "sym(v1).trim()");
+
+        let v = mk_to_lower(SymbolicValue::Symbol(SsaValue(2)));
+        assert_eq!(format!("{}", v), "sym(v2).toLowerCase()");
+
+        let v = mk_to_upper(SymbolicValue::Symbol(SsaValue(3)));
+        assert_eq!(format!("{}", v), "sym(v3).toUpperCase()");
+
+        let v = mk_replace(SymbolicValue::Symbol(SsaValue(4)), "<".into(), "&lt;".into());
+        assert_eq!(format!("{}", v), "sym(v4).replace(\"<\", \"&lt;\")");
+
+        let v = mk_strlen(SymbolicValue::Symbol(SsaValue(5)));
+        assert_eq!(format!("{}", v), "strlen(sym(v5))");
+
+        let v = mk_substr(
+            SymbolicValue::Symbol(SsaValue(6)),
+            SymbolicValue::Concrete(0),
+            Some(SymbolicValue::Concrete(5)),
+        );
+        assert_eq!(format!("{}", v), "sym(v6).substr(0, 5)");
     }
 }

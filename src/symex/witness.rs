@@ -152,6 +152,14 @@ fn is_string_renderable(expr: &SymbolicValue) -> bool {
         SymbolicValue::ConcreteStr(_) => true,
         SymbolicValue::Symbol(_) => true,
         SymbolicValue::Concat(l, r) => is_string_renderable(l) && is_string_renderable(r),
+        // Phase 22: String ops on string-renderable operands are renderable
+        SymbolicValue::Trim(s)
+        | SymbolicValue::ToLower(s)
+        | SymbolicValue::ToUpper(s)
+        | SymbolicValue::Replace(s, _, _) => is_string_renderable(s),
+        SymbolicValue::Substr(s, _, _) => is_string_renderable(s),
+        // StrLen returns integer — not string-renderable
+        SymbolicValue::StrLen(_) => false,
         // Arithmetic, opaque calls, phis, integers, unknown — not string-renderable
         SymbolicValue::Concrete(_)
         | SymbolicValue::BinOp(_, _, _)
@@ -191,6 +199,21 @@ fn collect_tainted_inner(
         SymbolicValue::Phi(ops) => {
             for (_, v) in ops {
                 collect_tainted_inner(v, state, out);
+            }
+        }
+        // Phase 22: String operations — recurse into operands
+        SymbolicValue::ToLower(s)
+        | SymbolicValue::ToUpper(s)
+        | SymbolicValue::Trim(s)
+        | SymbolicValue::StrLen(s)
+        | SymbolicValue::Replace(s, _, _) => {
+            collect_tainted_inner(s, state, out);
+        }
+        SymbolicValue::Substr(s, start, end) => {
+            collect_tainted_inner(s, state, out);
+            collect_tainted_inner(start, state, out);
+            if let Some(e) = end {
+                collect_tainted_inner(e, state, out);
             }
         }
         SymbolicValue::Concrete(_) | SymbolicValue::ConcreteStr(_) | SymbolicValue::Unknown => {}
@@ -238,6 +261,30 @@ fn substitute_tainted(
                 .collect();
             SymbolicValue::Phi(new_ops)
         }
+        // Phase 22: String operations — recurse into operands
+        SymbolicValue::Trim(s) => {
+            SymbolicValue::Trim(Box::new(substitute_tainted(s, tainted, payload)))
+        }
+        SymbolicValue::ToLower(s) => {
+            SymbolicValue::ToLower(Box::new(substitute_tainted(s, tainted, payload)))
+        }
+        SymbolicValue::ToUpper(s) => {
+            SymbolicValue::ToUpper(Box::new(substitute_tainted(s, tainted, payload)))
+        }
+        SymbolicValue::StrLen(s) => {
+            SymbolicValue::StrLen(Box::new(substitute_tainted(s, tainted, payload)))
+        }
+        SymbolicValue::Replace(s, pat, rep) => SymbolicValue::Replace(
+            Box::new(substitute_tainted(s, tainted, payload)),
+            pat.clone(),
+            rep.clone(),
+        ),
+        SymbolicValue::Substr(s, start, end) => SymbolicValue::Substr(
+            Box::new(substitute_tainted(s, tainted, payload)),
+            Box::new(substitute_tainted(start, tainted, payload)),
+            end.as_ref()
+                .map(|e| Box::new(substitute_tainted(e, tainted, payload))),
+        ),
         // Leaf nodes that are not tainted symbols — return unchanged
         other => other.clone(),
     }
@@ -255,6 +302,38 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
             let left = evaluate_concrete(l);
             let right = evaluate_concrete(r);
             format!("{}{}", left, right)
+        }
+        // Phase 22: String operations — apply to recursively evaluated inner
+        SymbolicValue::Trim(s) => evaluate_concrete(s).trim().to_owned(),
+        SymbolicValue::ToLower(s) => evaluate_concrete(s).to_lowercase(),
+        SymbolicValue::ToUpper(s) => evaluate_concrete(s).to_uppercase(),
+        SymbolicValue::Replace(s, pat, rep) => {
+            evaluate_concrete(s).replace(pat.as_str(), rep.as_str())
+        }
+        SymbolicValue::Substr(s, start, end) => {
+            let inner = evaluate_concrete(s);
+            match (
+                start.as_concrete_int(),
+                end.as_ref().and_then(|e| e.as_concrete_int()),
+            ) {
+                (Some(i), Some(j)) => {
+                    let i = i.max(0) as usize;
+                    let j = j.max(0) as usize;
+                    inner.get(i..j.min(inner.len())).unwrap_or("").to_owned()
+                }
+                (Some(i), None) if end.is_none() => {
+                    let i = i.max(0) as usize;
+                    inner.get(i..).unwrap_or("").to_owned()
+                }
+                _ => format!("{}", expr),
+            }
+        }
+        SymbolicValue::StrLen(s) => {
+            if let SymbolicValue::ConcreteStr(cs) = s.as_ref() {
+                cs.len().to_string()
+            } else {
+                format!("{}", expr)
+            }
         }
         // For non-foldable expressions, use Display
         other => format!("{}", other),
@@ -616,5 +695,85 @@ mod tests {
         let w = witness.unwrap();
         assert!(w.contains("flows to"), "witness: {}", w);
         assert!(w.contains("SELECT 1"), "witness: {}", w);
+    }
+
+    // ── Phase 22: String operation witness tests ──────────────────────
+
+    #[test]
+    fn test_string_ops_are_string_renderable() {
+        // Trim, ToLower, ToUpper, Replace on string-renderable inner → renderable
+        assert!(is_string_renderable(&SymbolicValue::Trim(
+            Box::new(SymbolicValue::Symbol(SsaValue(0)))
+        )));
+        assert!(is_string_renderable(&SymbolicValue::ToLower(
+            Box::new(SymbolicValue::Symbol(SsaValue(0)))
+        )));
+        assert!(is_string_renderable(&SymbolicValue::ToUpper(
+            Box::new(SymbolicValue::Symbol(SsaValue(0)))
+        )));
+        assert!(is_string_renderable(&SymbolicValue::Replace(
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+            "<".into(),
+            "&lt;".into(),
+        )));
+        assert!(is_string_renderable(&SymbolicValue::Substr(
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+            Box::new(SymbolicValue::Concrete(0)),
+            Some(Box::new(SymbolicValue::Concrete(5))),
+        )));
+        // StrLen returns int — NOT string-renderable
+        assert!(!is_string_renderable(&SymbolicValue::StrLen(
+            Box::new(SymbolicValue::Symbol(SsaValue(0)))
+        )));
+    }
+
+    #[test]
+    fn test_evaluate_concrete_string_ops() {
+        // Trim
+        let v = SymbolicValue::Trim(Box::new(SymbolicValue::ConcreteStr("  hi  ".into())));
+        assert_eq!(evaluate_concrete(&v), "hi");
+
+        // ToLower
+        let v = SymbolicValue::ToLower(Box::new(SymbolicValue::ConcreteStr("ABC".into())));
+        assert_eq!(evaluate_concrete(&v), "abc");
+
+        // Replace
+        let v = SymbolicValue::Replace(
+            Box::new(SymbolicValue::ConcreteStr("a<b".into())),
+            "<".into(),
+            "&lt;".into(),
+        );
+        assert_eq!(evaluate_concrete(&v), "a&lt;b");
+    }
+
+    #[test]
+    fn test_substitute_tainted_through_string_ops() {
+        let tainted_val = SsaValue(5);
+        let mut tainted = HashSet::new();
+        tainted.insert(tainted_val);
+
+        // Concat("prefix", Trim(Symbol(5)))
+        let expr = SymbolicValue::Concat(
+            Box::new(SymbolicValue::ConcreteStr("prefix".into())),
+            Box::new(SymbolicValue::Trim(Box::new(SymbolicValue::Symbol(
+                tainted_val,
+            )))),
+        );
+
+        let result = substitute_tainted(&expr, &tainted, "PAYLOAD");
+        // After substitution: Concat("prefix", Trim(ConcreteStr("PAYLOAD")))
+        // evaluate_concrete should fold: "prefix" + "PAYLOAD".trim() = "prefixPAYLOAD"
+        assert_eq!(evaluate_concrete(&result), "prefixPAYLOAD");
+    }
+
+    #[test]
+    fn test_collect_tainted_through_string_ops() {
+        let tainted_val = SsaValue(5);
+        let mut state = SymbolicState::new();
+        state.mark_tainted(tainted_val);
+
+        let expr = SymbolicValue::ToLower(Box::new(SymbolicValue::Symbol(tainted_val)));
+        let tainted = collect_tainted_symbols(&expr, &state);
+        assert!(tainted.contains(&tainted_val));
     }
 }
