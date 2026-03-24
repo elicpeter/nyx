@@ -1,0 +1,1227 @@
+//! Multi-path symbolic exploration with bounded forking (Phase 18b).
+//!
+//! Extends Phase 18a's single-path symbolic execution to explore multiple
+//! paths through the CFG from source to sink. At branch points where both
+//! successors lie on some source-to-sink CFG path, the executor forks the
+//! symbolic state and explores both branches independently.
+//!
+//! Hard budgets on forks, paths, and total symbolic transfer steps guarantee
+//! termination. Verdict aggregation is sound: `Infeasible` is only returned
+//! when the entire relevant search space was explored without budget exhaustion.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+
+use crate::cfg::Cfg;
+use crate::constraint;
+use crate::evidence::{SymbolicVerdict, Verdict};
+use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::ir::{BlockId, SsaBody, SsaValue, Terminator};
+use crate::ssa::type_facts::TypeFactResult;
+use crate::taint::Finding;
+
+use super::state::{PathConstraint, SymbolicState};
+use super::transfer;
+use super::value::SymbolicValue;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Budget constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximum branch forks per finding before falling back to single-path.
+const MAX_FORKS_PER_FINDING: usize = 3;
+
+/// Maximum total paths explored per finding.
+const MAX_PATHS_PER_FINDING: usize = 8;
+
+/// Maximum symbolic transfer steps (phi + body instructions) summed across
+/// ALL paths for one finding. Global, not per-path.
+const MAX_TOTAL_STEPS: usize = 500;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A single exploration path in flight.
+///
+/// The executor advances this one block at a time via successor transitions.
+/// No pre-computed block sequence — successor choice happens at each terminator.
+struct ExplorationState {
+    /// Current symbolic state (cloned at fork points).
+    sym_state: SymbolicState,
+    /// Constraint environment (cloned at fork points).
+    env: constraint::PathEnv,
+    /// Block to process next.
+    current_block: BlockId,
+    /// Last block visited (for path-sensitive phi resolution).
+    predecessor: Option<BlockId>,
+    /// Forks consumed by this path and its ancestors.
+    forks_used: usize,
+    /// Symbolic transfer steps on THIS path.
+    steps_taken: usize,
+    /// Constraints checked on this path.
+    constraints_checked: u32,
+}
+
+/// Outcome of a single completed exploration path.
+pub(super) struct PathOutcome {
+    verdict: Verdict,
+    constraints_checked: u32,
+    witness: Option<String>,
+}
+
+/// Result of multi-path exploration across all paths for one finding.
+pub(super) struct ExplorationResult {
+    pub paths_completed: Vec<PathOutcome>,
+    #[allow(dead_code)]
+    pub paths_pruned: usize,
+    #[allow(dead_code)]
+    pub total_steps: usize,
+    /// True IFF the relevant search space was fully explored under budget.
+    /// False if any fork/path/step budget prevented exploring a relevant path.
+    pub search_exhausted: bool,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Reachability
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Compute the set of blocks on some CFG path from source to sink.
+///
+/// This is **CFG source-to-sink reachability pruning**, NOT a taint slice.
+/// It does not prove that tainted data flows through these blocks — only that
+/// control flow can reach the sink from the source through them. Used to
+/// prevent exploring branches structurally disconnected from the
+/// source-to-sink span.
+///
+/// Algorithm: BFS forward from source ∩ BFS backward from sink. O(|blocks|).
+fn compute_source_sink_reachable(
+    ssa: &SsaBody,
+    source_block: BlockId,
+    sink_block: BlockId,
+) -> HashSet<BlockId> {
+    // Forward BFS from source
+    let mut forward = HashSet::new();
+    let mut queue = VecDeque::new();
+    forward.insert(source_block);
+    queue.push_back(source_block);
+    while let Some(bid) = queue.pop_front() {
+        if let Some(block) = ssa.blocks.get(bid.0 as usize) {
+            for &succ in &block.succs {
+                if forward.insert(succ) {
+                    queue.push_back(succ);
+                }
+            }
+        }
+    }
+
+    // Backward BFS from sink
+    let mut backward = HashSet::new();
+    backward.insert(sink_block);
+    queue.push_back(sink_block);
+    while let Some(bid) = queue.pop_front() {
+        if let Some(block) = ssa.blocks.get(bid.0 as usize) {
+            for &pred in &block.preds {
+                if backward.insert(pred) {
+                    queue.push_back(pred);
+                }
+            }
+        }
+    }
+
+    // Intersection
+    forward.intersection(&backward).copied().collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Exploration engine
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Run multi-path symbolic exploration for a single finding.
+///
+/// Walks the CFG from the source block to the sink block, forking at branch
+/// points where both successors are on some source-to-sink CFG path.
+/// Budget-bounded: at most [`MAX_FORKS_PER_FINDING`] forks,
+/// [`MAX_PATHS_PER_FINDING`] total paths, and [`MAX_TOTAL_STEPS`] symbolic
+/// transfer steps across all paths.
+pub(super) fn explore_finding(
+    finding: &Finding,
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    const_values: &HashMap<SsaValue, ConstLattice>,
+    type_facts: &TypeFactResult,
+) -> ExplorationResult {
+    let path_blocks = super::extract_path_blocks(finding, ssa);
+    if path_blocks.len() < 2 {
+        return ExplorationResult {
+            paths_completed: vec![PathOutcome {
+                verdict: Verdict::Inconclusive,
+                constraints_checked: 0,
+                witness: None,
+            }],
+            paths_pruned: 0,
+            total_steps: 0,
+            search_exhausted: true,
+        };
+    }
+
+    let source_block = path_blocks[0];
+    let sink_block = path_blocks[path_blocks.len() - 1];
+    let reachable = compute_source_sink_reachable(ssa, source_block, sink_block);
+    let on_path: HashSet<BlockId> = path_blocks.iter().copied().collect();
+
+    // Seed symbolic state (same as Phase 18a analyse_finding_path)
+    let mut sym_state = SymbolicState::new();
+    sym_state.seed_from_const_values(const_values);
+    for step in &finding.flow_steps {
+        if matches!(step.op_kind, crate::evidence::FlowStepKind::Source)
+            && let Some(&ssa_val) = ssa.cfg_node_map.get(&step.cfg_node)
+        {
+            sym_state.mark_tainted(ssa_val);
+            sym_state.set(ssa_val, SymbolicValue::Symbol(ssa_val));
+        }
+    }
+
+    // Seed constraint environment
+    let mut env = constraint::PathEnv::empty();
+    env.seed_from_optimization(const_values, type_facts);
+
+    // Initialize work queue
+    let initial = ExplorationState {
+        sym_state,
+        env,
+        current_block: source_block,
+        predecessor: None,
+        forks_used: 0,
+        steps_taken: 0,
+        constraints_checked: 0,
+    };
+
+    let mut work_queue: VecDeque<ExplorationState> = VecDeque::new();
+    work_queue.push_back(initial);
+
+    let mut outcomes: Vec<PathOutcome> = Vec::new();
+    let mut paths_pruned: usize = 0;
+    let mut total_steps: usize = 0;
+    let mut search_exhausted = true;
+
+    while let Some(mut state) = work_queue.pop_front() {
+        // Global budget check: path count
+        if outcomes.len() >= MAX_PATHS_PER_FINDING {
+            paths_pruned += 1;
+            search_exhausted = false;
+            continue;
+        }
+
+        // Global budget check: total steps
+        if total_steps >= MAX_TOTAL_STEPS {
+            paths_pruned += 1;
+            search_exhausted = false;
+            continue;
+        }
+
+        // Process blocks along this path until termination or fork
+        let outcome = run_path(
+            &mut state,
+            ssa,
+            cfg,
+            const_values,
+            &reachable,
+            &on_path,
+            &mut work_queue,
+            &mut outcomes,
+            &mut total_steps,
+            &mut search_exhausted,
+            finding,
+        );
+
+        if let Some(outcome) = outcome {
+            outcomes.push(outcome);
+        }
+    }
+
+    ExplorationResult {
+        paths_completed: outcomes,
+        paths_pruned,
+        total_steps,
+        search_exhausted,
+    }
+}
+
+/// Process blocks along a single path until it terminates, forks, or exhausts budget.
+///
+/// Returns `Some(PathOutcome)` when the path reaches a terminal state.
+/// Returns `None` when the path was consumed by a fork (both branches enqueued).
+#[allow(clippy::too_many_arguments)]
+fn run_path(
+    state: &mut ExplorationState,
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    const_values: &HashMap<SsaValue, ConstLattice>,
+    reachable: &HashSet<BlockId>,
+    on_path: &HashSet<BlockId>,
+    work_queue: &mut VecDeque<ExplorationState>,
+    outcomes: &mut Vec<PathOutcome>,
+    total_steps: &mut usize,
+    search_exhausted: &mut bool,
+    finding: &Finding,
+) -> Option<PathOutcome> {
+    loop {
+        // Global step budget
+        if *total_steps >= MAX_TOTAL_STEPS {
+            *search_exhausted = false;
+            return Some(record_outcome(state, finding, ssa));
+        }
+
+        let block_id = state.current_block;
+        let block = match ssa.blocks.get(block_id.0 as usize) {
+            Some(b) => b,
+            None => {
+                return Some(PathOutcome {
+                    verdict: Verdict::Inconclusive,
+                    constraints_checked: state.constraints_checked,
+                    witness: None,
+                });
+            }
+        };
+
+        // Transfer this block's instructions
+        transfer::transfer_block_with_predecessor(
+            &mut state.sym_state,
+            block,
+            cfg,
+            ssa,
+            state.predecessor,
+        );
+        let step_count = block.phis.len() + block.body.len();
+        state.steps_taken += step_count;
+        *total_steps += step_count;
+
+        // Examine terminator
+        match &block.terminator {
+            Terminator::Branch {
+                cond,
+                true_blk,
+                false_blk,
+                condition,
+            } => {
+                let true_reachable = reachable.contains(true_blk);
+                let false_reachable = reachable.contains(false_blk);
+
+                match (true_reachable, false_reachable) {
+                    (false, false) => {
+                        // Dead end — neither successor reaches sink
+                        return Some(PathOutcome {
+                            verdict: Verdict::Inconclusive,
+                            constraints_checked: state.constraints_checked,
+                            witness: None,
+                        });
+                    }
+                    (true, false) => {
+                        // Only true branch reaches sink
+                        if let Some(outcome) = apply_branch_constraint(
+                            state, cfg, ssa, const_values, block_id, *cond, condition, true,
+                        ) {
+                            return Some(outcome);
+                        }
+                        state.predecessor = Some(block_id);
+                        state.current_block = *true_blk;
+                    }
+                    (false, true) => {
+                        // Only false branch reaches sink
+                        if let Some(outcome) = apply_branch_constraint(
+                            state, cfg, ssa, const_values, block_id, *cond, condition, false,
+                        ) {
+                            return Some(outcome);
+                        }
+                        state.predecessor = Some(block_id);
+                        state.current_block = *false_blk;
+                    }
+                    (true, true) => {
+                        // Both successors reachable — fork candidate
+                        let can_fork = state.forks_used < MAX_FORKS_PER_FINDING
+                            && outcomes.len() + work_queue.len() + 1 < MAX_PATHS_PER_FINDING
+                            && *total_steps < MAX_TOTAL_STEPS;
+
+                        if can_fork {
+                            // Fork: clone state for true branch, reuse state for false
+                            return fork_at_branch(
+                                state,
+                                cfg,
+                                ssa,
+                                const_values,
+                                block_id,
+                                *cond,
+                                condition,
+                                *true_blk,
+                                *false_blk,
+                                work_queue,
+                                outcomes,
+                            );
+                        } else {
+                            // Budget exhausted — follow original path
+                            *search_exhausted = false;
+                            let preferred_polarity = if on_path.contains(true_blk) {
+                                true
+                            } else if on_path.contains(false_blk) {
+                                false
+                            } else {
+                                true // deterministic fallback: prefer true_blk
+                            };
+                            let target = if preferred_polarity {
+                                *true_blk
+                            } else {
+                                *false_blk
+                            };
+                            if let Some(outcome) = apply_branch_constraint(
+                                state,
+                                cfg,
+                                ssa,
+                                const_values,
+                                block_id,
+                                *cond,
+                                condition,
+                                preferred_polarity,
+                            ) {
+                                return Some(outcome);
+                            }
+                            state.predecessor = Some(block_id);
+                            state.current_block = target;
+                        }
+                    }
+                }
+            }
+            Terminator::Goto(target) => {
+                if !reachable.contains(target) {
+                    // Successor not on any source-to-sink path
+                    return Some(PathOutcome {
+                        verdict: Verdict::Inconclusive,
+                        constraints_checked: state.constraints_checked,
+                        witness: None,
+                    });
+                }
+                state.predecessor = Some(block_id);
+                state.current_block = *target;
+            }
+            Terminator::Return | Terminator::Unreachable => {
+                return Some(record_outcome(state, finding, ssa));
+            }
+        }
+    }
+}
+
+/// Apply a branch constraint and check for UNSAT.
+///
+/// Returns `Some(PathOutcome)` with `Infeasible` if the constraint makes the
+/// environment unsatisfiable. Returns `None` if the path should continue.
+#[allow(clippy::too_many_arguments)]
+fn apply_branch_constraint(
+    state: &mut ExplorationState,
+    cfg: &Cfg,
+    ssa: &SsaBody,
+    const_values: &HashMap<SsaValue, ConstLattice>,
+    block_id: BlockId,
+    cond: petgraph::graph::NodeIndex,
+    pre_lowered: &Option<Box<constraint::ConditionExpr>>,
+    polarity: bool,
+) -> Option<PathOutcome> {
+    let cond_expr = if let Some(pre) = pre_lowered {
+        (**pre).clone()
+    } else {
+        constraint::lower_condition(&cfg[cond], ssa, block_id, Some(const_values))
+    };
+
+    if matches!(cond_expr, constraint::ConditionExpr::Unknown) {
+        // No useful constraint — continue without recording
+        return None;
+    }
+
+    state.sym_state.add_constraint(PathConstraint {
+        block: block_id,
+        condition: cond_expr.clone(),
+        polarity,
+    });
+
+    state.env = constraint::refine_env(&state.env, &cond_expr, polarity);
+    state.constraints_checked += 1;
+
+    if state.env.is_unsat() {
+        return Some(PathOutcome {
+            verdict: Verdict::Infeasible,
+            constraints_checked: state.constraints_checked,
+            witness: None,
+        });
+    }
+
+    None
+}
+
+/// Fork at a branch point: create two exploration states (one per successor).
+///
+/// Immediately checks each forked state for UNSAT and records `Infeasible`
+/// outcomes without enqueuing. Returns `None` (path consumed by fork).
+#[allow(clippy::too_many_arguments)]
+fn fork_at_branch(
+    state: &mut ExplorationState,
+    cfg: &Cfg,
+    ssa: &SsaBody,
+    const_values: &HashMap<SsaValue, ConstLattice>,
+    block_id: BlockId,
+    cond: petgraph::graph::NodeIndex,
+    pre_lowered: &Option<Box<constraint::ConditionExpr>>,
+    true_blk: BlockId,
+    false_blk: BlockId,
+    work_queue: &mut VecDeque<ExplorationState>,
+    outcomes: &mut Vec<PathOutcome>,
+) -> Option<PathOutcome> {
+    let cond_expr = if let Some(pre) = pre_lowered {
+        (**pre).clone()
+    } else {
+        constraint::lower_condition(&cfg[cond], ssa, block_id, Some(const_values))
+    };
+
+    let is_unknown = matches!(cond_expr, constraint::ConditionExpr::Unknown);
+
+    // True branch
+    let mut true_state = ExplorationState {
+        sym_state: state.sym_state.clone(),
+        env: state.env.clone(),
+        current_block: true_blk,
+        predecessor: Some(block_id),
+        forks_used: state.forks_used + 1,
+        steps_taken: state.steps_taken,
+        constraints_checked: state.constraints_checked,
+    };
+
+    if !is_unknown {
+        true_state.sym_state.add_constraint(PathConstraint {
+            block: block_id,
+            condition: cond_expr.clone(),
+            polarity: true,
+        });
+        true_state.env = constraint::refine_env(&true_state.env, &cond_expr, true);
+        true_state.constraints_checked += 1;
+    }
+
+    // False branch (reuse original state's data to avoid extra clone)
+    let mut false_state = ExplorationState {
+        sym_state: state.sym_state.clone(),
+        env: state.env.clone(),
+        current_block: false_blk,
+        predecessor: Some(block_id),
+        forks_used: state.forks_used + 1,
+        steps_taken: state.steps_taken,
+        constraints_checked: state.constraints_checked,
+    };
+
+    if !is_unknown {
+        false_state.sym_state.add_constraint(PathConstraint {
+            block: block_id,
+            condition: cond_expr.clone(),
+            polarity: false,
+        });
+        false_state.env = constraint::refine_env(&false_state.env, &cond_expr, false);
+        false_state.constraints_checked += 1;
+    }
+
+    // Enqueue feasible branches; record infeasible immediately
+    if true_state.env.is_unsat() {
+        outcomes.push(PathOutcome {
+            verdict: Verdict::Infeasible,
+            constraints_checked: true_state.constraints_checked,
+            witness: None,
+        });
+    } else {
+        work_queue.push_back(true_state);
+    }
+
+    if false_state.env.is_unsat() {
+        outcomes.push(PathOutcome {
+            verdict: Verdict::Infeasible,
+            constraints_checked: false_state.constraints_checked,
+            witness: None,
+        });
+    } else {
+        work_queue.push_back(false_state);
+    }
+
+    // Original state consumed by fork — no outcome from this path
+    None
+}
+
+/// Record the final outcome for a path that has reached its terminal state.
+fn record_outcome(
+    state: &ExplorationState,
+    finding: &Finding,
+    ssa: &SsaBody,
+) -> PathOutcome {
+    let witness = state.sym_state.get_sink_witness(finding, ssa);
+    // All constraints passed (or none on path) → feasible
+    let verdict = Verdict::Confirmed;
+    PathOutcome {
+        verdict,
+        constraints_checked: state.constraints_checked,
+        witness,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Verdict aggregation
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl ExplorationResult {
+    /// Aggregate per-path outcomes into a single [`SymbolicVerdict`].
+    ///
+    /// Sound aggregation:
+    /// - ANY path `Confirmed` → `Confirmed`
+    /// - ALL paths `Infeasible` AND `search_exhausted` → `Infeasible`
+    /// - Otherwise → `Inconclusive`
+    ///
+    /// `Infeasible` is only returned when the entire relevant search space
+    /// was explored without budget exhaustion.
+    pub fn aggregate_verdict(&self) -> SymbolicVerdict {
+        let paths_explored = self.paths_completed.len() as u32;
+        let constraints_checked: u32 = self
+            .paths_completed
+            .iter()
+            .map(|p| p.constraints_checked)
+            .sum();
+
+        let has_confirmed = self
+            .paths_completed
+            .iter()
+            .any(|p| p.verdict == Verdict::Confirmed);
+        let all_infeasible = !self.paths_completed.is_empty()
+            && self
+                .paths_completed
+                .iter()
+                .all(|p| p.verdict == Verdict::Infeasible);
+
+        let verdict = if has_confirmed {
+            Verdict::Confirmed
+        } else if all_infeasible && self.search_exhausted {
+            Verdict::Infeasible
+        } else {
+            Verdict::Inconclusive
+        };
+
+        // Prefer witness from a Confirmed path; fall back to any path's witness
+        let witness = self
+            .paths_completed
+            .iter()
+            .filter(|p| p.verdict == Verdict::Confirmed)
+            .find_map(|p| p.witness.clone())
+            .or_else(|| {
+                self.paths_completed
+                    .iter()
+                    .find_map(|p| p.witness.clone())
+            });
+
+        SymbolicVerdict {
+            verdict,
+            constraints_checked,
+            paths_explored,
+            witness,
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ssa::ir::{SsaBlock, SsaValue, Terminator, ValueDef};
+    use crate::ssa::type_facts::TypeFactResult;
+    use crate::taint::FlowStepRaw;
+    use petgraph::graph::NodeIndex;
+    use smallvec::smallvec;
+
+    fn empty_type_facts() -> TypeFactResult {
+        TypeFactResult {
+            facts: HashMap::new(),
+        }
+    }
+
+    fn make_value_def(block: BlockId, cfg_node: NodeIndex) -> ValueDef {
+        ValueDef {
+            var_name: None,
+            cfg_node,
+            block,
+        }
+    }
+
+    /// Build a minimal Finding with source at n0 and sink at n1.
+    fn make_finding(n0: NodeIndex, n1: NodeIndex) -> Finding {
+        Finding {
+            sink: n1,
+            source: n0,
+            path: vec![n0, n1],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 1,
+            cap_specificity: 1,
+            uses_summary: false,
+            flow_steps: vec![
+                FlowStepRaw {
+                    cfg_node: n0,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Source,
+                },
+                FlowStepRaw {
+                    cfg_node: n1,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Sink,
+                },
+            ],
+            symbolic: None,
+        }
+    }
+
+    // ─── Test: compute_source_sink_reachable ────────────────────────────
+
+    #[test]
+    fn reachable_diamond_excludes_dead_end() {
+        // B0 → B1, B0 → B2 (dead-end), B1 → B3 (sink)
+        let b0 = BlockId(0);
+        let b1 = BlockId(1);
+        let b2 = BlockId(2);
+        let b3 = BlockId(3);
+        let ssa = SsaBody {
+            blocks: vec![
+                SsaBlock {
+                    id: b0,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b1),
+                    preds: smallvec![],
+                    succs: smallvec![b1, b2],
+                },
+                SsaBlock {
+                    id: b1,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![b0],
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b2,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return,
+                    preds: smallvec![b0],
+                    succs: smallvec![],
+                },
+                SsaBlock {
+                    id: b3,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return,
+                    preds: smallvec![b1],
+                    succs: smallvec![],
+                },
+            ],
+            entry: b0,
+            value_defs: vec![],
+            cfg_node_map: HashMap::new(),
+            exception_edges: vec![],
+        };
+
+        let reachable = compute_source_sink_reachable(&ssa, b0, b3);
+        assert!(reachable.contains(&b0));
+        assert!(reachable.contains(&b1));
+        assert!(reachable.contains(&b3));
+        assert!(!reachable.contains(&b2), "dead-end B2 should be excluded");
+    }
+
+    #[test]
+    fn reachable_diamond_includes_both_branches() {
+        // B0 → {B1, B2} → B3 (sink)
+        let b0 = BlockId(0);
+        let b1 = BlockId(1);
+        let b2 = BlockId(2);
+        let b3 = BlockId(3);
+        let ssa = SsaBody {
+            blocks: vec![
+                SsaBlock {
+                    id: b0,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b1),
+                    preds: smallvec![],
+                    succs: smallvec![b1, b2],
+                },
+                SsaBlock {
+                    id: b1,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![b0],
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b2,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![b0],
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b3,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return,
+                    preds: smallvec![b1, b2],
+                    succs: smallvec![],
+                },
+            ],
+            entry: b0,
+            value_defs: vec![],
+            cfg_node_map: HashMap::new(),
+            exception_edges: vec![],
+        };
+
+        let reachable = compute_source_sink_reachable(&ssa, b0, b3);
+        assert_eq!(reachable.len(), 4);
+        assert!(reachable.contains(&b1));
+        assert!(reachable.contains(&b2));
+    }
+
+    // ─── Test: aggregate_verdict ────────────────────────────────────────
+
+    #[test]
+    fn aggregate_any_confirmed_wins() {
+        let result = ExplorationResult {
+            paths_completed: vec![
+                PathOutcome {
+                    verdict: Verdict::Infeasible,
+                    constraints_checked: 1,
+                    witness: None,
+                },
+                PathOutcome {
+                    verdict: Verdict::Confirmed,
+                    constraints_checked: 1,
+                    witness: Some("sym(v0)".into()),
+                },
+            ],
+            paths_pruned: 0,
+            total_steps: 10,
+            search_exhausted: true,
+        };
+        let v = result.aggregate_verdict();
+        assert_eq!(v.verdict, Verdict::Confirmed);
+        assert_eq!(v.paths_explored, 2);
+        assert_eq!(v.witness, Some("sym(v0)".into()));
+    }
+
+    #[test]
+    fn aggregate_all_infeasible_exhausted() {
+        let result = ExplorationResult {
+            paths_completed: vec![
+                PathOutcome {
+                    verdict: Verdict::Infeasible,
+                    constraints_checked: 1,
+                    witness: None,
+                },
+                PathOutcome {
+                    verdict: Verdict::Infeasible,
+                    constraints_checked: 2,
+                    witness: None,
+                },
+            ],
+            paths_pruned: 0,
+            total_steps: 10,
+            search_exhausted: true,
+        };
+        let v = result.aggregate_verdict();
+        assert_eq!(v.verdict, Verdict::Infeasible);
+        assert_eq!(v.constraints_checked, 3);
+    }
+
+    #[test]
+    fn aggregate_all_infeasible_but_budget_hit_is_inconclusive() {
+        let result = ExplorationResult {
+            paths_completed: vec![PathOutcome {
+                verdict: Verdict::Infeasible,
+                constraints_checked: 1,
+                witness: None,
+            }],
+            paths_pruned: 2,
+            total_steps: 500,
+            search_exhausted: false, // budget prevented full exploration
+        };
+        let v = result.aggregate_verdict();
+        assert_eq!(v.verdict, Verdict::Inconclusive);
+    }
+
+    #[test]
+    fn aggregate_empty_is_inconclusive() {
+        let result = ExplorationResult {
+            paths_completed: vec![],
+            paths_pruned: 0,
+            total_steps: 0,
+            search_exhausted: true,
+        };
+        let v = result.aggregate_verdict();
+        assert_eq!(v.verdict, Verdict::Inconclusive);
+    }
+
+    // ─── Test: explore_finding with linear CFG (no fork) ────────────────
+
+    #[test]
+    fn explore_linear_no_fork() {
+        // B0(source) → Goto → B1(sink) → Return
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let b0 = BlockId(0);
+        let b1 = BlockId(1);
+
+        let ssa = SsaBody {
+            blocks: vec![
+                SsaBlock {
+                    id: b0,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b1),
+                    preds: smallvec![],
+                    succs: smallvec![b1],
+                },
+                SsaBlock {
+                    id: b1,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return,
+                    preds: smallvec![b0],
+                    succs: smallvec![],
+                },
+            ],
+            entry: b0,
+            value_defs: vec![
+                make_value_def(b0, n0),
+                make_value_def(b1, n1),
+            ],
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))]
+                .into_iter()
+                .collect(),
+            exception_edges: vec![],
+        };
+
+        let finding = make_finding(n0, n1);
+        let result = explore_finding(
+            &finding,
+            &ssa,
+            &Cfg::new(),
+            &HashMap::new(),
+            &empty_type_facts(),
+        );
+
+        assert_eq!(result.paths_completed.len(), 1);
+        assert_eq!(result.paths_completed[0].verdict, Verdict::Confirmed);
+        assert!(result.search_exhausted);
+
+        let v = result.aggregate_verdict();
+        assert_eq!(v.verdict, Verdict::Confirmed);
+        assert_eq!(v.paths_explored, 1);
+    }
+
+    // ─── Test: diamond CFG, both paths feasible ─────────────────────────
+
+    #[test]
+    fn explore_diamond_both_feasible() {
+        // B0(source) → Branch → {B1, B2} → B3(sink)
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let n2 = NodeIndex::new(2);
+        let n3 = NodeIndex::new(3);
+        let n_cond = NodeIndex::new(0);
+        let b0 = BlockId(0);
+        let b1 = BlockId(1);
+        let b2 = BlockId(2);
+        let b3 = BlockId(3);
+
+        // Minimal CFG with a condition node
+        let mut cfg_graph = Cfg::new();
+        let _c = cfg_graph.add_node(crate::cfg::NodeInfo {
+            kind: crate::cfg::StmtKind::Seq,
+            span: (0, 0),
+            labels: smallvec::SmallVec::new(),
+            defines: None,
+            extra_defines: Vec::new(),
+            uses: Vec::new(),
+            callee: None,
+            receiver: None,
+            enclosing_func: None,
+            call_ordinal: 0,
+            const_text: None,
+            condition_vars: Vec::new(),
+            condition_text: None,
+            condition_negated: false,
+            arg_uses: Vec::new(),
+            sink_payload_args: None,
+            all_args_literal: false,
+            catch_param: false,
+            arg_callees: Vec::new(),
+            outer_callee: None,
+            cast_target_type: None,
+            bin_op: None,
+        });
+
+        let ssa = SsaBody {
+            blocks: vec![
+                SsaBlock {
+                    id: b0,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Branch {
+                        cond: n_cond,
+                        true_blk: b1,
+                        false_blk: b2,
+                        condition: None,
+                    },
+                    preds: smallvec![],
+                    succs: smallvec![b1, b2],
+                },
+                SsaBlock {
+                    id: b1,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![b0],
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b2,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![b0],
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b3,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return,
+                    preds: smallvec![b1, b2],
+                    succs: smallvec![],
+                },
+            ],
+            entry: b0,
+            value_defs: vec![
+                make_value_def(b0, n0),
+                make_value_def(b1, n1),
+                make_value_def(b2, n2),
+                make_value_def(b3, n3),
+            ],
+            cfg_node_map: [
+                (n0, SsaValue(0)),
+                (n1, SsaValue(1)),
+                (n2, SsaValue(2)),
+                (n3, SsaValue(3)),
+            ]
+            .into_iter()
+            .collect(),
+            exception_edges: vec![],
+        };
+
+        // Finding path goes through B0 → B1 → B3
+        let finding = Finding {
+            sink: n3,
+            source: n0,
+            path: vec![n0, n1, n3],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 2,
+            cap_specificity: 1,
+            uses_summary: false,
+            flow_steps: vec![
+                FlowStepRaw {
+                    cfg_node: n0,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Source,
+                },
+                FlowStepRaw {
+                    cfg_node: n1,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Assignment,
+                },
+                FlowStepRaw {
+                    cfg_node: n3,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Sink,
+                },
+            ],
+            symbolic: None,
+        };
+
+        let result = explore_finding(
+            &finding,
+            &ssa,
+            &cfg_graph,
+            &HashMap::new(),
+            &empty_type_facts(),
+        );
+
+        // Both branches should be explored (fork at B0)
+        assert!(
+            result.paths_completed.len() >= 2,
+            "expected >= 2 paths, got {}",
+            result.paths_completed.len()
+        );
+        assert!(result.search_exhausted);
+
+        let v = result.aggregate_verdict();
+        assert_eq!(v.verdict, Verdict::Confirmed);
+        assert!(v.paths_explored >= 2);
+    }
+
+    // ─── Test: single-successor branch (no fork) ───────────────────────
+
+    #[test]
+    fn explore_branch_single_reachable_no_fork() {
+        // B0(source) → Branch → {B1 (→ B3 sink), B2 (→ Return, dead-end)}
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let n3 = NodeIndex::new(3);
+        let n_cond = NodeIndex::new(0);
+        let b0 = BlockId(0);
+        let b1 = BlockId(1);
+        let b2 = BlockId(2);
+        let b3 = BlockId(3);
+
+        let mut cfg_graph = Cfg::new();
+        cfg_graph.add_node(crate::cfg::NodeInfo {
+            kind: crate::cfg::StmtKind::Seq,
+            span: (0, 0),
+            labels: smallvec::SmallVec::new(),
+            defines: None,
+            extra_defines: Vec::new(),
+            uses: Vec::new(),
+            callee: None,
+            receiver: None,
+            enclosing_func: None,
+            call_ordinal: 0,
+            const_text: None,
+            condition_vars: Vec::new(),
+            condition_text: None,
+            condition_negated: false,
+            arg_uses: Vec::new(),
+            sink_payload_args: None,
+            all_args_literal: false,
+            catch_param: false,
+            arg_callees: Vec::new(),
+            outer_callee: None,
+            cast_target_type: None,
+            bin_op: None,
+        });
+
+        let ssa = SsaBody {
+            blocks: vec![
+                SsaBlock {
+                    id: b0,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Branch {
+                        cond: n_cond,
+                        true_blk: b1,
+                        false_blk: b2,
+                        condition: None,
+                    },
+                    preds: smallvec![],
+                    succs: smallvec![b1, b2],
+                },
+                SsaBlock {
+                    id: b1,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![b0],
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b2,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return, // dead-end: doesn't reach sink
+                    preds: smallvec![b0],
+                    succs: smallvec![],
+                },
+                SsaBlock {
+                    id: b3,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return,
+                    preds: smallvec![b1],
+                    succs: smallvec![],
+                },
+            ],
+            entry: b0,
+            value_defs: vec![
+                make_value_def(b0, n0),
+                make_value_def(b1, n1),
+                ValueDef {
+                    var_name: None,
+                    cfg_node: NodeIndex::new(2),
+                    block: b2,
+                },
+                make_value_def(b3, n3),
+            ],
+            cfg_node_map: [
+                (n0, SsaValue(0)),
+                (n1, SsaValue(1)),
+                (n3, SsaValue(3)),
+            ]
+            .into_iter()
+            .collect(),
+            exception_edges: vec![],
+        };
+
+        let finding = Finding {
+            sink: n3,
+            source: n0,
+            path: vec![n0, n1, n3],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 2,
+            cap_specificity: 1,
+            uses_summary: false,
+            flow_steps: vec![
+                FlowStepRaw {
+                    cfg_node: n0,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Source,
+                },
+                FlowStepRaw {
+                    cfg_node: n1,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Assignment,
+                },
+                FlowStepRaw {
+                    cfg_node: n3,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Sink,
+                },
+            ],
+            symbolic: None,
+        };
+
+        let result = explore_finding(
+            &finding,
+            &ssa,
+            &cfg_graph,
+            &HashMap::new(),
+            &empty_type_facts(),
+        );
+
+        // Only one path (B2 is not reachable from source to sink)
+        assert_eq!(result.paths_completed.len(), 1);
+        assert_eq!(result.paths_completed[0].verdict, Verdict::Confirmed);
+        assert!(result.search_exhausted);
+    }
+}

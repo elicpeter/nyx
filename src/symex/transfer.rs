@@ -5,7 +5,7 @@
 
 use crate::cfg::Cfg;
 use crate::ssa::const_prop::ConstLattice;
-use crate::ssa::ir::{SsaBlock, SsaBody, SsaInst, SsaOp};
+use crate::ssa::ir::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp};
 
 use super::state::SymbolicState;
 use super::value::{mk_binop, mk_call, mk_phi, Op, SymbolicValue};
@@ -116,6 +116,59 @@ pub fn transfer_inst(
             state.set(inst.value, sym);
             state.propagate_taint(inst.value, &operand_vals);
         }
+    }
+}
+
+/// Transfer a single SSA instruction with optional predecessor context.
+///
+/// ONLY phi instructions use predecessor-sensitive selection — when
+/// `predecessor` is `Some(bid)`, the phi resolves to the operand from
+/// that specific predecessor block instead of building a `Phi(...)`
+/// expression. All non-phi instructions delegate to [`transfer_inst`].
+pub fn transfer_inst_with_predecessor(
+    state: &mut SymbolicState,
+    inst: &SsaInst,
+    cfg: &Cfg,
+    ssa: &SsaBody,
+    predecessor: Option<BlockId>,
+) {
+    match (&inst.op, predecessor) {
+        (SsaOp::Phi(operands), Some(pred)) => {
+            let sym = state.resolve_phi_from_predecessor(operands, pred);
+            state.set(inst.value, sym);
+            // Taint: propagate only from the matched predecessor operand
+            for (bid, v) in operands.iter() {
+                if *bid == pred {
+                    state.propagate_taint(inst.value, &[*v]);
+                    return;
+                }
+            }
+            // Predecessor not found among operands — propagate from all (fallback)
+            let operand_vals: Vec<_> = operands.iter().map(|(_, v)| *v).collect();
+            state.propagate_taint(inst.value, &operand_vals);
+        }
+        _ => {
+            transfer_inst(state, inst, cfg, ssa);
+        }
+    }
+}
+
+/// Transfer all instructions in a block with predecessor context.
+///
+/// Phis use predecessor-aware transfer; body instructions use standard
+/// [`transfer_inst`]. See [`transfer_inst_with_predecessor`] for details.
+pub fn transfer_block_with_predecessor(
+    state: &mut SymbolicState,
+    block: &SsaBlock,
+    cfg: &Cfg,
+    ssa: &SsaBody,
+    predecessor: Option<BlockId>,
+) {
+    for inst in &block.phis {
+        transfer_inst_with_predecessor(state, inst, cfg, ssa, predecessor);
+    }
+    for inst in &block.body {
+        transfer_inst(state, inst, cfg, ssa);
     }
 }
 
@@ -559,5 +612,105 @@ mod tests {
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Concrete(1));
         // Body const should be set
         assert_eq!(state.get(SsaValue(3)), SymbolicValue::Concrete(10));
+    }
+
+    #[test]
+    fn transfer_phi_with_predecessor_resolves_to_operand() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        // Set up different values for each predecessor
+        state.set(SsaValue(0), SymbolicValue::Concrete(10));
+        state.set(SsaValue(1), SymbolicValue::Concrete(20));
+
+        let inst = make_inst(
+            2,
+            SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+            node,
+        );
+
+        // With predecessor B1, should resolve to SsaValue(1) → Concrete(20)
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)));
+        assert_eq!(state.get(SsaValue(2)), SymbolicValue::Concrete(20));
+    }
+
+    #[test]
+    fn transfer_phi_with_predecessor_taint_from_selected_only() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        // B0's operand is NOT tainted, B1's operand IS tainted
+        state.set(SsaValue(0), SymbolicValue::Concrete(10));
+        state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
+        state.mark_tainted(SsaValue(1));
+
+        let inst = make_inst(
+            2,
+            SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+            node,
+        );
+
+        // With predecessor B0 (untainted), result should NOT be tainted
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(0)));
+        assert!(!state.is_tainted(SsaValue(2)));
+    }
+
+    #[test]
+    fn transfer_phi_with_predecessor_taint_from_tainted_pred() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Concrete(10));
+        state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
+        state.mark_tainted(SsaValue(1));
+
+        let inst = make_inst(
+            2,
+            SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+            node,
+        );
+
+        // With predecessor B1 (tainted), result SHOULD be tainted
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)));
+        assert!(state.is_tainted(SsaValue(2)));
+    }
+
+    #[test]
+    fn transfer_phi_without_predecessor_builds_phi_expr() {
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Concrete(10));
+        state.set(SsaValue(1), SymbolicValue::Concrete(20));
+
+        let inst = make_inst(
+            2,
+            SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+            node,
+        );
+
+        // Without predecessor (None), falls back to Phi(...) expression
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, None);
+        let expected = SymbolicValue::Phi(vec![
+            (BlockId(0), SymbolicValue::Concrete(10)),
+            (BlockId(1), SymbolicValue::Concrete(20)),
+        ]);
+        assert_eq!(state.get(SsaValue(2)), expected);
+    }
+
+    #[test]
+    fn transfer_non_phi_ignores_predecessor() {
+        // Non-phi instructions should behave identically regardless of predecessor
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        let inst = make_inst(0, SsaOp::Const(Some("42".into())), node);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(5)));
+        assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(42));
     }
 }

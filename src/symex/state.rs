@@ -20,10 +20,14 @@ pub struct PathConstraint {
     pub polarity: bool,
 }
 
-/// Symbolic state for a single-path walk through SSA blocks.
+/// Symbolic state for a path walk through SSA blocks.
 ///
 /// Tracks a symbolic expression tree per SSA value, branch constraints
 /// collected along the path, and a flat taint root-set with eager propagation.
+///
+/// `Clone` is required for multi-path exploration (Phase 18b): the executor
+/// clones the state at branch forks to explore both successors independently.
+#[derive(Clone)]
 pub struct SymbolicState {
     /// Symbolic value for each SSA value encountered on the path.
     values: HashMap<SsaValue, SymbolicValue>,
@@ -101,6 +105,30 @@ impl SymbolicState {
                 _ => {} // Bool, Null, Top, Varying — not modeled
             }
         }
+    }
+
+    /// Resolve a phi to the operand from a specific predecessor.
+    ///
+    /// Returns the symbolic value for the matched predecessor's operand.
+    /// Falls back to full `mk_phi(...)` only when the predecessor is genuinely
+    /// not found among the phi's operands (e.g. unreachable predecessor was
+    /// pruned during SSA construction).
+    pub fn resolve_phi_from_predecessor(
+        &self,
+        operands: &[(BlockId, SsaValue)],
+        predecessor: BlockId,
+    ) -> SymbolicValue {
+        for (bid, v) in operands {
+            if *bid == predecessor {
+                return self.get(*v);
+            }
+        }
+        // Fallback: build the full phi expression
+        let phi_ops: Vec<_> = operands
+            .iter()
+            .map(|(bid, v)| (*bid, self.get(*v)))
+            .collect();
+        super::value::mk_phi(phi_ops)
     }
 
     /// Generate a witness string for the sink value of a finding.
