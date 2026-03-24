@@ -116,6 +116,13 @@ fn cross_file_scc_ssa() {
     validate_expectations(&diags, &dir);
 }
 
+#[test]
+fn cross_file_scc_convergence() {
+    let dir = fixture_path("cross_file_scc_convergence");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── Cross-cutting tests ───────────────────────────────────────────────────
 
 #[test]
