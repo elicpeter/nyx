@@ -26,7 +26,7 @@ use crate::taint::Finding;
 
 use super::loops::LoopInfo;
 use super::state::{PathConstraint, SymbolicState};
-use super::transfer::{self, SymexSummaryCtx};
+use super::transfer::{self, SymexHeapCtx, SymexSummaryCtx};
 use super::value::SymbolicValue;
 use super::SymexContext;
 
@@ -227,6 +227,14 @@ pub(super) fn explore_finding(
     });
     let summary_ctx_ref = summary_ctx.as_ref();
 
+    // Phase 21: Build heap context for field-sensitive symbolic heap.
+    let heap_ctx = ctx.points_to.map(|pts| SymexHeapCtx {
+        points_to: pts,
+        ssa,
+        lang: ctx.lang,
+    });
+    let heap_ctx_ref = heap_ctx.as_ref();
+
     while let Some(mut state) = work_queue.pop_front() {
         // Global budget check: path count
         if outcomes.len() >= MAX_PATHS_PER_FINDING {
@@ -257,6 +265,7 @@ pub(super) fn explore_finding(
             &mut search_exhausted,
             finding,
             summary_ctx_ref,
+            heap_ctx_ref,
         );
 
         if let Some(outcome) = outcome {
@@ -291,6 +300,7 @@ fn run_path(
     search_exhausted: &mut bool,
     finding: &Finding,
     summary_ctx: Option<&SymexSummaryCtx>,
+    heap_ctx: Option<&SymexHeapCtx>,
 ) -> Option<PathOutcome> {
     loop {
         // Global step budget
@@ -362,6 +372,7 @@ fn run_path(
             ssa,
             state.predecessor,
             summary_ctx,
+            heap_ctx,
         );
 
         // Phase 20: Collapse induction variables after re-visit to prevent
@@ -1010,6 +1021,7 @@ mod tests {
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
+            points_to: None,
         };
         let result = explore_finding(&finding, &ctx);
 
@@ -1163,6 +1175,7 @@ mod tests {
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
+            points_to: None,
         };
         let result = explore_finding(&finding, &ctx);
 
@@ -1320,6 +1333,7 @@ mod tests {
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
+            points_to: None,
         };
         let result = explore_finding(&finding, &ctx);
 

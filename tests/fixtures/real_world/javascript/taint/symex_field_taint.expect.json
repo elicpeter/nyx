@@ -1,0 +1,15 @@
+{
+  "description": "Tainted input stored into object field, read back, flows to SQL sink.",
+  "tags": ["taint", "field-sensitivity", "sqli"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 9],
+      "evidence_contains": [],
+      "notes": "req.query.name stored to user.name, read back and concatenated into SQL query — SQLi"
+    }
+  ]
+}

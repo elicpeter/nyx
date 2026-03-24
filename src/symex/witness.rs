@@ -63,6 +63,20 @@ pub fn extract_witness(
     // 5. Find tainted symbols in expression tree
     let tainted = collect_tainted_symbols(&sym, state);
 
+    // 5b. Phase 21: Collect field paths from heap access trace.
+    let field_paths: Vec<String> = state
+        .heap()
+        .field_accesses()
+        .iter()
+        .filter(|a| tainted.contains(&a.ssa_value))
+        .map(|a| format!("{}.{}", a.object_name, a.field_name))
+        .collect();
+    let field_suffix = if field_paths.is_empty() {
+        String::new()
+    } else {
+        format!(" via {}", field_paths.join(", "))
+    };
+
     // 6. Branch on string-renderability
     if tainted.is_empty() {
         // No tainted symbols — expression is fully concrete or opaque
@@ -77,14 +91,14 @@ pub fn extract_witness(
         let substituted = substitute_tainted(&sym, &tainted, payload);
         let concrete = evaluate_concrete(&substituted);
         Some(format!(
-            "input '{}' = \"{}\" flows to {}(\"{}\")",
-            source_var, payload, sink_callee, concrete
+            "input '{}' = \"{}\" flows to {}(\"{}\"){}",
+            source_var, payload, sink_callee, concrete, field_suffix
         ))
     } else {
         // Not string-renderable: generic witness
         Some(format!(
-            "tainted input '{}' reaches {}() unsanitized",
-            source_var, sink_callee
+            "tainted input '{}' reaches {}() unsanitized{}",
+            source_var, sink_callee, field_suffix
         ))
     }
 }

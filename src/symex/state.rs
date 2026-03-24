@@ -7,6 +7,7 @@ use crate::ssa::const_prop::ConstLattice;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue};
 use crate::taint::Finding;
 
+use super::heap::SymbolicHeap;
 use super::value::SymbolicValue;
 
 /// A branch constraint collected along the path.
@@ -36,6 +37,8 @@ pub struct SymbolicState {
     /// SSA values known to carry taint. Eagerly propagated during transfer —
     /// no recursive expression-tree walking needed.
     tainted_roots: HashSet<SsaValue>,
+    /// Field-sensitive symbolic heap (Phase 21).
+    heap: SymbolicHeap,
 }
 
 impl SymbolicState {
@@ -45,6 +48,7 @@ impl SymbolicState {
             values: HashMap::new(),
             path_constraints: Vec::new(),
             tainted_roots: HashSet::new(),
+            heap: SymbolicHeap::new(),
         }
     }
 
@@ -92,12 +96,24 @@ impl SymbolicState {
     /// **preserves taint**: if a phi value was tainted before widening, it
     /// remains tainted. `Unknown + tainted` means "shape unknown but still
     /// attacker-controlled."
+    /// Get a reference to the symbolic heap.
+    pub fn heap(&self) -> &SymbolicHeap {
+        &self.heap
+    }
+
+    /// Get a mutable reference to the symbolic heap.
+    pub fn heap_mut(&mut self) -> &mut SymbolicHeap {
+        &mut self.heap
+    }
+
     pub fn widen_at_loop_head(&mut self, block: BlockId, ssa: &SsaBody) {
         let block_data = &ssa.blocks[block.0 as usize];
         for phi in &block_data.phis {
             self.values.insert(phi.value, SymbolicValue::Unknown);
             // PRESERVE taint — do NOT remove from tainted_roots.
         }
+        // Widen heap: degrade field symbolic precision, preserve taint.
+        self.heap.widen();
     }
 
     /// Seed symbolic values from SSA constant propagation results.

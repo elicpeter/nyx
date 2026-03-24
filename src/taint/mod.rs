@@ -160,6 +160,7 @@ pub fn analyse_file(
                         global_summaries,
                         lang: caller_lang,
                         namespace: caller_namespace,
+                        points_to: Some(&opt.points_to),
                     };
                     crate::symex::annotate_findings(&mut f, &symex_ctx);
                 }
@@ -446,6 +447,7 @@ fn analyse_ssa_js_two_level(
             global_summaries,
             lang,
             namespace,
+            points_to: Some(&toplevel_opt.points_to),
         };
         crate::symex::annotate_findings(&mut all_findings, &symex_ctx);
     }
@@ -503,6 +505,7 @@ fn analyse_ssa_js_two_level(
                     global_summaries,
                     lang,
                     namespace,
+                    points_to: Some(&func_opt.points_to),
                 };
                 crate::symex::annotate_findings(&mut func_findings, &symex_ctx);
             }

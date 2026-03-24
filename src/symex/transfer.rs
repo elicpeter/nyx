@@ -9,11 +9,14 @@
 
 use crate::cfg::Cfg;
 use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::heap::PointsToResult;
 use crate::ssa::ir::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue};
+use crate::ssa::pointsto::{classify_container_op, ContainerOp};
 use crate::summary::ssa_summary::TaintTransform;
 use crate::summary::{CalleeResolution, GlobalSummaries};
 use crate::symbol::Lang;
 
+use super::heap::{self, FieldAccessRecord, FieldSlot, HeapKey};
 use super::state::SymbolicState;
 use super::value::{mk_binop, mk_call, mk_phi, Op, SymbolicValue};
 
@@ -27,6 +30,16 @@ pub struct SymexSummaryCtx<'a> {
     pub namespace: &'a str,
 }
 
+/// Context for field-sensitive heap operations during transfer (Phase 21).
+///
+/// When provided, Assign and Call instructions attempt store/load operations
+/// through the symbolic heap using allocation-site identities from points-to.
+pub struct SymexHeapCtx<'a> {
+    pub points_to: &'a PointsToResult,
+    pub ssa: &'a SsaBody,
+    pub lang: Lang,
+}
+
 /// Result of resolving a callee symbolically via its summary.
 struct SymbolicCallResult {
     value: SymbolicValue,
@@ -38,8 +51,9 @@ pub fn transfer_inst(
     state: &mut SymbolicState,
     inst: &SsaInst,
     cfg: &Cfg,
-    _ssa: &SsaBody,
+    ssa: &SsaBody,
     summary_ctx: Option<&SymexSummaryCtx>,
+    heap_ctx: Option<&SymexHeapCtx>,
 ) {
     match &inst.op {
         SsaOp::Const(text) => {
@@ -86,6 +100,31 @@ pub fn transfer_inst(
                     state.propagate_taint(inst.value, uses_slice);
                 }
                 2 => {
+                    // Phase 21: Field-load pattern detection.
+                    // When RHS is a member expression, SSA produces 2 uses:
+                    //   uses[0] = dotted-path SSA value (e.g., v for "user.name")
+                    //   uses[1] = base variable SSA value (e.g., v for "user")
+                    // The first operand IS the field value — use it directly.
+                    if let Some(def) = ssa.value_defs.get(uses_slice[0].0 as usize) {
+                        if def.var_name.as_ref().is_some_and(|n| n.contains('.')) {
+                            let sym = state.get(uses_slice[0]);
+                            state.set(inst.value, sym);
+                            state.propagate_taint(inst.value, uses_slice);
+                            // Record heap load for cross-alias + witness
+                            try_heap_load_record(state, inst, ssa, heap_ctx);
+                            return;
+                        }
+                    }
+
+                    // Phase 21: Heap-based cross-alias load fallback.
+                    // If the instruction defines a dotted path but the first
+                    // operand doesn't have a dotted var_name (aliased object),
+                    // try loading from the symbolic heap via points-to.
+                    if try_heap_alias_load(state, inst, ssa, heap_ctx) {
+                        state.propagate_taint(inst.value, uses_slice);
+                        return;
+                    }
+
                     // Check for binary op metadata on the CFG node
                     let info = &cfg[inst.cfg_node];
                     if let Some(bin_op) = info.bin_op {
@@ -105,6 +144,10 @@ pub fn transfer_inst(
                     state.propagate_taint(inst.value, uses_slice);
                 }
             }
+
+            // Phase 21: If this instruction defines a dotted path, record
+            // the store in the symbolic heap for cross-alias resolution.
+            try_heap_field_store(state, inst, ssa, heap_ctx);
         }
 
         SsaOp::Call { callee, args, receiver } => {
@@ -121,6 +164,52 @@ pub fn transfer_inst(
                 if let Some(&first_val) = arg_slot.first() {
                     arg_syms.push(state.get(first_val));
                     all_operands.push(first_val);
+                }
+            }
+
+            // Phase 21: Container store/load via symbolic heap.
+            if let Some(hctx) = heap_ctx {
+                if let Some(container_op) = classify_container_op(callee, hctx.lang) {
+                    let recv_obj = receiver
+                        .and_then(|rv| hctx.points_to.get(rv))
+                        .filter(|pts| pts.len() == 1)
+                        .and_then(|pts| pts.iter().next().copied());
+
+                    if let Some(obj_id) = recv_obj {
+                        let key = HeapKey {
+                            object: obj_id,
+                            field: FieldSlot::Elements,
+                        };
+                        match container_op {
+                            ContainerOp::Store { ref value_args } => {
+                                let val_sym = value_args
+                                    .first()
+                                    .and_then(|&idx| args.get(idx))
+                                    .and_then(|slot| slot.first())
+                                    .map(|&v| state.get(v))
+                                    .unwrap_or(SymbolicValue::Unknown);
+                                let any_tainted = value_args.iter().any(|&idx| {
+                                    args.get(idx)
+                                        .and_then(|slot| slot.first())
+                                        .map(|&v| state.is_tainted(v))
+                                        .unwrap_or(false)
+                                });
+                                state.heap_mut().store(key, val_sym, any_tainted);
+                                // Fall through to normal Call for return value
+                            }
+                            ContainerOp::Load => {
+                                let loaded = state.heap().load(&key);
+                                if !matches!(loaded, SymbolicValue::Unknown) {
+                                    state.set(inst.value, loaded);
+                                    if state.heap().is_tainted(&key) {
+                                        state.mark_tainted(inst.value);
+                                    }
+                                    return;
+                                }
+                                // Fall through to normal Call
+                            }
+                        }
+                    }
                 }
             }
 
@@ -157,6 +246,136 @@ pub fn transfer_inst(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Phase 21: Heap helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Record a field store in the symbolic heap when the instruction defines
+/// a dotted path (e.g., `user.name`).
+fn try_heap_field_store(
+    state: &mut SymbolicState,
+    inst: &SsaInst,
+    ssa: &SsaBody,
+    heap_ctx: Option<&SymexHeapCtx>,
+) {
+    let hctx = match heap_ctx {
+        Some(hctx) => hctx,
+        None => return,
+    };
+    let vn = match inst.var_name.as_deref() {
+        Some(vn) => vn,
+        None => return,
+    };
+    let (recv_name, field_name) = match heap::split_field_access(vn) {
+        Some(pair) => pair,
+        None => return,
+    };
+    let recv_ssa = match heap::resolve_receiver_ssa(recv_name, hctx.ssa, inst.value) {
+        Some(v) => v,
+        None => return,
+    };
+    let obj_id = match heap::resolve_singleton_object(recv_ssa, hctx.points_to) {
+        Some(id) => id,
+        None => return,
+    };
+
+    let key = HeapKey {
+        object: obj_id,
+        field: FieldSlot::Named(field_name.to_string()),
+    };
+    let sym = state.get(inst.value);
+    let tainted = state.is_tainted(inst.value);
+    state.heap_mut().store(key, sym, tainted);
+    state.heap_mut().record_access(FieldAccessRecord {
+        object_name: recv_name.to_string(),
+        field_name: field_name.to_string(),
+        ssa_value: inst.value,
+    });
+}
+
+/// Record a field access from a successful field-load pattern.
+fn try_heap_load_record(
+    state: &mut SymbolicState,
+    inst: &SsaInst,
+    ssa: &SsaBody,
+    heap_ctx: Option<&SymexHeapCtx>,
+) {
+    let hctx = match heap_ctx {
+        Some(hctx) => hctx,
+        None => return,
+    };
+    // The uses[0] var_name has the dotted path.
+    let uses = match &inst.op {
+        SsaOp::Assign(u) => u,
+        _ => return,
+    };
+    if let Some(&first) = uses.first() {
+        if let Some(def) = ssa.value_defs.get(first.0 as usize) {
+            if let Some(ref dotted) = def.var_name {
+                if let Some((recv_name, field_name)) = heap::split_field_access(dotted) {
+                    state.heap_mut().record_access(FieldAccessRecord {
+                        object_name: recv_name.to_string(),
+                        field_name: field_name.to_string(),
+                        ssa_value: inst.value,
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Try to resolve a 2-use Assign via heap cross-alias lookup.
+///
+/// When `inst.var_name` is a dotted path (e.g., `obj.field`) but the first
+/// operand doesn't have a dotted def (the alias case), check the heap via
+/// points-to resolution.  Returns `true` if the heap provided a value.
+fn try_heap_alias_load(
+    state: &mut SymbolicState,
+    inst: &SsaInst,
+    ssa: &SsaBody,
+    heap_ctx: Option<&SymexHeapCtx>,
+) -> bool {
+    let hctx = match heap_ctx {
+        Some(hctx) => hctx,
+        None => return false,
+    };
+    let vn = match inst.var_name.as_deref() {
+        Some(vn) => vn,
+        None => return false,
+    };
+    let (recv_name, field_name) = match heap::split_field_access(vn) {
+        Some(pair) => pair,
+        None => return false,
+    };
+    let recv_ssa = match heap::resolve_receiver_ssa(recv_name, hctx.ssa, inst.value) {
+        Some(v) => v,
+        None => return false,
+    };
+    let obj_id = match heap::resolve_singleton_object(recv_ssa, hctx.points_to) {
+        Some(id) => id,
+        None => return false,
+    };
+
+    let key = HeapKey {
+        object: obj_id,
+        field: FieldSlot::Named(field_name.to_string()),
+    };
+    let loaded = state.heap().load(&key);
+    if matches!(loaded, SymbolicValue::Unknown) {
+        return false;
+    }
+    state.set(inst.value, loaded);
+    if state.heap().is_tainted(&key) {
+        state.mark_tainted(inst.value);
+    }
+    state.heap_mut().record_access(FieldAccessRecord {
+        object_name: recv_name.to_string(),
+        field_name: field_name.to_string(),
+        ssa_value: inst.value,
+    });
+    true
+}
+
 /// Transfer a single SSA instruction with optional predecessor context.
 ///
 /// ONLY phi instructions use predecessor-sensitive selection — when
@@ -170,6 +389,7 @@ pub fn transfer_inst_with_predecessor(
     ssa: &SsaBody,
     predecessor: Option<BlockId>,
     summary_ctx: Option<&SymexSummaryCtx>,
+    heap_ctx: Option<&SymexHeapCtx>,
 ) {
     match (&inst.op, predecessor) {
         (SsaOp::Phi(operands), Some(pred)) => {
@@ -187,7 +407,7 @@ pub fn transfer_inst_with_predecessor(
             state.propagate_taint(inst.value, &operand_vals);
         }
         _ => {
-            transfer_inst(state, inst, cfg, ssa, summary_ctx);
+            transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx);
         }
     }
 }
@@ -203,12 +423,13 @@ pub fn transfer_block_with_predecessor(
     ssa: &SsaBody,
     predecessor: Option<BlockId>,
     summary_ctx: Option<&SymexSummaryCtx>,
+    heap_ctx: Option<&SymexHeapCtx>,
 ) {
     for inst in &block.phis {
-        transfer_inst_with_predecessor(state, inst, cfg, ssa, predecessor, summary_ctx);
+        transfer_inst_with_predecessor(state, inst, cfg, ssa, predecessor, summary_ctx, heap_ctx);
     }
     for inst in &block.body {
-        transfer_inst(state, inst, cfg, ssa, summary_ctx);
+        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx);
     }
 }
 
@@ -219,12 +440,13 @@ pub fn transfer_block(
     cfg: &Cfg,
     ssa: &SsaBody,
     summary_ctx: Option<&SymexSummaryCtx>,
+    heap_ctx: Option<&SymexHeapCtx>,
 ) {
     for inst in &block.phis {
-        transfer_inst(state, inst, cfg, ssa, summary_ctx);
+        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx);
     }
     for inst in &block.body {
-        transfer_inst(state, inst, cfg, ssa, summary_ctx);
+        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx);
     }
 }
 
@@ -409,7 +631,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("42".into())), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(42));
         assert!(!state.is_tainted(SsaValue(0)));
@@ -422,7 +644,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("\"hello\"".into())), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         assert_eq!(
             state.get(SsaValue(0)),
@@ -437,7 +659,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("true".into())), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Unknown);
     }
@@ -449,7 +671,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(None), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Unknown);
     }
@@ -461,7 +683,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Source, node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Symbol(SsaValue(0)));
         assert!(state.is_tainted(SsaValue(0)));
@@ -474,7 +696,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Param { index: 0 }, node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Symbol(SsaValue(0)));
         assert!(!state.is_tainted(SsaValue(0)));
@@ -491,7 +713,7 @@ mod tests {
         state.mark_tainted(SsaValue(0));
 
         let inst = make_inst(1, SsaOp::Assign(smallvec![SsaValue(0)]), node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Concrete(7));
         assert!(state.is_tainted(SsaValue(1)));
@@ -512,7 +734,7 @@ mod tests {
             SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]),
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         let expected = SymbolicValue::BinOp(
             Op::Mul,
@@ -537,7 +759,7 @@ mod tests {
             SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]),
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Unknown);
     }
@@ -560,7 +782,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         let expected = SymbolicValue::Call(
             "parseInt".into(),
@@ -588,7 +810,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         let expected = SymbolicValue::Call(
             "send".into(),
@@ -612,7 +834,7 @@ mod tests {
             SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         let expected = SymbolicValue::Phi(vec![
             (BlockId(0), SymbolicValue::Concrete(1)),
@@ -683,17 +905,17 @@ mod tests {
 
         // v0: source (tainted)
         let i0 = make_inst(0, SsaOp::Source, node_plain);
-        transfer_inst(&mut state, &i0, &cfg, &ssa, None);
+        transfer_inst(&mut state, &i0, &cfg, &ssa, None, None);
         assert!(state.is_tainted(SsaValue(0)));
 
         // v1: copy of v0
         let i1 = make_inst(1, SsaOp::Assign(smallvec![SsaValue(0)]), node_plain);
-        transfer_inst(&mut state, &i1, &cfg, &ssa, None);
+        transfer_inst(&mut state, &i1, &cfg, &ssa, None, None);
         assert!(state.is_tainted(SsaValue(1)));
 
         // v2: constant (not tainted)
         let i2 = make_inst(2, SsaOp::Const(Some("3".into())), node_plain);
-        transfer_inst(&mut state, &i2, &cfg, &ssa, None);
+        transfer_inst(&mut state, &i2, &cfg, &ssa, None, None);
         assert!(!state.is_tainted(SsaValue(2)));
 
         // v3: v1 * v2 (tainted because v1 is tainted)
@@ -702,7 +924,7 @@ mod tests {
             SsaOp::Assign(smallvec![SsaValue(1), SsaValue(2)]),
             node_mul,
         );
-        transfer_inst(&mut state, &i3, &cfg, &ssa, None);
+        transfer_inst(&mut state, &i3, &cfg, &ssa, None, None);
         assert!(state.is_tainted(SsaValue(3)));
         let expected = SymbolicValue::BinOp(
             Op::Mul,
@@ -721,7 +943,7 @@ mod tests {
             },
             node_plain,
         );
-        transfer_inst(&mut state, &i4, &cfg, &ssa, None);
+        transfer_inst(&mut state, &i4, &cfg, &ssa, None, None);
         assert!(state.is_tainted(SsaValue(4)));
     }
 
@@ -733,7 +955,7 @@ mod tests {
 
         state.set(SsaValue(0), SymbolicValue::Concrete(99));
         let inst = make_inst(0, SsaOp::Nop, node);
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         // Nop does not overwrite existing value
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(99));
@@ -762,7 +984,7 @@ mod tests {
             succs: smallvec![],
         };
 
-        transfer_block(&mut state, &block, &cfg, &ssa, None);
+        transfer_block(&mut state, &block, &cfg, &ssa, None, None);
 
         // Phi with all-same should fold to Concrete(1)
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Concrete(1));
@@ -787,7 +1009,7 @@ mod tests {
         );
 
         // With predecessor B1, should resolve to SsaValue(1) → Concrete(20)
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None, None);
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Concrete(20));
     }
 
@@ -809,7 +1031,7 @@ mod tests {
         );
 
         // With predecessor B0 (untainted), result should NOT be tainted
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(0)), None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(0)), None, None);
         assert!(!state.is_tainted(SsaValue(2)));
     }
 
@@ -830,7 +1052,7 @@ mod tests {
         );
 
         // With predecessor B1 (tainted), result SHOULD be tainted
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None, None);
         assert!(state.is_tainted(SsaValue(2)));
     }
 
@@ -850,7 +1072,7 @@ mod tests {
         );
 
         // Without predecessor (None), falls back to Phi(...) expression
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, None, None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, None, None, None);
         let expected = SymbolicValue::Phi(vec![
             (BlockId(0), SymbolicValue::Concrete(10)),
             (BlockId(1), SymbolicValue::Concrete(20)),
@@ -866,7 +1088,7 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("42".into())), node);
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(5)), None);
+        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(5)), None, None);
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(42));
     }
 
@@ -956,7 +1178,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
 
         // Should pass through arg's symbolic value
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Symbol(SsaValue(0)));
@@ -999,7 +1221,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
 
         // Should fall back to Call expression, not Symbol pass-through
         match state.get(SsaValue(2)) {
@@ -1039,7 +1261,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
 
         // StripBits → Unknown, not tainted
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Unknown);
@@ -1074,7 +1296,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
 
         // AddBits → fresh Symbol, tainted
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Symbol(SsaValue(1)));
@@ -1109,7 +1331,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
 
         // source_caps non-empty → tainted Symbol
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Symbol(SsaValue(0)));
@@ -1137,7 +1359,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx));
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None);
 
         match state.get(SsaValue(1)) {
             SymbolicValue::Call(name, _) => assert_eq!(name, "unknown_func"),
@@ -1164,7 +1386,7 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, None);
+        transfer_inst(&mut state, &inst, &cfg, &ssa, None, None);
 
         match state.get(SsaValue(1)) {
             SymbolicValue::Call(name, _) => assert_eq!(name, "foo"),

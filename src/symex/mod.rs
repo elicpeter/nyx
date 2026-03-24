@@ -15,6 +15,7 @@ pub mod transfer;
 pub mod executor;
 pub mod witness;
 pub mod loops;
+pub mod heap;
 
 pub use value::{SymbolicValue, Op, MAX_EXPR_DEPTH};
 pub use state::{SymbolicState, PathConstraint};
@@ -24,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 use crate::cfg::Cfg;
 use crate::evidence::{SymbolicVerdict, Verdict};
 use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::heap::PointsToResult;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue};
 use crate::ssa::type_facts::TypeFactResult;
 use crate::summary::GlobalSummaries;
@@ -46,6 +48,9 @@ pub struct SymexContext<'a> {
     pub global_summaries: Option<&'a GlobalSummaries>,
     pub lang: Lang,
     pub namespace: &'a str,
+    /// Points-to analysis results for object identity resolution in the
+    /// field-sensitive symbolic heap (Phase 21).
+    pub points_to: Option<&'a PointsToResult>,
 }
 
 /// Maximum candidates to analyse per file (budget bound).
@@ -316,6 +321,7 @@ mod tests {
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
+            points_to: None,
         };
         let verdict = analyse_finding_path(&finding, &ctx);
         assert_eq!(verdict.verdict, Verdict::Confirmed);
@@ -371,6 +377,7 @@ mod tests {
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
+            points_to: None,
         };
         annotate_findings(
             std::slice::from_mut(&mut finding),
@@ -420,6 +427,7 @@ mod tests {
             global_summaries: None,
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
+            points_to: None,
         };
         annotate_findings(
             std::slice::from_mut(&mut finding),

@@ -1,0 +1,15 @@
+{
+  "description": "Multi-hop nested field access: req.body.username flows to SQL sink.",
+  "tags": ["taint", "field-sensitivity", "sqli", "nested"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 7],
+      "evidence_contains": [],
+      "notes": "req.body.username flows through nested field access to SQL query concatenation — SQLi"
+    }
+  ]
+}
