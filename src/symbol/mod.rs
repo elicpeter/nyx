@@ -34,6 +34,27 @@ impl Lang {
         }
     }
 
+    /// Derive `Lang` from a file extension (e.g. `"rs"`, `"py"`).
+    ///
+    /// Mirrors the extension→language mapping in `ast::lang_for_path()` so that
+    /// callers outside `ast` can obtain a `Lang` from a path without needing a
+    /// `FuncSummary`.
+    pub fn from_extension(ext: &str) -> Option<Lang> {
+        match ext {
+            "rs" => Some(Lang::Rust),
+            "c" => Some(Lang::C),
+            "cpp" => Some(Lang::Cpp),
+            "java" => Some(Lang::Java),
+            "go" => Some(Lang::Go),
+            "php" => Some(Lang::Php),
+            "py" => Some(Lang::Python),
+            "ts" => Some(Lang::TypeScript),
+            "js" => Some(Lang::JavaScript),
+            "rb" => Some(Lang::Ruby),
+            _ => None,
+        }
+    }
+
     /// Canonical slug string for this language.
     pub fn as_str(&self) -> &'static str {
         match self {

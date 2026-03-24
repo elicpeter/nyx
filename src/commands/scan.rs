@@ -339,7 +339,14 @@ fn run_topo_batches(
                 // not-yet-converged summaries — only keep final iteration's.
                 iteration_diags.clear();
 
-                let batch_results: Vec<(Vec<Diag>, Vec<crate::summary::FuncSummary>)> = batch
+                let ssa_snap_before = global_summaries.snapshot_ssa().clone();
+
+                let batch_results: Vec<(
+                    std::path::PathBuf,
+                    Vec<Diag>,
+                    Vec<crate::summary::FuncSummary>,
+                    Vec<(String, usize, crate::summary::ssa_summary::SsaFuncSummary)>,
+                )> = batch
                     .files
                     .par_iter()
                     .map(|path| {
@@ -353,34 +360,68 @@ fn run_topo_batches(
                         ) {
                             Ok(r) => {
                                 pb.inc(0); // don't double-count iterations in progress bar
-                                (r.diags, r.summaries)
+                                (path.to_path_buf(), r.diags, r.summaries, r.ssa_summaries)
                             }
                             Err(e) => {
                                 tracing::warn!("pass 2 (SCC iter {}): {}: {e}", iter, path.display());
                                 if let Some(l) = logs {
                                     l.warn(format!("Pass 2 (SCC iter {iter}) analysis failed: {e}"), Some(path.display().to_string()), None);
                                 }
-                                (vec![], vec![])
+                                (path.to_path_buf(), vec![], vec![], vec![])
                             }
                         }
                     })
                     .collect();
 
-                for (diags, summaries) in batch_results {
+                let mut ssa_count: usize = 0;
+                for (path, diags, summaries, ssa_summaries) in batch_results {
                     iteration_diags.extend(diags);
+
+                    // Derive lang: prefer FuncSummary slug, fall back to file extension.
+                    let lang = summaries
+                        .first()
+                        .and_then(|s| crate::symbol::Lang::from_slug(&s.lang))
+                        .or_else(|| {
+                            path.extension()
+                                .and_then(|e| e.to_str())
+                                .and_then(crate::symbol::Lang::from_extension)
+                        });
+
                     for s in summaries {
                         let key = s.func_key(root_str_ref);
                         global_summaries.insert(key, s);
                     }
+
+                    if let Some(lang) = lang {
+                        if !ssa_summaries.is_empty() {
+                            let namespace = crate::symbol::normalize_namespace(
+                                &path.to_string_lossy(),
+                                root_str_ref,
+                            );
+                            for (name, arity, ssa_sum) in ssa_summaries {
+                                let key = crate::symbol::FuncKey {
+                                    lang,
+                                    namespace: namespace.clone(),
+                                    name,
+                                    arity: Some(arity),
+                                };
+                                global_summaries.insert_ssa(key, ssa_sum);
+                                ssa_count += 1;
+                            }
+                        }
+                    }
                 }
 
                 let snap_after = global_summaries.snapshot_caps();
-                let converged = snap_before == snap_after;
+                let ssa_converged = ssa_snap_before == *global_summaries.snapshot_ssa();
+                let converged = snap_before == snap_after && ssa_converged;
                 tracing::debug!(
                     batch = batch_idx,
                     files = batch.files.len(),
                     recursive = true,
                     iteration = iter,
+                    ssa_summaries_updated = ssa_count,
+                    ssa_converged,
                     converged,
                     "SCC batch iteration"
                 );

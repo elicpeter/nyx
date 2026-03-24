@@ -107,6 +107,15 @@ fn cross_file_mixed_cap_sink() {
     validate_expectations(&diags, &dir);
 }
 
+// ── SCC SSA summary refinement ────────────────────────────────────────────
+
+#[test]
+fn cross_file_scc_ssa() {
+    let dir = fixture_path("cross_file_scc_ssa");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── Cross-cutting tests ───────────────────────────────────────────────────
 
 #[test]

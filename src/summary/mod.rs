@@ -301,6 +301,15 @@ impl GlobalSummaries {
             .collect()
     }
 
+    /// Snapshot the SSA summaries for convergence detection.
+    ///
+    /// Used alongside [`snapshot_caps`] in the SCC fixed-point loop so that
+    /// SSA-only refinements (e.g. a `StripBits` transform appearing after a
+    /// cross-file sanitizer is resolved) are not invisible to convergence.
+    pub fn snapshot_ssa(&self) -> &HashMap<FuncKey, SsaFuncSummary> {
+        &self.ssa_by_key
+    }
+
     /// Resolve a bare (already-normalized) callee name to a [`FuncKey`].
     ///
     /// Resolution order:
