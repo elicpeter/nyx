@@ -238,11 +238,31 @@ pub fn class_name_to_type_kind(name: &str) -> Option<TypeKind> {
         // is_subtype_of() for instanceof checks.
         "HttpClient" | "CloseableHttpClient" | "OkHttpClient" | "WebClient"
         | "RestTemplate" => Some(TypeKind::HttpClient),
-        "HttpServletResponse" | "HttpResponse" | "ServletResponse" => {
+        "HttpServletResponse" | "HttpResponse" | "ServletResponse"
+        // Phase 16: Spring HTTP response
+        | "ResponseEntity" => {
             Some(TypeKind::HttpResponse)
         }
-        "Connection" | "DataSource" | "MongoClient" => Some(TypeKind::DatabaseConnection),
-        "File" | "Path" => Some(TypeKind::FileHandle),
+        "Connection" | "DataSource" | "MongoClient"
+        // Phase 16: JDBC statement types (execute SQL, same suppression semantics)
+        | "Statement" | "PreparedStatement" => Some(TypeKind::DatabaseConnection),
+        "File" | "Path"
+        // Phase 16: Java I/O supertypes (enables hierarchy fallback for subtypes)
+        | "InputStream" | "OutputStream" | "Reader" | "Writer" | "PrintWriter"
+        | "BufferedInputStream" | "BufferedOutputStream" => Some(TypeKind::FileHandle),
+        // Phase 16: Python qualified type names.
+        // Only covers raw lowered names from isinstance(). The lowering in lower.rs
+        // extracts the literal type text: isinstance(x, requests.Session) produces
+        // type_name = "requests.Session". Does NOT handle import aliasing
+        // (e.g., `from requests import Session as S` → "S" is not resolved).
+        "requests.Response" | "http.client.HTTPResponse" | "urllib3.response.HTTPResponse"
+        | "httpx.Response" | "aiohttp.ClientResponse" => Some(TypeKind::HttpResponse),
+        "requests.Session" | "urllib3.PoolManager" | "aiohttp.ClientSession"
+        | "httpx.Client" | "httpx.AsyncClient" => Some(TypeKind::HttpClient),
+        "sqlite3.Connection" | "psycopg2.connection" | "mysql.connector.connection"
+        | "pymongo.MongoClient" | "redis.Redis" => Some(TypeKind::DatabaseConnection),
+        "io.TextIOWrapper" | "io.BufferedReader" | "io.BufferedWriter" | "io.FileIO"
+        | "io.BytesIO" | "io.StringIO" => Some(TypeKind::FileHandle),
         _ => None,
     }
 }
@@ -294,16 +314,76 @@ mod tests {
     }
 
     #[test]
-    fn parse_file_input_stream_not_resolved() {
-        // FileInputStream: tier 2 has "File" but not "FileInputStream".
+    fn parse_file_input_stream_via_hierarchy() {
+        // FileInputStream: not in tier 1 or tier 2 directly.
         // Tier 3 hierarchy: FileInputStream → supertypes ["InputStream"].
-        // "InputStream" is NOT in tier 2, so hierarchy fallback yields None.
-        // However, FileInputStream IS NOT in class_name_to_type_kind tier 2 directly.
-        // Let's verify the actual behavior:
-        let result = parse_type_name("FileInputStream");
-        // FileInputStream is not in tier 1 or tier 2. Tier 3 checks
-        // JAVA_HIERARCHY: ("FileInputStream", &["InputStream"]).
-        // "InputStream" is not in class_name_to_type_kind, so → None.
-        assert_eq!(result, None);
+        // "InputStream" IS in tier 2 (Phase 16) → FileHandle.
+        assert_eq!(parse_type_name("FileInputStream"), Some(TypeKind::FileHandle));
+    }
+
+    // ── Phase 16: Java I/O and JDBC types ───────────────────────────────
+
+    #[test]
+    fn parse_java_statement_to_db() {
+        assert_eq!(parse_type_name("Statement"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(parse_type_name("PreparedStatement"), Some(TypeKind::DatabaseConnection));
+    }
+
+    #[test]
+    fn parse_java_io_stream_to_file_handle() {
+        assert_eq!(parse_type_name("InputStream"), Some(TypeKind::FileHandle));
+        assert_eq!(parse_type_name("OutputStream"), Some(TypeKind::FileHandle));
+        assert_eq!(parse_type_name("Reader"), Some(TypeKind::FileHandle));
+        assert_eq!(parse_type_name("Writer"), Some(TypeKind::FileHandle));
+        assert_eq!(parse_type_name("PrintWriter"), Some(TypeKind::FileHandle));
+    }
+
+    #[test]
+    fn parse_java_response_entity() {
+        assert_eq!(parse_type_name("ResponseEntity"), Some(TypeKind::HttpResponse));
+    }
+
+    // ── Phase 16: Python qualified type names ───────────────────────────
+
+    #[test]
+    fn parse_python_qualified_http_client() {
+        assert_eq!(parse_type_name("requests.Session"), Some(TypeKind::HttpClient));
+        assert_eq!(parse_type_name("aiohttp.ClientSession"), Some(TypeKind::HttpClient));
+        assert_eq!(parse_type_name("httpx.Client"), Some(TypeKind::HttpClient));
+        assert_eq!(parse_type_name("httpx.AsyncClient"), Some(TypeKind::HttpClient));
+        assert_eq!(parse_type_name("urllib3.PoolManager"), Some(TypeKind::HttpClient));
+    }
+
+    #[test]
+    fn parse_python_qualified_db_connection() {
+        assert_eq!(
+            parse_type_name("sqlite3.Connection"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            parse_type_name("psycopg2.connection"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            parse_type_name("mysql.connector.connection"),
+            Some(TypeKind::DatabaseConnection)
+        );
+    }
+
+    #[test]
+    fn parse_python_qualified_http_response() {
+        assert_eq!(parse_type_name("requests.Response"), Some(TypeKind::HttpResponse));
+        assert_eq!(parse_type_name("httpx.Response"), Some(TypeKind::HttpResponse));
+        assert_eq!(
+            parse_type_name("aiohttp.ClientResponse"),
+            Some(TypeKind::HttpResponse)
+        );
+    }
+
+    #[test]
+    fn parse_python_qualified_file_handle() {
+        assert_eq!(parse_type_name("io.TextIOWrapper"), Some(TypeKind::FileHandle));
+        assert_eq!(parse_type_name("io.BytesIO"), Some(TypeKind::FileHandle));
+        assert_eq!(parse_type_name("io.StringIO"), Some(TypeKind::FileHandle));
     }
 }

@@ -1,0 +1,15 @@
+{
+  "description": "isinstance(conn, sqlite3.Connection) guard narrows conn to DatabaseConnection in PathEnv — SQL injection finding should still be present (type confirms DB connection, does not suppress SQLi)",
+  "tags": ["taint", "type-flow", "isinstance", "sqli", "python"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [4, 7],
+      "evidence_contains": [],
+      "notes": "request.args.get flows into conn.execute via string concat; isinstance guard narrows type to DatabaseConnection but does not suppress SQLi. must_match false because Python string concat propagation may not be detected."
+    }
+  ]
+}

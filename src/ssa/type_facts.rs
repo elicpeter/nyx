@@ -353,6 +353,14 @@ static JAVA_HIERARCHY: &[(&str, &[&str])] = &[
     ("MongoClient", &["DatabaseConnection"]),
     ("RedisTemplate", &["DatabaseConnection"]),
     ("JmsTemplate", &["DatabaseConnection"]),
+    // Phase 16 hardening — Spring, Servlet, I/O
+    ("ResponseEntity", &["HttpResponse"]),
+    ("HttpServletRequestWrapper", &["HttpServletRequest", "ServletRequest"]),
+    ("PrintWriter", &["Writer"]),
+    ("FileReader", &["Reader"]),
+    ("FileWriter", &["Writer"]),
+    ("InputStreamReader", &["Reader"]),
+    ("OutputStreamWriter", &["Writer"]),
 ];
 
 impl TypeHierarchy {
@@ -414,6 +422,16 @@ impl GoInterfaceTable {
             "io.ReadCloser" | "ReadCloser" => {
                 matches!(kind, TypeKind::FileHandle | TypeKind::HttpResponse)
             }
+            // Phase 16 hardening — database and extended I/O interfaces
+            "sql.DB" | "sql.Conn" | "sql.Tx" | "DB" => {
+                matches!(kind, TypeKind::DatabaseConnection)
+            }
+            "io.WriteCloser" | "WriteCloser" => {
+                matches!(kind, TypeKind::HttpResponse | TypeKind::FileHandle)
+            }
+            "io.ReadWriteCloser" | "ReadWriteCloser" => {
+                matches!(kind, TypeKind::HttpResponse | TypeKind::FileHandle)
+            }
             _ => true, // Unknown interface → conservative (could satisfy)
         }
     }
@@ -443,6 +461,27 @@ impl GoInterfaceTable {
                     | TypeKind::Url
                     | TypeKind::HttpClient
             ),
+            // Phase 16 hardening — database and extended I/O interfaces
+            "sql.DB" | "sql.Conn" | "sql.Tx" | "DB" => matches!(
+                kind,
+                TypeKind::Int
+                    | TypeKind::Bool
+                    | TypeKind::String
+                    | TypeKind::HttpResponse
+                    | TypeKind::FileHandle
+                    | TypeKind::HttpClient
+                    | TypeKind::Url
+            ),
+            "io.WriteCloser" | "WriteCloser" | "io.ReadWriteCloser" | "ReadWriteCloser" => {
+                matches!(
+                    kind,
+                    TypeKind::Int
+                        | TypeKind::Bool
+                        | TypeKind::String
+                        | TypeKind::DatabaseConnection
+                        | TypeKind::Url
+                )
+            }
             _ => false, // Unknown interface → conservative
         }
     }
@@ -834,6 +873,66 @@ mod tests {
     #[test]
     fn go_http_client_definitely_not_response_writer() {
         assert!(GoInterfaceTable::definitely_not(&TypeKind::HttpClient, "http.ResponseWriter"));
+    }
+
+    // ── Phase 16: Hierarchy expansion ──────────────────────────────────
+
+    #[test]
+    fn java_hierarchy_resolve_response_entity() {
+        // ResponseEntity → HttpResponse via hierarchy tier 3
+        assert_eq!(TypeHierarchy::resolve_kind("ResponseEntity"), Some(TypeKind::HttpResponse));
+    }
+
+    #[test]
+    fn java_hierarchy_resolve_print_writer() {
+        // PrintWriter → Writer (hierarchy) → FileHandle (class_name_to_type_kind)
+        assert_eq!(TypeHierarchy::resolve_kind("PrintWriter"), Some(TypeKind::FileHandle));
+        assert!(TypeHierarchy::is_subtype_of("PrintWriter", "Writer"));
+    }
+
+    #[test]
+    fn java_hierarchy_io_subtypes() {
+        assert!(TypeHierarchy::is_subtype_of("FileReader", "Reader"));
+        assert!(TypeHierarchy::is_subtype_of("FileWriter", "Writer"));
+        assert!(TypeHierarchy::is_subtype_of("InputStreamReader", "Reader"));
+        assert!(TypeHierarchy::is_subtype_of("OutputStreamWriter", "Writer"));
+        assert!(TypeHierarchy::is_subtype_of("HttpServletRequestWrapper", "HttpServletRequest"));
+        assert!(TypeHierarchy::is_subtype_of("HttpServletRequestWrapper", "ServletRequest"));
+    }
+
+    // ── Phase 16: Go interface expansion ────────────────────────────────
+
+    #[test]
+    fn go_interface_sql_db_definitely_not_response() {
+        // Key assertion for FP suppression: DatabaseConnection is definitely
+        // NOT http.ResponseWriter → HTML_ESCAPE stripped on sql.DB first arg.
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::DatabaseConnection,
+            "http.ResponseWriter"
+        ));
+        // Also definitely not for sql.DB interface entries
+        assert!(GoInterfaceTable::definitely_not(&TypeKind::HttpResponse, "sql.DB"));
+        assert!(GoInterfaceTable::definitely_not(&TypeKind::FileHandle, "sql.DB"));
+        assert!(GoInterfaceTable::definitely_not(&TypeKind::HttpClient, "sql.DB"));
+    }
+
+    #[test]
+    fn go_interface_sql_db_satisfies() {
+        assert!(GoInterfaceTable::satisfies(&TypeKind::DatabaseConnection, "sql.DB"));
+        assert!(GoInterfaceTable::satisfies(&TypeKind::DatabaseConnection, "sql.Conn"));
+        assert!(GoInterfaceTable::satisfies(&TypeKind::DatabaseConnection, "sql.Tx"));
+        assert!(!GoInterfaceTable::satisfies(&TypeKind::HttpResponse, "sql.DB"));
+        assert!(!GoInterfaceTable::satisfies(&TypeKind::Int, "sql.DB"));
+    }
+
+    #[test]
+    fn go_interface_write_closer() {
+        assert!(GoInterfaceTable::satisfies(&TypeKind::HttpResponse, "io.WriteCloser"));
+        assert!(GoInterfaceTable::satisfies(&TypeKind::FileHandle, "io.WriteCloser"));
+        assert!(!GoInterfaceTable::satisfies(&TypeKind::Int, "io.WriteCloser"));
+        assert!(!GoInterfaceTable::satisfies(&TypeKind::DatabaseConnection, "io.WriteCloser"));
+        assert!(GoInterfaceTable::definitely_not(&TypeKind::DatabaseConnection, "io.WriteCloser"));
+        assert!(!GoInterfaceTable::definitely_not(&TypeKind::FileHandle, "io.WriteCloser"));
     }
 
     #[test]
