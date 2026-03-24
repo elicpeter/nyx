@@ -100,46 +100,11 @@ impl FuncSummary {
         Cap::from_bits_truncate(self.sink_caps)
     }
 
-    /// Collapse the three independent cap fields back into the single
-    /// `DataLabel` that the current taint engine expects.
-    ///
-    /// Priority: **Sink > Source > Sanitizer**.  Sinks first because
-    /// missing a dangerous call‑site is worse than a false‑positive on a
-    /// source.  Sources beat sanitizers because an un‑tracked source is
-    /// a missed vulnerability, while an un‑tracked sanitizer only causes
-    /// false positives.
-    #[allow(dead_code)]
-    pub fn primary_label(&self) -> Option<DataLabel> {
-        let sink = self.sink_caps();
-        let src = self.source_caps();
-        let san = self.sanitizer_caps();
-
-        if !sink.is_empty() {
-            Some(DataLabel::Sink(sink))
-        } else if !src.is_empty() {
-            Some(DataLabel::Source(src))
-        } else if !san.is_empty() {
-            Some(DataLabel::Sanitizer(san))
-        } else {
-            None
-        }
-    }
-
     /// Returns `true` when any parameter flows to the return value.
     /// Also returns `true` for legacy summaries with `propagates_taint: true`
     /// but empty `propagating_params` (backward compat).
     pub fn propagates_any(&self) -> bool {
         !self.propagating_params.is_empty() || self.propagates_taint
-    }
-
-    /// Returns `true` when this function has **any** observable taint
-    /// effect — it is a source, sanitizer, sink, or propagates taint.
-    #[allow(dead_code)]
-    pub fn is_interesting(&self) -> bool {
-        self.source_caps != 0
-            || self.sanitizer_caps != 0
-            || self.sink_caps != 0
-            || self.propagates_any()
     }
 
     /// Build a [`FuncKey`] from this summary, normalizing the namespace

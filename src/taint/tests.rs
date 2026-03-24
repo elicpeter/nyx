@@ -1505,8 +1505,6 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
             name: "get_input".into(),
             arity: Some(0),
         },
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
         &cfg,
@@ -1569,8 +1567,6 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
             name: "fetch_env".into(),
             arity: Some(0),
         },
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
         &cfg,
@@ -1619,8 +1615,6 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
             name: "clean_shell".into(),
             arity: Some(1),
         },
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
         &cfg,
@@ -1670,8 +1664,6 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
             name: "run_cmd".into(),
             arity: Some(0), // C param extraction yields 0 (pre-existing limitation)
         },
-        arg_map: vec![],
-        ret_taints: false,
     }];
     let findings = analyse_file(
         &cfg,
@@ -1734,8 +1726,6 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 name: "get_secret".into(),
                 arity: Some(0),
             },
-            arg_map: vec![],
-            ret_taints: true,
         },
         InteropEdge {
             from: CallSiteKey {
@@ -1751,8 +1741,6 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 name: "make_safe".into(),
                 arity: Some(1),
             },
-            arg_map: vec![],
-            ret_taints: true,
         },
         InteropEdge {
             from: CallSiteKey {
@@ -1768,8 +1756,6 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 name: "run_dangerous".into(),
                 arity: Some(0), // C param extraction yields 0 (pre-existing limitation)
             },
-            arg_map: vec![],
-            ret_taints: false,
         },
     ];
     let findings = analyse_file(
@@ -1826,8 +1812,6 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 name: "get_secret".into(),
                 arity: Some(0),
             },
-            arg_map: vec![],
-            ret_taints: true,
         },
         InteropEdge {
             from: CallSiteKey {
@@ -1843,8 +1827,6 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 name: "run_dangerous".into(),
                 arity: Some(0), // C param extraction yields 0 (pre-existing limitation)
             },
-            arg_map: vec![],
-            ret_taints: false,
         },
     ];
     let findings = analyse_file(
@@ -1954,8 +1936,6 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
             ordinal: 0,
         },
         to: key,
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
         &cfg,
@@ -2015,8 +1995,6 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
             name: "read_input".into(),
             arity: Some(0),
         },
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
         &cfg,
@@ -2076,8 +2054,6 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
             ordinal: 0,
         },
         to: key,
-        arg_map: vec![],
-        ret_taints: true,
     }];
     let findings = analyse_file(
         &cfg,
@@ -2189,8 +2165,6 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 name: "dangerous_query".into(),
                 arity: Some(0),
             },
-            arg_map: vec![],
-            ret_taints: true,
         },
         InteropEdge {
             from: CallSiteKey {
@@ -2206,8 +2180,6 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 name: "run_query".into(),
                 arity: Some(1),
             },
-            arg_map: vec![],
-            ret_taints: false,
         },
     ];
     let findings = analyse_file(
@@ -2403,8 +2375,6 @@ fn interop_edge_wrong_caller_lang_no_match() {
             ordinal: 0,
         },
         to: key,
-        arg_map: vec![],
-        ret_taints: true,
     }];
 
     let js_src = b"function main() {\n  let x = get_data();\n  eval(x);\n}\n";

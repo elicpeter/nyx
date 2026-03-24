@@ -641,8 +641,6 @@ mod tests {
                 name: "js_func".into(),
                 arity: Some(1),
             },
-            arg_map: vec![],
-            ret_taints: false,
         }];
 
         let cg = build_call_graph(&gs, &interop);

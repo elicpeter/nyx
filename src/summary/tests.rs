@@ -18,25 +18,6 @@ fn make(name: &str, src: u16, san: u16, sink: u16) -> FuncSummary {
 }
 
 #[test]
-fn primary_label_priority() {
-    // sink beats everything
-    let s = make("f", 0xFF, 0xFF, 0x01);
-    assert!(matches!(s.primary_label(), Some(DataLabel::Sink(_))));
-
-    // source beats sanitizer
-    let s = make("f", 0x01, 0x02, 0x00);
-    assert!(matches!(s.primary_label(), Some(DataLabel::Source(_))));
-
-    // sanitizer alone
-    let s = make("f", 0x00, 0x04, 0x00);
-    assert!(matches!(s.primary_label(), Some(DataLabel::Sanitizer(_))));
-
-    // nothing
-    let s = make("f", 0, 0, 0);
-    assert!(s.primary_label().is_none());
-}
-
-#[test]
 fn merge_unions_conservatively() {
     let a = make("foo", 0x01, 0x00, 0x00);
     let b = FuncSummary {
@@ -63,18 +44,6 @@ fn merge_unions_conservatively() {
     assert_eq!(foo.propagating_params, vec![0]);
     assert_eq!(foo.tainted_sink_params, vec![0]);
     assert_eq!(foo.callees, vec!["bar".to_string()]);
-}
-
-#[test]
-fn is_interesting_detects_all_cases() {
-    assert!(!make("f", 0, 0, 0).is_interesting());
-    assert!(make("f", 1, 0, 0).is_interesting());
-    assert!(make("f", 0, 1, 0).is_interesting());
-    assert!(make("f", 0, 0, 1).is_interesting());
-
-    let mut p = make("f", 0, 0, 0);
-    p.propagating_params = vec![0];
-    assert!(p.is_interesting());
 }
 
 #[test]
@@ -364,7 +333,6 @@ fn backward_compat_legacy_propagates_taint_json() {
     assert!(summary.propagates_taint);
     assert!(summary.propagating_params.is_empty());
     assert!(summary.propagates_any());
-    assert!(summary.is_interesting());
 }
 
 #[test]
