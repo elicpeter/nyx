@@ -1255,6 +1255,95 @@ tr.selected td {
   padding: 2px 0;
 }
 
+/* ── State Transition Card ────────────────────────────────────────── */
+.state-transition-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.state-machine-label {
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  font-size: var(--text-xs);
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-2);
+}
+.state-subject {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+}
+.state-subject-label {
+  color: var(--text-secondary);
+}
+.state-subject-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--bg);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.state-transition-visual {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  margin-bottom: var(--space-2);
+}
+.state-from,
+.state-to {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-base);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+}
+.state-from {
+  background: var(--sev-low-bg);
+  color: var(--sev-low);
+}
+.state-to {
+  background: var(--sev-high-bg);
+  color: var(--sev-high);
+}
+.state-arrow {
+  font-size: var(--text-xl);
+  color: var(--text-tertiary);
+}
+.state-acquire-location {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  margin-top: var(--space-2);
+}
+.state-remediation {
+  background: var(--accent-light);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text);
+  line-height: 1.5;
+}
+.state-remediation-label {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--accent);
+  margin-bottom: var(--space-1);
+}
+
 /* ── Code Viewer Modal ────────────────────────────────────────────── */
 .code-modal-overlay {
   position: fixed;

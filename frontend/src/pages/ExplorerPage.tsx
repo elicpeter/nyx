@@ -6,7 +6,7 @@ import { CodeViewer } from '../components/data-display/CodeViewer';
 import { LoadingState } from '../components/ui/LoadingState';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ExplorerIcon } from '../components/icons/Icons';
-import type { TreeEntry, FlowStep } from '../api/types';
+import type { TreeEntry, FlowStep, FindingView } from '../api/types';
 
 type ExplorerMode = 'tree' | 'symbols' | 'hotspots';
 
@@ -105,6 +105,7 @@ export function ExplorerPage() {
   const evidence = fullFinding?.evidence;
   const flowSteps = evidence?.flow_steps;
   const hasFlow = flowSteps && flowSteps.length > 0;
+  const hasStateEvidence = fullFinding?.rule_id.startsWith('state-') && evidence?.state;
 
   const codeHighlights = selectedFindingIndex != null && evidence
     ? {
@@ -315,7 +316,7 @@ export function ExplorerPage() {
               </div>
             </div>
 
-            {/* Taint Flow (shown when a finding is selected) */}
+            {/* Taint Flow (shown when a taint finding is selected) */}
             {hasFlow && (
               <div className="explorer-right-section">
                 <h3>Taint Flow</h3>
@@ -324,6 +325,11 @@ export function ExplorerPage() {
                   onStepClick={(line) => setHighlightLine(line)}
                 />
               </div>
+            )}
+
+            {/* State Evidence (shown when a state finding is selected) */}
+            {hasStateEvidence && fullFinding && (
+              <ExplorerStateDetail finding={fullFinding} />
             )}
           </>
         )}
@@ -379,6 +385,63 @@ function ExplorerFlowTimeline({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── State Evidence (compact version for explorer) ────────────────────────────
+
+const STATE_REMEDIATION_HINTS: Record<string, string> = {
+  'state-use-after-close':
+    'Ensure the resource is not accessed after calling close/free.',
+  'state-double-close':
+    'Remove the duplicate close call, or guard with a null/closed check.',
+  'state-resource-leak':
+    'Add a close/free call before the function exits, or use defer/with/try-with-resources/RAII.',
+  'state-resource-leak-possible':
+    'Ensure the resource is closed on all code paths, including error/early-return paths.',
+  'state-unauthed-access':
+    'Add an authentication check before this operation, or move it behind auth middleware.',
+};
+
+function ExplorerStateDetail({ finding }: { finding: FindingView }) {
+  const st = finding.evidence?.state;
+  if (!st) return null;
+
+  const isAuth = st.machine === 'auth';
+  const machineLabel = isAuth ? 'Authentication State' : 'Resource Lifecycle';
+  const hint = STATE_REMEDIATION_HINTS[finding.rule_id];
+  const acquireLocation =
+    (finding.rule_id.includes('leak') && finding.evidence?.sink)
+      ? `L${finding.evidence.sink.line}:${finding.evidence.sink.col}`
+      : null;
+
+  return (
+    <div className="explorer-right-section">
+      <h3>State Analysis</h3>
+      <div className="state-transition-card">
+        <div className="state-machine-label">{machineLabel}</div>
+        {st.subject && (
+          <div className="state-subject">
+            <span className="state-subject-label">Variable:</span>
+            <code className="state-subject-name">{st.subject}</code>
+          </div>
+        )}
+        <div className="state-transition-visual">
+          <span className="state-from">{st.from_state}</span>
+          <span className="state-arrow">&rarr;</span>
+          <span className="state-to">{st.to_state}</span>
+        </div>
+        {acquireLocation && (
+          <div className="state-acquire-location">Acquired at: {acquireLocation}</div>
+        )}
+      </div>
+      {hint && (
+        <div className="state-remediation">
+          <div className="state-remediation-label">Remediation</div>
+          {hint}
+        </div>
+      )}
     </div>
   );
 }

@@ -1276,6 +1276,21 @@ impl PathEnv {
     pub fn fact_count(&self) -> usize {
         self.facts.len()
     }
+
+    /// Iterate over all (SsaValue, ValueFact) pairs.
+    pub fn facts(&self) -> &[(SsaValue, ValueFact)] {
+        &self.facts
+    }
+
+    /// Iterate over all known disequality pairs.
+    pub fn disequalities(&self) -> &[(SsaValue, SsaValue)] {
+        &self.disequalities
+    }
+
+    /// Iterate over all relational constraints (lhs op rhs).
+    pub fn relational(&self) -> &[(SsaValue, RelOp, SsaValue)] {
+        &self.relational
+    }
 }
 
 #[cfg(test)]

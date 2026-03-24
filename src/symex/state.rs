@@ -72,6 +72,11 @@ impl SymbolicState {
         self.path_constraints.push(c);
     }
 
+    /// Get all path constraints accumulated on this path.
+    pub fn path_constraints(&self) -> &[PathConstraint] {
+        &self.path_constraints
+    }
+
     /// Mark an SSA value as tainted (adds to the root set).
     pub fn mark_tainted(&mut self, v: SsaValue) {
         self.tainted_roots.insert(v);

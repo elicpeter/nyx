@@ -17,18 +17,7 @@
         11
       ],
       "evidence_contains": [],
-      "notes": "os.Open on line 6 \u2014 f never closed before function returns"
-    },
-    {
-      "rule_id": "state-use-after-close",
-      "severity": "HIGH",
-      "must_match": false,
-      "line_range": [
-        23,
-        23
-      ],
-      "evidence_contains": [],
-      "notes": "noise: f.Read on line 23 in readDefer \u2014 f.Close() is deferred (line 21), f is still open at this point"
+      "notes": "os.Open on line 6 — f never closed before function returns"
     }
   ]
 }

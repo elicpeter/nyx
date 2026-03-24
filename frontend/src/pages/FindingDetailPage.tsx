@@ -43,6 +43,31 @@ function parseNoteText(note: string): string {
   return note;
 }
 
+function isStateFinding(f: FindingView): boolean {
+  return f.rule_id.startsWith('state-');
+}
+
+const STATE_REMEDIATION_HINTS: Record<string, string> = {
+  'state-use-after-close':
+    'Ensure the resource is not accessed after calling close/free. Consider restructuring to use the resource before releasing it.',
+  'state-double-close':
+    'Remove the duplicate close call, or guard with a null/closed check.',
+  'state-resource-leak':
+    'Add a close/free call before the function exits, or use a language-specific cleanup pattern (defer, with, try-with-resources, RAII).',
+  'state-resource-leak-possible':
+    'Ensure the resource is closed on all code paths, including error/early-return paths.',
+  'state-unauthed-access':
+    'Add an authentication check before this operation, or move it behind an auth middleware/guard.',
+};
+
+const STATE_RULE_DESCRIPTIONS: Record<string, string> = {
+  'state-use-after-close': 'Variable used after its resource handle was closed',
+  'state-double-close': 'Resource handle closed more than once',
+  'state-resource-leak': 'Resource acquired but never closed',
+  'state-resource-leak-possible': 'Resource may not be closed on all paths',
+  'state-unauthed-access': 'Sensitive operation reached without authentication',
+};
+
 // ── Collapsible Section ─────────────────────────────────────────────────────
 
 interface CollapsibleSectionProps {
@@ -80,7 +105,51 @@ function EvidenceCard({ kind, color, span }: { kind: string; color: string; span
   );
 }
 
-function EvidenceSection({ evidence }: { evidence: Evidence }) {
+function StateTransitionCard({ evidence, ruleId }: { evidence: Evidence; ruleId: string }) {
+  const st = evidence.state;
+  if (!st) return null;
+
+  const isAuth = st.machine === 'auth';
+  const machineLabel = isAuth ? 'Authentication State' : 'Resource Lifecycle';
+  const acquireLocation =
+    (ruleId.includes('leak') && evidence.sink)
+      ? `${evidence.sink.path}:${evidence.sink.line}:${evidence.sink.col}`
+      : null;
+
+  return (
+    <div className="state-transition-card">
+      <div className="state-machine-label">{machineLabel}</div>
+      {st.subject && (
+        <div className="state-subject">
+          <span className="state-subject-label">Variable:</span>
+          <code className="state-subject-name">{st.subject}</code>
+        </div>
+      )}
+      <div className="state-transition-visual">
+        <span className="state-from">{st.from_state}</span>
+        <span className="state-arrow">&rarr;</span>
+        <span className="state-to">{st.to_state}</span>
+      </div>
+      {acquireLocation && (
+        <div className="state-acquire-location">Acquired at: {acquireLocation}</div>
+      )}
+    </div>
+  );
+}
+
+function StateRemediationHint({ ruleId }: { ruleId: string }) {
+  const hint = STATE_REMEDIATION_HINTS[ruleId];
+  if (!hint) return null;
+
+  return (
+    <div className="state-remediation">
+      <div className="state-remediation-label">Remediation</div>
+      {hint}
+    </div>
+  );
+}
+
+function EvidenceSection({ evidence, skipStateCard }: { evidence: Evidence; skipStateCard?: boolean }) {
   const cards: React.ReactNode[] = [];
 
   if (evidence.source) {
@@ -112,14 +181,14 @@ function EvidenceSection({ evidence }: { evidence: Evidence }) {
     );
   }
 
-  if (evidence.state) {
+  if (evidence.state && !skipStateCard) {
     const st = evidence.state;
     cards.push(
       <div className="evidence-card" key="state">
         <div className="evidence-kind">State: {st.machine}</div>
         <div>
           {st.subject ? `${st.subject}: ` : ''}
-          {String(st.from_state ?? '')} &rarr; {String(st.to_state ?? '')}
+          {st.from_state} &rarr; {st.to_state}
         </div>
       </div>,
     );
@@ -480,8 +549,9 @@ export function FindingDetailPage() {
 
   const f = finding;
   const evidence = f.evidence;
+  const isState = isStateFinding(f);
   const hasWhySection =
-    f.message || (evidence && (evidence.source || evidence.sink));
+    f.message || (evidence && (evidence.source || evidence.sink || evidence.state));
   const hasEvidence =
     evidence &&
     (evidence.source ||
@@ -495,7 +565,7 @@ export function FindingDetailPage() {
   const hasLabels = f.labels && f.labels.length > 0;
   const hasCode = !!f.code_context;
 
-  const sanitizerBadge = f.sanitizer_status ? (
+  const sanitizerBadge = (f.sanitizer_status && !isState) ? (
     <span className={`badge sanitizer-badge-${f.sanitizer_status}`}>
       {f.sanitizer_status === 'none'
         ? 'No sanitizers'
@@ -552,29 +622,44 @@ export function FindingDetailPage() {
       {/* Why Nyx Reported This */}
       {hasWhySection && (
         <CollapsibleSection title="Why Nyx Reported This">
-          {evidence?.explanation && (
-            <p style={{ marginBottom: 'var(--space-3)', lineHeight: 1.5 }}>
-              {evidence.explanation}
-            </p>
+          {isState ? (
+            <>
+              {STATE_RULE_DESCRIPTIONS[f.rule_id] && (
+                <p style={{ marginBottom: 'var(--space-3)', lineHeight: 1.5 }}>
+                  {STATE_RULE_DESCRIPTIONS[f.rule_id]}
+                </p>
+              )}
+              {f.message && <p style={{ marginBottom: 'var(--space-3)' }}>{f.message}</p>}
+              {evidence && <StateTransitionCard evidence={evidence} ruleId={f.rule_id} />}
+              <StateRemediationHint ruleId={f.rule_id} />
+            </>
+          ) : (
+            <>
+              {evidence?.explanation && (
+                <p style={{ marginBottom: 'var(--space-3)', lineHeight: 1.5 }}>
+                  {evidence.explanation}
+                </p>
+              )}
+              {f.message && <p style={{ marginBottom: 'var(--space-3)' }}>{f.message}</p>}
+              {evidence?.source && (
+                <p className="evidence-note">
+                  Tainted data flows from <strong>{evidence.source.kind}</strong> at line{' '}
+                  {evidence.source.line} to a dangerous operation.
+                </p>
+              )}
+              {evidence?.sink && (
+                <p className="evidence-note">
+                  Sink at line {evidence.sink.line}
+                  {evidence.sink.snippet ? (
+                    <>
+                      : <code>{evidence.sink.snippet}</code>
+                    </>
+                  ) : null}
+                </p>
+              )}
+              {f.guard_kind && <p className="evidence-note">Guard: {f.guard_kind}</p>}
+            </>
           )}
-          {f.message && <p style={{ marginBottom: 'var(--space-3)' }}>{f.message}</p>}
-          {evidence?.source && (
-            <p className="evidence-note">
-              Tainted data flows from <strong>{evidence.source.kind}</strong> at line{' '}
-              {evidence.source.line} to a dangerous operation.
-            </p>
-          )}
-          {evidence?.sink && (
-            <p className="evidence-note">
-              Sink at line {evidence.sink.line}
-              {evidence.sink.snippet ? (
-                <>
-                  : <code>{evidence.sink.snippet}</code>
-                </>
-              ) : null}
-            </p>
-          )}
-          {f.guard_kind && <p className="evidence-note">Guard: {f.guard_kind}</p>}
         </CollapsibleSection>
       )}
 
@@ -588,7 +673,7 @@ export function FindingDetailPage() {
       {/* Evidence */}
       {hasEvidence && (
         <CollapsibleSection title="Evidence">
-          <EvidenceSection evidence={evidence!} />
+          <EvidenceSection evidence={evidence!} skipStateCard={isState} />
         </CollapsibleSection>
       )}
 

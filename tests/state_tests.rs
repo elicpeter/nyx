@@ -574,3 +574,77 @@ fn cpp_new_double_delete() {
     // new + delete + delete → double-close.
     assert_has("cpp_new_double_delete.cpp", "state-double-close");
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// (12) PHP resource lifecycle
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn php_fopen_leak() {
+    assert_has_prefix("php_fopen_no_close.php", "state-resource-leak");
+}
+
+#[test]
+fn php_fopen_close() {
+    assert_no_state_findings("php_fopen_close.php");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// (13) Ruby resource lifecycle
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn ruby_file_open_leak() {
+    assert_has_prefix("ruby_file_open_no_close.rb", "state-resource-leak");
+}
+
+#[test]
+fn ruby_file_open_close() {
+    assert_no_state_findings("ruby_file_open_close.rb");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// (14) TypeScript resource lifecycle
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn ts_fs_open_no_close() {
+    assert_has_prefix("ts_fs_open_no_close.ts", "state-resource-leak");
+}
+
+#[test]
+fn ts_fs_open_close() {
+    assert_no_state_findings("ts_fs_open_close.ts");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// (15) Edge-case regression tests
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn variable_shadowing_known_limitation() {
+    // Inner scope fclose(f) masks outer scope f due to name-based interning.
+    // Known limitation: SymbolInterner keys by name, not scope.
+    // Result: zero findings (false negative for the outer leak).
+    assert_no_state_findings("variable_shadowing.c");
+}
+
+#[test]
+fn resource_as_function_arg_still_leaks() {
+    // f is opened in caller() and passed to helper() but never closed.
+    // State analysis is intra-function, so caller() sees fopen without fclose.
+    assert_has_prefix("resource_as_arg.c", "state-resource-leak");
+}
+
+#[test]
+fn resource_returned_from_factory() {
+    // Factory function: fopen without fclose, resource is returned to caller.
+    // Known false positive — cross-function ownership not tracked.
+    assert_has_prefix("resource_returned.c", "state-resource-leak");
+}
+
+#[test]
+fn loop_reopen_clean() {
+    // Each loop iteration opens and closes the file — clean at exit.
+    assert_no_state_findings("loop_reopen.c");
+}

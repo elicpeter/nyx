@@ -25,7 +25,7 @@
     {
       "rule_id": "cfg-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         13,
         13
@@ -47,13 +47,13 @@
     {
       "rule_id": "state-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         6,
         6
       ],
       "evidence_contains": [],
-      "notes": "noise: resource leak finding — secondary to primary fixture purpose"
+      "notes": "state-resource-leak for block form function — secondary finding"
     }
   ]
 }

@@ -78,10 +78,24 @@ app.post('/admin/exec', (req, res) => {
 });
 ```
 
+## Managed Resource Suppression
+
+The state engine recognizes language-specific cleanup patterns and suppresses false-positive leak findings:
+
+| Pattern | Languages | Suppression |
+|---------|-----------|-------------|
+| **RAII / Drop** | Rust | All leak findings suppressed except unsafe `alloc`/`dealloc` |
+| **Smart pointers** | C++ | `make_unique`/`make_shared` treated as RAII-managed; raw `new`/`malloc` still tracked |
+| **`defer`** | Go | `defer f.Close()` suppresses leak at function exit |
+| **`with` context manager** | Python | `with open(f) as f:` suppresses leak for managed variable |
+| **try-with-resources** | Java | Resources in TWR clause suppressed |
+
 ## What It Cannot Detect
 
 - **Cross-function resource management**: Resources opened in one function and closed in another are not tracked. This is the most common source of false positives for leak detection.
-- **RAII / defer / try-with-resources**: Implicit cleanup via language-level constructs (Rust's `Drop`, Go's `defer`, Java's try-with-resources, Python's `with`) is not recognized. These patterns will produce false-positive leak findings.
+- **Factory/builder functions**: A function that opens a resource and returns it to the caller will be flagged as a leak, since cross-function ownership transfer is not tracked.
+- **Variable shadowing across scopes**: Variables with the same name in inner and outer scopes share a single symbol (name-based interning), so an inner-scope close masks an outer-scope leak.
+- **Resources stored in collections**: Handles stored in arrays, maps, or other containers and later cleaned up via iteration are not tracked.
 - **Dynamic dispatch**: If `close()` is called through a trait object or interface, it may not be recognized.
 - **Authentication via type system**: Rust's type-state pattern (e.g. `AuthenticatedRequest<T>`) is not recognized as an auth check.
 - **Complex authorization logic**: Only recognized function name patterns are checked.
@@ -90,11 +104,10 @@ app.post('/admin/exec', (req, res) => {
 
 | Scenario | Why it fires | Mitigation |
 |----------|-------------|------------|
-| RAII / Drop / defer cleanup | Implicit cleanup not visible | Known limitation; filter by severity |
-| Resource returned to caller | Ownership transferred, not leaked | Known limitation |
+| Factory function returns resource | Ownership transferred to caller, not leaked | Known limitation |
+| Resource returned to caller | Same as factory pattern | Known limitation |
 | Framework-managed resources | Web framework manages connection lifecycle | Exclude framework-generated handlers |
-| Try-with-resources (Java) | Language construct not parsed | Known limitation |
-| Context manager (Python `with`) | Block construct not tracked | Known limitation |
+| Variable name shadowing | Inner-scope close masks outer-scope variable | Known limitation |
 
 ## Common False Negatives
 
@@ -103,6 +116,21 @@ app.post('/admin/exec', (req, res) => {
 | Resource closed in helper function | Cross-function tracking not implemented |
 | Auth in middleware | Auth check happens before handler is called |
 | Double-close via aliased reference | Alias analysis not performed |
+
+## Per-Language Detection Accuracy (Phase 6)
+
+| Language | Leak | Double-Close | Use-After-Close | Branch-Aware | Notes |
+|----------|------|-------------|----------------|-------------|-------|
+| C | Yes | Yes | Yes | Yes | Mature: fopen/malloc/pthread |
+| C++ | Yes | Yes | Yes | Yes | new/delete + inherited C; smart pointers suppressed |
+| Python | Yes | Yes | Yes | Yes | `with` suppressed; open/socket/connect |
+| Go | Yes | Yes | Yes | Yes | `defer` suppressed; os.Open/.Close |
+| Rust | Unsafe only | N/A | N/A | N/A | RAII suppresses all except alloc/dealloc |
+| JavaScript | Yes | Yes | Partial | Yes | fs.openSync/closeSync |
+| TypeScript | Yes | Yes | Partial | Yes | Same pairs as JavaScript |
+| PHP | Yes | Yes | Partial | Yes | fopen/fclose, curl, mysqli |
+| Ruby | Partial | Partial | Partial | Yes | File.open/.close, TCPSocket |
+| Java | Limited | Limited | Limited | Limited | Constructor callee matching incomplete |
 
 ## Confidence Signals
 
@@ -148,6 +176,12 @@ The state engine recognizes these acquire/release pairs per language:
 | `socket` | `close` | Socket |
 | `malloc`, `calloc`, `realloc` | `free` | Heap memory |
 | `pthread_mutex_lock` | `pthread_mutex_unlock` | Mutex |
+
+### C++ (additional)
+| Acquire | Release | Resource |
+|---------|---------|----------|
+| `new` | `delete` | Heap object |
+| `new[]` | `delete[]` | Heap array |
 
 ### Rust
 | Acquire | Release | Resource |

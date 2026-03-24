@@ -17,6 +17,8 @@ pub mod witness;
 pub mod loops;
 pub mod heap;
 pub mod strings;
+#[cfg(feature = "smt")]
+pub mod smt;
 
 pub use value::{SymbolicValue, Op, MAX_EXPR_DEPTH};
 pub use state::{SymbolicState, PathConstraint};
@@ -59,6 +61,21 @@ const MAX_CANDIDATES: usize = 50;
 
 /// Maximum blocks on a path before we skip symex (too expensive).
 const MAX_PATH_BLOCKS: usize = 100;
+
+/// Runtime feature gate for SMT solving. Default ON when compiled with `smt` feature.
+/// Set `NYX_SMT=0` or `NYX_SMT=false` to disable.
+#[cfg(feature = "smt")]
+pub fn smt_enabled() -> bool {
+    std::env::var("NYX_SMT")
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true)
+}
+
+/// SMT solving is not available without the `smt` compile-time feature.
+#[cfg(not(feature = "smt"))]
+pub fn smt_enabled() -> bool {
+    false
+}
 
 /// Feature gate: check if symbolic execution targeting is enabled.
 ///

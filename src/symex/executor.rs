@@ -235,6 +235,14 @@ pub(super) fn explore_finding(
     });
     let heap_ctx_ref = heap_ctx.as_ref();
 
+    // Phase 23: Create SMT context for cross-variable constraint solving.
+    #[cfg(feature = "smt")]
+    let mut smt_ctx = if super::smt_enabled() {
+        Some(super::smt::SmtContext::new())
+    } else {
+        None
+    };
+
     while let Some(mut state) = work_queue.pop_front() {
         // Global budget check: path count
         if outcomes.len() >= MAX_PATHS_PER_FINDING {
@@ -266,6 +274,8 @@ pub(super) fn explore_finding(
             finding,
             summary_ctx_ref,
             heap_ctx_ref,
+            #[cfg(feature = "smt")]
+            &mut smt_ctx,
         );
 
         if let Some(outcome) = outcome {
@@ -301,6 +311,7 @@ fn run_path(
     finding: &Finding,
     summary_ctx: Option<&SymexSummaryCtx>,
     heap_ctx: Option<&SymexHeapCtx>,
+    #[cfg(feature = "smt")] smt_ctx: &mut Option<super::smt::SmtContext>,
 ) -> Option<PathOutcome> {
     loop {
         // Global step budget
@@ -416,6 +427,7 @@ fn run_path(
                         // Only true branch reaches sink
                         if let Some(outcome) = apply_branch_constraint(
                             state, cfg, ssa, const_values, block_id, *cond, condition, true,
+                            #[cfg(feature = "smt")] smt_ctx,
                         ) {
                             return Some(outcome);
                         }
@@ -426,6 +438,7 @@ fn run_path(
                         // Only false branch reaches sink
                         if let Some(outcome) = apply_branch_constraint(
                             state, cfg, ssa, const_values, block_id, *cond, condition, false,
+                            #[cfg(feature = "smt")] smt_ctx,
                         ) {
                             return Some(outcome);
                         }
@@ -452,6 +465,7 @@ fn run_path(
                                 *false_blk,
                                 work_queue,
                                 outcomes,
+                                #[cfg(feature = "smt")] smt_ctx,
                             );
                         } else {
                             // Budget exhausted — follow original path
@@ -477,6 +491,7 @@ fn run_path(
                                 *cond,
                                 condition,
                                 preferred_polarity,
+                                #[cfg(feature = "smt")] smt_ctx,
                             ) {
                                 return Some(outcome);
                             }
@@ -519,6 +534,7 @@ fn apply_branch_constraint(
     cond: petgraph::graph::NodeIndex,
     pre_lowered: &Option<Box<constraint::ConditionExpr>>,
     polarity: bool,
+    #[cfg(feature = "smt")] smt_ctx: &mut Option<super::smt::SmtContext>,
 ) -> Option<PathOutcome> {
     let cond_expr = if let Some(pre) = pre_lowered {
         (**pre).clone()
@@ -548,6 +564,27 @@ fn apply_branch_constraint(
         });
     }
 
+    // Phase 23: SMT escalation — check with Z3 when PathEnv says SAT but
+    // accumulated constraints have cross-variable shape.
+    #[cfg(feature = "smt")]
+    if let Some(smt) = smt_ctx {
+        if super::smt::should_escalate(state.sym_state.path_constraints())
+            && smt.has_budget()
+        {
+            if let super::smt::SmtResult::Unsat = smt.check_path_feasibility(
+                state.sym_state.path_constraints(),
+                &state.sym_state,
+                &state.env,
+            ) {
+                return Some(PathOutcome {
+                    verdict: Verdict::Infeasible,
+                    constraints_checked: state.constraints_checked,
+                    witness: None,
+                });
+            }
+        }
+    }
+
     None
 }
 
@@ -568,6 +605,7 @@ fn fork_at_branch(
     false_blk: BlockId,
     work_queue: &mut VecDeque<ExplorationState>,
     outcomes: &mut Vec<PathOutcome>,
+    #[cfg(feature = "smt")] smt_ctx: &mut Option<super::smt::SmtContext>,
 ) -> Option<PathOutcome> {
     let cond_expr = if let Some(pre) = pre_lowered {
         (**pre).clone()
@@ -621,8 +659,18 @@ fn fork_at_branch(
         false_state.constraints_checked += 1;
     }
 
-    // Enqueue feasible branches; record infeasible immediately
-    if true_state.env.is_unsat() {
+    // Enqueue feasible branches; record infeasible immediately.
+    // Phase 23: Also check SMT for cross-variable infeasibility.
+    let true_infeasible = true_state.env.is_unsat() || {
+        #[cfg(feature = "smt")]
+        {
+            smt_check_infeasible(smt_ctx, &true_state)
+        }
+        #[cfg(not(feature = "smt"))]
+        false
+    };
+
+    if true_infeasible {
         outcomes.push(PathOutcome {
             verdict: Verdict::Infeasible,
             constraints_checked: true_state.constraints_checked,
@@ -632,7 +680,16 @@ fn fork_at_branch(
         work_queue.push_back(true_state);
     }
 
-    if false_state.env.is_unsat() {
+    let false_infeasible = false_state.env.is_unsat() || {
+        #[cfg(feature = "smt")]
+        {
+            smt_check_infeasible(smt_ctx, &false_state)
+        }
+        #[cfg(not(feature = "smt"))]
+        false
+    };
+
+    if false_infeasible {
         outcomes.push(PathOutcome {
             verdict: Verdict::Infeasible,
             constraints_checked: false_state.constraints_checked,
@@ -644,6 +701,32 @@ fn fork_at_branch(
 
     // Original state consumed by fork — no outcome from this path
     None
+}
+
+/// Phase 23: Check if a forked state is infeasible via SMT.
+///
+/// Only invoked when the `smt` feature is enabled and the escalation
+/// predicate fires (cross-variable constraints detected).
+#[cfg(feature = "smt")]
+fn smt_check_infeasible(
+    smt_ctx: &mut Option<super::smt::SmtContext>,
+    state: &ExplorationState,
+) -> bool {
+    if let Some(smt) = smt_ctx {
+        if super::smt::should_escalate(state.sym_state.path_constraints())
+            && smt.has_budget()
+        {
+            return matches!(
+                smt.check_path_feasibility(
+                    state.sym_state.path_constraints(),
+                    &state.sym_state,
+                    &state.env,
+                ),
+                super::smt::SmtResult::Unsat
+            );
+        }
+    }
+    false
 }
 
 /// Record the final outcome for a path that has reached its terminal state.

@@ -329,7 +329,7 @@ This plan breaks the full vision into phases, each scoped for one Claude Code se
 
 ## Phase 11: Debug Views
 
-**Goal:** Expose engine internals — CFG, SSA, call graph, taint graph — for advanced users. This is where Nyx becomes truly special.
+**Goal:** Expose engine internals — CFG, SSA, call graph, taint graph, state machines, heap analysis, constraint reasoning, abstract interpretation, symbolic execution, and SMT — for advanced users. This is where Nyx becomes truly special.
 
 ### Backend
 - **CFG API**: `GET /api/debug/cfg?file=&function=` — Returns CFG for a function as graph JSON: nodes (basic blocks with statements, line ranges) and edges (branch type: true/false/unconditional/exception). Serialize from `Cfg` struct.
@@ -338,15 +338,27 @@ This plan breaks the full vision into phases, each scoped for one Claude Code se
 - **Taint graph API**: `GET /api/debug/taint?file=&function=` — Returns taint propagation graph: nodes (variables/SSA values with taint status) and edges (propagation/sanitize/sink). Derived from `SsaTaintState` execution.
 - **Summary API**: `GET /api/debug/summaries?function=` — Returns interprocedural summary for a function: source-to-return, arg-to-sink, sanitizer effects, SSA summary.
 - **Function list API**: `GET /api/debug/functions?file=` — Returns list of functions available for debug inspection in a file.
+- **State analysis API**: `GET /api/debug/state-analysis?file=&function=` — Returns state machine analysis for a function: states (identified abstract states), transitions (edges with trigger conditions), guards/auth gates on transitions, invalid transition reasoning (why a transition is rejected), reachability justification (why a transition was considered reachable), and path-to-violating-state (shortest path from initial state to a policy-violating state).
+- **Heap/alias API**: `GET /api/debug/heap?file=&function=` — Returns heap analysis data: heap objects by allocation site (file, line, type), tracked fields per object, points-to sets (which pointers may/must point to which objects), must-alias vs may-alias pairs, and field-sensitive taint on object fields.
+- **Constraint/path reasoning API**: `GET /api/debug/constraints?file=&function=` or `GET /api/debug/constraints?finding=<id>` — Returns path reasoning data: extracted predicates (type, variable, condition), accumulated path constraints along each path, infeasible branches pruned (branch location + contradicting constraint), type-based narrowing applied, and constraint contradictions detected.
+- **Abstract interpretation API**: `GET /api/debug/abstract-interp?file=&function=` — Returns abstract interpretation state: interval facts per variable at each program point, string facts (prefix/suffix tracking), widened values at loop heads (pre- and post-widen), and sink suppressions justified by abstract facts (which sink, which variable, which fact proved safety).
+- **Symbolic execution API**: `GET /api/debug/symex?file=&function=` or `GET /api/debug/symex?finding=<id>` — Returns symbolic execution data: symbolic values per variable (expression trees), explored paths (count and enumeration), feasible vs infeasible branch decisions, path budget and exhaustion status, and witness (concrete input assignment) if generated.
+- **SMT reasoning API**: `GET /api/debug/smt?finding=<id>` — Returns SMT solver interaction data (only when SMT is enabled): whether SMT was invoked, which path/branch triggered it, result (SAT / UNSAT / UNKNOWN), timeout vs model found, and model-derived witness values if SAT.
 
 ### Frontend
-- **Debug page** (`/debug`): Sub-navigation for CFG, SSA, Call Graph, Taint, Summaries.
+- **Debug page** (`/debug`): Sub-navigation for CFG, SSA, Call Graph, Taint, Summaries, State Analysis, Heap/Alias, Constraints, Abstract Interp, Symbolic Execution, SMT.
 - **Function selector**: Shared component — file picker + function dropdown. Used across all debug views.
 - **CFG viewer** (`/debug/cfg`): Graph visualization using SVG/Canvas. Basic blocks as rectangles with statement text. Directed edges with branch labels. Highlight path relevant to a selected finding. Pan/zoom.
 - **SSA viewer** (`/debug/ssa`): Block-based display showing SSA instructions per block. Phi nodes highlighted. Variable version chains. Mapping back to source lines.
 - **Call graph viewer** (`/debug/call-graph`): Force-directed or hierarchical graph layout. Nodes = functions with finding badges. Edges = call relationships. Click node to see summary. Filter by file or namespace.
 - **Taint graph viewer** (`/debug/taint`): Node types color-coded (source=green, propagation=blue, sanitizer=purple, sink=red). Edge labels for transforms. Filter to show only finding-relevant subgraph.
 - **Summary explorer** (`/debug/summaries`): For a selected function, show its interprocedural summary: which params propagate, which hit sinks, sanitizer effects, confidence notes.
+- **State analysis viewer** (`/debug/state-analysis`): State machine diagram showing identified states as nodes and transitions as labeled directed edges. Transitions display trigger conditions; guard/auth gate annotations shown inline. Invalid transitions rendered as dashed/red edges with rejection reason tooltip. Reachable transitions annotated with justification (why the engine believes this path is feasible). Violating-state paths highlighted — shortest path from initial state to the violation, with each step's reasoning visible on click. Filterable by state or transition type.
+- **Heap / points-to / alias inspector** (`/debug/heap`): Structured table/tree view (graph visualization deferred). Heap objects listed by allocation site (file:line, inferred type). Each object expandable to show tracked fields with their taint status. Points-to sets displayed per pointer variable — list of target objects with must/may distinction. Must-alias and may-alias pairs shown in a deduplicated list with source locations. Field-sensitive taint on objects shown inline — which fields carry taint, from which origin.
+- **Constraint / path reasoning viewer** (`/debug/constraints`): Accessible per-function or per-finding. Shows extracted predicates in a structured table (predicate kind, variable, condition expression). Accumulated path constraints displayed per-path as an ordered list. Infeasible branches highlighted with the contradicting constraint shown inline. Type-based narrowing shown as annotations (e.g., "x narrowed to int → FILE_IO suppressed"). Constraint contradictions called out explicitly with both conflicting constraints displayed side-by-side.
+- **Abstract interpretation viewer** (`/debug/abstract-interp`): Per-function view showing variable facts at each program point. Interval facts displayed as `[lo, hi]` ranges in a variable × program-point grid. String facts shown as prefix/suffix pairs. Loop heads annotated with pre-widen and post-widen values to show where precision was traded for termination. Sink suppressions section: lists each suppressed sink with the justifying abstract fact (e.g., "SSRF suppressed: string prefix `https://safe.example.com/` locks host").
+- **Symbolic execution viewer** (`/debug/symex`): Accessible per-function or per-finding. Shows symbolic values as collapsible expression trees. Path explorer lists all explored paths with feasible/infeasible status and branch decisions at each fork. Path count and budget displayed (e.g., "47 / 1000 paths explored"). Budget exhaustion clearly indicated when hit. Witness panel shows the concrete input assignment that reaches the sink, if generated — variable name → value mapping.
+- **SMT reasoning panel** (`/debug/smt`): Only rendered when SMT is enabled (hidden or shows "SMT not enabled" otherwise). Per-finding view showing: whether SMT was invoked (and why — which branch/path triggered the query), solver result badge (SAT in green, UNSAT in red, UNKNOWN in yellow), timeout indication (duration + whether the solver timed out vs produced a result), and model-derived witness values if SAT (variable → concrete value table). Query details expandable for advanced users.
 
 ### Definition of done
 - Can select a file and function, view its CFG as a graph
@@ -354,6 +366,12 @@ This plan breaks the full vision into phases, each scoped for one Claude Code se
 - Call graph renders project-wide or file-scoped
 - Taint graph shows propagation for a function
 - Summary explorer shows interprocedural summaries
+- State analysis view renders state transitions, guards, invalid transition reasoning, reachability justification, and path to violating state
+- Heap inspector shows allocation sites, points-to sets, must/may alias, and field-sensitive taint
+- Constraint viewer shows predicates, path constraints, pruned branches, type narrowing, and contradictions for a function or finding
+- Abstract interpretation view shows interval/string facts, widened values, and sink suppressions with justifying facts
+- Symbolic execution view shows symbolic values, explored paths, feasibility, budget, and witness
+- SMT panel shows invocation status, SAT/UNSAT/UNKNOWN result, timeout info, and model-derived witness values when SMT is enabled
 
 ---
 

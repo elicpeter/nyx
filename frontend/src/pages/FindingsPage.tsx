@@ -476,7 +476,7 @@ export function FindingsPage() {
                         '-'
                       )}
                     </td>
-                    <td>{f.rule_id}</td>
+                    <td title={f.message || ''}>{f.rule_id}</td>
                     <td>{f.category}</td>
                     <td className="cell-path" title={f.path}>
                       {truncPath(f.path)}

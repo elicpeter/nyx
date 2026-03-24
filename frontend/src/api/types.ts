@@ -26,8 +26,8 @@ export interface SpanEvidence {
 export interface StateEvidence {
   machine: string;
   subject?: string;
-  // from/to states — simplified for frontend
-  [key: string]: unknown;
+  from_state: string;
+  to_state: string;
 }
 
 export interface Evidence {

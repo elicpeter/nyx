@@ -13,13 +13,13 @@
     {
       "rule_id": "state-resource-leak",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         2,
         9
       ],
       "evidence_contains": [],
-      "notes": "Streams created without error handlers may leak on pipe failure; scanner likely cannot track stream lifecycle"
+      "notes": "Streams created without error handlers may leak on pipe failure"
     },
     {
       "rule_id": "state-resource-leak-possible",

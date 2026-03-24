@@ -54,7 +54,7 @@
         15
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+      "notes": "cfg-resource-leak — primary detection for double_close (state engine does not yet fire for Ruby)"
     },
     {
       "rule_id": "cfg-resource-leak",
@@ -65,7 +65,7 @@
         21
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+      "notes": "cfg-resource-leak — primary detection for use_after_close (state engine does not yet fire for Ruby)"
     },
     {
       "rule_id": "cfg-resource-leak",
@@ -76,7 +76,7 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+      "notes": "cfg-resource-leak — primary detection for read_and_close (state engine does not yet fire for Ruby)"
     }
   ]
 }

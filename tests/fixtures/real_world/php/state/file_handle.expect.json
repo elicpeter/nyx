@@ -14,7 +14,7 @@
     {
       "rule_id": "state-resource-leak",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         1,
         7
@@ -25,7 +25,7 @@
     {
       "rule_id": "state-double-close",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         13,
         21
