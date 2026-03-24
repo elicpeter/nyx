@@ -1,0 +1,6 @@
+{
+  "description": "req.query.name sanitized via he.encode (HTML entity encoding) before res.send — taint should be cleared",
+  "tags": ["taint", "negative", "xss", "sanitizer", "he"],
+  "modes": ["full"],
+  "expected": []
+}

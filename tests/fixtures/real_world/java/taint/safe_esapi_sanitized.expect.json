@@ -1,0 +1,6 @@
+{
+  "description": "ESAPI Encoder.encodeForHTML and Validator.getValidInput sanitize tainted servlet input before println sink",
+  "tags": ["taint", "negative", "xss", "sanitizer", "esapi"],
+  "modes": ["full"],
+  "expected": []
+}

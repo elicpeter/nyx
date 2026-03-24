@@ -27,7 +27,7 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["readObject", "readLine"],
+        matchers: &["readObject", "readLine", "ObjectMapper.readValue"],
         label: DataLabel::Source(Cap::all()),
         case_sensitive: false,
     },
@@ -43,9 +43,25 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
+    LabelRule {
+        matchers: &["Encoder.encodeForSQL"],
+        label: DataLabel::Sanitizer(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["Encoder.encodeForURL"],
+        label: DataLabel::Sanitizer(Cap::URL_ENCODE),
+        case_sensitive: false,
+    },
+    // OWASP ESAPI input validator — validates and canonicalizes input
+    LabelRule {
+        matchers: &["Validator.getValidInput"],
+        label: DataLabel::Sanitizer(Cap::all()),
+        case_sensitive: false,
+    },
     // Type-check sanitizers — parsing to a primitive erases taint
     LabelRule {
-        matchers: &["Integer.parseInt", "Long.parseLong", "Double.parseDouble", "Integer.valueOf", "Boolean.parseBoolean"],
+        matchers: &["Integer.parseInt", "Long.parseLong", "Short.parseShort", "Double.parseDouble", "Integer.valueOf", "Boolean.parseBoolean"],
         label: DataLabel::Sanitizer(Cap::all()),
         case_sensitive: false,
     },
@@ -91,7 +107,7 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["readObject", "readUnshared", "XMLDecoder.readObject"],
+        matchers: &["readObject", "readUnshared", "XMLDecoder.readObject", "ObjectMapper.readValue"],
         label: DataLabel::Sink(Cap::DESERIALIZE),
         case_sensitive: false,
     },

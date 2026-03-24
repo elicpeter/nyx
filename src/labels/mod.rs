@@ -428,6 +428,8 @@ fn framework_rules_for_lang(
         "ruby" | "rb" => ruby::framework_rules(ctx),
         "java" => java::framework_rules(ctx),
         "php" => php::framework_rules(ctx),
+        "javascript" | "js" => javascript::framework_rules(ctx),
+        "typescript" | "ts" => typescript::framework_rules(ctx),
         _ => Vec::new(),
     }
 }

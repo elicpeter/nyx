@@ -1,4 +1,5 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, SinkGate};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule, SinkGate};
+use crate::utils::project::FrameworkContext;
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -71,6 +72,12 @@ pub static RULES: &[LabelRule] = &[
     LabelRule {
         matchers: &["shell-escape", "shellescape"],
         label: DataLabel::Sanitizer(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
+    },
+    // he library — HTML entity encoding
+    LabelRule {
+        matchers: &["he.encode", "he.escape"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
@@ -241,3 +248,13 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["name", "pattern"],
 };
+
+/// Framework-conditional rules for JavaScript.
+pub fn framework_rules(_ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    // Express/React framework rules deferred:
+    // - express-validator check()/validationResult() are middleware validators,
+    //   not data-flow sanitizers — they don't strip taint from req.body.
+    // - dangerouslySetInnerHTML is already a static sink rule.
+    // - ResponseEntity-style response sinks need a broader cap model.
+    Vec::new()
+}
