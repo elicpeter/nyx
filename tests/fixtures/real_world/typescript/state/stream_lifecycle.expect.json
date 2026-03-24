@@ -1,5 +1,5 @@
 {
-  "description": "Stream lifecycle: processStream pipes without error handlers (may leak). processStreamSafe handles errors and destroys streams.",
+  "description": "Stream lifecycle: processStream pipes without error handlers (leaks). processStreamSafe handles errors and destroys streams.",
   "tags": [
     "state",
     "resource-leak",
@@ -12,25 +12,14 @@
   "expected": [
     {
       "rule_id": "state-resource-leak",
-      "severity": null,
-      "must_match": true,
-      "line_range": [
-        2,
-        9
-      ],
-      "evidence_contains": [],
-      "notes": "Streams created without error handlers may leak on pipe failure"
-    },
-    {
-      "rule_id": "state-resource-leak-possible",
-      "severity": "LOW",
+      "severity": "MEDIUM",
       "must_match": true,
       "line_range": [
         4,
         4
       ],
       "evidence_contains": [],
-      "notes": "TP: createReadStream at line 4 in processStream has no error handler and may leak on pipe failure"
+      "notes": "createReadStream at line 4 in processStream never closed — definite leak (per-function scoped)"
     },
     {
       "rule_id": "state-resource-leak",
@@ -41,18 +30,18 @@
         5
       ],
       "evidence_contains": [],
-      "notes": "TP: createWriteStream at line 5 in processStream has no error handler and leaks on pipe failure"
+      "notes": "createWriteStream at line 5 in processStream never closed — definite leak (per-function scoped)"
     },
     {
       "rule_id": "state-resource-leak-possible",
       "severity": "LOW",
-      "must_match": true,
+      "must_match": false,
       "line_range": [
-        5,
-        5
+        11,
+        12
       ],
       "evidence_contains": [],
-      "notes": "TP: createWriteStream at line 5 has a possible leak path when errors occur before pipe completes"
+      "notes": "processStreamSafe: possible leak via error paths before destroy()"
     },
     {
       "rule_id": "cfg-resource-leak",

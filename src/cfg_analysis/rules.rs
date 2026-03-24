@@ -337,18 +337,21 @@ static PYTHON_RESOURCES: &[ResourcePair] = &[
 
 static RUBY_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
-        acquire: &["File.open", "open"],
+        acquire: &["File.open", "File.new", "open"],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "file handle",
-        use_patterns: &[],
+        use_patterns: &[
+            ".read", ".write", ".gets", ".puts", ".each_line",
+            ".readline", ".readlines", ".sysread", ".syswrite",
+        ],
     },
     ResourcePair {
-        acquire: &["TCPSocket.new", "UDPSocket.new"],
+        acquire: &["TCPSocket.new", "UDPSocket.new", "TCPServer.new", "UNIXSocket.new"],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "socket",
-        use_patterns: &[],
+        use_patterns: &[".read", ".write", ".send", ".recv", ".gets", ".puts"],
     },
     ResourcePair {
         acquire: &[".lock"],
@@ -356,6 +359,14 @@ static RUBY_RESOURCES: &[ResourcePair] = &[
         exclude_acquire: &[],
         resource_name: "mutex",
         use_patterns: &[],
+    },
+    ResourcePair {
+        acquire: &["PG.connect", "PG::Connection.new", "Sequel.connect",
+                    "Mysql2::Client.new", "SQLite3::Database.new"],
+        release: &[".close", ".disconnect"],
+        exclude_acquire: &[],
+        resource_name: "db connection",
+        use_patterns: &[".exec", ".query", ".exec_params", ".prepare", ".execute"],
     },
 ];
 

@@ -1886,6 +1886,670 @@ Phase 24A (interprocedural execution core — provides `InterprocCtx`, `CallOutc
 
 ---
 
+## Phase 25: Exception-Aware Symbolic Execution
+
+**Category:** Analysis Depth — Symbolic Execution Completeness
+
+**Why now:** The symbolic executor only explores normal control flow (Goto, Branch, Return). Exception edges — try/catch/finally — are recorded in `SsaBody.exception_edges` and used by the taint engine, but the symex explorer skips them entirely. Real-world code uses try/catch extensively. Security-relevant patterns include: taint flowing through caught exceptions (`catch(e) { sink(e.message) }`), sanitization in finally blocks that may not execute, and error-path-specific sinks (error logging with user data). Without exception-path exploration, symex produces `Inconclusive` on any taint path that passes through a catch block.
+
+### Current state
+- `SsaBody.exception_edges: Vec<(BlockId, BlockId)>` records source→catch edges (stripped from CFG before SSA lowering but preserved for taint)
+- `CatchParam` SSA op creates symbolic values for caught exception parameters
+- Taint engine (`ssa_transfer.rs`) handles exception edges: orphan catch blocks are initialized with `SsaTaintState::initial()`, and taint flows through `CatchParam` to catch-body sinks
+- Symex executor (`executor.rs`) processes only `Terminator::Goto`, `Branch`, `Return`, `Unreachable` — exception successors never entered
+
+### Goals
+- Extend the symex explorer to fork into exception paths at call sites within try blocks
+- Model caught exception parameters as symbolic inputs carrying caller-context taint
+- Explore both normal and exception successors when budget allows
+- Handle finally blocks as code reachable from both normal and exception paths
+- Detect taint flows through exception-handling patterns that the current executor misses
+
+### Files/systems to be touched
+- `src/symex/executor.rs` — extend `run_path()` to track exception successors and fork into catch blocks
+- `src/symex/state.rs` — optional: `ExceptionState` to model caught exception symbolic value
+- `src/symex/transfer.rs` — handle `SsaOp::CatchParam` with proper symbolic seeding (currently creates Symbol but no exception context)
+- `src/ssa/ir.rs` — no structural changes needed; `exception_edges` already available
+
+### Concrete implementation tasks
+
+1. **Build exception successor map**: At the start of `explore_finding()`, construct `HashMap<BlockId, Vec<BlockId>>` from `ssa.exception_edges` mapping source blocks to their catch entry blocks. This is O(n) and cached per finding.
+
+2. **Extend `ExplorationState`**: Add `exception_context: Option<SymbolicValue>` to track the symbolic value of the exception object when exploring a catch path. Used to seed `CatchParam` instructions.
+
+3. **Fork into exception paths at call sites**: After processing a block containing a Call instruction that is an exception source (key in exception map):
+   - If fork budget allows and the catch block is on a source→sink path (reachability check):
+     - Clone current `ExplorationState`
+     - Set `exception_context` to a tainted `Symbol` (exception carries caller taint)
+     - Set `current_block` to the catch entry block
+     - Push to work queue
+   - If budget exhausted: skip exception path (conservative — taint engine already handles it)
+
+4. **Transfer `CatchParam` with exception context**: In `transfer_inst()`, when processing `SsaOp::CatchParam`:
+   - If `exception_context` is `Some(val)`: set the catch param to that symbolic value, propagate taint
+   - If `None` (not on an exception path): set to `Symbol(v)` with taint if the param appears in flow steps
+
+5. **Finally block handling**: Finally blocks appear as normal successors of both the try-body exit and the catch-body exit. No special handling needed — the explorer naturally reaches finally blocks via Goto from either path. The key correctness property is that the symex state at finally entry correctly reflects which path was taken (normal vs exception). This is automatic because each forked path carries its own state.
+
+6. **Reachability pruning**: Extend `compute_reachable_blocks()` to include exception edges. Currently it only uses Goto/Branch successors. Add exception edges so catch blocks appear in the reachable set.
+
+7. **Add integration fixtures**:
+   - `symex_exception_catch_taint.js` — taint flows through caught exception to sink in catch block
+   - `symex_exception_finally_cleanup.js` — sanitization in finally block (safe pattern)
+   - `symex_exception_rethrow.js` — exception caught, modified, and re-thrown to outer catch
+
+### Architecture notes
+- Exception paths are explored as forks, not as primary paths. The normal path is always explored first; exception paths are queued like branch forks.
+- The fork budget (`MAX_FORKS_PER_FINDING`) is shared between branch forks and exception forks. Under budget pressure, exception forks are lower priority than branch forks (branch forks explore the taint path directly; exception forks explore alternative paths).
+- Exception paths do NOT produce new findings — they enrich existing findings with additional evidence (exception-path feasibility). The taint engine is authoritative for finding discovery.
+- Sound: skipping exception paths under budget → Inconclusive (not Infeasible). The taint engine already detects exception-path taint flows independently.
+
+### Validation requirements
+- All existing tests pass (999+ lib tests, SSA corpus, integration fixtures)
+- New fixtures exercise exception-path exploration
+- No regressions in benchmark precision/recall
+- Exception-path forks bounded by existing fork budget
+
+### Exit criteria
+- Exception successor map built in `explore_finding()`
+- Exception forks queued when call sites have exception edges and budget allows
+- `CatchParam` transfer uses exception context for symbolic seeding
+- Reachability analysis includes exception edges
+- 3 integration fixtures demonstrating exception-path taint detection
+
+### Dependencies
+Phase 18b (multi-path exploration — fork machinery). Phase 5 (SSA hardening — try/catch in CFG). Phase 24B (budget controls — exception forks draw from shared budget).
+
+---
+
+## Phase 26: Bitwise Operations and Extended Arithmetic
+
+**Category:** Analysis Depth — Expression Completeness
+
+**Why now:** The `BinOp` enum in `cfg.rs` only has `Add, Sub, Mul, Div, Mod`. Bitwise operations (`&`, `|`, `^`, `<<`, `>>`) are explicitly excluded by `extract_bin_op()` (returns `None`). This means any computation involving bit manipulation collapses to `Unknown` in the symbolic executor. Bitwise ops appear in security-relevant patterns: permission masks (`if (flags & ADMIN_FLAG)`), hash computations, and protocol field extraction. The CFG already parses the operator text; it just doesn't classify bitwise variants.
+
+### Current state
+- `cfg::BinOp`: 5 variants (Add, Sub, Mul, Div, Mod)
+- `extract_bin_op()` in `cfg.rs` (line 1483): returns `None` for all non-arithmetic operators including `&`, `|`, `^`, `<<`, `>>`
+- `symex::Op`: mirrors `cfg::BinOp` with `From<cfg::BinOp>` impl
+- `mk_binop()` in `value.rs`: concrete folding for arithmetic only
+- Z3 in `smt.rs`: translates `Op` to Z3 integer arithmetic; no bitvector operations
+
+### Goals
+- Extend `BinOp` and `Op` with bitwise variants
+- Extract bitwise operators from tree-sitter AST
+- Implement concrete folding for bitwise operations
+- Extend Z3 translation to handle bitvector constraints
+- Add comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`) as expression-level operations (currently only in path constraints)
+
+### Files/systems to be touched
+- `src/cfg.rs` — extend `BinOp` enum, update `extract_bin_op()`
+- `src/symex/value.rs` — extend `Op` enum, `From<BinOp>`, concrete folding in `mk_binop()`
+- `src/symex/smt.rs` — optional: Z3 bitvector translation for bitwise constraints
+- `src/abstract_interp/interval.rs` — optional: interval transfer for bitwise ops
+
+### Concrete implementation tasks
+
+1. **Extend `cfg::BinOp`**:
+   ```rust
+   pub enum BinOp {
+       Add, Sub, Mul, Div, Mod,
+       BitAnd, BitOr, BitXor, LeftShift, RightShift,
+       Eq, NotEq, Lt, LtEq, Gt, GtEq,
+   }
+   ```
+
+2. **Update `extract_bin_op()` in `cfg.rs`**: Add operator text matching for `"&"` → `BitAnd`, `"|"` → `BitOr`, `"^"` → `BitXor`, `"<<"` → `LeftShift`, `">>"` → `RightShift`, `"=="/"===" ` → `Eq`, `"!="/"!==" ` → `NotEq`, `"<"` → `Lt`, `">"` → `Gt`, `"<="` → `LtEq`, `">="` → `GtEq`. Must distinguish `&`(bitwise) from `&&`(logical) and `|` from `||` — check operator text length.
+
+3. **Extend `symex::Op` and `From<BinOp>`**: Mirror all new variants.
+
+4. **Implement concrete folding in `mk_binop()`**:
+   ```rust
+   Op::BitAnd => lhs.checked_and(rhs)?,   // i64 & i64
+   Op::BitOr  => lhs.checked_or(rhs)?,    // i64 | i64 (no overflow possible)
+   Op::BitXor => Some(lhs ^ rhs),
+   Op::LeftShift => if rhs >= 0 && rhs < 64 { Some(lhs << rhs) } else { None },
+   Op::RightShift => if rhs >= 0 && rhs < 64 { Some(lhs >> rhs) } else { None },
+   Op::Eq => /* returns 1 or 0, or use ConcreteStr for bool? */,
+   ```
+   Note: shift amounts must be bounds-checked (0..63) to prevent panic. Out-of-range → `Unknown`.
+
+5. **Z3 bitvector translation** (optional, lower priority): Z3's integer sort supports `mod`/`div` but not bitwise natively. Two options: (a) use Z3 bitvector sort (`BV(64)`) for variables involved in bitwise ops, or (b) skip bitwise constraints in SMT (conservative, sound). Option (b) is simpler for Phase 26; bitvector SMT can be a follow-up.
+
+6. **Abstract interpretation transfer** (optional): `IntervalFact` transfer for `BitAnd(x, mask)` when mask is a known constant → result bounded by `[0, mask]`. Useful for permission flag patterns.
+
+7. **Add unit tests**: Concrete folding for all new ops, overflow/shift bounds, display formatting.
+
+### Validation requirements
+- All existing tests pass
+- `extract_bin_op()` correctly parses bitwise and comparison operators across all 10 languages
+- Concrete folding is correct and panic-free for all edge cases
+- No regressions: existing `BinOp` variants unchanged
+
+### Exit criteria
+- `BinOp` and `Op` extended with 11 new variants
+- `extract_bin_op()` classifies bitwise and comparison operators
+- Concrete folding implemented with bounds checking
+- Unit tests for all new operations
+
+### Dependencies
+None. Standalone extension of existing enum + extraction + folding.
+
+---
+
+## Phase 27: SMT String Theory
+
+**Category:** Analysis Depth — Constraint Solving Precision
+
+**Why now:** The Z3 integration (Phase 23) only supports integer sort. String-valued constraints — `if (input.startsWith("safe"))`, `if (cmd === "allowed")`, `if (url.includes("://"))` — are silently skipped, meaning the SMT solver cannot prove infeasibility of string-guarded paths. String comparisons are among the most common guard patterns in web applications. Z3's string theory (`QF_S`) supports concatenation, containment, prefix/suffix, length, and regex matching.
+
+### Current state
+- `VarSort` enum in `smt.rs`: only `Int` variant
+- `translate_operand()`: returns `None` for `ConstValue::Str(_)` (line 353)
+- `seed_from_path_env()`: skips non-integer facts
+- String-valued path constraints: accumulated in `PathConstraint` but never asserted to Z3
+- Z3 crate (0.19): provides `z3::ast::String` with `concat()`, `contains()`, `prefix_of()`, `suffix_of()`, `length()`, `at()`, `substr()` methods
+
+### Goals
+- Add Z3 string sort alongside integer sort
+- Translate string-valued operands and constraints to Z3 string theory
+- Prove infeasibility of string-guarded paths (e.g., `startsWith` check that excludes tainted prefix)
+- Integrate symbolic string operations (`SymbolicValue::Concat`, `Replace`, `ToLower`, etc.) into Z3 assertions
+
+### Files/systems to be touched
+- `src/symex/smt.rs` — extend `VarSort`, variable map, constraint translation, operand handling
+- `src/symex/value.rs` — no changes (expression trees already encode string ops)
+- `src/constraint/mod.rs` — optional: extend `ConditionExpr` with string comparison operators
+
+### Concrete implementation tasks
+
+1. **Extend `VarSort`**:
+   ```rust
+   enum VarSort {
+       Int,
+       Str,
+   }
+   ```
+
+2. **Extend variable map to hold both sorts**: Change `var_map: HashMap<SsaValue, (Z3Int, VarSort)>` to use an enum:
+   ```rust
+   enum Z3Var {
+       Int(Z3Int),
+       Str(z3::ast::String),
+   }
+   type VarMap = HashMap<SsaValue, (Z3Var, VarSort)>;
+   ```
+
+3. **Add `ensure_str_var()`**: Analog to `ensure_int_var()`. Create Z3 string variables for SSA values known to be string-typed (from `ConstLattice::Str`, `TypeFactResult`, or `SymbolicValue::ConcreteStr`).
+
+4. **Extend `translate_operand()`**: Handle `Operand::Const(ConstValue::Str(s))` → `z3::ast::String::from_str(s)`. Handle `Operand::Value(v)` where `v` has `VarSort::Str` → return the string variable.
+
+5. **Extend `assert_path_constraint()`** for string comparisons:
+   - `Eq` with two string operands → `str_a._eq(&str_b)`
+   - `NotEq` → `str_a._eq(&str_b).not()`
+   - String method predicates (startsWith, includes, endsWith) require translating `ConditionExpr` patterns into Z3 string operations:
+     - `x.startsWith("safe")` → `z3::ast::String::prefix_of(&z3_const_safe, &z3_x)`
+     - `x.includes("://")` → `z3::ast::String::contains(&z3_x, &z3_const_scheme)`
+
+6. **Translate symbolic string ops to Z3**:
+   - `SymbolicValue::Concat(a, b)` → `z3::ast::String::concat(&[&z3_a, &z3_b])`
+   - `SymbolicValue::Substr(s, start, len)` → `z3::ast::String::substr(&z3_s, &z3_start, &z3_len)`
+   - `SymbolicValue::StrLen(s)` → `z3::ast::String::length(&z3_s)` (returns Int)
+   - `SymbolicValue::ToLower(s)` / `ToUpper(s)` → uninterpreted function (Z3 has no case conversion)
+   - `SymbolicValue::Replace(s, pat, rep)` → `z3::ast::String::replace(&z3_s, &z3_pat, &z3_rep)`
+
+7. **Sort inference logic**: Determine whether an SSA value is string-typed:
+   - `ConstLattice::Str(_)` → Str
+   - `type_facts.get_type(v) == Some(TypeKind::String)` → Str
+   - Operand in a string comparison → Str
+   - Unknown → skip (conservative)
+
+8. **Budget considerations**: String theory queries are more expensive than integer queries. Keep the per-finding budget at 10 queries but add a string-specific timeout multiplier (e.g., 200ms vs 100ms for integer queries).
+
+9. **Add unit tests**: String equality, inequality, prefix, containment, concat, mixed int+string constraints.
+
+### Validation requirements
+- All existing tests pass
+- New string constraints correctly prune infeasible paths (e.g., `startsWith("safe")` guard on tainted input)
+- No regressions from integer-only SMT behavior
+- Budget and timeout bounds prevent solver blowup
+
+### Exit criteria
+- `VarSort::Str` and `Z3Var::Str` in SMT context
+- String operands translated to Z3 string theory
+- Concat, prefix, contains, replace operations translated
+- String-guarded paths provably pruned when infeasible
+- Unit tests for all string constraint patterns
+
+### Dependencies
+Phase 23 (SMT solving — provides `SmtContext`, `check_path_feasibility()`, solver infrastructure). Phase 22 (symbolic string theory — provides `SymbolicValue` string op variants).
+
+---
+
+## Phase 28: Symbolic Encoding and Decoding Models
+
+**Category:** Analysis Depth — Sanitizer Precision
+
+**Why now:** Encoding functions (`encodeURIComponent`, `html.escape`, `base64.b64encode`, `htmlspecialchars`) are recognized as sanitizers in label rules and strip capability bits during taint analysis. But the symbolic executor treats them as opaque `Call` nodes returning `Unknown`. This means symex cannot reason about whether an encoding actually neutralizes the attack payload. For example, `encodeURIComponent` prevents SSRF by encoding `://` but does NOT prevent SQL injection — this distinction is lost when the call is opaque. Modeling encoding semantics enables symex to produce more precise witnesses and verify that the correct encoding was applied for the vulnerability class.
+
+### Current state
+- Label rules across JS/TS, Python, PHP, Ruby, Java have encoding sanitizer matchers (encodeURIComponent, html.escape, htmlspecialchars, CGI.escapeHTML, etc.)
+- Taint engine strips capability bits based on sanitizer caps (e.g., HTML_ESCAPE strips HTML cap but not SQL cap)
+- Symex `strings.rs`: NO encoding methods recognized — only trim/case/replace/substr/strlen
+- Symex witness generation: Cannot show what the encoded output looks like
+
+### Goals
+- Recognize encoding/decoding functions as named symbolic operations
+- Model encoding semantics per vulnerability class (which caps each encoding neutralizes)
+- Produce encoded witness strings showing the actual output (e.g., `%3Cscript%3E` for URL-encoded XSS attempt)
+- Verify encoding completeness: flag cases where encoding is applied but doesn't match the sink's vulnerability class
+
+### Files/systems to be touched
+- `src/symex/strings.rs` — extend `classify_string_method()` and add `EncodingKind` enum
+- `src/symex/value.rs` — add `SymbolicValue::Encode { kind: EncodingKind, inner: Box<SymbolicValue> }` and `Decode` variant
+- `src/symex/transfer.rs` — recognize encoding calls and construct Encode nodes
+- `src/symex/witness.rs` — implement concrete encoding evaluation for witness generation
+
+### Concrete implementation tasks
+
+1. **Define `EncodingKind` enum** in `src/symex/strings.rs`:
+   ```rust
+   pub enum EncodingKind {
+       HtmlEscape,      // &lt; &gt; &amp; &quot;
+       UrlEncode,       // %XX encoding
+       Base64Encode,
+       Base64Decode,
+       UrlDecode,
+       ShellEscape,     // single-quote wrapping or backslash escaping
+       SqlEscape,       // doubling single quotes
+       JsonStringify,   // JSON string escaping
+   }
+   ```
+
+2. **Extend `classify_string_method()`** per language to recognize encoding methods:
+   - JS/TS: `encodeURIComponent` → UrlEncode, `encodeURI` → UrlEncode, `btoa` → Base64Encode, `atob` → Base64Decode, `JSON.stringify` → JsonStringify
+   - Python: `html.escape` → HtmlEscape, `urllib.parse.quote` → UrlEncode, `base64.b64encode` → Base64Encode, `shlex.quote` → ShellEscape, `json.dumps` → JsonStringify
+   - PHP: `htmlspecialchars`/`htmlentities` → HtmlEscape, `urlencode`/`rawurlencode` → UrlEncode, `base64_encode` → Base64Encode, `escapeshellarg` → ShellEscape, `addslashes` → SqlEscape
+   - Ruby: `CGI.escapeHTML`/`ERB::Util.html_escape` → HtmlEscape, `CGI.escape` → UrlEncode, `Shellwords.escape` → ShellEscape
+   - Java: `URLEncoder.encode` → UrlEncode, `StringEscapeUtils.escapeHtml` → HtmlEscape
+   - Go: `url.QueryEscape` → UrlEncode, `html.EscapeString` → HtmlEscape
+
+3. **Add `SymbolicValue::Encode` and `Decode` variants**:
+   ```rust
+   Encode { kind: EncodingKind, inner: Box<SymbolicValue> },
+   Decode { kind: EncodingKind, inner: Box<SymbolicValue> },
+   ```
+   Smart constructors `mk_encode()` / `mk_decode()` with concrete folding: when inner is `ConcreteStr`, apply the encoding and produce a new `ConcreteStr`.
+
+4. **Concrete encoding implementations** in `strings.rs`:
+   - `HtmlEscape`: `<` → `&lt;`, `>` → `&gt;`, `&` → `&amp;`, `"` → `&quot;`, `'` → `&#x27;`
+   - `UrlEncode`: non-alphanumeric → `%XX`
+   - `Base64Encode`: standard base64 encoding
+   - `ShellEscape`: wrap in single quotes, escape internal single quotes
+   - `SqlEscape`: double single quotes
+   - `JsonStringify`: escape `\`, `"`, control characters
+
+5. **Witness generation**: In `witness.rs`, when the sink expression contains `Encode { kind, inner }`:
+   - Substitute tainted symbols in `inner` with the attack payload
+   - Apply the encoding to the substituted string
+   - Show both the raw and encoded forms: `input 'x' = "<script>alert(1)</script>" → encoded as "%3Cscript%3Ealert(1)%3C%2Fscript%3E" reaches sink()`
+
+6. **Cap-encoding mismatch detection**: When an `Encode` node reaches a sink, check if the encoding's cap coverage matches the sink's cap:
+   - `HtmlEscape` at a `SQL_QUERY` sink → encoding doesn't help, taint should NOT be stripped
+   - `UrlEncode` at an `SSRF` sink → encoding neutralizes `://` → taint could be stripped
+   - Record mismatch as evidence note: "HTML encoding applied but sink requires SQL escaping"
+
+7. **Add integration fixtures**:
+   - `symex_encoding_html_xss.js` — html escape before XSS sink (safe)
+   - `symex_encoding_wrong_type.js` — URL encoding before SQL sink (unsafe — wrong encoding type)
+
+### Validation requirements
+- All existing tests pass
+- Encoding functions produce concrete encoded strings in witnesses
+- Cap-encoding mismatch detected and reported
+- No regressions in sanitizer detection from taint engine
+
+### Exit criteria
+- `EncodingKind` enum with 8 encoding types
+- Per-language encoding method recognition
+- `SymbolicValue::Encode`/`Decode` with concrete folding
+- Witness strings show encoded output
+- Cap-encoding mismatch detection in evidence
+
+### Dependencies
+Phase 22 (symbolic string theory — `classify_string_method()` infrastructure). Phase 18a (expression trees — `SymbolicValue` variants).
+
+---
+
+## Phase 29: Array Index Sensitivity
+
+**Category:** Analysis Precision — Heap Model Refinement
+
+**Why now:** The symbolic heap uses `FieldSlot::Elements` as a flow-insensitive union of all array/list elements. `arr.push(tainted); arr.push(safe); sink(arr[1])` reports taint even though index 1 holds the safe value. For arrays with known constant indices, per-index tracking would eliminate these false positives. The constant propagation pass already computes known integer values for many SSA values, making index extraction feasible.
+
+### Current state
+- `FieldSlot::Elements` — single slot for all array elements, regardless of index
+- Container ops (`push`, `pop`, `append`, `get`, `set`) all map to `Elements` slot
+- `ConstLattice::Int(n)` available via `const_values` on `OptimizeResult`
+- Points-to analysis provides `HeapObjectId` for allocation sites
+
+### Goals
+- Track per-index symbolic values for arrays when the index is a known constant
+- Fall back to `Elements` (flow-insensitive union) for dynamic indices
+- Widen per-index tracking to `Elements` at loop heads to prevent unbounded growth
+- Improve precision for common patterns: `args[0]` (command), `args[1]` (first argument), `params[key]`
+
+### Files/systems to be touched
+- `src/symex/heap.rs` — extend `FieldSlot` with indexed variant, update store/load/fingerprint
+- `src/symex/transfer.rs` — extract constant index from call arguments for array access
+- `src/symex/executor.rs` — no changes needed (heap is opaque to executor)
+
+### Concrete implementation tasks
+
+1. **Extend `FieldSlot`**:
+   ```rust
+   pub enum FieldSlot {
+       Named(String),
+       Elements,
+       Index(u64),  // NEW: concrete array index
+   }
+   ```
+
+2. **Add `MAX_TRACKED_INDICES`** constant (e.g., 16): when an array has more than this many distinct concrete indices, collapse all `Index(n)` entries to a single `Elements` entry (union taint).
+
+3. **Update `store()`**: When storing to an array with a known constant index, use `FieldSlot::Index(n)`. When index is unknown, store to `FieldSlot::Elements` AND mark all existing `Index(n)` entries for that object as potentially overwritten (conservative).
+
+4. **Update `load()`**: When loading with a known constant index, check `Index(n)` first, then fall back to `Elements`. When index is unknown, load from `Elements`.
+
+5. **Extract constant index in transfer**: In the container-op handler (`transfer.rs`), when the op is `get`/`set`/array index:
+   - Check if the index argument SSA value has a known `ConstLattice::Int(n)` via `const_values`
+   - If yes, use `FieldSlot::Index(n as u64)`
+   - If no, use `FieldSlot::Elements`
+
+6. **Widening**: In `heap.widen()`, collapse all `Index(n)` entries to `Elements` (union values and taint). This matches the existing widening behavior.
+
+7. **Fingerprint update**: Include `Index(n)` entries in `fingerprint()` computation, sorted by index for determinism.
+
+8. **Add unit tests**: Per-index store/load, index overflow to Elements, mixed indexed/unindexed access, widening collapse.
+
+### Validation requirements
+- All existing tests pass
+- Per-index tracking eliminates false positives for constant-indexed array access
+- Dynamic indices fall back to Elements (no precision loss vs current behavior)
+- Heap size bounded by MAX_TRACKED_INDICES per array
+
+### Exit criteria
+- `FieldSlot::Index(u64)` variant
+- Store/load with constant index extraction
+- Widening collapses indices to Elements
+- Bounded at 16 tracked indices per array
+
+### Dependencies
+Phase 21 (field-sensitive heap — provides `FieldSlot`, `SymbolicHeap`). Phase 14 (points-to — provides `HeapObjectId` for object identity).
+
+---
+
+## Phase 30: Cross-File Interprocedural Symbolic Execution
+
+**Category:** Analysis Depth — Interprocedural Precision
+
+**Why now:** Phase 24A/B provides intra-file interprocedural symbolic execution: callee bodies are walked as nested frames. But cross-file calls fall back to `SsaFuncSummary` transform modeling (Phase 18c), which loses all internal control flow, branching, and data-dependent behavior. For multi-file projects, the most interesting security patterns span files: a utility module sanitizes input, a route handler calls it, a database module receives the result. Cross-file body execution would enable symex to trace taint precisely through these chains.
+
+### Current state
+- `InterprocCtx.callee_bodies: &HashMap<String, CalleeSsaBody>` — intra-file only
+- `CalleeSsaBody` bundles pre-lowered `SsaBody` + `OptimizeResult` + `param_count`
+- `SsaFuncSummary` stored in SQLite (`ssa_function_summaries` table) with `FuncKey` metadata
+- `GlobalSummaries.ssa_by_key: HashMap<FuncKey, SsaFuncSummary>` — cross-file summaries available
+- Resolution chain in `transfer.rs`: interproc body → summary → opaque call
+- `scan.rs` pass 1: `lower_all_functions()` produces both summaries and bodies per file, but bodies are discarded after pass 1 taint analysis
+
+### Goals
+- Persist `CalleeSsaBody` alongside `SsaFuncSummary` for cross-file callees
+- Make cross-file callee bodies available to the symbolic executor
+- Extend `InterprocCtx` to resolve callees from both intra-file and cross-file body stores
+- Gate cross-file execution on body size and budget to prevent blowup
+- Maintain the resolution chain: intra-file body → cross-file body → summary → opaque call
+
+### Files/systems to be touched
+- `src/database.rs` — add SQLite table for serialized `CalleeSsaBody` blobs
+- `src/summary/mod.rs` — extend `GlobalSummaries` with `bodies_by_key: HashMap<FuncKey, CalleeSsaBody>`
+- `src/commands/scan.rs` — persist bodies in pass 1, load between passes
+- `src/symex/interproc.rs` — extend callee resolution to check cross-file bodies
+- `src/symex/mod.rs` — add `cross_file_bodies` to `SymexContext`
+- `src/taint/mod.rs` — thread cross-file bodies into `SymexContext`
+
+### Concrete implementation tasks
+
+1. **Serialize `CalleeSsaBody`**: `SsaBody` and `OptimizeResult` must implement `Serialize`/`Deserialize`. `SsaBody` contains `Vec<SsaBlock>` with `SsaInst`, `SsaOp`, `Terminator` — all need serde derives. `OptimizeResult` contains `const_values: HashMap<SsaValue, ConstLattice>`, `type_facts: TypeFactResult`, `points_to: PointsToResult`, `alias_result` — all need serde.
+
+2. **SQLite storage**: New table `ssa_function_bodies` with columns: `file_path TEXT`, `func_name TEXT`, `arity INTEGER`, `lang TEXT`, `namespace TEXT`, `body_blob BLOB` (bincode-serialized `CalleeSsaBody`). Stored alongside `ssa_function_summaries` in pass 1.
+
+3. **Size gate**: Only persist bodies smaller than `MAX_CROSS_FILE_BODY_BLOCKS = 100`. Larger functions use summary-only resolution. This bounds storage and execution cost.
+
+4. **Load between passes**: In `scan.rs` between pass 1 and pass 2, load cross-file bodies from SQLite into `GlobalSummaries.bodies_by_key`.
+
+5. **Extend `InterprocCtx`**: Add `cross_file_bodies: Option<&HashMap<FuncKey, CalleeSsaBody>>`. Resolution in `execute_callee()`: after checking intra-file `callee_bodies`, check `cross_file_bodies` using `resolve_callee_key()` for name+lang+arity matching.
+
+6. **Budget isolation**: Cross-file execution shares the same `InterprocBudget` but has a separate depth limit: `MAX_CROSS_FILE_DEPTH = 1` (one level of cross-file descent). Prevents deep cross-file chains from consuming all budget.
+
+7. **CFG for cross-file callees**: Cross-file bodies reference `NodeIndex` values from their original file's CFG. Store a minimal `Cfg` subset (just the `NodeInfo` entries referenced by the SSA body) alongside the body. Or, restructure `CalleeSsaBody` to be self-contained with embedded node info.
+
+8. **Add integration fixtures**: Multi-file test with cross-file helper function.
+
+### Architecture notes
+- Cross-file body execution is optional and additive. Files without available cross-file bodies fall back to summary resolution (existing behavior, no regression).
+- Serialization adds ~3-10KB per function body to SQLite. For a 1000-function project, this is ~3-10MB — acceptable.
+- The resolution chain becomes: intra-file body → cross-file body → SSA summary → legacy summary → opaque call.
+
+### Validation requirements
+- All existing tests pass
+- Cross-file body execution improves symex verdicts for multi-file patterns
+- Storage bounded by body size gate
+- Budget prevents cross-file execution from dominating analysis time
+
+### Exit criteria
+- `CalleeSsaBody` serializable and persisted to SQLite
+- Cross-file bodies loaded into `GlobalSummaries`
+- `InterprocCtx` resolves cross-file callees
+- Depth-limited cross-file execution
+- Integration fixture with cross-file taint path
+
+### Dependencies
+Phase 24A/B (interprocedural execution core + controls). Phase 8 (SSA summary persistence — SQLite infrastructure).
+
+---
+
+## Phase 31: Dynamic Dispatch and Type-Qualified Symbolic Resolution
+
+**Category:** Analysis Precision — Call Resolution
+
+**Why now:** The symbolic executor resolves calls by name only. When a receiver has a known type (e.g., `HttpClient.send(url)` where `client` was constructed as `new HttpClient()`), the taint engine's `resolve_type_qualified_labels()` constructs `"HttpClient.send"` for label matching — but the symex transfer doesn't use type facts for call resolution. This means virtual method calls to framework APIs (database clients, HTTP clients, template engines) are treated as opaque even when the receiver type is known.
+
+### Current state
+- `SymexContext.type_facts: &TypeFactResult` available but unused in symex call resolution
+- `TypeFactResult.get_type(v) → Option<TypeKind>` returns known types from constructor inference
+- `TypeKind::label_prefix()` maps security types to label-matching prefixes ("HttpClient" → "HttpClient")
+- Taint engine uses type-qualified resolution in `resolve_callee()` step 0 (Phase 10)
+- Symex transfer Call arm: container ops → string methods → interproc → summary → opaque
+
+### Goals
+- Use type facts to construct type-qualified callee names for symbolic resolution
+- Integrate type-qualified resolution into the symex call resolution chain
+- Enable summary-based modeling for framework API methods via type-qualified names
+
+### Files/systems to be touched
+- `src/symex/transfer.rs` — add type-qualified resolution step in Call arm
+
+### Concrete implementation tasks
+
+1. **Add type-qualified resolution step** in `transfer_inst()` Call arm, after interproc and before summary:
+   ```rust
+   // Phase 31: Type-qualified symbolic resolution
+   if let Some(receiver) = receiver {
+       if let Some(type_facts) = /* thread type_facts through */ {
+           if let Some(kind) = type_facts.get_type(*receiver) {
+               if let Some(prefix) = kind.label_prefix() {
+                   let qualified = format!("{}.{}", prefix, callee_method_name);
+                   if let Some(result) = resolve_callee_symbolically(ctx, &qualified, ...) {
+                       state.set(inst.value, result.value);
+                       if result.tainted { state.mark_tainted(inst.value); }
+                       return;
+                   }
+               }
+           }
+       }
+   }
+   ```
+
+2. **Thread `type_facts` to transfer**: Add `type_facts: Option<&TypeFactResult>` to the transfer function parameters, or include it in `SymexSummaryCtx`.
+
+3. **Extract method name from callee string**: For `obj.method()`, the callee string is `"method"` (after normalization). Combine with receiver type prefix.
+
+4. **Add unit test**: Mock type fact for a receiver, verify qualified name is resolved.
+
+### Validation requirements
+- All existing tests pass
+- Type-qualified resolution fires for known-type receivers
+- Fallback to unqualified resolution when receiver type is unknown
+
+### Exit criteria
+- Type-qualified callee names constructed in symex Call arm
+- Summary resolution uses qualified names
+- No regressions
+
+### Dependencies
+Phase 10 (type-aware analysis — provides `TypeKind`, `label_prefix()`, constructor inference).
+
+---
+
+## Phase 32: Floating Point and Extended Numeric Types
+
+**Category:** Analysis Completeness — Numeric Domain
+
+**Why now:** `ConstLattice` only supports `Int(i64)`. Floating-point literals (`0.5`, `1.0e-3`, `NaN`, `Infinity`) collapse to `Varying`, losing precision in constant propagation and symbolic execution. While float values rarely carry taint directly, they appear in security-relevant comparisons: threshold checks (`if (score > 0.95)`), rate limits, and financial calculations. Adding float support completes the numeric domain.
+
+### Current state
+- `ConstLattice`: `Top | Str(String) | Int(i64) | Bool(bool) | Null | Varying`
+- `parse()` in `const_prop.rs`: attempts `i64` parse, falls back to `Str` or `Varying`
+- `SymbolicValue::Concrete(i64)`: integer only
+- Abstract interpretation `IntervalFact`: `lo: i64, hi: i64`
+
+### Goals
+- Add `Float(f64)` variant to `ConstLattice`
+- Add `ConcreteFloat(f64)` variant to `SymbolicValue` (or reuse `Concrete` with a wider type)
+- Parse float literals in constant propagation
+- Extend `mk_binop()` with float arithmetic and concrete folding
+- Optional: extend `IntervalFact` with float bounds
+
+### Files/systems to be touched
+- `src/ssa/const_prop.rs` — add `Float(f64)` to `ConstLattice`, update `parse()`
+- `src/symex/value.rs` — add `ConcreteFloat(f64)` or extend `Concrete` to `ConcreteNum(NumericValue)`
+- `src/symex/transfer.rs` — seed float constants from `ConstLattice::Float`
+- `src/abstract_interp/interval.rs` — optional: float interval bounds
+
+### Concrete implementation tasks
+
+1. **Extend `ConstLattice`**: Add `Float(f64)`. Update `parse()` to try `f64` parse after `i64` fails (but before `Str` fallback). Handle `NaN`, `Infinity`, `-Infinity` as special cases.
+
+2. **Extend `SymbolicValue`**: Add `ConcreteFloat(f64)`. Smart constructor `mk_float_binop()` with concrete folding. Handle `NaN` propagation: any op involving `NaN` → `Unknown` (conservative).
+
+3. **Concrete folding for floats**: `Add(1.5, 2.5) → 4.0`, `Div(1.0, 0.0) → Unknown` (infinity), `Mul(NaN, x) → Unknown`.
+
+4. **Z3 translation** (optional): Z3 Real sort for float variables. `check_float_constraint()` for float comparisons in path constraints.
+
+5. **Display**: `ConcreteFloat(f)` → formatted as `f64` string in witness generation.
+
+### Validation requirements
+- All existing tests pass
+- Float literals parsed correctly
+- Float arithmetic folding correct for normal, infinity, NaN cases
+- No regressions in integer handling
+
+### Exit criteria
+- `ConstLattice::Float(f64)` with parsing
+- `SymbolicValue::ConcreteFloat(f64)` with folding
+- Float constants seeded in symex transfer
+
+### Dependencies
+None. Standalone numeric domain extension.
+
+---
+
+## Phase 33: Regex-Aware String Analysis
+
+**Category:** Analysis Depth — String Domain Precision
+
+**Why now:** Regex-based validation is ubiquitous in web applications: input validation (`/^[a-zA-Z0-9]+$/`), sanitization (`str.replace(/[<>"']/g, '')`), and routing (`/^\/api\/v[12]\//`). The symex engine treats regex operations as opaque — `Replace` only works with concrete string patterns, not regex patterns. This means regex-based sanitizers cannot be verified symbolically, and regex-based validators cannot prune infeasible paths.
+
+### Current state
+- `SymbolicValue::Replace(inner, pattern, replacement)` — pattern and replacement are concrete `String` only
+- `detect_replace_sanitizer()` in `strings.rs` — matches XSS/SQLi/CMDi patterns in Replace, but only for literal string patterns
+- No regex crate dependency in nyx
+- Path constraints have no regex-match predicate
+
+### Goals
+- Recognize regex patterns in Replace and Match operations
+- Classify common security-relevant regex patterns (alphanumeric-only, no-special-chars, URL format)
+- Use regex classification to determine if a sanitizer/validator is effective for a given vulnerability class
+- Optional: concrete regex evaluation for witness generation
+
+### Files/systems to be touched
+- `src/symex/strings.rs` — add `RegexPattern` classification, extend `detect_replace_sanitizer()`
+- `src/symex/value.rs` — extend `Replace` to accept regex patterns, add `RegexMatch` variant
+- `src/symex/witness.rs` — concrete regex evaluation for encoded witnesses
+- `Cargo.toml` — add `regex` crate dependency (feature-gated)
+
+### Concrete implementation tasks
+
+1. **Add `regex` crate** as optional dependency: `regex = { version = "1", optional = true }`. Feature gate: `regex_symex`.
+
+2. **Define `RegexClassification` enum**:
+   ```rust
+   pub enum RegexClassification {
+       AlphanumericOnly,      // ^[a-zA-Z0-9]+$
+       NoSpecialChars,        // removes <>"'&; etc.
+       NumericOnly,           // ^[0-9]+$
+       UrlFormat,             // ^https?://...
+       EmailFormat,           // basic email pattern
+       WhitelistChars(String),// [allowed_chars]+
+       Unknown,               // unrecognized pattern
+   }
+   ```
+
+3. **Implement `classify_regex(pattern: &str) → RegexClassification`**: Pattern-match against known security-relevant regex shapes. Use heuristics (check for `^`, `$` anchors, character classes) rather than full regex parsing.
+
+4. **Extend `detect_replace_sanitizer()`**: When the pattern is a regex string (starts with `/` in JS or contains regex metacharacters), classify it and determine if it strips dangerous characters for the relevant vulnerability class.
+
+5. **Add `SymbolicValue::RegexMatch`** variant:
+   ```rust
+   RegexMatch { input: Box<SymbolicValue>, pattern: String, classification: RegexClassification }
+   ```
+
+6. **Concrete regex evaluation** (with `regex` feature):
+   - For witness generation, apply regex patterns to concrete strings
+   - `Replace(/[<>"']/g, '')` on `<script>alert(1)</script>` → `scriptalert(1)/script`
+   - Show the post-regex output in witness
+
+7. **Path constraint integration**: When a regex test appears in a branch condition (`if (/^[0-9]+$/.test(input))`), create a `PathConstraint` with the regex classification. If the classification is `NumericOnly` and the sink requires `SQL_QUERY`, the path is safe (numeric input can't cause SQL injection).
+
+### Validation requirements
+- All existing tests pass
+- Common security regex patterns correctly classified
+- Replace with regex patterns produces correct witnesses (with regex feature)
+- Graceful degradation without regex feature (Unknown classification)
+
+### Exit criteria
+- `RegexClassification` enum with 7 categories
+- `classify_regex()` for common security patterns
+- Regex-aware `detect_replace_sanitizer()`
+- Concrete regex evaluation in witness generation
+- Feature-gated regex dependency
+
+### Dependencies
+Phase 22 (symbolic string theory — `Replace` infrastructure, `detect_replace_sanitizer()`). Phase 28 (encoding models — complements regex sanitizers).
+
+---
+
 ## Audit Summary
 
 The deep audit of the codebase (32,500 lines across all modules) reveals a solid, production-grade SSA-based taint engine with correct Cytron phi insertion, sound exception handling, and a well-designed lattice-based transfer framework. The engine is architecturally ready for extension — the `Lattice` trait, `Transfer` trait, and two-phase fixed-point design provide clean extension points for new abstract domains.

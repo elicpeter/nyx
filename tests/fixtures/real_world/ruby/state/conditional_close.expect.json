@@ -13,7 +13,7 @@
   "expected": [
     {
       "rule_id": "state-resource-leak-possible",
-      "severity": null,
+      "severity": "LOW",
       "must_match": true,
       "line_range": [
         1,
@@ -31,7 +31,7 @@
         2
       ],
       "evidence_contains": [],
-      "notes": "TP: File.open on line 2 is only closed in the if-branch (line 5); leaked when flag is false"
+      "notes": "Does not fire — correctly identified as may-leak, not definite leak"
     }
   ]
 }

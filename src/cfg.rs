@@ -1936,6 +1936,16 @@ fn push_node<'a>(
     // Python `with` and Java try-with-resources.
     let is_raii_managed = is_raii_factory(lang, &text);
 
+    // Ruby block form auto-close: `File.open(path) { |f| f.read }` —
+    // the block parameter receives the resource and Ruby guarantees close
+    // at block exit.  If assigned (`f = File.open(p) { ... }`), the
+    // variable holds the block's return value, not an open resource.
+    let is_ruby_block_managed = lang == "ruby"
+        && call_ast.is_some_and(|cn| {
+            let mut c = cn.walk();
+            cn.children(&mut c).any(|ch| ch.kind() == "do_block" || ch.kind() == "block")
+        });
+
     let idx = g.add_node(NodeInfo {
         kind,
         span,
@@ -1959,7 +1969,7 @@ fn push_node<'a>(
         outer_callee,
         cast_target_type,
         bin_op: extract_bin_op(ast, lang),
-        managed_resource: is_raii_managed,
+        managed_resource: is_raii_managed || is_ruby_block_managed,
             in_defer: false,
     });
 

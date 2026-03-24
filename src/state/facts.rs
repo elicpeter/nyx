@@ -133,7 +133,21 @@ pub fn extract_findings(
                 continue;
             }
             let var_name = interner.resolve(sym);
-            let acquire_node = find_acquire_node(cfg, sym, interner);
+            let scope = if is_func_exit { info.enclosing_func.as_deref() } else { None };
+            let acquire_node = find_acquire_node(cfg, sym, interner, scope);
+
+            // At the file-level Exit, skip variables whose acquire site is
+            // inside a function — those are already handled by the per-
+            // function exit checks above.  Without this, the file-level Exit
+            // would duplicate leak findings with a misleading acquire span
+            // (the first global match instead of the correct function-local one).
+            if is_exit {
+                if let Some(acq) = acquire_node {
+                    if cfg[acq].enclosing_func.is_some() {
+                        continue;
+                    }
+                }
+            }
 
             // Suppress leaks for resources acquired inside managed scopes
             // (Python `with`, Java try-with-resources). The suppression is
@@ -231,12 +245,25 @@ fn find_acquire_node(
     cfg: &Cfg,
     sym: super::symbol::SymbolId,
     interner: &SymbolInterner,
+    enclosing_func: Option<&str>,
 ) -> Option<petgraph::graph::NodeIndex> {
     let var_name = interner.resolve(sym);
+    // Try function-scoped match first (correct for multi-function files
+    // where the same variable name appears in multiple functions).
+    if let Some(func) = enclosing_func {
+        for (idx, info) in cfg.node_references() {
+            if info.kind == StmtKind::Call
+                && info.enclosing_func.as_deref() == Some(func)
+                && info.defines.as_deref() == Some(var_name)
+            {
+                return Some(idx);
+            }
+        }
+    }
+    // Fallback: first global match (for file-level Exit or top-level code).
     for (idx, info) in cfg.node_references() {
         if info.kind == StmtKind::Call
-            && let Some(ref def) = info.defines
-            && def == var_name
+            && info.defines.as_deref() == Some(var_name)
         {
             return Some(idx);
         }

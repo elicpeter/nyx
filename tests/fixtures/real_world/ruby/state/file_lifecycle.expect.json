@@ -14,8 +14,8 @@
   "expected": [
     {
       "rule_id": "state-resource-leak",
-      "severity": null,
-      "must_match": false,
+      "severity": "MEDIUM",
+      "must_match": true,
       "line_range": [
         1,
         7
@@ -25,22 +25,22 @@
     },
     {
       "rule_id": "state-double-close",
-      "severity": null,
-      "must_match": false,
+      "severity": "MEDIUM",
+      "must_match": true,
       "line_range": [
-        12,
-        20
+        14,
+        18
       ],
       "evidence_contains": [],
       "notes": "double_close calls f.close twice"
     },
     {
       "rule_id": "state-use-after-close",
-      "severity": null,
-      "must_match": false,
+      "severity": "HIGH",
+      "must_match": true,
       "line_range": [
-        18,
-        27
+        20,
+        25
       ],
       "evidence_contains": [],
       "notes": "use_after_close reads from file handle after closing it"
@@ -54,7 +54,7 @@
         15
       ],
       "evidence_contains": [],
-      "notes": "cfg-resource-leak — primary detection for double_close (state engine does not yet fire for Ruby)"
+      "notes": "cfg-resource-leak for double_close — may be suppressed by state finding on same line"
     },
     {
       "rule_id": "cfg-resource-leak",
@@ -65,7 +65,7 @@
         21
       ],
       "evidence_contains": [],
-      "notes": "cfg-resource-leak — primary detection for use_after_close (state engine does not yet fire for Ruby)"
+      "notes": "cfg-resource-leak for use_after_close — may be suppressed by state finding on same line"
     },
     {
       "rule_id": "cfg-resource-leak",
@@ -76,7 +76,7 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "cfg-resource-leak — primary detection for read_and_close (state engine does not yet fire for Ruby)"
+      "notes": "cfg-resource-leak for read_and_close — may be suppressed by state finding on same line"
     }
   ]
 }

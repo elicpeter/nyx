@@ -382,15 +382,22 @@ fn js_fs_use_after_close() {
 fn java_twr_no_false_leak() {
     // Java try-with-resources guarantees AutoCloseable.close() is called.
     // The managed_resource flag on the acquire node suppresses false leaks.
+    // The fixture also contains unsafeManual() which genuinely leaks —
+    // only verify that the TWR function's acquire (line 5) doesn't leak.
     let findings = state_diags_for("java_try_with_resources.java");
-    let leaks: Vec<_> = findings
+    let twr_leaks: Vec<_> = findings
         .iter()
-        .filter(|d| d.id.starts_with("state-resource-leak"))
+        .filter(|d| d.id.starts_with("state-resource-leak") && d.line <= 8)
         .collect();
     assert!(
-        leaks.is_empty(),
-        "Expected zero resource-leak findings in TWR fixture, got: {:?}",
-        leaks.iter().map(|d| &d.id).collect::<Vec<_>>()
+        twr_leaks.is_empty(),
+        "Expected zero resource-leak findings in TWR function (lines 1-8), got: {:?}",
+        twr_leaks.iter().map(|d| (&d.id, d.line)).collect::<Vec<_>>()
+    );
+    // unsafeManual (lines 10-13) is a genuine leak — verify it's detected
+    assert!(
+        findings.iter().any(|d| d.id == "state-resource-leak" && d.line > 8),
+        "Expected state-resource-leak for unsafeManual"
     );
 }
 
@@ -645,6 +652,21 @@ fn ruby_file_open_leak() {
 #[test]
 fn ruby_file_open_close() {
     assert_no_state_findings("ruby_file_open_close.rb");
+}
+
+#[test]
+fn ruby_double_close() {
+    assert_has("ruby_double_close.rb", "state-double-close");
+}
+
+#[test]
+fn ruby_use_after_close() {
+    assert_has("ruby_use_after_close.rb", "state-use-after-close");
+}
+
+#[test]
+fn ruby_pg_connection_leak() {
+    assert_has_prefix("ruby_pg_connection_leak.rb", "state-resource-leak");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
