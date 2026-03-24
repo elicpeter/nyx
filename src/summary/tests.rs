@@ -432,6 +432,7 @@ fn ssa_summary_serde_round_trip_identity() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -448,6 +449,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -464,6 +466,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -484,6 +487,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -508,6 +512,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     };
     gs.insert_ssa(key.clone(), v1.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v1));
@@ -521,6 +526,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     };
     gs.insert_ssa(key.clone(), v2.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v2));
@@ -552,6 +558,7 @@ fn global_summaries_merge_with_ssa_entries() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     };
     let sum_b = SsaFuncSummary {
         param_to_return: vec![],
@@ -561,6 +568,7 @@ fn global_summaries_merge_with_ssa_entries() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     };
 
     gs1.insert_ssa(key_a.clone(), sum_a.clone());
@@ -591,6 +599,7 @@ fn global_summaries_is_empty_considers_ssa() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     });
 
     assert!(!gs.is_empty());
@@ -609,6 +618,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
+        return_abstract: None,
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -640,6 +650,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
         param_container_to_return: vec![0],
         param_to_container_store: vec![(1, 0)],
         return_type: None,
+        return_abstract: None,
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -659,4 +670,43 @@ fn ssa_summary_backward_compat_missing_container_fields() {
     let summary: SsaFuncSummary = serde_json::from_str(json).unwrap();
     assert!(summary.param_container_to_return.is_empty());
     assert!(summary.param_to_container_store.is_empty());
+}
+
+#[test]
+fn ssa_summary_serde_round_trip_return_abstract() {
+    use crate::abstract_interp::{AbstractValue, IntervalFact, StringFact};
+
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        param_to_sink: vec![],
+        source_caps: Cap::empty(),
+        param_to_sink_param: vec![],
+        param_container_to_return: vec![],
+        param_to_container_store: vec![],
+        return_type: None,
+        return_abstract: Some(AbstractValue {
+            interval: IntervalFact { lo: Some(-2_147_483_648), hi: Some(2_147_483_647) },
+            string: StringFact::top(),
+        }),
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+    assert!(back.return_abstract.is_some());
+    let abs = back.return_abstract.unwrap();
+    assert_eq!(abs.interval.lo, Some(-2_147_483_648));
+    assert_eq!(abs.interval.hi, Some(2_147_483_647));
+    assert!(abs.string.is_top());
+}
+
+#[test]
+fn ssa_summary_backward_compat_missing_return_abstract() {
+    // Old JSON without return_abstract should deserialize with None
+    let json = r#"{
+        "param_to_return": [],
+        "param_to_sink": [],
+        "source_caps": 0
+    }"#;
+    let summary: SsaFuncSummary = serde_json::from_str(json).unwrap();
+    assert_eq!(summary.return_abstract, None);
 }

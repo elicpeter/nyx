@@ -270,6 +270,7 @@ pub(crate) fn extract_intra_file_ssa_summaries(
             || !summary.source_caps.is_empty()
             || !summary.param_container_to_return.is_empty()
             || !summary.param_to_container_store.is_empty()
+            || summary.return_abstract.is_some()
         {
             summaries.insert(func_name.clone(), summary);
         }
@@ -337,6 +338,7 @@ fn lower_all_functions(
                 || !summary.source_caps.is_empty()
                 || !summary.param_container_to_return.is_empty()
                 || !summary.param_to_container_store.is_empty()
+                || summary.return_abstract.is_some()
             {
                 summaries.insert(func_name.clone(), summary);
             }

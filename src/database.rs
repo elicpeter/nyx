@@ -1341,6 +1341,7 @@ fn ssa_summaries_round_trip() {
                 param_container_to_return: vec![],
                 param_to_container_store: vec![],
                 return_type: None,
+                return_abstract: None,
             },
         ),
         (
@@ -1356,6 +1357,7 @@ fn ssa_summaries_round_trip() {
                 param_container_to_return: vec![],
                 param_to_container_store: vec![],
                 return_type: None,
+                return_abstract: None,
             },
         ),
     ];
@@ -1413,6 +1415,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             param_container_to_return: vec![],
             param_to_container_store: vec![],
             return_type: None,
+            return_abstract: None,
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1).unwrap();
@@ -1432,6 +1435,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             param_container_to_return: vec![],
             param_to_container_store: vec![],
             return_type: None,
+            return_abstract: None,
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2).unwrap();
@@ -1468,6 +1472,7 @@ fn clear_drops_ssa_summaries_table() {
             param_container_to_return: vec![],
             param_to_container_store: vec![],
             return_type: None,
+            return_abstract: None,
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &sums).unwrap();

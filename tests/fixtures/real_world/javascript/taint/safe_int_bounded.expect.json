@@ -1,15 +1,6 @@
 {
-  "description": "SQL: offset is computed via integer arithmetic (page * 10). Abstract interval domain tracks bounded range but does not suppress SQL injection (Phase 17 suppression is SSRF-only).",
-  "tags": ["taint", "sqli", "abstract-interp", "interval-domain"],
+  "description": "SQL: parseInt(req.query.page) is a full sanitizer (Cap::all), so taint is killed before reaching connection.query. No finding expected.",
+  "tags": ["taint", "sqli", "sanitizer"],
   "modes": ["full"],
-  "expected": [
-    {
-      "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
-      "line_range": [6, 7],
-      "evidence_contains": [],
-      "notes": "FP: offset is a bounded integer but Phase 17 abstract suppression is limited to SSRF safe-prefix. SQL suppression deferred to future targeted analysis."
-    }
-  ]
+  "expected": []
 }

@@ -161,6 +161,8 @@ pub static RULES: &[LabelRule] = &[
             "connection.query",
             "client.query",
             "pool.query",
+            "db.query",
+            "db.execute",
         ],
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,

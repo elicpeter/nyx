@@ -22,6 +22,7 @@ pub use string_domain::StringFact;
 
 use crate::ssa::ir::SsaValue;
 use crate::state::lattice::{AbstractDomain, Lattice};
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 /// Feature gate: check if abstract interpretation is enabled.
@@ -41,7 +42,7 @@ pub fn is_enabled() -> bool {
 /// Each subdomain is independent — join, meet, widen, and leq are applied
 /// component-wise. Adding a new subdomain requires adding a field here
 /// and updating the component-wise implementations.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AbstractValue {
     pub interval: IntervalFact,
     pub string: StringFact,

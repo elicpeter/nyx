@@ -1368,6 +1368,10 @@ fn transfer_inst(
 ) {
     let info = &cfg[inst.cfg_node];
 
+    // Phase 17 hardening: cross-file abstract return fact from callee resolution.
+    // Set inside the Call arm, applied after transfer_abstract to override Top.
+    let mut callee_return_abstract: Option<crate::abstract_interp::AbstractValue> = None;
+
     match &inst.op {
         SsaOp::Source => {
             // Apply source labels from NodeInfo
@@ -1491,6 +1495,9 @@ fn transfer_inst(
             if let Some(ref resolved) = callee_summary {
                 resolved_container_to_return = resolved.param_container_to_return.clone();
                 resolved_container_store = resolved.param_to_container_store.clone();
+
+                // Phase 17 hardening: capture abstract return for post-transfer injection
+                callee_return_abstract = resolved.return_abstract.clone();
 
                 // Cross-file type propagation: if the callee has a known return
                 // type (from SSA summary), inject it into the caller's path env
@@ -1993,6 +2000,15 @@ fn transfer_inst(
     if let Some(ref mut abs) = state.abstract_state {
         transfer_abstract(inst, cfg, abs);
     }
+
+    // Phase 17 hardening: cross-file abstract return injection.
+    // Applied after transfer_abstract so summary-provided facts override the
+    // default Top that transfer_abstract assigns to unknown callees.
+    if let Some(ref abs_val) = callee_return_abstract {
+        if let Some(ref mut abs) = state.abstract_state {
+            abs.set(inst.value, abs_val.clone());
+        }
+    }
 }
 
 /// Phase 17: Compute abstract values for an SSA instruction.
@@ -2098,22 +2114,9 @@ fn transfer_abstract(
     }
 }
 
-/// Check if a callee is a known integer/numeric-producing function.
-///
-/// Conservative list: only includes functions whose return type is unambiguously
-/// numeric across supported languages. Excludes overloaded or collection-returning
-/// functions (valueOf, count, length, size, abs).
+/// Re-export from type_facts for use in transfer_abstract.
 fn is_int_producing_callee(callee: &str) -> bool {
-    let suffix = callee.rsplit(['.', ':']).next().unwrap_or(callee);
-    matches!(
-        suffix,
-        "parseInt" | "parseFloat" | "Number"        // JS/TS
-        | "int" | "float" | "ord"                    // Python
-        | "parseLong" | "parseDouble" | "parseShort" // Java
-        | "Atoi" | "ParseInt" | "ParseFloat"         // Go
-        | "intval" | "floatval"                       // PHP
-        | "to_i" | "to_f"                             // Ruby
-    )
+    crate::ssa::type_facts::is_int_producing_callee(callee)
 }
 
 /// Check if a constant text is a string literal (quoted).
@@ -2428,15 +2431,16 @@ fn collect_block_events(
         }
 
         // Phase 17: Abstract-domain-aware sink suppression.
+        // Includes SSRF prefix locking and dual-gate (type + interval) for SQL/FILE_IO.
         if let Some(ref abs) = state.abstract_state {
-            if is_abstract_safe_for_sink(inst, sink_caps, abs) {
+            if is_abstract_safe_for_sink(inst, sink_caps, abs, transfer.type_facts, &state, ssa) {
                 continue;
             }
         }
-        // Phase 17: Call-site abstract suppression (check URL argument for SSRF).
+        // Phase 17: Call-site abstract suppression.
         if let SsaOp::Call { ref args, .. } = inst.op {
             if let Some(ref abs) = state.abstract_state {
-                if is_call_abstract_safe(args, sink_caps, abs) {
+                if is_call_abstract_safe(inst, args, sink_caps, abs, transfer.type_facts, &state, ssa) {
                     continue;
                 }
             }
@@ -3488,15 +3492,22 @@ fn is_path_type_safe_for_sink(
 
 /// Check if abstract domain facts prove a sink is safe.
 ///
-/// Currently limited to SSRF suppression: if the URL prefix contains
-/// `scheme://host/`, the attacker cannot control the destination host.
+/// SSRF: string prefix with locked host.
+/// SQL_QUERY / FILE_IO: dual gate — type-proven Int AND bounded interval on all
+/// tainted leaf values. Traces back through Assign chains to find original
+/// tainted data (e.g., `parseInt(x)` inside `"SELECT ..." + parseInt(x) * 10`).
 ///
-/// Broader suppressions (bounded-integer for SQL_QUERY/FILE_IO) are
-/// intentionally excluded — the policy is too broad to be sound.
+/// NOTE: FILE_IO string prefix suppression intentionally omitted.
+/// A prefix like "/app/static/" does not prevent path traversal
+/// (e.g., "/app/static/../../etc/passwd"). The string domain cannot
+/// prove absence of "../" in the attacker-controlled suffix.
 fn is_abstract_safe_for_sink(
     inst: &SsaInst,
     sink_caps: Cap,
     abs: &AbstractState,
+    type_facts: Option<&crate::ssa::type_facts::TypeFactResult>,
+    state: &SsaTaintState,
+    ssa: &SsaBody,
 ) -> bool {
     let used = inst_use_values(inst);
     if used.is_empty() {
@@ -3513,31 +3524,129 @@ fn is_abstract_safe_for_sink(
         }
     }
 
+    // Dual gate: SQL_QUERY / FILE_IO with proven Int type AND bounded interval.
+    // Both conditions required: type proves the value IS an integer (not a string
+    // that happened to parse), interval proves it's bounded (not arbitrary).
+    // Traces through Assign chains so "const_string + tainted_int" is caught.
+    if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO) {
+        if let Some(tf) = type_facts {
+            let leaves = trace_tainted_leaf_values(inst, state, ssa);
+            if !leaves.is_empty()
+                && leaves
+                    .iter()
+                    .all(|v| tf.is_int(*v) && abs.get(*v).interval.is_proven_bounded())
+            {
+                return true;
+            }
+        }
+    }
+
     false
 }
 
 /// Check if call arguments prove a sink is safe via abstract domain.
 fn is_call_abstract_safe(
+    inst: &SsaInst,
     args: &[SmallVec<[SsaValue; 2]>],
     sink_caps: Cap,
     abs: &AbstractState,
+    type_facts: Option<&crate::ssa::type_facts::TypeFactResult>,
+    state: &SsaTaintState,
+    ssa: &SsaBody,
 ) -> bool {
-    if !sink_caps.intersects(Cap::SSRF) {
-        return false;
-    }
-    // For SSRF sinks, check if the URL argument (first arg) has a safe prefix.
-    // Guard: if the first arg group is empty (receiver couldn't be resolved to
-    // an SSA value), we cannot prove safety — return false to avoid vacuous
-    // truth from `.all()` on an empty iterator.
-    if let Some(first_arg) = args.first() {
-        if first_arg.is_empty() {
-            return false;
+    // SSRF — check if the URL argument (first arg) has a safe prefix.
+    if sink_caps.intersects(Cap::SSRF) {
+        if let Some(first_arg) = args.first() {
+            if !first_arg.is_empty()
+                && first_arg
+                    .iter()
+                    .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string))
+            {
+                return true;
+            }
         }
-        return first_arg
-            .iter()
-            .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string));
     }
+
+    // Dual gate for Call sinks (same as non-Call path)
+    if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO) {
+        if let Some(tf) = type_facts {
+            let leaves = trace_tainted_leaf_values(inst, state, ssa);
+            if !leaves.is_empty()
+                && leaves
+                    .iter()
+                    .all(|v| tf.is_int(*v) && abs.get(*v).interval.is_proven_bounded())
+            {
+                return true;
+            }
+        }
+    }
+
     false
+}
+
+/// Maximum backwards trace depth through Assign chains.
+const MAX_TRACE_DEPTH: usize = 8;
+
+/// Trace backwards through Assign chains to find the leaf tainted SSA values.
+///
+/// When a tainted value is a binary operation (e.g., string concatenation of
+/// `"SELECT ..." + offset`), the concat result is String-typed but the tainted
+/// operand (`offset`) may be Int-typed and bounded. This function finds those
+/// leaf tainted values so dual-gate suppression can check them directly.
+fn trace_tainted_leaf_values(
+    inst: &SsaInst,
+    state: &SsaTaintState,
+    ssa: &SsaBody,
+) -> SmallVec<[SsaValue; 4]> {
+    let mut leaves = SmallVec::new();
+    let used = inst_use_values(inst);
+    for &v in &used {
+        if state.get(v).is_some() {
+            trace_single_leaf(v, state, ssa, &mut leaves, 0);
+        }
+    }
+    leaves
+}
+
+fn trace_single_leaf(
+    v: SsaValue,
+    state: &SsaTaintState,
+    ssa: &SsaBody,
+    leaves: &mut SmallVec<[SsaValue; 4]>,
+    depth: usize,
+) {
+    if depth >= MAX_TRACE_DEPTH || leaves.len() >= 16 {
+        leaves.push(v);
+        return;
+    }
+    // Find the instruction defining v by scanning its block.
+    let vd = &ssa.value_defs[v.0 as usize];
+    let block = &ssa.blocks[vd.block.0 as usize];
+    let inst = match block.body.iter().find(|i| i.value == v) {
+        Some(i) => i,
+        None => {
+            // Phi or not found in body — treat as leaf
+            leaves.push(v);
+            return;
+        }
+    };
+    match &inst.op {
+        SsaOp::Assign(uses) if uses.len() >= 2 => {
+            let mut found = false;
+            for &u in uses {
+                if state.get(u).is_some() {
+                    trace_single_leaf(u, state, ssa, leaves, depth + 1);
+                    found = true;
+                }
+            }
+            if !found {
+                leaves.push(v);
+            }
+        }
+        _ => {
+            leaves.push(v);
+        }
+    }
 }
 
 /// SSRF safety: prefix includes scheme + full host + path separator.
@@ -3577,6 +3686,8 @@ struct ResolvedSummary {
     param_to_container_store: Vec<(usize, usize)>,
     /// Inferred return type from cross-file SSA summary.
     return_type: Option<crate::ssa::type_facts::TypeKind>,
+    /// Abstract domain fact for the return value (Phase 17 hardening).
+    return_abstract: Option<crate::abstract_interp::AbstractValue>,
 }
 
 fn resolve_callee(
@@ -3619,6 +3730,7 @@ fn resolve_callee(
                     param_container_to_return: vec![],
                     param_to_container_store: vec![],
                     return_type: None,
+                    return_abstract: None,
                 });
             }
             // Try label classification for the bound function
@@ -3648,6 +3760,7 @@ fn resolve_callee(
                     param_container_to_return: vec![],
                     param_to_container_store: vec![],
                     return_type: None,
+                    return_abstract: None,
                 });
             }
         }
@@ -3693,6 +3806,7 @@ fn resolve_callee(
             param_container_to_return: vec![],
             param_to_container_store: vec![],
             return_type: None,
+            return_abstract: None,
         });
     }
     if local_matches.len() > 1 {
@@ -3714,6 +3828,7 @@ fn resolve_callee(
                         param_container_to_return: vec![],
                         param_to_container_store: vec![],
                         return_type: None,
+                        return_abstract: None,
                     });
                 }
             }
@@ -3741,6 +3856,7 @@ fn resolve_callee(
                 param_container_to_return: vec![],
                 param_to_container_store: vec![],
                 return_type: None,
+                return_abstract: None,
             });
         }
     }
@@ -3784,6 +3900,7 @@ fn convert_ssa_to_resolved(
         param_container_to_return: ssa_sum.param_container_to_return.clone(),
         param_to_container_store: ssa_sum.param_to_container_store.clone(),
         return_type: ssa_sum.return_type.clone(),
+        return_abstract: ssa_sum.return_abstract.clone(),
     }
 }
 
@@ -4123,8 +4240,10 @@ pub fn extract_ssa_func_summary(
         .collect();
 
     // Helper: run a taint probe with a given global_seed and return
-    // (surviving_return_caps, sink_events).
-    let run_probe = |seed: HashMap<SymbolId, VarTaint>| -> (Cap, Vec<SsaTaintEvent>) {
+    // (surviving_return_caps, sink_events, return_abstract).
+    // The return_abstract is the joined abstract value of the return SSA value
+    // across all return blocks (None if Top or abstract interp disabled).
+    let run_probe = |seed: HashMap<SymbolId, VarTaint>| -> (Cap, Vec<SsaTaintEvent>, Option<crate::abstract_interp::AbstractValue>) {
         let seed_ref = if seed.is_empty() { None } else { Some(&seed) };
         let transfer = SsaTaintTransfer {
             lang,
@@ -4155,6 +4274,8 @@ pub fn extract_ssa_func_summary(
         // If only param values reach return → pure passthrough (Identity).
         let mut derived_caps = Cap::empty();
         let mut param_caps = Cap::empty();
+        // Extract abstract value of the return SSA value.
+        let mut return_abstract: Option<crate::abstract_interp::AbstractValue> = None;
         for &bid in &return_blocks {
             if let Some(entry) = &block_states[bid] {
                 let empty_induction = HashSet::new();
@@ -4169,6 +4290,22 @@ pub fn extract_ssa_func_summary(
                         derived_caps |= taint.caps;
                     }
                 }
+                // Abstract return: find the last instruction's SSA value in this
+                // return block and extract its abstract value from the exit state.
+                if let Some(ref abs) = exit.abstract_state {
+                    let ret_val = ssa.blocks[bid].body.last()
+                        .or_else(|| ssa.blocks[bid].phis.last())
+                        .map(|inst| inst.value);
+                    if let Some(rv) = ret_val {
+                        let av = abs.get(rv);
+                        if !av.is_top() {
+                            return_abstract = Some(match return_abstract {
+                                None => av,
+                                Some(prev) => prev.join(&av),
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -4179,11 +4316,16 @@ pub fn extract_ssa_func_summary(
             param_caps
         };
 
-        (return_caps, events)
+        // Drop return_abstract if it joined to Top
+        let return_abstract = return_abstract.filter(|v| !v.is_top());
+
+        (return_caps, events, return_abstract)
     };
 
-    // Probe with no params tainted → detect source_caps
-    let (baseline_return_caps, _baseline_events) = run_probe(HashMap::new());
+    // Probe with no params tainted → detect source_caps + return abstract.
+    // Abstract values don't depend on taint seeding, so the baseline probe
+    // captures the function's intrinsic abstract return value.
+    let (baseline_return_caps, _baseline_events, return_abstract) = run_probe(HashMap::new());
     let source_caps = baseline_return_caps;
 
     // Probe each param
@@ -4208,7 +4350,7 @@ pub fn extract_ssa_func_summary(
             uses_summary: false,
         });
 
-        let (return_caps, events) = run_probe(seed);
+        let (return_caps, events, _) = run_probe(seed);
 
         // Subtract baseline source_caps — we only want param-contributed caps
         let param_return_caps = return_caps & !source_caps;
@@ -4250,6 +4392,7 @@ pub fn extract_ssa_func_summary(
         param_container_to_return,
         param_to_container_store,
         return_type,
+        return_abstract,
     }
 }
 

@@ -5,13 +5,14 @@
 //! (add, sub, mul, div, mod) with overflow-safe semantics.
 
 use crate::state::lattice::{AbstractDomain, Lattice};
+use serde::{Deserialize, Serialize};
 
 /// Numeric interval: `[lo, hi]` inclusive bounds.
 ///
 /// - `top()` = `[None, None]` — any integer
 /// - `bottom()` = `[1, 0]` — empty / unsatisfiable (lo > hi)
 /// - `exact(n)` = `[n, n]` — singleton
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntervalFact {
     pub lo: Option<i64>,
     pub hi: Option<i64>,

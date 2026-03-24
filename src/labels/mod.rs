@@ -1006,15 +1006,15 @@ mod tests {
     #[test]
     fn classify_case_sensitive_suffix_boundary() {
         let extras = vec![RuntimeLabelRule {
-            matchers: vec!["Execute".into()],
+            matchers: vec!["RunQuery".into()],
             label: DataLabel::Sink(Cap::SQL_QUERY),
             case_sensitive: true,
         }];
         // Correct case with dot boundary
-        let result = classify("javascript", "db.Execute", Some(&extras));
+        let result = classify("javascript", "db.RunQuery", Some(&extras));
         assert_eq!(result, Some(DataLabel::Sink(Cap::SQL_QUERY)));
         // Wrong case does NOT match
-        let result = classify("javascript", "db.execute", Some(&extras));
+        let result = classify("javascript", "db.runquery", Some(&extras));
         assert_eq!(result, None);
     }
 

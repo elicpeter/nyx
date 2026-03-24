@@ -4,6 +4,7 @@
 //! (URL prefix proves host is locked) and general string analysis.
 
 use crate::state::lattice::{AbstractDomain, Lattice};
+use serde::{Deserialize, Serialize};
 
 /// Maximum tracked prefix length (bytes).
 pub const MAX_PREFIX_LEN: usize = 256;
@@ -18,7 +19,7 @@ pub const MAX_SUFFIX_LEN: usize = 128;
 /// - `Some(prefix)` ⊑ `None` (no prefix known)
 ///
 /// Prefix and suffix are independent: a value can have both, either, or neither.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StringFact {
     /// Known prefix of the string. `None` = unknown.
     pub prefix: Option<String>,

@@ -222,6 +222,24 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
     }
 }
 
+/// Check if a callee is a known integer/numeric-producing function.
+///
+/// Conservative list: only includes functions whose return type is unambiguously
+/// numeric across supported languages. Excludes overloaded or collection-returning
+/// functions (valueOf, count, length, size, abs).
+pub fn is_int_producing_callee(callee: &str) -> bool {
+    let suffix = callee.rsplit(['.', ':']).next().unwrap_or(callee);
+    matches!(
+        suffix,
+        "parseInt" | "parseFloat" | "Number"        // JS/TS
+        | "int" | "float" | "ord"                    // Python
+        | "parseLong" | "parseDouble" | "parseShort" // Java
+        | "Atoi" | "ParseInt" | "ParseFloat"         // Go
+        | "intval" | "floatval"                       // PHP
+        | "to_i" | "to_f"                             // Ruby
+    )
+}
+
 /// Analyze types for all SSA values.
 ///
 /// Uses constant propagation results to seed types from known constants,
@@ -253,9 +271,13 @@ pub fn analyze_types(
                 SsaOp::Param { .. } => TypeFact::unknown(),
                 SsaOp::CatchParam => TypeFact::from_kind(TypeKind::Object),
                 SsaOp::Call { callee, .. } => {
-                    lang.and_then(|l| constructor_type(l, callee))
-                        .map(TypeFact::from_kind)
-                        .unwrap_or_else(TypeFact::unknown)
+                    if let Some(ty) = lang.and_then(|l| constructor_type(l, callee)) {
+                        TypeFact::from_kind(ty)
+                    } else if is_int_producing_callee(callee) {
+                        TypeFact::from_kind(TypeKind::Int)
+                    } else {
+                        TypeFact::unknown()
+                    }
                 }
                 SsaOp::Nop => TypeFact::unknown(),
                 SsaOp::Assign(uses) if uses.len() == 1 => {
@@ -299,7 +321,7 @@ pub fn analyze_types(
                 }
             }
 
-            // Copy assignments
+            // Copy assignments and binary arithmetic
             for inst in &block.body {
                 if let SsaOp::Assign(uses) = &inst.op {
                     if uses.len() == 1 {
@@ -308,6 +330,18 @@ pub fn analyze_types(
                         if old != Some(&src_fact) {
                             facts.insert(inst.value, src_fact);
                             changed = true;
+                        }
+                    } else if uses.len() == 2 {
+                        // Binary assignments: if both operands are Int, result is Int.
+                        // This ensures `parseInt(x) * 10` is typed as Int (Int * Int = Int).
+                        let lhs = facts.get(&uses[0]).cloned().unwrap_or_else(TypeFact::unknown);
+                        let rhs = facts.get(&uses[1]).cloned().unwrap_or_else(TypeFact::unknown);
+                        if matches!(lhs.kind, TypeKind::Int) && matches!(rhs.kind, TypeKind::Int) {
+                            let new_fact = TypeFact::from_kind(TypeKind::Int);
+                            if facts.get(&inst.value) != Some(&new_fact) {
+                                facts.insert(inst.value, new_fact);
+                                changed = true;
+                            }
                         }
                     }
                 }

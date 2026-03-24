@@ -1,3 +1,4 @@
+use crate::abstract_interp::AbstractValue;
 use crate::labels::Cap;
 use crate::ssa::type_facts::TypeKind;
 use serde::{Deserialize, Serialize};
@@ -46,4 +47,9 @@ pub struct SsaFuncSummary {
     /// calls or type annotations. Enables cross-file type-qualified resolution.
     #[serde(default)]
     pub return_type: Option<TypeKind>,
+    /// Abstract domain fact for the return value (Phase 17 hardening).
+    /// When present, callers can use this to seed the return SSA value's
+    /// abstract state for cross-procedural interval/string analysis.
+    #[serde(default)]
+    pub return_abstract: Option<AbstractValue>,
 }
