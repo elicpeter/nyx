@@ -17,6 +17,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use smallvec::SmallVec;
+
 use crate::cfg::Cfg;
 use crate::constraint;
 use crate::evidence::{SymbolicVerdict, Verdict};
@@ -70,6 +72,11 @@ struct ExplorationState {
     /// Per-block visit count for bounded loop unrolling (Phase 20).
     /// Inherited at fork points — both branches share the visit history.
     visit_counts: HashMap<BlockId, u8>,
+    /// When `Some`, this path entered via an exception edge (Phase 25).
+    /// Moved into `sym_state.exception_context` immediately before block
+    /// transfer so that `CatchParam` can consume it. This is a taint carrier
+    /// (`SymbolicValue::Unknown`), not a faithful thrown-value model.
+    exception_context: Option<SymbolicValue>,
 }
 
 /// Outcome of a single completed exploration path.
@@ -112,6 +119,8 @@ fn compute_source_sink_reachable(
     ssa: &SsaBody,
     source_block: BlockId,
     sink_block: BlockId,
+    exception_succs: &HashMap<BlockId, SmallVec<[BlockId; 2]>>,
+    exception_preds: &HashMap<BlockId, SmallVec<[BlockId; 2]>>,
 ) -> HashSet<BlockId> {
     // Forward BFS from source
     let mut forward = HashSet::new();
@@ -126,6 +135,14 @@ fn compute_source_sink_reachable(
                 }
             }
         }
+        // Phase 25: follow exception edges from this block
+        if let Some(catches) = exception_succs.get(&bid) {
+            for &catch in catches {
+                if forward.insert(catch) {
+                    queue.push_back(catch);
+                }
+            }
+        }
     }
 
     // Backward BFS from sink
@@ -137,6 +154,14 @@ fn compute_source_sink_reachable(
             for &pred in &block.preds {
                 if backward.insert(pred) {
                     queue.push_back(pred);
+                }
+            }
+        }
+        // Phase 25: follow exception edges TO this block (reverse)
+        if let Some(srcs) = exception_preds.get(&bid) {
+            for &src in srcs {
+                if backward.insert(src) {
+                    queue.push_back(src);
                 }
             }
         }
@@ -183,7 +208,32 @@ pub(super) fn explore_finding(
 
     let source_block = path_blocks[0];
     let sink_block = path_blocks[path_blocks.len() - 1];
-    let reachable = compute_source_sink_reachable(ssa, source_block, sink_block);
+
+    // Phase 25: precompute exception edge maps (O(n) once, reused everywhere)
+    let exception_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = {
+        let mut map: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
+        for &(src, catch) in &ssa.exception_edges {
+            let entry = map.entry(src).or_default();
+            if !entry.contains(&catch) {
+                entry.push(catch);
+            }
+        }
+        map
+    };
+    let exception_preds: HashMap<BlockId, SmallVec<[BlockId; 2]>> = {
+        let mut map: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
+        for &(src, catch) in &ssa.exception_edges {
+            let entry = map.entry(catch).or_default();
+            if !entry.contains(&src) {
+                entry.push(src);
+            }
+        }
+        map
+    };
+
+    let reachable = compute_source_sink_reachable(
+        ssa, source_block, sink_block, &exception_succs, &exception_preds,
+    );
     let on_path: HashSet<BlockId> = path_blocks.iter().copied().collect();
 
     // Compute loop information (Phase 20)
@@ -215,6 +265,7 @@ pub(super) fn explore_finding(
         steps_taken: 0,
         constraints_checked: 0,
         visit_counts: HashMap::new(),
+        exception_context: None,
     };
 
     let mut work_queue: VecDeque<ExplorationState> = VecDeque::new();
@@ -293,6 +344,7 @@ pub(super) fn explore_finding(
             &reachable,
             &on_path,
             &loop_info,
+            &exception_succs,
             &mut work_queue,
             &mut outcomes,
             &mut total_steps,
@@ -333,6 +385,7 @@ fn run_path(
     reachable: &HashSet<BlockId>,
     on_path: &HashSet<BlockId>,
     loop_info: &LoopInfo,
+    exception_succs: &HashMap<BlockId, SmallVec<[BlockId; 2]>>,
     work_queue: &mut VecDeque<ExplorationState>,
     outcomes: &mut Vec<PathOutcome>,
     total_steps: &mut usize,
@@ -405,6 +458,12 @@ fn run_path(
             return Some(record_outcome(state, finding, ssa, cfg));
         }
 
+        // Phase 25: move exception context into sym_state before block transfer
+        // so CatchParam can consume it during instruction transfer
+        if let Some(exc_val) = state.exception_context.take() {
+            state.sym_state.set_exception_context(exc_val);
+        }
+
         // Transfer this block's instructions
         let lang = summary_ctx.map(|c| c.lang).or(heap_ctx.map(|c| c.lang));
         transfer::transfer_block_with_predecessor(
@@ -433,6 +492,36 @@ fn run_path(
         let step_count = block.phis.len() + block.body.len();
         state.steps_taken += step_count;
         *total_steps += step_count;
+
+        // Phase 25: fork into exception paths from this block
+        if let Some(catch_blocks) = exception_succs.get(&block_id) {
+            for &catch_blk in catch_blocks {
+                if !reachable.contains(&catch_blk) {
+                    continue;
+                }
+                let can_fork = state.forks_used < MAX_FORKS_PER_FINDING
+                    && outcomes.len() + work_queue.len() + 1 < MAX_PATHS_PER_FINDING
+                    && *total_steps < MAX_TOTAL_STEPS;
+                if can_fork {
+                    let exc_state = ExplorationState {
+                        sym_state: state.sym_state.clone(),
+                        env: constraint::PathEnv::empty(),
+                        current_block: catch_blk,
+                        predecessor: Some(block_id),
+                        forks_used: state.forks_used + 1,
+                        steps_taken: state.steps_taken,
+                        constraints_checked: state.constraints_checked,
+                        visit_counts: state.visit_counts.clone(),
+                        // Taint carrier — not a faithful thrown-value model.
+                        // CatchParam transfer will mark the catch parameter tainted.
+                        exception_context: Some(SymbolicValue::Unknown),
+                    };
+                    work_queue.push_back(exc_state);
+                } else {
+                    *search_exhausted = false;
+                }
+            }
+        }
 
         // Examine terminator
         match &block.terminator {
@@ -656,6 +745,7 @@ fn fork_at_branch(
         steps_taken: state.steps_taken,
         constraints_checked: state.constraints_checked,
         visit_counts: state.visit_counts.clone(),
+        exception_context: None,
     };
 
     if !is_unknown {
@@ -678,6 +768,7 @@ fn fork_at_branch(
         steps_taken: state.steps_taken,
         constraints_checked: state.constraints_checked,
         visit_counts: state.visit_counts.clone(),
+        exception_context: None,
     };
 
     if !is_unknown {
@@ -927,7 +1018,7 @@ fn append_interproc_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ssa::ir::{SsaBlock, SsaValue, Terminator, ValueDef};
+    use crate::ssa::ir::{SsaBlock, SsaInst, SsaOp, SsaValue, Terminator, ValueDef};
     use crate::ssa::type_facts::TypeFactResult;
     use crate::taint::FlowStepRaw;
     use petgraph::graph::NodeIndex;
@@ -1025,7 +1116,9 @@ mod tests {
             exception_edges: vec![],
         };
 
-        let reachable = compute_source_sink_reachable(&ssa, b0, b3);
+        let empty_succs = HashMap::new();
+        let empty_preds = HashMap::new();
+        let reachable = compute_source_sink_reachable(&ssa, b0, b3, &empty_succs, &empty_preds);
         assert!(reachable.contains(&b0));
         assert!(reachable.contains(&b1));
         assert!(reachable.contains(&b3));
@@ -1080,7 +1173,9 @@ mod tests {
             exception_edges: vec![],
         };
 
-        let reachable = compute_source_sink_reachable(&ssa, b0, b3);
+        let empty_succs = HashMap::new();
+        let empty_preds = HashMap::new();
+        let reachable = compute_source_sink_reachable(&ssa, b0, b3, &empty_succs, &empty_preds);
         assert_eq!(reachable.len(), 4);
         assert!(reachable.contains(&b1));
         assert!(reachable.contains(&b2));
@@ -1548,5 +1643,274 @@ mod tests {
         assert_eq!(result.paths_completed.len(), 1);
         assert_eq!(result.paths_completed[0].verdict, Verdict::Confirmed);
         assert!(result.search_exhausted);
+    }
+
+    // ─── Phase 25: Exception-aware reachability and forking ─────────────
+
+    #[test]
+    fn reachable_includes_exception_edges() {
+        // B0 → B1 (Goto, normal), exception edge B0→B2, B2 → B3 (Goto)
+        // Target: B0 to B3. B1 is NOT on any path to B3.
+        let b0 = BlockId(0);
+        let b1 = BlockId(1);
+        let b2 = BlockId(2);
+        let b3 = BlockId(3);
+        let ssa = SsaBody {
+            blocks: vec![
+                SsaBlock {
+                    id: b0,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b1),
+                    preds: smallvec![],
+                    succs: smallvec![b1],
+                },
+                SsaBlock {
+                    id: b1,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return(None),
+                    preds: smallvec![b0],
+                    succs: smallvec![],
+                },
+                SsaBlock {
+                    id: b2,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![], // orphan: only reachable via exception edge
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b3,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return(None),
+                    preds: smallvec![b2],
+                    succs: smallvec![],
+                },
+            ],
+            entry: b0,
+            value_defs: vec![],
+            cfg_node_map: HashMap::new(),
+            exception_edges: vec![(b0, b2)],
+        };
+
+        let mut exc_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
+        exc_succs.insert(b0, smallvec![b2]);
+        let mut exc_preds: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
+        exc_preds.insert(b2, smallvec![b0]);
+
+        let reachable = compute_source_sink_reachable(&ssa, b0, b3, &exc_succs, &exc_preds);
+        assert!(reachable.contains(&b0), "source should be reachable");
+        assert!(reachable.contains(&b2), "catch block should be reachable via exception edge");
+        assert!(reachable.contains(&b3), "sink should be reachable");
+        assert!(!reachable.contains(&b1), "B1 is NOT on any path to B3");
+    }
+
+    #[test]
+    fn reachable_exception_backward() {
+        // B0 → B1 (normal, dead-end), exception edge B0→B2, B2 → B3 (sink)
+        // Sink B3 is only reachable from B0 via the exception path.
+        let b0 = BlockId(0);
+        let b1 = BlockId(1);
+        let b2 = BlockId(2);
+        let b3 = BlockId(3);
+        let ssa = SsaBody {
+            blocks: vec![
+                SsaBlock {
+                    id: b0,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b1),
+                    preds: smallvec![],
+                    succs: smallvec![b1],
+                },
+                SsaBlock {
+                    id: b1,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return(None),
+                    preds: smallvec![b0],
+                    succs: smallvec![],
+                },
+                SsaBlock {
+                    id: b2,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![],
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b3,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return(None),
+                    preds: smallvec![b2],
+                    succs: smallvec![],
+                },
+            ],
+            entry: b0,
+            value_defs: vec![],
+            cfg_node_map: HashMap::new(),
+            exception_edges: vec![(b0, b2)],
+        };
+
+        let mut exc_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
+        exc_succs.insert(b0, smallvec![b2]);
+        let mut exc_preds: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
+        exc_preds.insert(b2, smallvec![b0]);
+
+        let reachable = compute_source_sink_reachable(&ssa, b0, b3, &exc_succs, &exc_preds);
+        assert!(reachable.contains(&b0));
+        assert!(reachable.contains(&b2));
+        assert!(reachable.contains(&b3));
+        // B1 is forward-reachable from B0 but backward-unreachable from B3
+        assert!(!reachable.contains(&b1));
+    }
+
+    #[test]
+    fn exception_fork_catch_param_tainted() {
+        // B0: Source (tainted) → Goto B1
+        // B1: Call instruction → Goto B3  (exception edge B1→B2)
+        // B2: CatchParam → Goto B3        (catch block)
+        // B3: Return                       (sink block)
+        let b0 = BlockId(0);
+        let b1 = BlockId(1);
+        let b2 = BlockId(2);
+        let b3 = BlockId(3);
+
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let n2 = NodeIndex::new(2);
+        let n3 = NodeIndex::new(3);
+
+        let ssa = SsaBody {
+            blocks: vec![
+                SsaBlock {
+                    id: b0,
+                    phis: vec![],
+                    body: vec![SsaInst {
+                        value: SsaValue(0),
+                        op: SsaOp::Source,
+                        cfg_node: n0,
+                        var_name: Some("x".into()),
+                        span: (0, 0),
+                    }],
+                    terminator: Terminator::Goto(b1),
+                    preds: smallvec![],
+                    succs: smallvec![b1],
+                },
+                SsaBlock {
+                    id: b1,
+                    phis: vec![],
+                    body: vec![SsaInst {
+                        value: SsaValue(1),
+                        op: SsaOp::Call {
+                            callee: "JSON.parse".into(),
+                            args: vec![smallvec![SsaValue(0)]],
+                            receiver: None,
+                        },
+                        cfg_node: n1,
+                        var_name: None,
+                        span: (0, 0),
+                    }],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![b0],
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b2,
+                    phis: vec![],
+                    body: vec![SsaInst {
+                        value: SsaValue(2),
+                        op: SsaOp::CatchParam,
+                        cfg_node: n2,
+                        var_name: Some("e".into()),
+                        span: (0, 0),
+                    }],
+                    terminator: Terminator::Goto(b3),
+                    preds: smallvec![], // orphan: only via exception edge
+                    succs: smallvec![b3],
+                },
+                SsaBlock {
+                    id: b3,
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Return(None),
+                    preds: smallvec![b1, b2],
+                    succs: smallvec![],
+                },
+            ],
+            entry: b0,
+            value_defs: vec![
+                make_value_def(b0, n0),
+                make_value_def(b1, n1),
+                make_value_def(b2, n2),
+                make_value_def(b3, n3),
+            ],
+            cfg_node_map: [
+                (n0, SsaValue(0)),
+                (n1, SsaValue(1)),
+                (n2, SsaValue(2)),
+                (n3, SsaValue(3)),
+            ]
+            .into_iter()
+            .collect(),
+            exception_edges: vec![(b1, b2)],
+        };
+
+        let finding = Finding {
+            sink: n3,
+            source: n0,
+            path: vec![n0, n1, n3],
+            source_kind: crate::labels::SourceKind::UserInput,
+            path_validated: false,
+            guard_kind: None,
+            hop_count: 2,
+            cap_specificity: 1,
+            uses_summary: false,
+            flow_steps: vec![
+                FlowStepRaw {
+                    cfg_node: n0,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Source,
+                },
+                FlowStepRaw {
+                    cfg_node: n3,
+                    var_name: Some("x".into()),
+                    op_kind: crate::evidence::FlowStepKind::Sink,
+                },
+            ],
+            symbolic: None,
+        };
+
+        let cfg_graph = crate::cfg::Cfg::new();
+        let ctx = super::SymexContext {
+            ssa: &ssa,
+            cfg: &cfg_graph,
+            const_values: &HashMap::new(),
+            type_facts: &empty_type_facts(),
+            global_summaries: None,
+            lang: crate::symbol::Lang::JavaScript,
+            namespace: "test.js",
+            points_to: None,
+            callee_bodies: None,
+            scc_membership: None,
+        };
+        let result = explore_finding(&finding, &ctx);
+
+        // Both normal and exception paths should be explored
+        assert!(
+            result.paths_completed.len() >= 2,
+            "Expected at least 2 paths (normal + exception), got {}",
+            result.paths_completed.len()
+        );
+        // At least one path should be Confirmed
+        assert!(
+            result.paths_completed.iter().any(|p| p.verdict == Verdict::Confirmed),
+            "Expected at least one Confirmed path via exception fork"
+        );
     }
 }

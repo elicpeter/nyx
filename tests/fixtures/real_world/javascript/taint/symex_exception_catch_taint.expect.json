@@ -1,0 +1,15 @@
+{
+  "description": "Taint flows from req.query.data through catch block to res.send — XSS via exception path. Symex should confirm by exploring exception fork.",
+  "tags": ["taint", "xss", "symex", "exception-path"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 11],
+      "evidence_contains": [],
+      "notes": "req.query.data flows to res.send in catch block — XSS via exception path"
+    }
+  ]
+}

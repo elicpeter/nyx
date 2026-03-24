@@ -39,6 +39,13 @@ pub struct SymbolicState {
     tainted_roots: HashSet<SsaValue>,
     /// Field-sensitive symbolic heap (Phase 21).
     heap: SymbolicHeap,
+    /// Exception context for catch-path symbolic execution (Phase 25).
+    /// When `Some`, the next `CatchParam` instruction consumes this value and
+    /// marks itself tainted. This is NOT a faithful model of the thrown value —
+    /// it is a taint carrier that signals "this CatchParam was reached via an
+    /// exception edge and should be treated as tainted." The symbolic value is
+    /// `Unknown` because we do not model the exception object's structure.
+    exception_context: Option<SymbolicValue>,
 }
 
 impl SymbolicState {
@@ -49,6 +56,7 @@ impl SymbolicState {
             path_constraints: Vec::new(),
             tainted_roots: HashSet::new(),
             heap: SymbolicHeap::new(),
+            exception_context: None,
         }
     }
 
@@ -90,6 +98,16 @@ impl SymbolicState {
     /// Get the set of all tainted SSA values.
     pub fn tainted_values(&self) -> &HashSet<SsaValue> {
         &self.tainted_roots
+    }
+
+    /// Set the exception context for catch-path CatchParam seeding (Phase 25).
+    pub fn set_exception_context(&mut self, val: SymbolicValue) {
+        self.exception_context = Some(val);
+    }
+
+    /// Consume the exception context. Returns `Some` exactly once per catch block.
+    pub fn take_exception_context(&mut self) -> Option<SymbolicValue> {
+        self.exception_context.take()
     }
 
     /// Propagate taint: if any operand is tainted, mark `result` as tainted.

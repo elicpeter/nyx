@@ -86,7 +86,17 @@ pub fn transfer_inst(
         }
 
         SsaOp::CatchParam => {
-            state.set(inst.value, SymbolicValue::Symbol(inst.value));
+            if let Some(exc_val) = state.take_exception_context() {
+                // Phase 25: on an exception path — seed from exception context
+                // and mark tainted (matches taint engine: CatchParam gets Cap::all())
+                state.set(inst.value, exc_val);
+                state.mark_tainted(inst.value);
+            } else {
+                // Normal path or no explicit exception context — still mark tainted
+                // to match taint engine behavior (ssa_transfer.rs CatchParam gets Cap::all())
+                state.set(inst.value, SymbolicValue::Symbol(inst.value));
+                state.mark_tainted(inst.value);
+            }
         }
 
         SsaOp::Nop => {

@@ -1,0 +1,15 @@
+{
+  "description": "Sanitization in catch block via DOMPurify.sanitize makes the flow safe. Finding should be suppressed.",
+  "tags": ["taint", "xss", "symex", "exception-path"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [4, 12],
+      "evidence_contains": [],
+      "notes": "DOMPurify.sanitize strips taint — res.send in catch should NOT fire"
+    }
+  ]
+}
