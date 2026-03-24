@@ -1,0 +1,68 @@
+name: 'Nyx Security Scanner'
+description: 'Run the Nyx multi-language vulnerability scanner on your codebase'
+author: 'Eli Peter'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  path:
+    description: 'Directory to scan'
+    required: false
+    default: '.'
+  version:
+    description: 'Nyx release tag (e.g. v0.5.0) or "latest"'
+    required: false
+    default: 'latest'
+  format:
+    description: 'Output format: sarif, json, or console'
+    required: false
+    default: 'sarif'
+  fail-on:
+    description: 'Exit non-zero if findings meet this severity threshold: HIGH, MEDIUM, or LOW'
+    required: false
+    default: ''
+  args:
+    description: 'Additional CLI arguments (e.g. "--severity >=MEDIUM --profile ci")'
+    required: false
+    default: ''
+  token:
+    description: 'GitHub token for release download (avoids rate limits)'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  finding-count:
+    description: 'Number of findings detected'
+    value: ${{ steps.scan.outputs.finding-count }}
+  sarif-file:
+    description: 'Path to SARIF results file (empty if format is not sarif)'
+    value: ${{ steps.scan.outputs.sarif-file }}
+  exit-code:
+    description: 'Nyx exit code (0 = clean, 1 = threshold breached)'
+    value: ${{ steps.scan.outputs.exit-code }}
+  nyx-version:
+    description: 'Installed nyx version'
+    value: ${{ steps.install.outputs.nyx-version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install nyx
+      id: install
+      shell: bash
+      env:
+        NYX_VERSION: ${{ inputs.version }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: ${{ github.action_path }}/action-scripts/download.sh
+
+    - name: Run nyx scan
+      id: scan
+      shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_ARGS: ${{ inputs.args }}
+      run: ${{ github.action_path }}/action-scripts/run.sh
