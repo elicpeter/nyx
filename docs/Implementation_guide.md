@@ -2,13 +2,13 @@
 
 This is the execution-order roadmap for completing Nyx's remaining static analysis capabilities after the SSA IR milestone. Each phase is sized for one Claude Code implementation pass.
 
-## Current State (as of Phase 17 completion — 2026-03-24)
+## Current State (as of Phase 19 completion — 2026-03-24)
 
-**Engine:** SSA-only taint analysis across 10 languages. Two-pass scanning with cross-file summaries (both `FuncSummary` and `SsaFuncSummary` persisted to SQLite). Call graph with Tarjan SCC + topological ordering used for pass 2 scheduling (callee-first batch processing with SCC fixed-point iteration, max 3 iterations). SSA optimizations: constant propagation, copy propagation, alias analysis, dead code elimination, type fact inference, points-to analysis. JS/TS two-level solve for cross-scope taint. k=1 call-site-sensitive inline analysis with caching. Abstract interpretation (interval + string product domain) with widening at loop heads. Constraint solving (PathEnv with equality/relational/disequality constraints). Symbolic feasibility checking (single-path, constraint-based, produces Infeasible/Confirmed/Inconclusive verdicts). Points-based confidence scoring integrating all evidence sources.
+**Engine:** SSA-only taint analysis across 10 languages. Two-pass scanning with cross-file summaries (both `FuncSummary` and `SsaFuncSummary` persisted to SQLite). Call graph with Tarjan SCC + topological ordering used for pass 2 scheduling (callee-first batch processing with SCC fixed-point iteration, max 3 iterations). SSA optimizations: constant propagation, copy propagation, alias analysis, dead code elimination, type fact inference, points-to analysis. JS/TS two-level solve for cross-scope taint. k=1 call-site-sensitive inline analysis with caching. Abstract interpretation (interval + string product domain) with widening at loop heads. Constraint solving (PathEnv with equality/relational/disequality constraints). Symbolic feasibility checking (single-path, constraint-based, produces Infeasible/Confirmed/Inconclusive verdicts). Multi-path symbolic exploration with forking executor and verdict aggregation. SSA summaries for cross-file interprocedural analysis. Points-based confidence scoring integrating all evidence sources.
 
-**Test infrastructure:** 880+ tests (795 lib + 85 integration/fixture), 0 failures. 265 SSA corpus fixtures. 6 cross-file integration test projects. Real-world fixtures verify specific rule IDs, line ranges, and must_match semantics. Negative tests (e.g., `unsafe_string_bounded.js`) prove suppression does NOT over-fire.
+**Test infrastructure:** 894 lib tests, 0 failures. 265 SSA corpus fixtures. 6 cross-file integration test projects. Benchmark: 214 cases across 9 languages (C, C++, Rust added in Phase 19), P=82.7%, R=95.0%, F1=88.5%. Real-world fixtures verify specific rule IDs, line ranges, and must_match semantics. Negative tests (e.g., `unsafe_string_bounded.js`) prove suppression does NOT over-fire.
 
-**Implemented phases (1-17):** All implemented and wired into the default scan pipeline. See phase-by-phase sections below for details. All features default ON except state analysis (`cfg.scanner.enable_state_analysis`). Feature gates: `NYX_CONTEXT_SENSITIVE`, `NYX_ABSTRACT_INTERP`, `NYX_CONSTRAINT`, `NYX_SYMEX` (all default ON).
+**Implemented phases (1-19):** All implemented and wired into the default scan pipeline. See phase-by-phase sections below for details. All features default ON except state analysis (`cfg.scanner.enable_state_analysis`). Feature gates: `NYX_CONTEXT_SENSITIVE`, `NYX_ABSTRACT_INTERP`, `NYX_CONSTRAINT`, `NYX_SYMEX` (all default ON).
 
 **Remaining architectural debt:**
 - SSA summaries discarded during SCC fixed-point iteration (only `FuncSummary` caps updated between iterations — precision loss for mutually recursive functions)
@@ -1241,6 +1241,623 @@ Phase 18b (multi-path exploration — required for `witness_state` capture on co
 
 ### Dependencies
 All preceding phases. This is a validation checkpoint.
+
+---
+
+## Phase 20: Loop-Aware Symbolic Execution
+
+**Category:** Analysis Depth — Symbolic Execution Completeness
+
+**Why now:** The Phase 18b executor handles loops by brute-force budget exhaustion: when a path enters a loop, it re-visits blocks until `MAX_TOTAL_STEPS=500` is consumed, then produces an `Inconclusive` verdict with `search_exhausted=false`. This wastes budget on loop bodies that don't affect the taint path, produces no useful verdict for loop-containing paths, and prevents the executor from reaching post-loop code where the actual sink may be. Any real-world codebase has loops on most taint paths — without loop awareness, symex is limited to straight-line and single-branch code.
+
+### Current state (after Phase 18c)
+- `src/symex/executor.rs`: `run_path()` follows CFG successors in a loop with no visited-block tracking, no back-edge detection, and no cycle termination strategy. Budget timeout (`MAX_TOTAL_STEPS`) is the only termination guarantee for loops.
+- `src/ssa/ssa_transfer.rs`: The taint engine has `detect_back_edges()` (Phase 5.2) which identifies back edges via post-dominance analysis. Also has `detect_induction_phis()` and `is_simple_increment()` for pruning trivial loop counters. None of this is used by symex.
+- `src/abstract_interp/`: The abstract domain has `widen()` on `IntervalFact` and `StringFact` (Phase 17), invoked at loop heads in the taint engine worklist. Not integrated with symex's `SymbolicState` or `PathEnv`.
+- `src/constraint/domain.rs`: `PathEnv` has a per-key `meet_counts` tracker and applies widening after `WIDEN_THRESHOLD=3` meets on the same key. This is per-refinement widening, not loop-iteration widening.
+
+### Goals
+- Detect loop back edges during symex exploration so the executor knows when it's re-entering a loop
+- Implement bounded loop unrolling: explore the loop body up to k iterations (default k=2), producing useful symbolic state for post-loop code
+- After k iterations, widen symbolic values at loop-head phi nodes to `Unknown` and proceed past the loop — do not consume remaining budget on further iterations
+- Detect and prune simple induction variables (loop counters) during symex to avoid polluting symbolic state with useless expressions like `((i+1)+1)+1`
+- Maintain termination guarantees and budget semantics: loop-aware execution should never increase worst-case cost, only reduce wasted budget
+
+### Files/systems to be touched
+- Modify: `src/symex/executor.rs` — back-edge detection, per-path visit counts, bounded unrolling, early loop exit
+- New: `src/symex/loops.rs` — loop detection and induction variable analysis for symex context
+- Modify: `src/symex/state.rs` — `widen_at_loop_head()` method to widen phi-defined values
+- Modify: `src/symex/transfer.rs` — skip induction-variable phi nodes on unrolling iterations
+- Modify: `src/symex/mod.rs` — `pub mod loops;` declaration
+
+### Concrete implementation tasks
+
+1. **Back-edge detection for symex** in `src/symex/loops.rs`:
+   - `fn detect_back_edges(ssa: &SsaBody) -> HashSet<(BlockId, BlockId)>` — compute back edges as (source, target) pairs where target dominates source. Use dominator tree from `petgraph::algo::dominators`. This mirrors `detect_back_edges()` in `ssa_transfer.rs` but operates on `BlockId` pairs rather than `NodeIndex` pairs.
+   - `fn loop_heads(back_edges: &HashSet<(BlockId, BlockId)>) -> HashSet<BlockId>` — extract the set of blocks that are loop head targets.
+   - Cache the result per `explore_finding()` invocation (computed once, shared across all paths).
+
+2. **Per-path visit tracking** in `ExplorationState`:
+   - Add `visit_counts: HashMap<BlockId, u8>` to `ExplorationState`. Increment when entering a block.
+   - At clone (fork): the visit counts are inherited by both forks (they share history).
+   - `const MAX_LOOP_UNROLL: u8 = 2` — default unrolling bound.
+
+3. **Bounded unrolling logic** in `run_path()`:
+   - Before transferring a block, check if it's a loop head AND `visit_counts[block] > MAX_LOOP_UNROLL`.
+   - If so: **do not transfer the block again**. Instead:
+     a. Call `state.sym_state.widen_at_loop_head(block, ssa)` to widen all phi-defined values in this block to `Unknown` and mark them untainted (conservative: widened values lose taint precision).
+     b. Skip to the loop's exit successor. Determine exit successor: the branch successor that is NOT a back-edge target. If both successors are in the loop body (nested loop), fall through to the one on the taint path (`on_path` set).
+     c. Continue execution past the loop.
+   - If `visit_counts[block] <= MAX_LOOP_UNROLL`: transfer normally (unrolled iteration).
+
+4. **`widen_at_loop_head()`** in `src/symex/state.rs`:
+   ```rust
+   pub fn widen_at_loop_head(&mut self, block: BlockId, ssa: &SsaBody) {
+       let block_data = &ssa.blocks[block.0 as usize];
+       for phi in &block_data.phis {
+           self.values.insert(phi.value, SymbolicValue::Unknown);
+           self.tainted_roots.remove(&phi.value);
+       }
+   }
+   ```
+   This is deliberately aggressive: after k unrollings, we know nothing about loop-modified values. The taint engine's abstract domain provides the precise answer; symex just needs to not blow up.
+
+5. **Induction variable detection** in `src/symex/loops.rs`:
+   - `fn detect_induction_vars(ssa: &SsaBody, back_edges: &HashSet<(BlockId, BlockId)>) -> HashSet<SsaValue>` — identify SSA values defined by phi nodes at loop heads where the back-edge operand is `v + const` or `v - const` (simple increment/decrement).
+   - In `transfer_inst()`: when processing an induction-variable phi at a loop head, set the value to `Unknown` immediately rather than building a growing expression tree. This prevents `((i+1)+1)+1` chains that consume `MAX_EXPR_DEPTH` budget.
+
+6. **Loop exit determination** in `src/symex/loops.rs`:
+   - `fn loop_exit_successor(ssa: &SsaBody, block: BlockId, back_edges: &HashSet<(BlockId, BlockId)>, loop_heads: &HashSet<BlockId>) -> Option<BlockId>` — for a branch at a loop head, return the successor that exits the loop (is not dominated by the loop head, or is not a back-edge source). Falls back to `None` if both successors are inside the loop.
+
+7. **Thread loop analysis through executor** in `src/symex/executor.rs`:
+   - In `explore_finding()`: compute `back_edges`, `loop_heads`, and `induction_vars` once from the SSA body. Pass as shared references to `run_path()`.
+   - Update `run_path()` signature to accept `&LoopInfo` bundle struct.
+
+### Architecture notes
+
+- **Widening is deliberately coarse.** The symex loop widening sets phi-defined values to `Unknown`. This is sound (never misses a real vulnerability) but imprecise (may produce false Inconclusive verdicts for values only modified inside the loop). The abstract interpretation domain in the taint engine provides the precise answer for these values — symex is a secondary check, not the primary analysis.
+- **k=2 is sufficient for most security patterns.** Security-relevant loop patterns are typically: (a) iterate over input characters (sanitizer check) — unrolling 2 iterations reveals the branch structure, (b) accumulate into a string/buffer — 2 iterations show the concat pattern, (c) retry loops — 1 iteration shows the body. Deeper unrolling rarely adds precision for security analysis.
+- **Budget savings are significant.** A loop with 10 instructions and 50 iterations currently consumes 500 steps (entire budget). With k=2 unrolling, it consumes 20 steps + widening, leaving 480 steps for the rest of the path. This is the primary benefit: reaching post-loop sinks that are currently unreachable.
+- **Induction variable pruning is optional but valuable.** Without it, 2 loop iterations build expressions like `BinOp(Add, BinOp(Add, Symbol(i), Concrete(1)), Concrete(1))` at the phi. With it, the phi is immediately `Unknown`. Both are correct; the latter is cleaner and avoids depth-budget pressure.
+
+### Validation requirements
+- All existing tests pass (894+ lib tests)
+- Loop-containing paths produce verdicts (not just budget-exhausted Inconclusive)
+- Post-loop sinks are reachable after bounded unrolling
+- Induction variables don't consume expression depth budget
+- No increase in worst-case budget consumption (loops should use LESS budget, not more)
+- New unit tests for back-edge detection, visit counting, widening, and exit determination
+
+### Exit criteria
+- `src/symex/loops.rs` with back-edge detection, loop head computation, induction variable detection, exit successor determination
+- `ExplorationState.visit_counts` tracks per-block visits
+- `run_path()` implements bounded unrolling (k=2 default) with widening at loop heads
+- Induction variable phi nodes produce `Unknown` immediately (no expression tree growth)
+- At least 2 integration fixtures with loops: one where the sink is inside the loop body, one where it's after the loop
+- Budget utilization improves: loop-containing paths use fewer total steps
+
+### Dependencies
+Phase 18b (multi-path exploration — provides `ExplorationState`, `run_path()`, budget framework). Phase 5.2 (induction variable detection in taint engine — design reference, not code dependency).
+
+---
+
+## Phase 21: Symbolic Memory Model — Field-Sensitive Heap
+
+**Category:** Analysis Depth — Symbolic Execution Precision
+
+**Why now:** The symbolic executor treats all property accesses and container operations as opaque function calls: `obj.field` becomes `Call(".field", [obj])` and `arr[i]` becomes `Call("[]", [arr, i])`. This means taint that flows through object fields or array elements is invisible to symex — it can only confirm paths where taint flows through scalar variables. Real vulnerability patterns frequently involve object fields: `req.body.username` → `query.where.name` → `db.query()`. Without a memory model, these paths produce `Inconclusive` verdicts because the symbolic executor cannot connect the store to the load.
+
+### Current state (after Phase 20)
+- `src/symex/transfer.rs`: Property access and array indexing produce `Call(method, args)` — uninterpreted.
+- `src/symex/state.rs`: `SymbolicState` maps `SsaValue → SymbolicValue`. No heap or field tracking.
+- `src/ssa/heap.rs`: The taint engine has `HeapState` with `HeapObjectId(SsaValue)` allocation-site identities and per-object `HeapTaint` (caps + origins). Container operations (`push`, `pop`, `set`, `get`) are classified by `classify_container_op()` in `pointsto.rs`.
+- `src/ssa/pointsto.rs`: `PointsToResult` tracks which SSA values point to which heap objects. `PointsToSet` is bounded to 4 objects per value.
+- `src/cfg.rs`: `NodeInfo` has `receiver: Option<String>` for method calls, `defines: Option<String>` for LHS of assignments. Property access patterns are available from the AST.
+
+### Goals
+- Add a symbolic heap to `SymbolicState` that maps (object identity, field name) → `SymbolicValue`
+- Model property stores: `obj.field = expr` updates the symbolic heap
+- Model property loads: `x = obj.field` reads from the symbolic heap (or produces `Unknown` if field not tracked)
+- Use allocation-site identity from `PointsToResult` to distinguish different objects
+- Track taint through object field assignments and reads
+- Bounded: cap tracked fields per object and total heap entries to prevent blowup
+
+### Files/systems to be touched
+- New: `src/symex/heap.rs` — `SymbolicHeap`, `HeapKey`, store/load operations
+- Modify: `src/symex/state.rs` — add `heap: SymbolicHeap` to `SymbolicState`, update `clone()`
+- Modify: `src/symex/transfer.rs` — model property store/load instructions through symbolic heap
+- Modify: `src/symex/executor.rs` — thread `PointsToResult` into exploration context
+- Modify: `src/symex/mod.rs` — `pub mod heap;`, add `points_to: Option<&PointsToResult>` to `SymexContext`
+- Modify: `src/taint/mod.rs` — pass `PointsToResult` from `OptimizeResult` into `SymexContext`
+
+### Concrete implementation tasks
+
+1. **Define `SymbolicHeap`** in `src/symex/heap.rs`:
+   ```rust
+   /// Symbolic heap mapping (object, field) → SymbolicValue.
+   /// Allocation-site sensitive: each allocation site is a distinct object.
+   pub struct SymbolicHeap {
+       fields: HashMap<HeapKey, SymbolicValue>,
+       tainted_keys: HashSet<HeapKey>,
+   }
+
+   #[derive(Hash, Eq, PartialEq, Clone)]
+   pub struct HeapKey {
+       object: SsaValue,      // allocation site (SSA value that created the object)
+       field: CompactString,   // field name ("username", "0", etc.)
+   }
+   ```
+   Implement: `store(key, value)`, `load(key) -> SymbolicValue` (returns `Unknown` if absent), `is_tainted(key) -> bool`, `clone()`.
+   - `const MAX_HEAP_ENTRIES: usize = 64` — if exceeded, evict oldest entries (LRU or FIFO). Sound: eviction produces `Unknown` on subsequent load, which is conservative.
+   - `const MAX_FIELDS_PER_OBJECT: usize = 8` — per-object cap. Beyond this, the object is "smeared" — all fields collapse to a single `Unknown` entry.
+
+2. **Identify store/load patterns** in `src/symex/transfer.rs`:
+   - **Store pattern**: `SsaOp::Assign([rhs])` where `cfg_node.defines` contains a `.` (property assignment like `obj.field = rhs`). Extract receiver and field from `defines` string (split on last `.`).
+   - **Load pattern**: `SsaOp::Call { callee, args, receiver }` where `callee` matches a property access pattern (contains `.` prefix or is a known getter). Or: `SsaOp::Assign([src])` where `cfg_node` has a property-access use pattern.
+   - **Container store**: `SsaOp::Call` where callee matches `push`, `set`, `append`, `add` — classify via a simplified version of `classify_container_op()` from `pointsto.rs`.
+   - **Container load**: `SsaOp::Call` where callee matches `pop`, `get`, `shift`, `remove`.
+   - **Resolve object identity**: look up the receiver SSA value in `PointsToResult` to get `HeapObjectId`. If `PointsToSet` has exactly one object, use that as the allocation site. If multiple objects (may-alias), fall through to `Unknown` (sound: don't guess among aliases).
+
+3. **Wire symbolic heap into transfer**:
+   - In `transfer_inst()`, before the existing `SsaOp::Assign` and `SsaOp::Call` handling:
+     a. Check if instruction matches a store pattern → `state.heap.store(key, rhs_sym)` + propagate taint
+     b. Check if instruction matches a load pattern → `state.set(result, state.heap.load(key))` + propagate taint from heap entry
+   - Fall through to existing handling if no store/load pattern matches. This ensures backward compatibility — no existing behavior changes.
+
+4. **Thread `PointsToResult` to symex**:
+   - Add `points_to: Option<&'a PointsToResult>` to `SymexContext`.
+   - In `taint/mod.rs` call sites, pass `Some(&opt.points_to)` (already available from `OptimizeResult`).
+   - In `transfer_inst()`, resolve receiver identities via points-to lookup.
+
+5. **Heap-aware witness generation** in `src/symex/witness.rs`:
+   - When building witness for a confirmed path, check if any tainted heap entries contributed to the sink expression.
+   - If so, include the field path in the witness: `"input 'req.body.username' stores to user.name, flows to query()"`.
+   - Use `SymbolicHeap.tainted_keys` to find the relevant field paths.
+
+6. **Add unit tests**:
+   - `test_heap_store_load_roundtrip` — store a value, load it back, verify equality
+   - `test_heap_taint_propagation` — store tainted value, load produces tainted result
+   - `test_heap_unknown_on_missing_field` — load from unstored field returns Unknown
+   - `test_heap_bounds` — exceed `MAX_HEAP_ENTRIES`, verify eviction doesn't crash and loads return Unknown
+   - `test_heap_alias_fallback` — multiple objects in PointsToSet → no store/load (fall through to Unknown)
+
+7. **Add integration fixtures**:
+   - `tests/fixtures/real_world/javascript/taint/symex_field_taint.js` — `req.body.name` stored into `user.name`, passed to `db.query()`. Expect Confirmed with field-aware witness.
+   - `tests/fixtures/real_world/javascript/taint/symex_field_sanitized.js` — field stored after sanitization. Expect no false positive.
+
+### Architecture notes
+
+- **Allocation-site sensitivity is the right granularity.** Each `new Object()` / `{}` literal gets a distinct identity. This distinguishes `userInput` from `config` without tracking every assignment. It matches the existing `HeapObjectId` model in the taint engine.
+- **Single-object precision, fall back on may-alias.** If `PointsToSet` has >1 object, the store/load is ambiguous — fall through to existing opaque-call behavior. This is sound (same as today) and avoids false precision. Only exact (single-object) aliases benefit from the heap model.
+- **No nested structures.** `obj.field.subfield` requires two loads. The first load produces a `SymbolicValue` that may be another object identity, enabling chained access. But this is best-effort — if the intermediate load returns `Unknown`, the chain breaks. Full nested tracking would require recursive heap modeling, which is Phase 23 (SMT) territory.
+- **Heap state is per-path.** `SymbolicHeap` is cloned at fork points, same as `SymbolicState`. This is O(heap_size) per fork — bounded by `MAX_HEAP_ENTRIES=64`.
+
+### Validation requirements
+- All existing tests pass
+- Field-tainted paths produce Confirmed verdicts (previously Inconclusive)
+- Heap bounds prevent blowup on object-heavy code
+- May-alias scenarios fall back to existing behavior (no precision loss)
+- Witnesses include field paths where applicable
+
+### Exit criteria
+- `src/symex/heap.rs` with `SymbolicHeap`, bounded store/load, taint tracking
+- Property access patterns detected and routed through symbolic heap in `transfer_inst()`
+- `PointsToResult` threaded through `SymexContext` for object identity resolution
+- Field-tainted findings produce improved verdicts with field-aware witnesses
+- 2+ integration fixtures demonstrate field-sensitive symbolic execution
+
+### Dependencies
+Phase 18c (witness generation — field paths extend witness format). Phase 14 (points-to analysis — `PointsToResult` provides object identities). Phase 20 (loop awareness — loops over object fields need bounded unrolling before heap loads).
+
+---
+
+## Phase 22: Symbolic String Theory
+
+**Category:** Analysis Depth — Symbolic Execution Precision
+
+**Why now:** String operations dominate web vulnerability patterns: SQL injection involves string concatenation with user input, XSS involves HTML template rendering, command injection involves shell command construction, path traversal involves filesystem path assembly. The symbolic executor currently models `Concat` but treats all other string operations as opaque `Call` nodes: `.replace()`, `.substring()`, `.split()`, `.trim()`, `.toLowerCase()`, `.indexOf()` all produce `Unknown`. This means (a) witness generation cannot show how string transformations affect the exploit payload, (b) the constraint solver cannot reason about string conditions like `.startsWith("http://")` or `.length > 0`, and (c) sanitizer-like string operations (`.replace(/<script>/g, "")`) are invisible to symex even when the taint engine already models them.
+
+### Current state (after Phase 21)
+- `src/symex/value.rs`: `SymbolicValue::Concat(Box, Box)` and `SymbolicValue::ConcreteStr(String)` exist. `mk_concat()` folds two `ConcreteStr` values into one. No other string operations.
+- `src/symex/witness.rs`: `evaluate_concrete()` folds `Concat` chains to strings. `substitute_tainted()` replaces `Symbol` nodes with payload strings. Works well for simple concat but cannot model string method results.
+- `src/abstract_interp/string_domain.rs`: `StringFact { prefix: Option<String>, suffix: Option<String> }` — the abstract domain tracks string prefixes and suffixes. `concat_transfer()` propagates prefixes/suffixes through concatenation. Join uses longest common prefix/suffix.
+- `src/constraint/domain.rs`: `ConstValue::Str(String)` exists as an exact string constant in `ValueFact`. String comparisons (`==`, `!=`) work. No prefix/suffix/length reasoning in the constraint domain.
+
+### Goals
+- Extend `SymbolicValue` with common string operations that preserve structure through the symbolic path
+- Model string methods during symbolic transfer: `substring`, `replace`, `trim`, `toLowerCase`/`toUpperCase`, `split`, `indexOf`, `startsWith`/`endsWith`, `length`
+- Add string-aware constraint reasoning: prefix checks, length bounds, pattern membership
+- Improve witness generation to show string operation effects on exploit payloads
+- Detect when string operations act as sanitizers (e.g., `.replace(/<script>/g, "")` strips XSS payload) and produce appropriate verdicts
+
+### Files/systems to be touched
+- Modify: `src/symex/value.rs` — add `StrOp` enum and `SymbolicValue::StrOp(StrOp, Box<SymbolicValue>, Vec<SymbolicValue>)` variant (or: add specific variants for key operations)
+- New: `src/symex/strings.rs` — string operation modeling, concrete evaluation, sanitizer detection
+- Modify: `src/symex/transfer.rs` — recognize string method calls and produce structured `SymbolicValue` instead of opaque `Call`
+- Modify: `src/symex/witness.rs` — evaluate string operations during witness generation
+- Modify: `src/constraint/solver.rs` — add string-aware refinement rules (optional, for prefix/length reasoning)
+- Modify: `src/symex/mod.rs` — `pub mod strings;` declaration
+
+### Concrete implementation tasks
+
+1. **Extend `SymbolicValue`** in `src/symex/value.rs`:
+   - Option A (enum extension): Add variants for high-value operations:
+     ```rust
+     Substr(Box<SymbolicValue>, Box<SymbolicValue>, Option<Box<SymbolicValue>>)  // str, start, end?
+     Replace(Box<SymbolicValue>, String, String)  // str, pattern, replacement (concrete pattern/repl only)
+     ToLower(Box<SymbolicValue>)
+     ToUpper(Box<SymbolicValue>)
+     Trim(Box<SymbolicValue>)
+     StrLen(Box<SymbolicValue>)  // returns Concrete(n) for ConcreteStr, or StrLen(sym) for symbolic
+     ```
+   - Option B (generic StrOp): `StrOp(StringMethod, Box<SymbolicValue>, Vec<SymbolicValue>)` with `StringMethod` enum. More extensible but less type-safe.
+   - **Recommendation**: Option A for the 6 operations above. These are the high-value operations for security analysis. Additional operations can be added incrementally.
+   - Implement smart constructors: `mk_substr()`, `mk_replace()`, `mk_tolower()`, etc. Each folds concrete arguments immediately (e.g., `mk_tolower(ConcreteStr("ABC"))` → `ConcreteStr("abc")`).
+
+2. **String method recognition** in `src/symex/strings.rs`:
+   - `fn recognize_string_method(callee: &str, lang: Lang) -> Option<StringMethod>` — map callee names to semantic operations across languages:
+     - `substring`, `slice`, `substr` (JS/TS), `[:]` slicing (Python) → `Substr`
+     - `replace`, `replaceAll` (JS), `str.replace` (Python), `gsub` (Ruby) → `Replace`
+     - `toLowerCase` (JS), `lower` (Python), `downcase` (Ruby) → `ToLower`
+     - `toUpperCase` (JS), `upper` (Python), `upcase` (Ruby) → `ToUpper`
+     - `trim`, `strip` (Python/Ruby) → `Trim`
+     - `length`, `len` (Python), `size` (Ruby) → `StrLen`
+   - This is a classifier, not exhaustive — unrecognized methods fall through to `Call`.
+
+3. **String transfer** in `src/symex/transfer.rs`:
+   - In the `SsaOp::Call` arm, before the existing fallback:
+     a. Check if callee is a recognized string method via `recognize_string_method()`.
+     b. If recognized and receiver is present: build the appropriate `SymbolicValue` variant using the receiver's symbolic value and concrete arguments (if available).
+     c. Taint propagation: string operations preserve taint from the input string. `Replace` additionally checks if replacement operands are tainted.
+     d. If arguments are not concrete (e.g., dynamic replace pattern): fall through to `Call` (can't model dynamic string operations precisely).
+
+4. **Concrete evaluation for witnesses** in `src/symex/witness.rs`:
+   - Extend `evaluate_concrete()` to handle new string variants:
+     - `Substr(ConcreteStr(s), Concrete(start), Some(Concrete(end)))` → `s[start..end]`
+     - `Replace(ConcreteStr(s), pattern, repl)` → `s.replace(pattern, repl)`
+     - `ToLower(ConcreteStr(s))` → `s.to_lowercase()`
+     - etc.
+   - Extend `substitute_tainted()` to recurse into string operation operands.
+   - This makes witnesses more accurate: `"input 'name' = \"<script>alert('xss')</script>\" flows to res.send(\"<h1>Hello \" + name.trim() + \"</h1>\")"` shows the trim didn't affect the payload.
+
+5. **Sanitizer detection via string operations** in `src/symex/strings.rs`:
+   - `fn is_string_sanitizer(method: StringMethod, pattern: &str, cap: Cap) -> bool`:
+     - `Replace` with pattern containing `<script>`, `<img`, `<svg`, `on\w+=` → sanitizer for `Cap::HTML_ESCAPE` / `Cap::CODE_EXEC`
+     - `Replace` with pattern containing `'`, `"`, `--`, `;` → potential sanitizer for `Cap::SQL_QUERY`
+     - `Replace` with pattern containing `$`, `` ` ``, `|`, `;` → potential sanitizer for `Cap::SHELL_ESCAPE`
+   - When a recognized sanitizer pattern is detected during transfer, the result value's taint can be conditionally cleared (or at minimum, the constraint solver can note that the dangerous pattern was removed).
+   - **Conservative policy**: Only clear taint when the replace pattern is provably comprehensive (e.g., global replace). Partial sanitization (non-global, single character) should NOT clear taint — log as a note instead.
+
+6. **String-aware constraint reasoning** (optional, in `src/constraint/solver.rs`):
+   - When `ConditionExpr::Comparison` has `lhs = StrLen(var)` and `rhs = Concrete(n)`: refine `var`'s `ValueFact` with string length bounds.
+   - When `BoolTest` on a value known to be a `startsWith` result: infer prefix constraint on the tested string.
+   - This is lower priority than the transfer/witness improvements — implement if budget allows, skip otherwise.
+
+7. **Add unit tests** in `src/symex/strings.rs`:
+   - `test_recognize_string_methods` — verify method recognition across JS, Python, Ruby
+   - `test_concrete_folding` — `mk_tolower(ConcreteStr("ABC"))` → `ConcreteStr("abc")`
+   - `test_substr_concrete` — `mk_substr(ConcreteStr("hello world"), 0, 5)` → `ConcreteStr("hello")`
+   - `test_replace_concrete` — `mk_replace(ConcreteStr("a<script>b"), "<script>", "")` → `ConcreteStr("ab")`
+   - `test_taint_preserved_through_string_ops` — tainted input through `ToLower` stays tainted
+   - `test_sanitizer_detection` — `Replace` with XSS pattern detected as sanitizer
+   - `test_dynamic_pattern_fallback` — non-concrete replace pattern falls through to `Call`
+
+8. **Add integration fixtures**:
+   - `tests/fixtures/real_world/javascript/taint/symex_string_ops.js` — input goes through `.trim().toLowerCase()` before reaching sink. Witness should show the transformations.
+   - `tests/fixtures/real_world/javascript/taint/symex_string_sanitizer.js` — input goes through `.replace(/<script>/g, "")` — symex should detect this as a sanitizer pattern and report accordingly.
+
+### Architecture notes
+
+- **Concrete arguments only for structured modeling.** `"hello".replace(userInput, "")` has a dynamic pattern — this cannot be modeled as a `Replace` node because the pattern is symbolic. Fall through to `Call` in these cases. Only concrete patterns and replacements produce structured `SymbolicValue` variants.
+- **Security-focused operation set.** The 6 operations above (substr, replace, tolower, toupper, trim, strlen) cover 90%+ of string operations relevant to security analysis. Encoding operations (`encodeURIComponent`, `htmlspecialchars`) should be modeled as sanitizers in the taint engine (which they already are), not as string operations in symex.
+- **No regex engine.** `Replace` with pattern is modeled as literal string replacement for concrete folding and sanitizer detection. Regex semantics (`/pattern/g`) are not interpreted — the pattern string is checked for known dangerous substrings. Full regex reasoning would require a regex theory solver, which is out of scope.
+- **String operations compose.** `input.trim().toLowerCase().replace(...)` builds a nested tree: `Replace(ToLower(Trim(Symbol(input))), ...)`. `evaluate_concrete()` unwinds this recursively. Depth bounding (`MAX_EXPR_DEPTH=32`) prevents blowup.
+
+### Validation requirements
+- All existing tests pass
+- String operations produce structured symbolic values (not opaque `Call`)
+- Witnesses show string transformation effects on exploit payloads
+- Sanitizer detection via `Replace` works for at least XSS and SQLi patterns
+- Concrete folding correct for all 6 operation types
+- No false negatives from overly aggressive sanitizer detection
+
+### Exit criteria
+- 6 string operation variants in `SymbolicValue` with smart constructors and concrete folding
+- String method recognition across JS, Python, Ruby (at minimum)
+- `transfer_inst()` routes recognized string methods through structured modeling
+- `evaluate_concrete()` and `substitute_tainted()` handle all new variants
+- Sanitizer detection for `Replace` patterns covering XSS, SQLi, CMDi
+- Witnesses include string operation effects
+- 2+ integration fixtures
+
+### Dependencies
+Phase 18c (witness generation — string operations extend witness evaluation). Phase 20 (loop awareness — string operations inside loops need bounded handling).
+
+---
+
+## Phase 23: SMT Solver Integration
+
+**Category:** Analysis Depth — Symbolic Execution Decision Procedure
+
+**Why now:** The constraint system (`PathEnv` + `refine_env`) is a lightweight abstract domain that tracks per-value facts (intervals, types, nullability, exact values) and detects contradictions incrementally. This handles simple cases well but cannot reason about: (a) arithmetic relationships between multiple variables (`x + y > 10 && x < 3 && y < 5`), (b) disjunctive conditions (`(a && !b) || (!a && b)`), (c) complex string constraints beyond prefix/suffix, (d) array index reasoning, or (e) combined constraints that require backtracking search. An SMT solver provides a complete decision procedure for these constraint classes. This is the single largest capability upgrade for the symbolic executor — it replaces "detect obvious contradictions" with "prove satisfiability or unsatisfiability."
+
+### Current state (after Phase 22)
+- `src/constraint/domain.rs`: `PathEnv` with per-value `ValueFact` (intervals, types, nullability, exact, excluded), equality classes (`UnionFind`), disequalities, relational constraints (`a < b`, `a <= b`). Bounded: `MAX_PATH_ENV_ENTRIES=64`, `MAX_RELATIONAL=16`.
+- `src/constraint/solver.rs`: `refine_env()` applies single `ConditionExpr` to `PathEnv` — monotone lattice refinement, no backtracking. `is_satisfiable()` checks `env.unsat` flag.
+- `src/constraint/lower.rs`: `lower_condition()` produces `ConditionExpr` from CFG condition nodes. Text-based operator extraction as fallback.
+- `src/symex/executor.rs`: Calls `constraint::refine_env()` at each branch, checks `env.is_unsat()`. Branches with UNSAT environments produce `Infeasible` verdicts.
+- No Z3, SMT-LIB, or SAT solver dependency in `Cargo.toml`.
+
+### Goals
+- Integrate Z3 (via the `z3` crate) as an optional backend for constraint solving
+- Implement a hybrid architecture: `PathEnv` handles fast-path refinement (95% of cases), Z3 handles hard cases where `PathEnv` returns `Unknown`/inconclusive
+- Translate accumulated path constraints to Z3 assertions incrementally (push/pop scoping aligned with path exploration)
+- Support integer arithmetic theory (QF_LIA), string theory (QF_S), and bitvector theory (QF_BV) for comprehensive reasoning
+- Provide concrete counterexamples from Z3 models to improve witness generation
+- Feature-gated: `NYX_SMT=1` enables Z3 backend (default OFF until proven stable and performant)
+
+### Files/systems to be touched
+- New: `src/symex/smt.rs` — Z3 context management, expression translation, query interface
+- Modify: `src/symex/executor.rs` — use SMT backend for branch feasibility when PathEnv is inconclusive
+- Modify: `src/symex/witness.rs` — extract concrete values from Z3 model for witnesses
+- Modify: `src/symex/mod.rs` — `pub mod smt;`, feature gate, `SmtContext` lifetime management
+- Modify: `Cargo.toml` — add `z3` crate as optional dependency behind a feature flag
+
+### Concrete implementation tasks
+
+1. **Add Z3 dependency** in `Cargo.toml`:
+   ```toml
+   [features]
+   smt = ["z3"]
+
+   [dependencies]
+   z3 = { version = "0.12", optional = true }
+   ```
+   Conditional compilation: all SMT code behind `#[cfg(feature = "smt")]`. When the feature is disabled, the solver falls back to `PathEnv`-only (current behavior).
+
+2. **Define `SmtContext`** in `src/symex/smt.rs`:
+   ```rust
+   pub struct SmtContext<'ctx> {
+       ctx: &'ctx z3::Context,
+       solver: z3::Solver<'ctx>,
+       /// SSA value → Z3 AST node mapping
+       var_map: HashMap<SsaValue, z3::ast::Dynamic<'ctx>>,
+       /// Sort assignment: which SSA values are ints, which are strings
+       sorts: HashMap<SsaValue, SmtSort>,
+       /// Assertion stack depth (for push/pop at forks)
+       scope_depth: u32,
+   }
+
+   enum SmtSort { Int, String, Bool }
+   ```
+
+3. **Expression translation** in `src/symex/smt.rs`:
+   - `fn translate_value(ctx: &SmtContext, val: &SymbolicValue) -> z3::ast::Dynamic`:
+     - `Concrete(n)` → `z3::ast::Int::from_i64(ctx, n)`
+     - `ConcreteStr(s)` → `z3::ast::String::from_str(ctx, s)`
+     - `Symbol(v)` → lookup or create fresh Z3 variable with appropriate sort
+     - `BinOp(op, l, r)` → translate recursively, apply Z3 arithmetic operations
+     - `Concat(l, r)` → `z3::ast::String::concat(ctx, &[&l_z3, &r_z3])`
+     - `StrLen(s)` → `z3::ast::String::length(&s_z3)`
+     - `Substr(s, start, end)` → `z3::ast::String::extract(&s_z3, &start_z3, &len_z3)`
+     - `Replace(s, pat, repl)` → `z3::ast::String::replace(&s_z3, &pat_z3, &repl_z3)`
+     - `Call(_, _)` / `Phi(_, _)` / `Unknown` → fresh unconstrained Z3 variable (sound: no knowledge)
+   - Sort inference: if a value appears in arithmetic context → Int; if in string context → String; default → Int.
+
+4. **Constraint assertion** in `src/symex/smt.rs`:
+   - `fn assert_condition(ctx: &mut SmtContext, cond: &ConditionExpr, polarity: bool)`:
+     - `Comparison { lhs, op, rhs }` → translate operands, assert comparison with Z3 operator
+     - `NullCheck { var, is_null }` → model as equality with a distinguished null constant
+     - `TypeCheck { var, type_name, positive }` → model as sort constraint (limited: Z3 doesn't have JS type system, but int/string distinction is useful)
+     - `BoolTest { var }` → assert `var != 0` (truthiness)
+     - Apply `polarity` via Z3 negation
+   - `fn check_sat(ctx: &SmtContext) -> SatResult { Sat, Unsat, Unknown }`:
+     - Call `ctx.solver.check()` with timeout (default 100ms per query)
+     - Map Z3 result to `SatResult`
+
+5. **Hybrid architecture** in `src/symex/executor.rs`:
+   - At branch points in `run_path()`:
+     a. First: apply `constraint::refine_env()` to `PathEnv` (fast path, microseconds)
+     b. If `PathEnv.is_unsat()` → `Infeasible` (no SMT needed)
+     c. If `PathEnv` is satisfiable but has accumulated >3 constraints on the same path AND `NYX_SMT=1`: invoke Z3 as confirmation
+     d. `SmtContext::assert_condition()` for each `PathConstraint` accumulated on this path
+     e. `SmtContext::check_sat()` → if `Unsat`, override verdict to `Infeasible`
+   - Z3 is the **secondary** solver, not the primary. Most branches are decided by `PathEnv` alone. Z3 is only invoked when `PathEnv` says "satisfiable" but the accumulated constraints are complex enough that `PathEnv` might be wrong (imprecise).
+   - Push/pop Z3 solver scopes at fork points for incremental solving.
+
+6. **Model extraction for witnesses** in `src/symex/witness.rs`:
+   - When Z3 returns `Sat`, extract the model: `ctx.solver.get_model()`.
+   - Map Z3 variable assignments back to SSA values via `var_map`.
+   - Use concrete values from the model as witness values instead of exploit templates.
+   - Example: if Z3 determines `x = "admin' OR 1=1 --"` satisfies all constraints, use that exact string as the witness instead of the generic `"' OR 1=1 --"` template.
+
+7. **Timeout and resource bounding**:
+   - Per-query timeout: `const SMT_QUERY_TIMEOUT_MS: u64 = 100` — individual Z3 check-sat calls
+   - Per-finding budget: `const MAX_SMT_QUERIES_PER_FINDING: usize = 10` — cap total Z3 invocations
+   - Global Z3 context: create once per `explore_finding()`, destroy at end (avoids per-query context overhead)
+   - If Z3 returns `Unknown` (timeout): treat as satisfiable (conservative, same as no SMT)
+
+8. **Add unit tests** (behind `#[cfg(feature = "smt")]`):
+   - `test_smt_simple_contradiction` — `x > 5 && x < 3` → Unsat
+   - `test_smt_multi_variable` — `x + y > 10 && x < 3 && y < 5` → Unsat (PathEnv cannot detect this)
+   - `test_smt_string_prefix` — `startsWith(x, "http://") && contains(x, "169.254")` → Sat (SSRF witness)
+   - `test_smt_satisfiable_path` — simple satisfiable constraints → Sat with model extraction
+   - `test_smt_timeout_fallback` — artificially complex query → Unknown → treated as Sat
+
+9. **Add integration fixtures**:
+   - `tests/fixtures/real_world/javascript/taint/symex_smt_infeasible.js` — path with multi-variable constraint that PathEnv cannot prove infeasible but Z3 can. With SMT enabled, expect `Infeasible`; without, expect `Confirmed` (false positive that SMT eliminates).
+
+### Architecture notes
+
+- **Z3 is optional, not required.** The `smt` feature flag keeps Z3 as an opt-in capability. The scanner works identically without it — `PathEnv` is the default. This is important for deployment: Z3 is a ~50MB native library with platform-specific builds.
+- **Hybrid is critical for performance.** Z3 queries take 1-100ms each. With 50 findings per file × 8 paths × multiple branches, naive SMT usage would add seconds per file. The hybrid approach ensures Z3 is only invoked on hard cases (estimated <5% of branches) — PathEnv handles the rest in microseconds.
+- **Incremental solving via push/pop.** Z3's incremental mode reuses prior assertions. At each fork, push a scope; at backtrack, pop. This avoids re-asserting the entire path history and leverages Z3's internal caching.
+- **String theory is Z3's biggest win for security.** Z3's string theory (QF_S / Seq) can reason about `concat`, `contains`, `indexOf`, `replace`, `length`, `substr` natively. This directly complements Phase 22's symbolic string operations — the expression tree provides the structure, Z3 provides the reasoning.
+- **Do not replace PathEnv.** `PathEnv` is fast, predictable, and sufficient for 95% of cases. Z3 is for the remaining 5% where PathEnv's per-value abstraction loses precision. Replacing PathEnv with Z3-only would be a massive performance regression.
+
+### Validation requirements
+- All existing tests pass with SMT feature disabled (default)
+- With `NYX_SMT=1`: additional infeasible paths detected that PathEnv misses
+- Z3 query timeout prevents unbounded latency
+- Model extraction produces valid concrete witnesses
+- No false negatives introduced by SMT (conservative fallback on Unknown)
+- Performance: <200ms added per file with SMT enabled (measured on benchmark corpus)
+
+### Exit criteria
+- `z3` crate integrated as optional dependency behind `smt` feature flag
+- `SmtContext` translates `SymbolicValue` + `ConditionExpr` to Z3 formulas
+- Hybrid solver: PathEnv fast-path, Z3 for complex cases
+- Push/pop scoping at path forks for incremental solving
+- Model extraction feeds concrete values into witness generation
+- Per-query timeout (100ms) and per-finding budget (10 queries) enforced
+- Feature gate `NYX_SMT` (default OFF)
+- At least 1 integration fixture demonstrating SMT-only infeasibility detection
+
+### Dependencies
+Phase 18b (multi-path exploration — Z3 scoping mirrors fork points). Phase 22 (string theory — Z3 string operations complement symbolic string values). Phase 20 (loop awareness — loop-widened values produce fresh Z3 variables at loop exits).
+
+---
+
+## Phase 24: Interprocedural Symbolic Inlining
+
+**Category:** Analysis Depth — Symbolic Execution Precision
+
+**Why now:** The symbolic executor currently resolves cross-file calls via pre-computed `SsaFuncSummary` transforms (Phase 18c): Identity pass-through, StripBits sanitizer, AddBits source. This works for simple functions but loses precision for callees with internal branching, data-dependent returns, or multiple effects. Example: `function getUser(id) { if (id < 0) return "guest"; return db.query("SELECT * FROM users WHERE id=" + id); }` — the summary says Identity (param flows to return), but it does not capture that the return value is a SQL query string only when `id >= 0`. Interprocedural symbolic inlining would walk the callee's SSA body during symex, maintaining full symbolic precision through the callee's control flow.
+
+### Current state (after Phase 23)
+- `src/symex/transfer.rs`: Cross-file calls resolved via `resolve_callee_symbolically()` — looks up `SsaFuncSummary` and models return value based on `TaintTransform` variants. Falls back to opaque `Call(callee, args)` when no summary or ambiguous resolution.
+- `src/taint/ssa_transfer.rs`: The taint engine has k=1 call-site-sensitive inline analysis via `inline_analyse_callee()` — re-analyzes callee SSA body with actual argument taint. Uses `CalleeSsaBody` (pre-lowered SSA + OptimizeResult + param_count) and `InlineCache` (keyed by `(callee_name, ArgTaintSig)`).
+- `src/taint/mod.rs`: `lower_all_functions()` produces both `SsaFuncSummary` and `CalleeSsaBody` for each intra-file function. `CalleeSsaBody` is available at taint analysis time.
+- `src/symex/executor.rs`: `explore_finding()` accepts `&SymexContext` with optional `GlobalSummaries` for summary-based resolution. No callee body access.
+
+### Goals
+- Inline callee SSA bodies into the symbolic executor's path exploration, enabling full symbolic precision through callee control flow
+- Maintain call depth bound (k=1 default, configurable) to prevent unbounded inlining
+- Seed callee parameters with actual call-site argument symbolic values (not just taint bits)
+- Propagate callee return's symbolic value back to the caller's result SSA value
+- Detect callee-internal sinks during inline symex exploration (beyond taint engine's `param_to_sink`)
+- Cache inline analysis results keyed by (callee, argument symbolic signatures) to avoid redundant exploration
+
+### Files/systems to be touched
+- Modify: `src/symex/transfer.rs` — add inline callee exploration as resolution step before summary fallback
+- New: `src/symex/inline.rs` — inline symbolic exploration of callee bodies
+- Modify: `src/symex/executor.rs` — support recursive `run_path()` calls for callee exploration, or separate callee exploration engine
+- Modify: `src/symex/mod.rs` — `pub mod inline;`, add `callee_bodies: Option<&HashMap<String, CalleeSsaBody>>` to `SymexContext`
+- Modify: `src/taint/mod.rs` — thread `CalleeSsaBody` map into `SymexContext` at all 3 call sites
+
+### Concrete implementation tasks
+
+1. **Define `InlineSymexResult`** in `src/symex/inline.rs`:
+   ```rust
+   pub struct InlineSymexResult {
+       /// Symbolic value at the callee's return point.
+       pub return_value: SymbolicValue,
+       /// Whether the return value carries taint.
+       pub return_tainted: bool,
+       /// Callee-internal sink events detected during exploration.
+       pub internal_sinks: Vec<InlineSinkEvent>,
+       /// Constraints accumulated inside the callee.
+       pub callee_constraints: Vec<PathConstraint>,
+   }
+
+   pub struct InlineSinkEvent {
+       pub sink_cfg_node: NodeIndex,
+       pub tainted_arg: SsaValue,
+       pub cap: Cap,
+   }
+   ```
+
+2. **Implement `inline_explore_callee()`** in `src/symex/inline.rs`:
+   ```rust
+   pub fn inline_explore_callee(
+       callee_body: &CalleeSsaBody,
+       arg_values: &[SymbolicValue],
+       arg_tainted: &[bool],
+       caller_ctx: &SymexContext,
+       depth: usize,
+   ) -> Option<InlineSymexResult>
+   ```
+   Logic:
+   a. Check depth bound: if `depth >= MAX_INLINE_DEPTH` (default 1), return `None` (fall through to summary).
+   b. Check callee size: if `callee_body.ssa.blocks.len() > MAX_INLINE_BLOCKS` (default 50), return `None`.
+   c. Create fresh `SymbolicState` for the callee. Seed parameter SSA values from `arg_values`.
+   d. Mark parameters as tainted based on `arg_tainted`.
+   e. Run a simplified version of `explore_finding()` on the callee's SSA body — but instead of looking for a specific sink, run to completion (all `Return` terminators).
+   f. At each `Return` terminator, collect the symbolic value of the return SSA value.
+   g. If multiple return points with different symbolic values: build a `Phi` of the return values (or `Unknown` if too many).
+   h. Collect any sink events encountered during the callee's exploration (callee-internal sinks).
+
+3. **Integrate into transfer** in `src/symex/transfer.rs`:
+   - In the `SsaOp::Call` arm, add inline resolution BEFORE the existing summary resolution:
+     a. If `callee_bodies` is available in context and contains the callee name:
+     b. Build `arg_values` and `arg_tainted` from the current symbolic state.
+     c. Call `inline_explore_callee()`.
+     d. If returns `Some(result)`: use `result.return_value` as the call's symbolic value, propagate `result.return_tainted`, record `result.internal_sinks` for later evidence.
+     e. If returns `None` (depth exceeded, too large, etc.): fall through to summary resolution.
+   - **Resolution order**: inline body → summary → opaque `Call`.
+
+4. **Callee-internal sink detection**:
+   - During inline exploration, check if any SSA instruction in the callee body is a sink (via `cfg[inst.cfg_node].labels` containing `DataLabel::Sink`).
+   - If a tainted value reaches a callee-internal sink: record as `InlineSinkEvent`.
+   - These events complement the taint engine's `param_to_sink` — they provide symbolic precision about WHICH argument value reaches the sink and under WHAT path constraints.
+   - Report inline sink events as additional evidence on the caller's finding.
+
+5. **Inline cache** in `src/symex/inline.rs`:
+   - `InlineSymexCache`: `HashMap<(String, SymbolicArgSig), InlineSymexResult>`
+   - `SymbolicArgSig`: compact signature of argument symbolic values — hash of each arg's `SymbolicValue` discriminant + taint status. Full structural hashing is too expensive; discriminant + taint captures the behavioral signature.
+   - Cache is per-`explore_finding()` invocation (not global) to bound memory.
+   - On cache hit: return cached result immediately. On miss: run inline exploration and cache.
+
+6. **Thread `CalleeSsaBody` map to symex**:
+   - Add `callee_bodies: Option<&'a HashMap<String, CalleeSsaBody>>` to `SymexContext`.
+   - In `taint/mod.rs`: the `CalleeSsaBody` map is already produced by `lower_all_functions()` for the taint engine's inline analysis. Pass it into `SymexContext` at all 3 call sites.
+   - For the JS two-level solve, each function scope's `callee_bodies` map is passed through.
+
+7. **Depth and budget limits**:
+   - `const MAX_INLINE_DEPTH: usize = 1` — single-level inlining (caller → callee, no callee → callee's callee).
+   - `const MAX_INLINE_BLOCKS: usize = 50` — skip inlining for large callees.
+   - `const MAX_INLINE_STEPS: usize = 100` — symbolic transfer step budget for the callee exploration (separate from the caller's budget).
+   - `const MAX_INLINE_FORKS: usize = 1` — at most 1 fork inside the callee (keep it simple — callee branching adds complexity).
+
+8. **Add unit tests** in `src/symex/inline.rs`:
+   - `test_inline_identity_function` — `function id(x) { return x; }` → return value equals arg value
+   - `test_inline_conditional_return` — `function safe(x) { if (x > 0) return x; return "default"; }` → return value is Phi or specific based on constraints
+   - `test_inline_depth_bound` — exceed `MAX_INLINE_DEPTH` → falls through to summary
+   - `test_inline_callee_size_bound` — large callee → falls through to summary
+   - `test_inline_cache_hit` — same callee with same arg signature → cached result reused
+   - `test_inline_callee_internal_sink` — callee has an internal sink → `InlineSinkEvent` collected
+
+9. **Add integration fixtures**:
+   - `tests/fixtures/real_world/javascript/taint/symex_inline_passthrough.js` — helper function that conditionally passes input through. Inline analysis should confirm the feasible path.
+   - `tests/fixtures/real_world/javascript/taint/symex_inline_sanitizer.js` — helper function that sanitizes input on one branch. Inline analysis should detect the sanitization and improve verdict precision.
+
+### Architecture notes
+
+- **Inline symex complements, not replaces, the taint engine's inline analysis.** The taint engine's `inline_analyse_callee()` propagates taint bits (cap bitsets) — it answers "does taint flow through this callee?" The symex inline analysis propagates symbolic values and path constraints — it answers "what concrete value would taint have after passing through this callee?" Both are needed: taint for recall, symex for precision/witnesses.
+- **Resolution order is critical.** Inline body is most precise (full control flow), summary is medium precision (transform-level), opaque call is least precise (Unknown with taint propagation). The chain should always try higher precision first and fall back gracefully. Never let a failed inline attempt produce LESS precision than the summary would have provided.
+- **No callee event propagation to caller findings.** If the callee has internal sinks (e.g., an inner `eval()` call), those are separate findings that the taint engine already detects via `param_to_sink`. The inline symex records them for evidence enrichment, not for creating new findings at the caller level. This prevents double-counting.
+- **Single-level inlining (k=1) is the sweet spot.** k=2 (callee of callee) would require `CalleeSsaBody` availability for transitive callees, which is only available for same-file functions. Cross-file callee bodies are not available. k=1 covers the most common pattern (helper function wrapping a sink or sanitizer).
+- **Cache key design matters.** Using full `SymbolicValue` hashing as cache key is too expensive (deep trees). The discriminant + taint signature captures "is arg 0 a concrete string? is arg 1 tainted?" — this is sufficient to distinguish behavioral outcomes for most helper functions.
+
+### Validation requirements
+- All existing tests pass
+- Inline exploration improves verdicts for helper-function patterns (Identity through branching callee)
+- Callee size and depth bounds prevent performance regression
+- Inline cache prevents redundant exploration
+- Resolution fallback chain (inline → summary → opaque) never loses precision
+- No false negatives from inline analysis (conservative on all fallback paths)
+
+### Exit criteria
+- `src/symex/inline.rs` with `inline_explore_callee()`, cache, and result types
+- Inline resolution integrated into `transfer_inst()` Call arm, before summary resolution
+- `CalleeSsaBody` map threaded through `SymexContext`
+- Depth (k=1), size (50 blocks), step (100), and fork (1) bounds enforced
+- Callee-internal sinks detected and reported as evidence
+- Inline cache keyed by (callee_name, arg_discriminant_sig)
+- 2+ integration fixtures demonstrating inline precision improvement
+
+### Dependencies
+Phase 18c (cross-file summaries — inline resolution precedes summary in the resolution chain). Phase 11 (context sensitivity — `CalleeSsaBody` and `InlineCache` design patterns reused from taint engine). Phase 20 (loop awareness — callee bodies may contain loops; inline exploration needs bounded unrolling).
 
 ---
 

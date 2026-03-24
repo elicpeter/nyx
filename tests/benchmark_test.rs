@@ -620,22 +620,23 @@ fn benchmark_evaluation() {
     println!("\nResults written to: {}", results_path.display());
     println!("=== Benchmark complete ===\n");
 
-    // ── Regression thresholds (Phase 1 baseline minus 5pp) ─────────
-    // Baseline (2026-03-22, Phase 1): P=0.699 R=0.983 F1=0.817
+    // ── Regression thresholds (Phase 19 baseline minus 5pp) ────────
+    // Baseline (2026-03-24, Phase 19): P=0.827 R=0.950 F1=0.885
+    // Expanded corpus: 214 cases across 9 languages (C, C++, Rust added)
     let rule = &results.aggregate_rule_level;
     assert!(
-        rule.precision >= 0.649,
-        "Rule-level precision {:.3} fell below threshold 0.649 (baseline 0.699)",
+        rule.precision >= 0.777,
+        "Rule-level precision {:.3} fell below threshold 0.777 (baseline 0.827)",
         rule.precision,
     );
     assert!(
-        rule.recall >= 0.933,
-        "Rule-level recall {:.3} fell below threshold 0.933 (baseline 0.983)",
+        rule.recall >= 0.900,
+        "Rule-level recall {:.3} fell below threshold 0.900 (baseline 0.950)",
         rule.recall,
     );
     assert!(
-        rule.f1 >= 0.767,
-        "Rule-level F1 {:.3} fell below threshold 0.767 (baseline 0.817)",
+        rule.f1 >= 0.835,
+        "Rule-level F1 {:.3} fell below threshold 0.835 (baseline 0.885)",
         rule.f1,
     );
 }

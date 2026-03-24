@@ -1,5 +1,104 @@
 # Nyx Benchmark Results
 
+## Phase 19 — Benchmark Expansion and Precision Gate (2026-03-24)
+
+Scanner version: 0.5.0
+Analysis mode: Full (taint + AST patterns + state analysis)
+Corpus: 214 cases (122 vulnerable, 92 safe) across 9 languages
+
+### Changes from Phase 8.5
+- **Corpus expansion**: 141 → 214 cases (+73 new cases, +52%)
+- **3 new languages**: C (20 cases), C++ (20 cases), Rust (18 cases)
+- **Interprocedural benchmark cases**: 12 cases across 6 languages (sanitizer wrapping + taint propagation through helpers)
+- **Path-pruning benchmark cases**: 3 cases (JS, Python, Go — allowlist-gated command execution)
+- **New vulnerability classes**: buffer_overflow (C/C++ sprintf/strcpy/strcat), fmt_string (C/C++ printf/fprintf)
+- **Regression thresholds updated** to Phase 19 baseline minus 5pp
+
+### Overall Metrics
+
+| Level | TP | FP | FN | TN | Precision | Recall | F1 |
+|-------|----|----|----|----|-----------|--------|----|
+| File-level | 119 | 24 | 2 | 68 | 83.2% | 98.3% | 90.2% |
+| Rule-level | 115 | 24 | 6 | 68 | 82.7% | 95.0% | 88.5% |
+
+Delta vs Phase 8.5: TP +36, FP +9, FN +4, TN +24. Precision -1.3pp, Recall -2.5pp, F1 -1.8pp. Note: deltas reflect new harder cases (interprocedural, path-pruning) and new language coverage, not regressions.
+
+### Per Language (rule-level)
+
+| Language | TP | FP | FN | TN | Precision | Recall | F1 |
+|----------|----|----|----|----|-----------|--------|----|
+| C | 11 | 2 | 1 | 6 | 84.6% | 91.7% | 88.0% |
+| C++ | 10 | 3 | 2 | 5 | 76.9% | 83.3% | 80.0% |
+| Go | 16 | 5 | 0 | 7 | 76.2% | 100.0% | 86.5% |
+| Java | 11 | 1 | 2 | 9 | 91.7% | 84.6% | 88.0% |
+| JavaScript | 15 | 5 | 0 | 7 | 75.0% | 100.0% | 85.7% |
+| PHP | 13 | 2 | 0 | 9 | 86.7% | 100.0% | 92.9% |
+| Python | 17 | 1 | 0 | 11 | 94.4% | 100.0% | 97.1% |
+| Ruby | 12 | 1 | 1 | 10 | 92.3% | 92.3% | 92.3% |
+| Rust | 10 | 4 | 0 | 4 | 71.4% | 100.0% | 83.3% |
+
+### Per Vulnerability Class (rule-level)
+
+| Class | TP | FP | FN | Precision | Recall | F1 |
+|-------|----|----|----|-----------|---------|----|
+| buffer_overflow | 5 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| cmdi | 30 | 0 | 2 | 100.0% | 93.8% | 96.8% |
+| code_injection | 8 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| deser | 6 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| fmt_string | 5 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| path_traversal | 15 | 0 | 1 | 100.0% | 93.8% | 96.8% |
+| sqli | 17 | 0 | 2 | 100.0% | 89.5% | 94.4% |
+| ssrf | 15 | 0 | 1 | 100.0% | 93.8% | 96.8% |
+| xss | 14 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+
+### New Language Coverage
+
+| Language | Vuln Classes Covered | Cases | Recall |
+|----------|---------------------|-------|--------|
+| C | cmdi, path_traversal, fmt_string, ssrf, buffer_overflow | 20 | 91.7% |
+| C++ | cmdi, path_traversal, fmt_string, ssrf, buffer_overflow | 20 | 83.3% |
+| Rust | cmdi, path_traversal, ssrf | 18 | 100.0% |
+
+### False Negatives (new)
+
+| Case | File | Notes |
+|------|------|-------|
+| c-cmdi-004 | c/cmdi/cmdi_fgets.c | fgets→array→system taint chain: rule ID mismatch (AST match only) |
+| cpp-cmdi-003 | cpp/cmdi/cmdi_getline.cpp | std::getline→string→system: c_str() method breaks taint chain |
+| cpp-ssrf-002 | cpp/ssrf/ssrf_connect.cpp | connect() via socket API not detected (complex multi-step setup) |
+| java-interproc-001 | java/interprocedural/InterprocTaintPropagation.java | Interprocedural taint through buildQuery() detected at file level but rule ID mismatch |
+| rb-interproc-001 | ruby/interprocedural/interproc_taint_propagation.rb | Same — interprocedural taint detected but rule ID mismatch |
+
+### False Positives (new safe cases flagged)
+
+| Case | File | Pattern |
+|------|------|---------|
+| c-safe-006 | c/safe/safe_validated.c | strstr() path validation not recognized as guard |
+| c-safe-008 | c/safe/safe_sanitize_func.c | Forward-declared sanitize_input() not tracked |
+| cpp-safe-006 | cpp/safe/safe_validated.cpp | strstr() path validation not recognized |
+| cpp-safe-007 | cpp/safe/safe_sanitize_func.cpp | Forward-declared sanitize_input() not tracked |
+| cpp-safe-008 | cpp/safe/safe_strtol.cpp | C-style strtol() not in C++ sanitizer rules |
+| rs-safe-003 | rust/safe/safe_reassigned.rs | Tainted variable unused but Command still flagged |
+| rs-safe-006 | rust/safe/safe_type_check.rs | parse::<u32>() type narrowing not tracked |
+| rs-safe-007 | rust/safe/safe_interprocedural.rs | Interprocedural sanitize_input() not resolved |
+| rs-safe-008 | rust/safe/safe_dominated.rs | Validation guard not recognized |
+| js-interproc-safe-001 | javascript/interprocedural/interproc_sanitizer_wrap.js | Interprocedural encodeURIComponent wrapper not resolved |
+| js-pathprune-safe-001 | javascript/path_pruning/safe_early_return.js | Allowlist early-return not pruned |
+| go-pathprune-safe-001 | go/path_pruning/safe_early_return.go | Allowlist early-return not pruned |
+| php-interproc-safe-001 | php/interprocedural/interproc_sanitizer_wrap.php | Interprocedural htmlspecialchars wrapper not resolved |
+
+### Thresholds
+
+Regression thresholds set 5pp below Phase 19 baseline.
+
+| Metric | Baseline | Threshold |
+|--------|----------|-----------|
+| Rule-level Precision | 82.7% | 77.7% |
+| Rule-level Recall | 95.0% | 90.0% |
+| Rule-level F1 | 88.5% | 83.5% |
+
+---
+
 ## Phase 8.5 — Cross-File SSA Benchmark Validation (2026-03-22)
 
 Scanner version: 0.4.0
