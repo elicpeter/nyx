@@ -130,11 +130,8 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "else"                  => Kind::Block,
     "elsif"                 => Kind::If,
 
-    // TODO(Phase 5): Ruby begin/rescue/ensure maps to Block, not Try.
-    // Ruby's `begin` has no `body` field — structurally incompatible with build_try().
-    // Sequential Block flow covers all branches, but exception edges are absent.
-    // Fixing requires a dedicated build_begin_rescue() handler.
-    "begin"                 => Kind::Block,
+    // begin/rescue/ensure: handled by build_begin_rescue() in cfg.rs
+    "begin"                 => Kind::Try,
     "rescue"                => Kind::Block,
     "ensure"                => Kind::Block,
     "case"                  => Kind::Block,

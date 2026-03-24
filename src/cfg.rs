@@ -1982,7 +1982,259 @@ fn extract_catch_param_name<'a>(catch_node: Node<'a>, lang: &str, code: &'a [u8]
             let alias = catch_node.child_by_field_name("alias")?;
             text_of(alias, code)
         }
+        "ruby" | "rb" => {
+            // Ruby: rescue StandardError => e  →  exception_variable → identifier
+            let var_node = catch_node.child_by_field_name("variable")?;
+            let mut cursor = var_node.walk();
+            for child in var_node.children(&mut cursor) {
+                if child.kind() == "identifier" {
+                    return text_of(child, code);
+                }
+            }
+            None
+        }
         _ => None,
+    }
+}
+
+// -------------------------------------------------------------------------
+//    Ruby begin/rescue/ensure handler
+// -------------------------------------------------------------------------
+
+/// Builds CFG for Ruby's `begin`/`rescue`/`ensure` blocks (and `body_statement`
+/// with inline rescue).  Ruby's `begin` has no `body` field — the try-body
+/// statements are direct children before `rescue`/`else`/`ensure` nodes.
+#[allow(clippy::too_many_arguments)]
+fn build_begin_rescue<'a>(
+    ast: Node<'a>,
+    preds: &[NodeIndex],
+    g: &mut Cfg,
+    lang: &str,
+    code: &'a [u8],
+    summaries: &mut FuncSummaries,
+    file_path: &str,
+    enclosing_func: Option<&str>,
+    call_ordinal: &mut u32,
+    analysis_rules: Option<&LangAnalysisRules>,
+    break_targets: &mut Vec<NodeIndex>,
+    continue_targets: &mut Vec<NodeIndex>,
+    throw_targets: &mut Vec<NodeIndex>,
+) -> Vec<NodeIndex> {
+    // 1. Partition children into body / rescue / else / ensure
+    let mut body_children: Vec<Node<'a>> = Vec::new();
+    let mut rescue_clauses: Vec<Node<'a>> = Vec::new();
+    let mut else_clause: Option<Node<'a>> = None;
+    let mut ensure_clause: Option<Node<'a>> = None;
+
+    let mut cursor = ast.walk();
+    for child in ast.children(&mut cursor) {
+        match child.kind() {
+            "rescue" => rescue_clauses.push(child),
+            "else" => else_clause = Some(child),
+            "ensure" => ensure_clause = Some(child),
+            _ if lookup(lang, child.kind()) == Kind::Trivia => {}
+            // Keywords like "begin", "end" appear as anonymous children
+            "begin" | "end" => {}
+            _ => body_children.push(child),
+        }
+    }
+
+    // 2. Build try body sub-CFG (sequential, like Block handler)
+    let try_body_first_idx = g.node_count();
+    let mut try_throw_targets = Vec::new();
+    let mut frontier = preds.to_vec();
+    for child in &body_children {
+        frontier = build_sub(
+            *child,
+            &frontier,
+            g,
+            lang,
+            code,
+            summaries,
+            file_path,
+            enclosing_func,
+            call_ordinal,
+            analysis_rules,
+            break_targets,
+            continue_targets,
+            &mut try_throw_targets,
+        );
+    }
+    let try_exits = frontier;
+    let try_body_last_idx = g.node_count();
+
+    // 3. Collect exception sources: implicit (calls) + explicit (throws)
+    let mut exception_sources: Vec<NodeIndex> = Vec::new();
+    for raw in try_body_first_idx..try_body_last_idx {
+        let idx = NodeIndex::new(raw);
+        if is_exception_source(&g[idx]) {
+            exception_sources.push(idx);
+        }
+    }
+    exception_sources.extend(&try_throw_targets);
+
+    // 4. Build each rescue clause and wire exception edges
+    let mut all_catch_exits: Vec<NodeIndex> = Vec::new();
+
+    for rescue_node in &rescue_clauses {
+        let param_name = extract_catch_param_name(*rescue_node, lang, code);
+
+        // If the rescue has a named variable (=> e), inject a synthetic catch-param node
+        let catch_preds = if let Some(ref name) = param_name {
+            let synth = g.add_node(NodeInfo {
+                kind: StmtKind::Seq,
+                span: (rescue_node.start_byte(), rescue_node.start_byte()),
+                labels: SmallVec::new(),
+                defines: Some(name.clone()),
+                extra_defines: vec![],
+                uses: Vec::new(),
+                callee: Some(format!("catch({name})")),
+                receiver: None,
+                enclosing_func: enclosing_func.map(|s| s.to_string()),
+                call_ordinal: 0,
+                condition_text: None,
+                condition_vars: Vec::new(),
+                condition_negated: false,
+                arg_uses: Vec::new(),
+                sink_payload_args: None,
+                all_args_literal: false,
+                catch_param: true,
+                const_text: None,
+                arg_callees: Vec::new(),
+                outer_callee: None,
+                cast_target_type: None,
+                bin_op: None,
+            });
+
+            // Wire exception edges from every exception source → synthetic node
+            for &src in &exception_sources {
+                g.add_edge(src, synth, EdgeKind::Exception);
+            }
+
+            vec![synth]
+        } else {
+            // No param name — will wire exception edges to first rescue body node
+            Vec::new()
+        };
+
+        // Build rescue body.  The rescue node's body may be in a "body" field
+        // (a "then" node), or the statements may be direct children.
+        let catch_first_idx = NodeIndex::new(g.node_count());
+        let rescue_body = rescue_node.child_by_field_name("body");
+        let catch_exits = if let Some(body_node) = rescue_body {
+            build_sub(
+                body_node,
+                &catch_preds,
+                g,
+                lang,
+                code,
+                summaries,
+                file_path,
+                enclosing_func,
+                call_ordinal,
+                analysis_rules,
+                break_targets,
+                continue_targets,
+                throw_targets,
+            )
+        } else {
+            // No body field — build rescue node itself as a block.
+            // Filter out meta-children (exceptions, exception_variable) by
+            // iterating and building only statement children.
+            let mut rescue_cursor = rescue_node.walk();
+            let mut rf = catch_preds.clone();
+            for child in rescue_node.children(&mut rescue_cursor) {
+                match child.kind() {
+                    "exceptions" | "exception_variable" => {}
+                    _ if lookup(lang, child.kind()) == Kind::Trivia => {}
+                    "=>" | "rescue" => {}
+                    _ => {
+                        rf = build_sub(
+                            child,
+                            &rf,
+                            g,
+                            lang,
+                            code,
+                            summaries,
+                            file_path,
+                            enclosing_func,
+                            call_ordinal,
+                            analysis_rules,
+                            break_targets,
+                            continue_targets,
+                            throw_targets,
+                        );
+                    }
+                }
+            }
+            rf
+        };
+
+        // If no param name, wire exception edges to the first rescue body node
+        if param_name.is_none() {
+            let catch_entry = if catch_first_idx.index() < g.node_count() {
+                catch_first_idx
+            } else {
+                continue;
+            };
+            for &src in &exception_sources {
+                g.add_edge(src, catch_entry, EdgeKind::Exception);
+            }
+        }
+
+        all_catch_exits.extend(catch_exits);
+    }
+
+    // 5. Build else clause (runs when no exception was raised)
+    let normal_exits = if let Some(else_node) = else_clause {
+        build_sub(
+            else_node,
+            &try_exits,
+            g,
+            lang,
+            code,
+            summaries,
+            file_path,
+            enclosing_func,
+            call_ordinal,
+            analysis_rules,
+            break_targets,
+            continue_targets,
+            throw_targets,
+        )
+    } else {
+        try_exits
+    };
+
+    // 6. Build ensure clause (Ruby's finally — always runs)
+    if let Some(ensure_node) = ensure_clause {
+        let mut ensure_preds: Vec<NodeIndex> = Vec::new();
+        ensure_preds.extend(&normal_exits);
+        ensure_preds.extend(&all_catch_exits);
+        if rescue_clauses.is_empty() {
+            ensure_preds.extend(&try_throw_targets);
+        }
+
+        build_sub(
+            ensure_node,
+            &ensure_preds,
+            g,
+            lang,
+            code,
+            summaries,
+            file_path,
+            enclosing_func,
+            call_ordinal,
+            analysis_rules,
+            break_targets,
+            continue_targets,
+            throw_targets,
+        )
+    } else {
+        // No ensure: return normal exits + catch exits
+        let mut exits = normal_exits;
+        exits.extend(all_catch_exits);
+        exits
     }
 }
 
@@ -2006,6 +2258,32 @@ fn build_try<'a>(
     continue_targets: &mut Vec<NodeIndex>,
     throw_targets: &mut Vec<NodeIndex>,
 ) -> Vec<NodeIndex> {
+    // Ruby begin/rescue/ensure: no "body" field, has "rescue" or "ensure" children.
+    // Delegate to the dedicated handler.
+    if ast.child_by_field_name("body").is_none() {
+        let mut cursor = ast.walk();
+        let has_rescue_or_ensure = ast
+            .children(&mut cursor)
+            .any(|c| c.kind() == "rescue" || c.kind() == "ensure");
+        if has_rescue_or_ensure {
+            return build_begin_rescue(
+                ast,
+                preds,
+                g,
+                lang,
+                code,
+                summaries,
+                file_path,
+                enclosing_func,
+                call_ordinal,
+                analysis_rules,
+                break_targets,
+                continue_targets,
+                throw_targets,
+            );
+        }
+    }
+
     // 1. Extract child AST nodes (language-aware field lookup)
     let try_body = ast.child_by_field_name("body");
 
@@ -2727,6 +3005,31 @@ fn build_sub<'a>(
         //  BLOCK: statements execute sequentially
         // ─────────────────────────────────────────────────────────────────
         Kind::SourceFile | Kind::Block => {
+            // Ruby body_statement with rescue/ensure = implicit begin/rescue
+            if lang == "ruby" && ast.kind() == "body_statement" {
+                let mut check = ast.walk();
+                if ast
+                    .children(&mut check)
+                    .any(|c| c.kind() == "rescue" || c.kind() == "ensure")
+                {
+                    return build_begin_rescue(
+                        ast,
+                        preds,
+                        g,
+                        lang,
+                        code,
+                        summaries,
+                        file_path,
+                        enclosing_func,
+                        call_ordinal,
+                        analysis_rules,
+                        break_targets,
+                        continue_targets,
+                        throw_targets,
+                    );
+                }
+            }
+
             let mut cursor = ast.walk();
             let mut frontier = preds.to_vec();
             // Track the last frontier before a function emptied it — used to
@@ -3645,6 +3948,166 @@ mod cfg_tests {
             catch_param_nodes.is_empty(),
             "catch without parameter should not create a catch_param node"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Ruby begin/rescue/ensure tests
+    // ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ruby_begin_rescue_has_exception_edges() {
+        let src = b"def f()\n  begin\n    foo()\n  rescue => e\n    bar(e)\n  end\nend";
+        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+        let exception_edges: Vec<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .collect();
+        assert!(
+            !exception_edges.is_empty(),
+            "begin/rescue should produce exception edges"
+        );
+    }
+
+    #[test]
+    fn ruby_rescue_catch_param_defines_variable() {
+        let src = b"def f()\n  begin\n    foo()\n  rescue StandardError => e\n    bar(e)\n  end\nend";
+        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+        let catch_param_nodes: Vec<_> = cfg
+            .node_indices()
+            .filter(|&n| cfg[n].catch_param)
+            .collect();
+        assert_eq!(
+            catch_param_nodes.len(),
+            1,
+            "Expected exactly one catch_param node in Ruby rescue"
+        );
+        let cp = &cfg[catch_param_nodes[0]];
+        assert_eq!(cp.defines.as_deref(), Some("e"));
+        assert_eq!(cp.kind, StmtKind::Seq);
+
+        // Exception edges should target the synthetic node
+        let exception_targets: Vec<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .map(|e| e.target())
+            .collect();
+        assert!(exception_targets.iter().all(|&t| t == catch_param_nodes[0]));
+    }
+
+    #[test]
+    fn ruby_begin_rescue_ensure_complete() {
+        let src = b"def f()\n  begin\n    foo()\n  rescue => e\n    bar(e)\n  ensure\n    baz()\n  end\nend";
+        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+        // Should have exception edges
+        let exception_count = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .count();
+        assert!(
+            exception_count > 0,
+            "begin/rescue/ensure should have exception edges"
+        );
+
+        // All nodes should be reachable (no orphaned nodes beyond entry/exit)
+        let node_count = cfg.node_count();
+        assert!(node_count > 3, "CFG should have multiple nodes");
+    }
+
+    #[test]
+    fn ruby_rescue_no_variable() {
+        // bare rescue without => e
+        let src = b"def f()\n  begin\n    foo()\n  rescue\n    bar()\n  end\nend";
+        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+        // No catch_param node should be created
+        let catch_param_nodes: Vec<_> = cfg
+            .node_indices()
+            .filter(|&n| cfg[n].catch_param)
+            .collect();
+        assert!(
+            catch_param_nodes.is_empty(),
+            "rescue without variable should not create a catch_param node"
+        );
+
+        // But exception edges should still exist
+        let exception_count = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .count();
+        assert!(
+            exception_count > 0,
+            "rescue without variable should still have exception edges"
+        );
+    }
+
+    #[test]
+    fn ruby_body_statement_implicit_begin() {
+        // def method body with inline rescue (no explicit begin)
+        let src = b"def f()\n  foo()\nrescue => e\n  bar(e)\nend";
+        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+        let exception_count = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .count();
+        assert!(
+            exception_count > 0,
+            "implicit begin via body_statement should produce exception edges"
+        );
+
+        let catch_param_nodes: Vec<_> = cfg
+            .node_indices()
+            .filter(|&n| cfg[n].catch_param)
+            .collect();
+        assert_eq!(
+            catch_param_nodes.len(),
+            1,
+            "implicit begin rescue should have one catch_param node"
+        );
+        assert_eq!(cfg[catch_param_nodes[0]].defines.as_deref(), Some("e"));
+    }
+
+    #[test]
+    fn ruby_multiple_rescue_clauses() {
+        let src = b"def f()\n  begin\n    foo()\n  rescue IOError => e\n    handle_io(e)\n  rescue => e\n    handle_other(e)\n  end\nend";
+        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+        let catch_param_nodes: Vec<_> = cfg
+            .node_indices()
+            .filter(|&n| cfg[n].catch_param)
+            .collect();
+        assert_eq!(
+            catch_param_nodes.len(),
+            2,
+            "Two rescue clauses should produce two catch_param nodes"
+        );
+
+        // Both should define "e"
+        for &cp in &catch_param_nodes {
+            assert_eq!(cfg[cp].defines.as_deref(), Some("e"));
+        }
+
+        // Exception edges should target both synthetic nodes
+        let exception_targets: std::collections::HashSet<_> = cfg
+            .edge_references()
+            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+            .map(|e| e.target())
+            .collect();
+        for &cp in &catch_param_nodes {
+            assert!(
+                exception_targets.contains(&cp),
+                "Exception edges should target each catch_param node"
+            );
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────
