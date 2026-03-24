@@ -232,11 +232,16 @@ pub fn class_name_to_type_kind(name: &str) -> Option<TypeKind> {
         "Boolean" => Some(TypeKind::Bool),
         "List" | "ArrayList" | "Collection" | "Set" | "HashSet" => Some(TypeKind::Array),
         "URL" | "URI" => Some(TypeKind::Url),
-        "HttpClient" | "CloseableHttpClient" => Some(TypeKind::HttpClient),
+        // Framework HTTP clients — also listed in JAVA_HIERARCHY (type_facts.rs)
+        // for subtype resolution. Both locations needed: this function is called
+        // directly by the constraint solver, while the hierarchy provides
+        // is_subtype_of() for instanceof checks.
+        "HttpClient" | "CloseableHttpClient" | "OkHttpClient" | "WebClient"
+        | "RestTemplate" => Some(TypeKind::HttpClient),
         "HttpServletResponse" | "HttpResponse" | "ServletResponse" => {
             Some(TypeKind::HttpResponse)
         }
-        "Connection" | "DataSource" => Some(TypeKind::DatabaseConnection),
+        "Connection" | "DataSource" | "MongoClient" => Some(TypeKind::DatabaseConnection),
         "File" | "Path" => Some(TypeKind::FileHandle),
         _ => None,
     }

@@ -97,20 +97,26 @@ impl TypeFactResult {
     }
 }
 
-/// Infer a type from a constructor or factory call callee name.
+/// Infer a type from a constructor, factory, or allocator call.
 ///
-/// Maps known constructor/factory patterns to security-relevant types.
+/// Maps known constructor/factory/allocator patterns to security-relevant
+/// types. Covers `new Foo()` constructors, factory methods like
+/// `HttpClient.newHttpClient()`, and allocator functions like `curl_init()`.
 /// Uses suffix matching consistent with the label classification system.
 pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
-    // Normalize: take the last segment for suffix matching
-    let suffix = callee.rsplit('.').next().unwrap_or(callee);
+    // Normalize: last segment after "::" (Rust/Ruby) then "." (method calls).
+    // Mirrors normalize_callee_name() in callgraph.rs:83-87.
+    let after_colons = callee.rsplit("::").next().unwrap_or(callee);
+    let suffix = after_colons.rsplit('.').next().unwrap_or(after_colons);
     match lang {
         Lang::Java => match suffix {
             "URL" | "URI" => Some(TypeKind::Url),
             "newHttpClient" | "newBuilder" if callee.contains("HttpClient") => {
                 Some(TypeKind::HttpClient)
             }
+            "OkHttpClient" | "WebClient" | "RestTemplate" => Some(TypeKind::HttpClient),
             "getConnection" => Some(TypeKind::DatabaseConnection),
+            "MongoClient" => Some(TypeKind::DatabaseConnection),
             "FileInputStream" | "FileOutputStream" | "FileReader" | "FileWriter"
             | "BufferedReader" | "BufferedWriter" => Some(TypeKind::FileHandle),
             "getWriter" | "getOutputStream" => Some(TypeKind::HttpResponse),
@@ -123,7 +129,11 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
         },
         Lang::Python => {
             // Python uses qualified names: requests.get, sqlite3.connect, etc.
-            if callee.starts_with("requests.") || callee == "urlopen" {
+            if callee.starts_with("requests.")
+                || callee == "urlopen"
+                || callee == "aiohttp.ClientSession"
+                || callee.starts_with("httpx.")
+            {
                 Some(TypeKind::HttpClient)
             } else if suffix == "connect"
                 && (callee.contains("sqlite3")
@@ -145,6 +155,41 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
                 Some(TypeKind::DatabaseConnection)
             } else if callee.contains("os.") && matches!(suffix, "Open" | "Create" | "OpenFile") {
                 Some(TypeKind::FileHandle)
+            } else if callee.contains("url.") && suffix == "Parse" {
+                Some(TypeKind::Url)
+            } else {
+                None
+            }
+        }
+        Lang::Php => match suffix {
+            "PDO" | "mysqli" => Some(TypeKind::DatabaseConnection),
+            "curl_init" => Some(TypeKind::HttpClient),
+            "fopen" => Some(TypeKind::FileHandle),
+            "SplFileObject" => Some(TypeKind::FileHandle),
+            _ => None,
+        },
+        Lang::C => match suffix {
+            "fopen" => Some(TypeKind::FileHandle),
+            "curl_easy_init" => Some(TypeKind::HttpClient),
+            "mysql_real_connect" | "PQconnectdb" => Some(TypeKind::DatabaseConnection),
+            _ => None,
+        },
+        Lang::Cpp => match suffix {
+            // Shares C FFI callees; C++ stream constructors deferred to Pass B
+            "fopen" => Some(TypeKind::FileHandle),
+            "curl_easy_init" => Some(TypeKind::HttpClient),
+            "mysql_real_connect" | "PQconnectdb" => Some(TypeKind::DatabaseConnection),
+            _ => None,
+        },
+        Lang::Rust => {
+            // Rust callees are full scoped_identifiers: "reqwest::Client::new".
+            // Use ends_with for exact namespace-qualified matching.
+            if callee.ends_with("reqwest::Client::new") || callee.ends_with("reqwest::get") {
+                Some(TypeKind::HttpClient)
+            } else if callee.ends_with("File::open") || callee.ends_with("File::create") {
+                Some(TypeKind::FileHandle)
+            } else if callee.ends_with("Url::parse") {
+                Some(TypeKind::Url)
             } else {
                 None
             }
@@ -277,6 +322,13 @@ static JAVA_HIERARCHY: &[(&str, &[&str])] = &[
     ("HashMap", &["Map"]),
     ("StringBuilder", &["CharSequence"]),
     ("StringBuffer", &["CharSequence"]),
+    // Framework types (Phase 10 hardening)
+    ("OkHttpClient", &["HttpClient"]),
+    ("WebClient", &["HttpClient"]),
+    ("RestTemplate", &["HttpClient"]),
+    ("MongoClient", &["DatabaseConnection"]),
+    ("RedisTemplate", &["DatabaseConnection"]),
+    ("JmsTemplate", &["DatabaseConnection"]),
 ];
 
 impl TypeHierarchy {
@@ -335,6 +387,9 @@ impl GoInterfaceTable {
                 matches!(kind, TypeKind::HttpResponse | TypeKind::FileHandle)
             }
             "io.Reader" | "Reader" => matches!(kind, TypeKind::FileHandle),
+            "io.ReadCloser" | "ReadCloser" => {
+                matches!(kind, TypeKind::FileHandle | TypeKind::HttpResponse)
+            }
             _ => true, // Unknown interface → conservative (could satisfy)
         }
     }
@@ -351,6 +406,15 @@ impl GoInterfaceTable {
                     | TypeKind::Bool
                     | TypeKind::String
                     | TypeKind::FileHandle
+                    | TypeKind::DatabaseConnection
+                    | TypeKind::Url
+                    | TypeKind::HttpClient
+            ),
+            "io.ReadCloser" | "ReadCloser" => matches!(
+                kind,
+                TypeKind::Int
+                    | TypeKind::Bool
+                    | TypeKind::String
                     | TypeKind::DatabaseConnection
                     | TypeKind::Url
             ),
@@ -627,5 +691,102 @@ mod tests {
             &TypeKind::HttpResponse,
             "io.Writer"
         ));
+    }
+
+    // ── Phase 10 hardening: constructor_type() expansions ────────────────
+
+    #[test]
+    fn constructor_type_php() {
+        assert_eq!(constructor_type(Lang::Php, "PDO"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(constructor_type(Lang::Php, "mysqli"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(constructor_type(Lang::Php, "curl_init"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Php, "fopen"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::Php, "SplFileObject"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::Php, "array_map"), None);
+    }
+
+    #[test]
+    fn constructor_type_c() {
+        assert_eq!(constructor_type(Lang::C, "fopen"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::C, "curl_easy_init"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::C, "mysql_real_connect"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(constructor_type(Lang::C, "PQconnectdb"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(constructor_type(Lang::C, "printf"), None);
+    }
+
+    #[test]
+    fn constructor_type_cpp() {
+        assert_eq!(constructor_type(Lang::Cpp, "fopen"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::Cpp, "curl_easy_init"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Cpp, "printf"), None);
+    }
+
+    #[test]
+    fn constructor_type_rust_exact() {
+        assert_eq!(constructor_type(Lang::Rust, "reqwest::Client::new"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Rust, "reqwest::get"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Rust, "File::open"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::Rust, "File::create"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::Rust, "std::fs::File::open"), Some(TypeKind::FileHandle));
+        assert_eq!(constructor_type(Lang::Rust, "Url::parse"), Some(TypeKind::Url));
+        // Broad patterns deferred to Pass B
+        assert_eq!(constructor_type(Lang::Rust, "Connection::open"), None);
+        assert_eq!(constructor_type(Lang::Rust, "println!"), None);
+    }
+
+    #[test]
+    fn constructor_type_java_expanded() {
+        assert_eq!(constructor_type(Lang::Java, "OkHttpClient"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Java, "WebClient"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Java, "RestTemplate"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Java, "MongoClient"), Some(TypeKind::DatabaseConnection));
+    }
+
+    #[test]
+    fn constructor_type_go_url() {
+        assert_eq!(constructor_type(Lang::Go, "url.Parse"), Some(TypeKind::Url));
+    }
+
+    #[test]
+    fn constructor_type_python_aiohttp() {
+        assert_eq!(constructor_type(Lang::Python, "aiohttp.ClientSession"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Python, "httpx.Client"), Some(TypeKind::HttpClient));
+    }
+
+    #[test]
+    fn java_hierarchy_expansion() {
+        assert!(TypeHierarchy::is_subtype_of("OkHttpClient", "HttpClient"));
+        assert!(TypeHierarchy::is_subtype_of("WebClient", "HttpClient"));
+        assert!(TypeHierarchy::is_subtype_of("RestTemplate", "HttpClient"));
+        assert!(TypeHierarchy::is_subtype_of("MongoClient", "DatabaseConnection"));
+        assert!(TypeHierarchy::is_subtype_of("RedisTemplate", "DatabaseConnection"));
+        assert!(TypeHierarchy::is_subtype_of("JmsTemplate", "DatabaseConnection"));
+        assert_eq!(TypeHierarchy::resolve_kind("OkHttpClient"), Some(TypeKind::HttpClient));
+        assert_eq!(TypeHierarchy::resolve_kind("RestTemplate"), Some(TypeKind::HttpClient));
+        assert_eq!(TypeHierarchy::resolve_kind("MongoClient"), Some(TypeKind::DatabaseConnection));
+    }
+
+    #[test]
+    fn go_interface_read_closer() {
+        assert!(GoInterfaceTable::satisfies(&TypeKind::FileHandle, "io.ReadCloser"));
+        assert!(GoInterfaceTable::satisfies(&TypeKind::HttpResponse, "io.ReadCloser"));
+        assert!(!GoInterfaceTable::satisfies(&TypeKind::Int, "io.ReadCloser"));
+        assert!(GoInterfaceTable::definitely_not(&TypeKind::Int, "io.ReadCloser"));
+        assert!(GoInterfaceTable::definitely_not(&TypeKind::DatabaseConnection, "io.ReadCloser"));
+        assert!(!GoInterfaceTable::definitely_not(&TypeKind::FileHandle, "io.ReadCloser"));
+    }
+
+    #[test]
+    fn go_http_client_definitely_not_response_writer() {
+        assert!(GoInterfaceTable::definitely_not(&TypeKind::HttpClient, "http.ResponseWriter"));
+    }
+
+    #[test]
+    fn colon_normalization_in_constructor_type() {
+        // Verify :: normalization doesn't break existing Java/JS/Python/Go patterns
+        assert_eq!(constructor_type(Lang::Java, "URL"), Some(TypeKind::Url));
+        assert_eq!(constructor_type(Lang::JavaScript, "URL"), Some(TypeKind::Url));
+        assert_eq!(constructor_type(Lang::Python, "requests.get"), Some(TypeKind::HttpClient));
+        assert_eq!(constructor_type(Lang::Go, "http.Get"), Some(TypeKind::HttpClient));
     }
 }

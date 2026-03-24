@@ -169,6 +169,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
 
     // data-flow
     "function_call_expression"      => Kind::CallFn,
+    "object_creation_expression"    => Kind::CallFn,
     "member_call_expression"        => Kind::CallMethod,
     "scoped_call_expression"        => Kind::CallMethod,
     "assignment_expression"         => Kind::Assignment,
