@@ -1,4 +1,5 @@
 use crate::labels::Cap;
+use crate::ssa::type_facts::TypeKind;
 use serde::{Deserialize, Serialize};
 
 /// Per-parameter taint transform describing how taint flows through a function.
@@ -41,4 +42,8 @@ pub struct SsaFuncSummary {
     /// container contents.
     #[serde(default)]
     pub param_to_container_store: Vec<(usize, usize)>,
+    /// Inferred return type of the function, when determinable from constructor
+    /// calls or type annotations. Enables cross-file type-qualified resolution.
+    #[serde(default)]
+    pub return_type: Option<TypeKind>,
 }

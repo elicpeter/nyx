@@ -91,6 +91,22 @@ fn cross_file_ssa_sanitizer() {
     validate_expectations(&diags, &dir);
 }
 
+// ── Cross-file param sink precision ───────────────────────────────────────
+
+#[test]
+fn cross_file_param_sink_precision() {
+    let dir = fixture_path("cross_file_param_sink_precision");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn cross_file_mixed_cap_sink() {
+    let dir = fixture_path("cross_file_mixed_cap_sink");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── Cross-cutting tests ───────────────────────────────────────────────────
 
 #[test]

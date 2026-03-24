@@ -1480,10 +1480,23 @@ fn transfer_inst(
             // Resolve callee summary (used for both taint propagation and container fields)
             let callee_summary = resolve_callee(transfer, callee, caller_func, info.call_ordinal);
 
-            // Capture container fields regardless of whether inline analysis handled the call
+            // Capture container fields and return type regardless of whether
+            // inline analysis handled the call
             if let Some(ref resolved) = callee_summary {
                 resolved_container_to_return = resolved.param_container_to_return.clone();
                 resolved_container_store = resolved.param_to_container_store.clone();
+
+                // Cross-file type propagation: if the callee has a known return
+                // type (from SSA summary), inject it into the caller's path env
+                // so downstream type-qualified resolution can use it.
+                if let Some(ref rtype) = resolved.return_type {
+                    if let Some(ref mut env) = state.path_env {
+                        use crate::constraint::domain::{TypeSet, ValueFact};
+                        let mut fact = ValueFact::top();
+                        fact.types = TypeSet::singleton(rtype);
+                        env.refine(inst.value, &fact);
+                    }
+                }
             }
 
             // When find_classifiable_inner_call overrides the callee (e.g.
@@ -2234,7 +2247,8 @@ fn collect_block_events(
             continue;
         }
 
-        let mut sink_caps = resolve_sink_caps(info, transfer);
+        let sink_info = resolve_sink_info(info, transfer);
+        let mut sink_caps = sink_info.caps;
 
         // Type-qualified sink resolution: when normal sink resolution found nothing,
         // try using the receiver's inferred type to construct a qualified callee name.
@@ -2390,7 +2404,7 @@ fn collect_block_events(
         }
 
         // Collect tainted SSA values that flow into this sink
-        let tainted = collect_tainted_sink_values(inst, info, &state, sink_caps, ssa, transfer);
+        let tainted = collect_tainted_sink_values(inst, info, &state, sink_caps, ssa, transfer, &sink_info.param_to_sink);
         if !tainted.is_empty() {
             // Compute all_validated: check if all tainted vars are validated
             let all_validated = tainted.iter().all(|(val, _, _)| {
@@ -2824,7 +2838,16 @@ fn merge_taint_into(
 }
 
 /// Resolve sink caps from labels or callee summary.
-fn resolve_sink_caps(info: &NodeInfo, transfer: &SsaTaintTransfer) -> Cap {
+/// Resolved sink information: aggregate caps plus optional per-parameter detail.
+struct SinkInfo {
+    caps: Cap,
+    /// When non-empty, only these caller argument positions flow to sinks.
+    /// Each entry is (param_index, per_param_sink_caps).
+    /// Empty = check all arguments (label-based sinks, or no per-param info).
+    param_to_sink: Vec<(usize, Cap)>,
+}
+
+fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
     let label_sink_caps = info.labels.iter().fold(Cap::empty(), |acc, lbl| {
         if let DataLabel::Sink(caps) = lbl {
             acc | *caps
@@ -2833,7 +2856,7 @@ fn resolve_sink_caps(info: &NodeInfo, transfer: &SsaTaintTransfer) -> Cap {
         }
     });
     if !label_sink_caps.is_empty() {
-        return label_sink_caps;
+        return SinkInfo { caps: label_sink_caps, param_to_sink: vec![] };
     }
 
     let caller_func = info.enclosing_func.as_deref().unwrap_or("");
@@ -2841,11 +2864,17 @@ fn resolve_sink_caps(info: &NodeInfo, transfer: &SsaTaintTransfer) -> Cap {
         .as_ref()
         .and_then(|c| resolve_callee(transfer, c, caller_func, info.call_ordinal))
         .filter(|r| !r.sink_caps.is_empty())
-        .map(|r| r.sink_caps)
-        .unwrap_or(Cap::empty())
+        .map(|r| SinkInfo {
+            caps: r.sink_caps,
+            param_to_sink: r.param_to_sink,
+        })
+        .unwrap_or(SinkInfo { caps: Cap::empty(), param_to_sink: vec![] })
 }
 
 /// Collect tainted SSA values at a sink instruction.
+///
+/// When `param_to_sink` is non-empty, only arguments at those positions are
+/// checked — enables per-parameter sink precision from cross-file summaries.
 fn collect_tainted_sink_values(
     inst: &SsaInst,
     info: &NodeInfo,
@@ -2853,6 +2882,7 @@ fn collect_tainted_sink_values(
     sink_caps: Cap,
     ssa: &SsaBody,
     transfer: &SsaTaintTransfer,
+    param_to_sink: &[(usize, Cap)],
 ) -> Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)> {
     let mut result = Vec::new();
 
@@ -2872,7 +2902,7 @@ fn collect_tainted_sink_values(
     // Collect SSA values used by this instruction
     let used_values = inst_use_values(inst);
 
-    // If gated sink, filter to payload arg positions
+    // Priority 1: gated sink filtering (CFG-level sink_payload_args)
     if let Some(ref positions) = info.sink_payload_args {
         if let SsaOp::Call { args, receiver, .. } = &inst.op {
             let offset = if receiver.is_some() { 1 } else { 0 };
@@ -2894,7 +2924,35 @@ fn collect_tainted_sink_values(
         }
     }
 
-    // Check all used values
+    // Priority 2: summary-based per-parameter sink filtering.
+    // param_to_sink indices map directly to args[] (no receiver offset —
+    // SsaOp::Param { index } corresponds to args[index], receiver is separate).
+    if !param_to_sink.is_empty() {
+        if let SsaOp::Call { args, .. } = &inst.op {
+            for &(param_idx, per_param_caps) in param_to_sink {
+                let effective_caps = per_param_caps & sink_caps;
+                if effective_caps.is_empty() {
+                    continue;
+                }
+                if let Some(arg_vals) = args.get(param_idx) {
+                    for &v in arg_vals {
+                        if let Some(taint) = state.get(v) {
+                            if (taint.caps & effective_caps) != Cap::empty()
+                                && !result.iter().any(|&(rv, _, _)| rv == v)
+                            {
+                                result.push((v, taint.caps, taint.origins.clone()));
+                            }
+                        }
+                        check_heap_taint(v, &mut result);
+                    }
+                }
+            }
+            apply_field_aware_suppression(&mut result, inst, state, sink_caps, ssa);
+            return result;
+        }
+    }
+
+    // Priority 3: aggregate fallback — check all used values
     for v in used_values {
         if let Some(taint) = state.get(v) {
             if (taint.caps & sink_caps) != Cap::empty() {
@@ -3368,12 +3426,18 @@ struct ResolvedSummary {
     source_caps: Cap,
     sanitizer_caps: Cap,
     sink_caps: Cap,
+    /// Per-parameter sink caps: (param_index, caps). When non-empty, only
+    /// arguments at these positions flow to internal sinks — enables positional
+    /// and capability-aware filtering instead of aggregate-only detection.
+    param_to_sink: Vec<(usize, Cap)>,
     propagates_taint: bool,
     propagating_params: Vec<usize>,
     /// Parameter indices whose container identity flows to return value.
     param_container_to_return: Vec<usize>,
     /// (src_param, container_param) pairs: src taint stored into container.
     param_to_container_store: Vec<(usize, usize)>,
+    /// Inferred return type from cross-file SSA summary.
+    return_type: Option<crate::ssa::type_facts::TypeKind>,
 }
 
 fn resolve_callee(
@@ -3410,10 +3474,12 @@ fn resolve_callee(
                     source_caps: ls.source_caps,
                     sanitizer_caps: ls.sanitizer_caps,
                     sink_caps: ls.sink_caps,
+                    param_to_sink: ls.tainted_sink_params.iter().map(|&i| (i, ls.sink_caps)).collect(),
                     propagates_taint: !ls.propagating_params.is_empty(),
                     propagating_params: ls.propagating_params.clone(),
                     param_container_to_return: vec![],
                     param_to_container_store: vec![],
+                    return_type: None,
                 });
             }
             // Try label classification for the bound function
@@ -3437,10 +3503,12 @@ fn resolve_callee(
                     source_caps,
                     sanitizer_caps,
                     sink_caps,
+                    param_to_sink: vec![],
                     propagates_taint: false,
                     propagating_params: vec![],
                     param_container_to_return: vec![],
                     param_to_container_store: vec![],
+                    return_type: None,
                 });
             }
         }
@@ -3480,10 +3548,12 @@ fn resolve_callee(
             source_caps: ls.source_caps,
             sanitizer_caps: ls.sanitizer_caps,
             sink_caps: ls.sink_caps,
+            param_to_sink: ls.tainted_sink_params.iter().map(|&i| (i, ls.sink_caps)).collect(),
             propagates_taint: !ls.propagating_params.is_empty(),
             propagating_params: ls.propagating_params.clone(),
             param_container_to_return: vec![],
             param_to_container_store: vec![],
+            return_type: None,
         });
     }
     if local_matches.len() > 1 {
@@ -3499,10 +3569,12 @@ fn resolve_callee(
                         source_caps: fs.source_caps(),
                         sanitizer_caps: fs.sanitizer_caps(),
                         sink_caps: fs.sink_caps(),
+                        param_to_sink: fs.tainted_sink_params.iter().map(|&i| (i, fs.sink_caps())).collect(),
                         propagates_taint: fs.propagates_any(),
                         propagating_params: fs.propagating_params.clone(),
                         param_container_to_return: vec![],
                         param_to_container_store: vec![],
+                        return_type: None,
                     });
                 }
             }
@@ -3524,10 +3596,12 @@ fn resolve_callee(
                 source_caps: fs.source_caps(),
                 sanitizer_caps: fs.sanitizer_caps(),
                 sink_caps: fs.sink_caps(),
+                param_to_sink: fs.tainted_sink_params.iter().map(|&i| (i, fs.sink_caps())).collect(),
                 propagates_taint: fs.propagates_any(),
                 propagating_params: fs.propagating_params.clone(),
                 param_container_to_return: vec![],
                 param_to_container_store: vec![],
+                return_type: None,
             });
         }
     }
@@ -3565,10 +3639,12 @@ fn convert_ssa_to_resolved(
         source_caps: ssa_sum.source_caps,
         sanitizer_caps,
         sink_caps,
+        param_to_sink: ssa_sum.param_to_sink.clone(),
         propagates_taint: !propagating_params.is_empty(),
         propagating_params,
         param_container_to_return: ssa_sum.param_container_to_return.clone(),
         param_to_container_store: ssa_sum.param_to_container_store.clone(),
+        return_type: ssa_sum.return_type.clone(),
     }
 }
 
@@ -4023,6 +4099,9 @@ pub fn extract_ssa_func_summary(
     let (param_container_to_return, param_to_container_store) =
         extract_container_flow_summary(ssa, lang);
 
+    // Infer return type: scan return-reaching blocks for constructor calls.
+    let return_type = infer_summary_return_type(ssa, lang);
+
     SsaFuncSummary {
         param_to_return,
         param_to_sink,
@@ -4030,7 +4109,35 @@ pub fn extract_ssa_func_summary(
         param_to_sink_param,
         param_container_to_return,
         param_to_container_store,
+        return_type,
     }
+}
+
+/// Infer the return type of a function from its SSA body by checking whether
+/// return-reaching blocks produce values from known constructor/factory calls.
+fn infer_summary_return_type(
+    ssa: &SsaBody,
+    lang: Lang,
+) -> Option<crate::ssa::type_facts::TypeKind> {
+    use crate::ssa::ir::Terminator;
+
+    // Find blocks with Return terminators, then look at the last defined value
+    // in those blocks — if it's a Call with a known constructor, that's our type.
+    for block in &ssa.blocks {
+        if !matches!(block.terminator, Terminator::Return) {
+            continue;
+        }
+        // Walk body in reverse to find the last Call that defines the return value.
+        for inst in block.body.iter().rev() {
+            if let SsaOp::Call { callee, .. } = &inst.op {
+                if let Some(ty) = crate::ssa::type_facts::constructor_type(lang, callee) {
+                    return Some(ty);
+                }
+            }
+            break; // only check the very last instruction
+        }
+    }
+    None
 }
 
 // ── Inter-procedural container flow detection (structural SSA analysis) ──

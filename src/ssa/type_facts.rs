@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
+use serde::{Serialize, Deserialize};
 use super::ir::*;
 use super::const_prop::ConstLattice;
 use crate::cfg::Cfg;
 use crate::symbol::Lang;
 
 /// Inferred type kind for an SSA value.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)] // All variants are part of the public API
 pub enum TypeKind {
     String,
@@ -100,7 +101,7 @@ impl TypeFactResult {
 ///
 /// Maps known constructor/factory patterns to security-relevant types.
 /// Uses suffix matching consistent with the label classification system.
-fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
+pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
     // Normalize: take the last segment for suffix matching
     let suffix = callee.rsplit('.').next().unwrap_or(callee);
     match lang {
