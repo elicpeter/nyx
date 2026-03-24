@@ -2,3 +2,4 @@
 /.idea
 /frontend/node_modules
 /src/server/assets/dist
+/.nyx
