@@ -199,10 +199,11 @@ impl DefaultTransfer<'_> {
             let is_auth_cond = auth_rules.iter().any(|rule| {
                 rule.matchers
                     .iter()
-                    .any(|m| cond_lower.contains(&m.to_ascii_lowercase()))
+                    .any(|m| condition_contains_auth_token(&cond_lower, m))
             });
             if is_auth_cond && !info.condition_negated {
-                let is_admin = ADMIN_PATTERNS.iter().any(|p| cond_lower.contains(p));
+                let is_admin =
+                    ADMIN_PATTERNS.iter().any(|p| condition_contains_auth_token(&cond_lower, p));
                 let new_level = if is_admin {
                     AuthLevel::Admin
                 } else {
@@ -263,6 +264,52 @@ fn callee_matches(callee: &str, pattern: &str) -> bool {
 fn is_guard_like(callee: &str) -> bool {
     static GUARD_PREFIXES: &[&str] = &["validate", "sanitize", "check_", "verify_", "assert_"];
     GUARD_PREFIXES.iter().any(|p| callee.starts_with(p))
+}
+
+/// Check if condition text contains an auth/admin matcher at a word boundary.
+///
+/// Dispatches based on matcher content:
+/// - **Identifier-only** (`is_authenticated`, `require_auth`): tokenise condition
+///   text on non-identifier characters and require an exact token match.
+/// - **Contains punctuation** (`middleware.auth`): find the matcher as a substring
+///   and verify word boundaries (non-ident char or string edge) on both sides.
+fn condition_contains_auth_token(cond: &str, matcher: &str) -> bool {
+    let matcher_lower = matcher.to_ascii_lowercase();
+    let is_ident_only = matcher_lower
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_');
+
+    if is_ident_only {
+        // Tokenise on non-identifier chars, check for exact token match.
+        cond.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .filter(|s| !s.is_empty())
+            .any(|token| token == matcher_lower)
+    } else {
+        // Word-boundary substring match for punctuated patterns.
+        let hay = cond.as_bytes();
+        let needle = matcher_lower.as_bytes();
+        if needle.len() > hay.len() {
+            return false;
+        }
+        let mut start = 0;
+        while start + needle.len() <= hay.len() {
+            if let Some(pos) = cond[start..].find(&*matcher_lower) {
+                let abs = start + pos;
+                let end = abs + needle.len();
+                let left_ok =
+                    abs == 0 || { let c = hay[abs - 1]; !c.is_ascii_alphanumeric() && c != b'_' };
+                let right_ok = end >= hay.len()
+                    || { let c = hay[end]; !c.is_ascii_alphanumeric() && c != b'_' };
+                if left_ok && right_ok {
+                    return true;
+                }
+                start = abs + 1;
+            } else {
+                break;
+            }
+        }
+        false
+    }
 }
 
 #[cfg(test)]
@@ -466,5 +513,96 @@ mod tests {
         assert!(is_guard_like("sanitize_html"));
         assert!(is_guard_like("check_permission"));
         assert!(!is_guard_like("open_file"));
+    }
+
+    // ── condition_contains_auth_token ────────────────────────────────────
+
+    #[test]
+    fn auth_token_exact_match() {
+        assert!(condition_contains_auth_token("is_authenticated", "is_authenticated"));
+        assert!(condition_contains_auth_token("is_admin", "is_admin"));
+        assert!(condition_contains_auth_token("require_auth", "require_auth"));
+    }
+
+    #[test]
+    fn auth_token_dotted_access() {
+        assert!(condition_contains_auth_token("req.is_authenticated()", "is_authenticated"));
+        assert!(condition_contains_auth_token(
+            "user.is_authenticated == true",
+            "is_authenticated"
+        ));
+        assert!(condition_contains_auth_token("req.user.is_authenticated", "is_authenticated"));
+        assert!(condition_contains_auth_token("user.is_admin()", "is_admin"));
+    }
+
+    #[test]
+    fn auth_token_rejects_substring_regression() {
+        // Explicit regression locks for known false positives.
+        assert!(!condition_contains_auth_token(
+            "not_is_authenticated",
+            "is_authenticated"
+        ));
+        assert!(!condition_contains_auth_token(
+            "cached_is_authenticated_flag",
+            "is_authenticated"
+        ));
+        assert!(!condition_contains_auth_token(
+            "xis_authenticated",
+            "is_authenticated"
+        ));
+        assert!(!condition_contains_auth_token(
+            "this_is_admin_panel",
+            "is_admin"
+        ));
+    }
+
+    #[test]
+    fn auth_token_underscore_camel_boundary_cases() {
+        // Underscore-joined identifiers are single tokens — must not match interior.
+        assert!(!condition_contains_auth_token(
+            "req.user_is_authenticated_flag",
+            "is_authenticated"
+        ));
+        // Dot-separated segments ARE separate tokens.
+        assert!(condition_contains_auth_token(
+            "req.user.is_authenticated",
+            "is_authenticated"
+        ));
+    }
+
+    #[test]
+    fn auth_token_dotted_matcher() {
+        assert!(condition_contains_auth_token("middleware.auth()", "middleware.auth"));
+        assert!(condition_contains_auth_token(
+            "if middleware.auth(req)",
+            "middleware.auth"
+        ));
+        // Left boundary violation.
+        assert!(!condition_contains_auth_token("xmiddleware.auth()", "middleware.auth"));
+        // Right boundary violation — "middleware.authz" extends past "middleware.auth".
+        assert!(!condition_contains_auth_token("middleware.authz()", "middleware.auth"));
+        // "middleware.auth.check" — matcher ends at '.', which is non-ident → matches.
+        assert!(condition_contains_auth_token("middleware.auth.check()", "middleware.auth"));
+    }
+
+    #[test]
+    fn auth_token_boolean_composition() {
+        // Compound conditions — each token should be individually matchable.
+        assert!(condition_contains_auth_token(
+            "is_authenticated && is_admin",
+            "is_authenticated"
+        ));
+        assert!(condition_contains_auth_token(
+            "is_authenticated && is_admin",
+            "is_admin"
+        ));
+        assert!(condition_contains_auth_token(
+            "!is_authenticated && is_admin",
+            "is_authenticated"
+        ));
+        assert!(condition_contains_auth_token(
+            "user == null || !user.is_authenticated",
+            "is_authenticated"
+        ));
     }
 }

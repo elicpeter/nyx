@@ -252,10 +252,10 @@ fn is_web_entrypoint_simple(
             .any(|p| web_params.contains(&p.to_ascii_lowercase().as_str()))
     });
 
-    // Strong handler names are enough even without web params
+    // Only handle_* and route_* are strong enough to skip param confirmation.
+    // api_*, serve_*, process_* require web parameter evidence.
     let strong_name = name_lower.starts_with("handle_")
-        || name_lower.starts_with("route_")
-        || name_lower.starts_with("api_");
+        || name_lower.starts_with("route_");
 
     has_web_params || strong_name
 }

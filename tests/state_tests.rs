@@ -351,3 +351,51 @@ fn js_fs_open_no_close() {
 fn js_fs_open_close() {
     assert_no_state_findings("js_fs_open_close.js");
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// (9) Auth — unauthed access detection
+// ═══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn auth_unprotected_handler_fires() {
+    assert_has("auth_unprotected_handler.js", "state-unauthed-access");
+}
+
+#[test]
+fn auth_protected_handler_clean() {
+    assert_absent("auth_protected_handler.js", "state-unauthed-access");
+}
+
+#[test]
+fn auth_not_a_handler_no_finding() {
+    // process_data() is not a web handler (process_* demoted to weak,
+    // param "batch" is not a web param).
+    assert_no_state_findings("auth_not_a_handler.py");
+}
+
+#[test]
+fn auth_negated_condition_does_not_elevate() {
+    // if (!is_authenticated) { exec(...) } — negated condition.
+    // True branch is the unauthenticated path; auth must NOT be elevated.
+    assert_has("auth_negated_condition.js", "state-unauthed-access");
+}
+
+#[test]
+fn auth_main_not_handler() {
+    // main() is explicitly excluded from web entrypoint detection.
+    assert_no_state_findings("auth_main_not_handler.js");
+}
+
+#[test]
+fn auth_api_version_not_handler() {
+    // api_version_string() matches api_* but has no web params (demoted
+    // from strong name). No privileged sink either.
+    assert_no_state_findings("auth_api_version_not_handler.js");
+}
+
+#[test]
+fn auth_substring_in_condition_no_false_elevate() {
+    // "not_is_authenticated_cache" must NOT match "is_authenticated".
+    // Handler + sink + no real auth = finding fires (regression lock).
+    assert_has("auth_substring_false_match.js", "state-unauthed-access");
+}

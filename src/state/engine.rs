@@ -98,7 +98,21 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
             continue;
         }
 
-        for (edge_kind, target) in edges {
+        for &(edge_kind, target) in &edges {
+            // Skip redundant Seq edges when a True or False edge reaches the
+            // same target. The CFG builder may emit both a Seq edge (from
+            // build_sub chaining) and a True/False edge (from explicit If
+            // wiring) to the same successor. The Seq edge carries no
+            // branch-aware state, so it dilutes the auth elevation that
+            // the True edge provides. Dropping it preserves correct semantics.
+            if matches!(edge_kind, EdgeKind::Seq)
+                && edges.iter().any(|&(k, t)| {
+                    t == target && matches!(k, EdgeKind::True | EdgeKind::False)
+                })
+            {
+                continue;
+            }
+
             let info = &cfg[node];
             let (out_state, _events) =
                 transfer.apply(node, info, Some(edge_kind), node_state.clone());
@@ -141,7 +155,15 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
             continue;
         }
 
-        for (edge_kind, target) in edges {
+        for &(edge_kind, target) in &edges {
+            // Same redundant-Seq-edge skip as Phase 1.
+            if matches!(edge_kind, EdgeKind::Seq)
+                && edges.iter().any(|&(k, t)| {
+                    t == target && matches!(k, EdgeKind::True | EdgeKind::False)
+                })
+            {
+                continue;
+            }
             if !seen_edges.insert((node, target)) {
                 continue;
             }
