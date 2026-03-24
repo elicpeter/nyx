@@ -430,67 +430,122 @@ detection is now reliable, and validate against the full benchmark corpus.
 
 ---
 
-## Phase 7 — Default-On Flip
+## Phase 7 — State Engine Default-On Audit Gate
 
-**Problem:** After Phases 1-6, state analysis should be precise enough for
-default enablement. This phase flips the default, adds per-language gating
-as a safety valve, and validates the full experience.
+This phase is an AUDIT / GO-NO-GO phase first, not an implementation phase first.
 
-### Pre-Conditions (must be verified, not assumed)
-- [ ] All other phases are complete (1 - 13 skipping 7 (this one))
-- [ ] Benchmark overhead: <10% of full scan time
-- [ ] Benchmark corpus: no new FPs from state analysis (there is fp's in tests/benchmark/... but they might be because the benchmark isn't expecting state, please look at state findings and determine if they are true fp or not)
+The goal is to determine whether the state engine, after Phases 1-13 excluding Phase 7, is actually ready to be enabled by default.
 
-### Deliverables
+You must evaluate the real current codebase and benchmark artifacts directly. Do not assume prior docs, comments, plans, or memory are accurate. Prefer code and test outputs over roadmap text.
 
-1. **Change default to enabled** (`src/utils/config.rs`)
-   - `enable_state_analysis: bool` default from `false` to `true`
-   - The "quick" profile should still have state analysis off (AST-only mode
-     skips CFG entirely, so state analysis wouldn't run anyway)
-   - The "ci" profile should enable state analysis (same as "full")
+### Primary Objectives
 
-2. **Add per-language state analysis control** (`src/utils/config.rs`)
-   - New config field: `state_analysis_languages: Option<Vec<String>>`
-   - When set, only run state analysis for the listed languages
-   - When `None` (default), run for all languages
-   - This gives users an escape hatch if one language produces too much noise
+1. **Benchmark finding adjudication comes first**
+    - Start by auditing the new benchmark findings in `tests/benchmark/...`, especially the findings currently labeled or suspected as "FPs" in the latest benchmark output.
+    - Inspect `tests/benchmark/results/latest.json` directly.
+    - Focus specifically on findings produced by the state engine / state rules.
+    - For each new or disputed benchmark finding:
+        - determine whether it is a **true positive (TP)** or a **false positive (FP)**
+        - explain why
+        - identify whether the benchmark expectation is stale / missing state expectations versus the engine actually being wrong
+    - Produce a clear adjudication table/report:
+        - finding id / file / rule
+        - why it fired
+        - TP or FP
+        - whether expected results should be updated
+        - whether the engine behavior should be fixed instead
+    - Do **not** blindly treat benchmark "FP" labels as ground truth if the benchmark corpus simply does not yet encode valid state findings.
 
-3. **Add `--no-state` CLI flag** (`src/cli.rs`)
-   - Quick opt-out for users who find state analysis noisy
-   - Maps to `cfg.scanner.enable_state_analysis = false`
+2. **Audit the current state engine after all completed phases**
+    - Audit the actual current implementation of the state engine after Phases 1-13 excluding Phase 7.
+    - Determine whether the engine is genuinely ready for default enablement.
+    - Evaluate:
+        - precision / noise
+        - obvious unsoundness or overfiring patterns
+        - per-language behavior and whether any language is notably weaker/noisier
+        - config/profile integration
+        - performance overhead
+        - output quality in JSON / SARIF / console
+        - whether current safeguards are sufficient for default-on
+    - This is a real readiness audit, not a box-checking exercise.
 
-4. **Update profile defaults**
-   - "quick": mode=Ast, state=off (no change)
-   - "ci": mode=Full, state=on (new)
-   - "full": mode=Full, state=on (no change)
-   - "taint_only": mode=Taint, state=off (no change)
-   - "conservative_large_repo": mode=Ast, state=off (no change)
+3. **Make a go / no-go decision**
+    - At the end of the audit, explicitly answer:
+        - Is the state engine ready to turn on by default now?
+        - If yes, why?
+        - If no, what specific blockers remain?
+    - If the answer is “not yet,” give the minimal concrete fix list required before default-on.
 
-5. **Integration validation**
-   - Run full test suite: `cargo test --all-features`
-   - Run benchmark corpus: verify no regression
-   - Run on 2-3 real open-source repos (if available as test fixtures) to
-     check for noise in the wild
-   - Verify JSON/SARIF/console output looks correct for all 5 rule types
+### Audit Requirements
 
-6. **Update documentation**
-   - `docs/configuration.md`: document new default, `--no-state` flag,
-     `state_analysis_languages` config
-   - `docs/detectors/state.md`: mark as default-on, update accuracy profile
-   - `docs/quickstart.md`: mention state analysis in default output description
+- Read actual source code, configs, CLI wiring, tests, and benchmark outputs directly.
+- Do not rely on stale roadmap text, comments, or prior assumptions.
+- Distinguish:
+    - benchmark expectation gaps
+    - real engine false positives
+    - output / classification issues
+    - config / profile issues
+    - performance issues
+- Be skeptical and evidence-driven.
 
-### Success Criteria
-- `enable_state_analysis` defaults to `true`
-- All existing tests pass with the new default
-- `--no-state` flag works correctly
-- Per-language gating works correctly
-- Documentation is updated
+### Files / Areas To Audit
 
-### Key Files
-- `src/utils/config.rs` — default value, profile defaults, new config field
-- `src/cli.rs` — new CLI flag
-- `docs/configuration.md` — user-facing docs
-- `docs/detectors/state.md` — detector docs
+- `tests/benchmark/results/latest.json`
+- `tests/benchmark/...`
+- all state-analysis related code paths
+- `src/utils/config.rs`
+- `src/cli.rs`
+- rule definitions and state detector wiring
+- output serialization / reporting paths
+- any test fixtures relevant to state findings
+
+### Required Deliverables
+
+1. **Benchmark FP/TP audit report**
+    - Review all new state-related benchmark findings in `latest.json`
+    - Classify each as TP or FP
+    - State whether the benchmark expectation is stale or the engine is wrong
+
+2. **State engine readiness audit**
+    - Summarize the state engine’s quality after Phases 1-13 excluding 7
+    - Call out strengths, weaknesses, noisy patterns, and language-specific concerns
+
+3. **Default-on recommendation**
+    - One of:
+        - **GO**: safe to enable by default now
+        - **GO WITH SAFETY VALVES**: safe to enable by default, but only with specific safeguards
+        - **NO-GO**: do not enable by default yet
+    - This recommendation must be justified with concrete evidence from the audit
+
+4. **Only if the audit result is GO or GO WITH SAFETY VALVES: implementation plan**
+    - Then and only then propose the implementation steps for flipping default-on
+    - Include:
+        - `enable_state_analysis` default change
+        - profile defaults
+        - `--no-state` CLI flag
+        - optional per-language gating if justified by audit results
+        - docs updates
+    - If the audit is NO-GO, do not implement the default-on flip. Instead produce the blocker list and the next corrective phase.
+
+### Important Decision Rules
+
+- If benchmark “FPs” are actually real TPs caused by stale expected results, say so clearly.
+- If even one language is materially noisier than the rest, call that out explicitly and decide whether that blocks default-on or merely justifies per-language gating.
+- Do not add per-language gating unless the audit shows it is actually warranted as a safety valve.
+- Do not flip the default just because the roadmap expected it by this phase. The audit result controls the decision.
+
+### Desired Final Output
+
+Return an audit report with these sections:
+
+1. Benchmark finding adjudication
+2. State engine quality audit
+3. Performance / integration audit
+4. Default-on decision: GO / GO WITH SAFETY VALVES / NO-GO
+5. If GO: exact implementation changes to make
+6. If NO-GO: exact blockers and next required phase
+
+The first task in this phase is the benchmark adjudication. Do not skip it.
 
 ---
 

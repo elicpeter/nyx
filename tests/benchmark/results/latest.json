@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-24T22:32:10Z",
+  "timestamp": "2026-03-24T23:36:48Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -1072,13 +1072,17 @@
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "TN",
-      "outcome_rule_level": "TN",
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [],
-      "all_finding_ids": [],
-      "security_finding_count": 0,
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
+      "all_finding_ids": [
+        "state-resource-leak"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -1128,12 +1132,15 @@
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
       "all_finding_ids": [
+        "state-resource-leak",
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 3,
       "non_security_finding_count": 0
     },
     {
@@ -1148,11 +1155,14 @@
       "matched_rule_ids": [
         "taint-unsanitised-flow (source 10:2)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
       "all_finding_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 10:2)"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -1168,12 +1178,15 @@
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "state-resource-leak"
+      ],
       "all_finding_ids": [
+        "state-resource-leak",
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 3,
       "non_security_finding_count": 0
     },
     {
@@ -1407,12 +1420,14 @@
       "outcome_location_level": "FN",
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
+        "cfg-resource-leak",
         "cfg-unguarded-sink"
       ],
       "all_finding_ids": [
+        "cfg-resource-leak",
         "cfg-unguarded-sink"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -1460,12 +1475,14 @@
       "outcome_location_level": null,
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
-        "state-resource-leak"
+        "state-resource-leak",
+        "cfg-resource-leak"
       ],
       "all_finding_ids": [
-        "state-resource-leak"
+        "state-resource-leak",
+        "cfg-resource-leak"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -1558,12 +1575,14 @@
       "outcome_location_level": null,
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
-        "state-resource-leak"
+        "state-resource-leak",
+        "cfg-resource-leak"
       ],
       "all_finding_ids": [
-        "state-resource-leak"
+        "state-resource-leak",
+        "cfg-resource-leak"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -1592,12 +1611,16 @@
       "outcome_location_level": null,
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak",
         "state-resource-leak"
       ],
       "all_finding_ids": [
+        "state-resource-leak",
+        "state-resource-leak",
         "state-resource-leak"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 3,
       "non_security_finding_count": 0
     },
     {
@@ -1614,14 +1637,16 @@
         "taint-unsanitised-flow (source 6:9)"
       ],
       "unexpected_rule_ids": [
-        "state-resource-leak"
+        "state-resource-leak",
+        "cfg-resource-leak"
       ],
       "all_finding_ids": [
         "state-resource-leak",
+        "cfg-resource-leak",
         "java.sqli.execute_concat",
         "taint-unsanitised-flow (source 6:9)"
       ],
-      "security_finding_count": 3,
+      "security_finding_count": 4,
       "non_security_finding_count": 0
     },
     {
@@ -1637,13 +1662,15 @@
         "taint-unsanitised-flow (source 6:9)"
       ],
       "unexpected_rule_ids": [
-        "state-resource-leak"
+        "state-resource-leak",
+        "cfg-resource-leak"
       ],
       "all_finding_ids": [
         "state-resource-leak",
+        "cfg-resource-leak",
         "taint-unsanitised-flow (source 6:9)"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 3,
       "non_security_finding_count": 0
     },
     {
@@ -1662,16 +1689,18 @@
       "unexpected_rule_ids": [
         "state-resource-leak",
         "java.sqli.execute_concat",
+        "state-resource-leak",
         "java.xss.getwriter_print"
       ],
       "all_finding_ids": [
         "state-resource-leak",
         "java.sqli.execute_concat",
+        "state-resource-leak",
         "taint-unsanitised-flow (source 7:9)",
         "java.xss.getwriter_print",
         "taint-unsanitised-flow (source 7:9)"
       ],
-      "security_finding_count": 5,
+      "security_finding_count": 6,
       "non_security_finding_count": 0
     },
     {
@@ -3063,11 +3092,11 @@
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
         "state-resource-leak",
-        "state-resource-leak"
+        "cfg-resource-leak"
       ],
       "all_finding_ids": [
         "state-resource-leak",
-        "state-resource-leak"
+        "cfg-resource-leak"
       ],
       "security_finding_count": 2,
       "non_security_finding_count": 0
@@ -3116,12 +3145,12 @@
       ],
       "unexpected_rule_ids": [
         "state-resource-leak",
-        "state-resource-leak",
+        "cfg-resource-leak",
         "py.sqli.execute_format"
       ],
       "all_finding_ids": [
         "state-resource-leak",
-        "state-resource-leak",
+        "cfg-resource-leak",
         "py.sqli.execute_format",
         "taint-unsanitised-flow (source 5:5)"
       ],
@@ -3143,11 +3172,11 @@
       ],
       "unexpected_rule_ids": [
         "state-resource-leak",
-        "state-resource-leak"
+        "cfg-resource-leak"
       ],
       "all_finding_ids": [
         "state-resource-leak",
-        "state-resource-leak",
+        "cfg-resource-leak",
         "py.sqli.execute_format",
         "taint-unsanitised-flow (source 5:5)"
       ],
@@ -4039,21 +4068,21 @@
   ],
   "aggregate_file_level": {
     "tp": 120,
-    "fp": 28,
+    "fp": 29,
     "fn_": 1,
-    "tn": 64,
-    "precision": 0.8108108108108109,
+    "tn": 63,
+    "precision": 0.8053691275167785,
     "recall": 0.9917355371900827,
-    "f1": 0.892193308550186
+    "f1": 0.8888888888888888
   },
   "aggregate_rule_level": {
     "tp": 115,
-    "fp": 28,
+    "fp": 29,
     "fn_": 6,
-    "tn": 64,
-    "precision": 0.8041958041958042,
+    "tn": 63,
+    "precision": 0.7986111111111112,
     "recall": 0.9504132231404959,
-    "f1": 0.8712121212121212
+    "f1": 0.8679245283018868
   },
   "by_language": {
     "c": {
@@ -4076,12 +4105,12 @@
     },
     "go": {
       "tp": 16,
-      "fp": 5,
+      "fp": 6,
       "fn_": 0,
-      "tn": 7,
-      "precision": 0.7619047619047619,
+      "tn": 6,
+      "precision": 0.7272727272727273,
       "recall": 1.0,
-      "f1": 0.8648648648648648
+      "f1": 0.8421052631578948
     },
     "java": {
       "tp": 11,
@@ -4195,9 +4224,9 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 28,
+      "fp": 29,
       "fn_": 0,
-      "tn": 64,
+      "tn": 63,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -4242,21 +4271,21 @@
     },
     ">=Low": {
       "tp": 83,
-      "fp": 52,
+      "fp": 53,
       "fn_": 38,
-      "tn": 40,
-      "precision": 0.6148148148148148,
+      "tn": 39,
+      "precision": 0.6102941176470589,
       "recall": 0.6859504132231405,
-      "f1": 0.6484375
+      "f1": 0.6459143968871596
     },
     ">=Medium": {
       "tp": 83,
-      "fp": 52,
+      "fp": 53,
       "fn_": 38,
-      "tn": 40,
-      "precision": 0.6148148148148148,
+      "tn": 39,
+      "precision": 0.6102941176470589,
       "recall": 0.6859504132231405,
-      "f1": 0.6484375
+      "f1": 0.6459143968871596
     }
   }
 }

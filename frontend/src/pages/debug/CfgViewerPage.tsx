@@ -4,6 +4,10 @@ import { useDebugCfg } from '../../api/queries/debug';
 import { GraphRenderer } from '../../components/debug/GraphRenderer';
 import type { CfgNodeView } from '../../api/types';
 
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + '\u2026' : s;
+}
+
 export function CfgViewerPage() {
   const { file, fn_name } = useOutletContext<{ file: string | null; fn_name: string | null }>();
   const { data, isLoading, error } = useDebugCfg(file, fn_name);
@@ -18,8 +22,12 @@ export function CfgViewerPage() {
 
   const graphNodes = data.nodes.map((n) => ({
     id: n.id,
-    label: `${n.kind}${n.callee ? ': ' + n.callee : n.defines ? ': ' + n.defines : ''} (L${n.line})`,
+    label: n.callee ? `${n.kind}: ${n.callee}` : n.defines ? `${n.kind}: ${n.defines}` : n.kind,
     type: n.kind,
+    detail: `Line ${n.line}`,
+    sublabel: n.condition_text ? truncate(n.condition_text, 35) : undefined,
+    badges: n.labels.length > 0 ? n.labels : undefined,
+    line: n.line,
   }));
 
   const graphEdges = data.edges.map((e) => ({
@@ -39,6 +47,7 @@ export function CfgViewerPage() {
           edges={graphEdges}
           onNodeClick={setSelectedNode}
           selectedNode={selectedNode}
+          mode="cfg"
         />
       </div>
       {selectedInfo && (
