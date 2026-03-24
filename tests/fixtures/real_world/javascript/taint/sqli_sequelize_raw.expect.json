@@ -1,0 +1,15 @@
+{
+  "description": "SQL injection via string concatenation into sequelize.query()",
+  "tags": ["taint", "sqli", "sequelize"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [3, 7],
+      "evidence_contains": [],
+      "notes": "req.query.name flows into SQL string via concat, then to sequelize.query()"
+    }
+  ]
+}

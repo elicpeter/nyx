@@ -90,6 +90,15 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },
+    // SQL injection: ActiveRecord query methods that accept raw SQL strings.
+    // `where` and `order` are the most common Rails SQLi vectors when called
+    // with string interpolation (e.g., User.where("name = '#{params[:name]}'")).
+    // Broad matchers — verified against fixture fallout.
+    LabelRule {
+        matchers: &["where", "order", "group", "having", "joins", "pluck"],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+    },
     // Open redirect: redirect_to with user-controlled destination.
     LabelRule {
         matchers: &["redirect_to"],

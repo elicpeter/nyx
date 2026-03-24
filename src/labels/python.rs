@@ -153,6 +153,18 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },
+    // SQL injection: sqlite3 / SQLAlchemy / generic DB connection execute.
+    LabelRule {
+        matchers: &[
+            "conn.execute",
+            "connection.execute",
+            "session.execute",
+            "engine.execute",
+            "db.execute",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
     LabelRule {
         matchers: &["send_file", "send_from_directory"],
         label: DataLabel::Sink(Cap::FILE_IO),

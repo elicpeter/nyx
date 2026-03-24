@@ -108,7 +108,13 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["mysqli_query", "pg_query", "query"],
+        matchers: &["mysqli_query", "pg_query", "pg_execute", "query"],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    // PDO and MySQLi OOP: exec/prepare+execute patterns.
+    LabelRule {
+        matchers: &["pdo.exec", "pdo.query", "mysqli.real_query", "mysqli_real_query"],
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },

@@ -481,7 +481,8 @@ fn collect_idents_with_paths(n: Node, code: &[u8], idents: &mut Vec<String>, pat
             // Also collect individual idents as fallback
             collect_idents(n, code, idents);
         }
-        "identifier" | "field_identifier" | "property_identifier" => {
+        "identifier" | "field_identifier" | "property_identifier"
+        | "shorthand_property_identifier_pattern" => {
             if let Some(txt) = text_of(n, code) {
                 idents.push(txt);
             }
@@ -503,10 +504,12 @@ fn collect_idents_with_paths(n: Node, code: &[u8], idents: &mut Vec<String>, pat
 /// Recursively collect every identifier that occurs inside `n`.
 ///
 /// Recognises `identifier` (most languages), `variable_name` (PHP),
-/// `field_identifier` (Go), and `property_identifier` (JS/TS).
+/// `field_identifier` (Go), `property_identifier` (JS/TS), and
+/// `shorthand_property_identifier_pattern` (JS/TS destructuring).
 fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
     match n.kind() {
-        "identifier" | "field_identifier" | "property_identifier" => {
+        "identifier" | "field_identifier" | "property_identifier"
+        | "shorthand_property_identifier_pattern" => {
             if let Some(txt) = text_of(n, code) {
                 out.push(txt);
             }

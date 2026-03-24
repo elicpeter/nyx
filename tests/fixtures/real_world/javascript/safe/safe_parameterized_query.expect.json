@@ -1,0 +1,15 @@
+{
+  "description": "Safe parameterized query — tainted data in bind array, not in SQL string",
+  "tags": ["taint", "sqli", "mysql", "safe"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [3, 8],
+      "evidence_contains": [],
+      "notes": "userId is passed as a bind parameter, not concatenated into the query string — should not fire"
+    }
+  ]
+}

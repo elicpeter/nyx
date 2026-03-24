@@ -1,5 +1,5 @@
 {
-  "description": "SQL injection via string concatenation with userId parameter. connection.query is not a recognized taint sink.",
+  "description": "SQL injection via string concatenation with userId parameter. connection.query is now a recognized SQL sink, but userId is a function param (not a recognized source).",
   "tags": [
     "taint",
     "sqli",
@@ -18,7 +18,7 @@
         7
       ],
       "evidence_contains": [],
-      "notes": "userId flows into SQL string via concat, but connection.query is not a defined sink and userId as a function param is not auto-tainted"
+      "notes": "userId flows into SQL string via concat to connection.query (SQL sink), but userId is a function param not a recognized source — requires interprocedural taint from caller"
     }
   ]
 }

@@ -1762,6 +1762,23 @@ fn transfer_inst(
                 }
             }
 
+            // Alias-aware taint propagation: when a.field becomes tainted and
+            // a/b are base aliases, b.field should also be tainted.
+            if !return_bits.is_empty() {
+                if let Some(aliases) = transfer.base_aliases {
+                    if !aliases.is_empty() {
+                        propagate_taint_to_aliases(
+                            inst,
+                            state,
+                            return_bits,
+                            &return_origins,
+                            aliases,
+                            ssa,
+                        );
+                    }
+                }
+            }
+
             // Write result
             if return_bits.is_empty() {
                 state.remove(inst.value);
@@ -1831,6 +1848,22 @@ fn transfer_inst(
                         && !combined_origins.iter().any(|o| o.node == inst.cfg_node)
                     {
                         combined_origins.push(origin);
+                    }
+                }
+            }
+
+            // Alias-aware taint propagation
+            if !combined_caps.is_empty() {
+                if let Some(aliases) = transfer.base_aliases {
+                    if !aliases.is_empty() {
+                        propagate_taint_to_aliases(
+                            inst,
+                            state,
+                            combined_caps,
+                            &combined_origins,
+                            aliases,
+                            ssa,
+                        );
                     }
                 }
             }
@@ -3002,26 +3035,28 @@ fn apply_field_aware_suppression(
             SsaOp::Call { callee, .. } => Some(callee.as_str()),
             _ => None,
         };
-        // Also check if any OTHER Call instruction in the same block uses a
-        // dotted name matching "base.X" — those are method calls, not field reads.
-        let has_untainted_field = all_used.iter().any(|&u| {
-            if u == *v {
-                return false;
-            }
-            ssa.def_of(u).var_name.as_deref().is_some_and(|uname| {
-                uname.starts_with(&prefix)
-                    // Skip the callee expression of this call
-                    && callee_name.map_or(true, |cn| uname != cn)
-                    // Skip values whose name looks like a method call expression
-                    // (e.g., "items.join" is a method call, not a field access)
-                    && !is_likely_method_expression(uname)
-                    && match state.get(u) {
-                        None => true,
-                        Some(t) => (t.caps & sink_caps).is_empty(),
-                    }
+        // Collect all field values matching "base.X" (excluding method-call
+        // expressions and the callee itself).
+        let field_values: SmallVec<[SsaValue; 4]> = all_used
+            .iter()
+            .copied()
+            .filter(|&u| {
+                u != *v
+                    && ssa.def_of(u).var_name.as_deref().is_some_and(|uname| {
+                        uname.starts_with(&prefix)
+                            && callee_name.map_or(true, |cn| uname != cn)
+                            && !is_likely_method_expression(uname)
+                    })
             })
-        });
-        !has_untainted_field
+            .collect();
+        // Suppress base only if there ARE field values AND ALL of them
+        // are untainted for the relevant sink caps.
+        let all_fields_clean = !field_values.is_empty()
+            && field_values.iter().all(|&u| match state.get(u) {
+                None => true,
+                Some(t) => (t.caps & sink_caps).is_empty(),
+            });
+        !all_fields_clean
     });
 }
 
@@ -3164,6 +3199,104 @@ fn propagate_sanitization_to_aliases(
                     },
                 );
             }
+        }
+    }
+}
+
+// ── Alias-Aware Taint Propagation ───────────────────────────────────────
+
+/// After taint assignment to `inst`, propagate taint to must-aliased field paths.
+///
+/// When `obj.data` receives taint and `obj` and `alias` are base aliases (from
+/// copy propagation), this function also taints `alias.data` in the taint state.
+/// For plain idents (no dot), tainting `obj` also taints `alias`.
+///
+/// Uses only the existing `BaseAliasResult` alias groups — no new alias inference.
+fn propagate_taint_to_aliases(
+    inst: &SsaInst,
+    state: &mut SsaTaintState,
+    taint_caps: Cap,
+    taint_origins: &SmallVec<[TaintOrigin; 2]>,
+    aliases: &crate::ssa::alias::BaseAliasResult,
+    ssa: &SsaBody,
+) {
+    let var_name = match inst.var_name.as_deref() {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Split into base and suffix: "obj.data" → ("obj", ".data"); "obj" → ("obj", "")
+    let (base, suffix) = match var_name.find('.') {
+        Some(pos) => (&var_name[..pos], &var_name[pos..]),
+        None => (var_name, ""),
+    };
+
+    let alias_bases = match aliases.aliases_of(base) {
+        Some(bases) => bases,
+        None => return,
+    };
+
+    // Collect SsaValues to taint. Iterate value_defs (not state.values) because
+    // target alias values may not yet be in the taint state.
+    let to_taint: SmallVec<[SsaValue; 8]> = ssa
+        .value_defs
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, vdef)| {
+            let vdef_name = vdef.var_name.as_deref()?;
+            for alias_base in alias_bases {
+                if alias_base == base {
+                    continue; // skip self — already tainted
+                }
+                if suffix.is_empty() {
+                    // Plain ident: look for exact match on alias base
+                    if vdef_name == alias_base.as_str() {
+                        return Some(SsaValue(idx as u32));
+                    }
+                } else {
+                    // Dotted path: check if vdef_name == "{alias_base}{suffix}"
+                    if vdef_name.len() == alias_base.len() + suffix.len()
+                        && vdef_name.starts_with(alias_base.as_str())
+                        && vdef_name.ends_with(suffix)
+                    {
+                        return Some(SsaValue(idx as u32));
+                    }
+                }
+            }
+            None
+        })
+        .collect();
+
+    for v in to_taint {
+        if let Some(existing) = state.get(v) {
+            // Union caps and origins into existing taint
+            let merged_caps = existing.caps | taint_caps;
+            let mut merged_origins = existing.origins.clone();
+            for orig in taint_origins {
+                if merged_origins.len() < MAX_ORIGINS
+                    && !merged_origins.iter().any(|o| o.node == orig.node)
+                {
+                    merged_origins.push(*orig);
+                }
+            }
+            state.set(
+                v,
+                VarTaint {
+                    caps: merged_caps,
+                    origins: merged_origins,
+                    uses_summary: existing.uses_summary,
+                },
+            );
+        } else {
+            // No existing taint — set fresh
+            state.set(
+                v,
+                VarTaint {
+                    caps: taint_caps,
+                    origins: taint_origins.clone(),
+                    uses_summary: false,
+                },
+            );
         }
     }
 }

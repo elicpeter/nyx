@@ -154,6 +154,30 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
+    // ─────────── SQL injection sinks ─────────────
+    // Database drivers: mysql, mysql2, pg, better-sqlite3
+    LabelRule {
+        matchers: &[
+            "connection.query",
+            "client.query",
+            "pool.query",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
+    // ORM / query builder raw-SQL entry points
+    LabelRule {
+        matchers: &[
+            "sequelize.query",
+            "knex.raw",
+            "$queryRaw",
+            "$queryRawUnsafe",
+            "$executeRaw",
+            "$executeRawUnsafe",
+        ],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: true,
+    },
 ];
 
 pub static GATED_SINKS: &[SinkGate] = &[
