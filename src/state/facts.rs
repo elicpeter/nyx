@@ -172,6 +172,52 @@ pub fn extract_findings(
 
             let acquire_span = acquire_node.map(|n| cfg[n].span);
 
+            // Suppress/downgrade leaks for variables returned from the
+            // function (factory pattern).  Only suppress when ALL
+            // predecessors that have the variable OPEN also return it.
+            // Mixed cases (some paths return, some leak) are downgraded
+            // to state-resource-leak-possible.
+            if is_func_exit {
+                let scope = info.enclosing_func.as_deref();
+                let mut returned_open = 0u32;
+                let mut non_returned_open = 0u32;
+                for pred in cfg.neighbors_directed(idx, petgraph::Direction::Incoming) {
+                    let Some(ps) = result.states.get(&pred) else { continue };
+                    let pred_has_open = ps.resource.vars.get(&sym)
+                        .map_or(false, |lc| lc.contains(ResourceLifecycle::OPEN));
+                    if !pred_has_open { continue; }
+                    let returns_var = cfg[pred].kind == StmtKind::Return
+                        && cfg[pred].uses.iter().any(|u| {
+                            interner.get_scoped(scope, u) == Some(sym)
+                        });
+                    if returns_var {
+                        returned_open += 1;
+                    } else {
+                        non_returned_open += 1;
+                    }
+                }
+                if returned_open > 0 && non_returned_open == 0 {
+                    continue; // all OPEN paths transfer ownership to caller
+                }
+                if returned_open > 0 && non_returned_open > 0 {
+                    // Mixed: some paths return resource, some leak it.
+                    findings.push(StateFinding {
+                        rule_id: "state-resource-leak-possible".into(),
+                        severity: Severity::Low,
+                        span: acquire_span.unwrap_or(info.span),
+                        message: format!(
+                            "resource `{var_name}` may not be closed on all paths"
+                        ),
+                        machine: "resource",
+                        subject: Some(var_name.to_string()),
+                        from_state: "open",
+                        to_state: "possibly_leaked",
+                    });
+                    continue;
+                }
+                // returned_open == 0: fall through to normal leak detection
+            }
+
             if !lifecycle.contains(ResourceLifecycle::CLOSED)
                 && !lifecycle.contains(ResourceLifecycle::MOVED)
             {

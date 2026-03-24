@@ -753,9 +753,32 @@ fn resource_as_function_arg_still_leaks() {
 
 #[test]
 fn resource_returned_from_factory() {
-    // Factory function: fopen without fclose, resource is returned to caller.
-    // Known false positive — cross-function ownership not tracked.
-    assert_has_prefix("resource_returned.c", "state-resource-leak");
+    // Factory function: fopen result is returned to caller — not a leak.
+    assert_no_state_findings("resource_returned.c");
+}
+
+#[test]
+fn returned_on_one_path_leaked_on_another() {
+    // Resource returned on one branch, leaked on another — still a finding.
+    assert_has("returned_on_one_path_leaked_on_another.c", "state-resource-leak-possible");
+}
+
+#[test]
+fn returned_on_all_success_paths() {
+    // Resource returned on all exit paths — no finding.
+    assert_no_state_findings("returned_on_all_success_paths.c");
+}
+
+#[test]
+fn return_null_after_open_without_close() {
+    // Opens resource then returns NULL — definite leak.
+    assert_has("return_null_after_open_without_close.c", "state-resource-leak");
+}
+
+#[test]
+fn factory_leak_not_returned() {
+    // Opens resource, returns integer — resource leaked.
+    assert_has_prefix("factory_leak_not_returned.c", "state-resource-leak");
 }
 
 #[test]
