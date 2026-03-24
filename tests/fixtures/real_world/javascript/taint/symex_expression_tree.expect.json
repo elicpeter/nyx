@@ -1,0 +1,36 @@
+{
+  "description": "SQL injection via string concatenation with user input. Tests that symex builds expression trees through the taint path.",
+  "tags": [
+    "taint",
+    "sqli",
+    "symex",
+    "expression-tree"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.q flows into client.query via string concatenation — symex should build expression tree"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "structural: cfg-unguarded-sink on client.query"
+    }
+  ]
+}

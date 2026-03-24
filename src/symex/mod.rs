@@ -5,6 +5,16 @@
 //! (non-trivial paths, non-validated) and runs constraint analysis on each
 //! path to determine feasibility. Results are stored as `SymbolicVerdict` on
 //! the finding, which flows through to Evidence and confidence scoring.
+//!
+//! Phase 18a adds symbolic expression trees (`SymbolicValue`) that preserve
+//! computation structure through the path walk, enabling richer witness strings.
+
+pub mod value;
+pub mod state;
+pub mod transfer;
+
+pub use value::{SymbolicValue, Op, MAX_EXPR_DEPTH};
+pub use state::{SymbolicState, PathConstraint};
 
 use std::collections::{HashMap, HashSet};
 
@@ -77,10 +87,12 @@ fn extract_path_blocks(finding: &Finding, ssa: &SsaBody) -> Vec<BlockId> {
     blocks
 }
 
-/// Run constraint analysis on a single finding's taint path.
+/// Run constraint and symbolic analysis on a single finding's taint path.
 ///
-/// Walks the SSA blocks from source to sink, collecting branch conditions
-/// and feeding them to the constraint solver. Returns a `SymbolicVerdict`.
+/// Walks the SSA blocks from source to sink, building symbolic expression
+/// trees per SSA value and collecting branch constraints. Feeds branch
+/// conditions to the constraint solver for feasibility checking, and
+/// generates a witness string showing the symbolic expression at the sink.
 fn analyse_finding_path(
     finding: &Finding,
     ssa: &SsaBody,
@@ -108,19 +120,38 @@ fn analyse_finding_path(
         };
     }
 
+    // --- Phase 18a: Create and seed SymbolicState ---
+    let mut sym_state = state::SymbolicState::new();
+    sym_state.seed_from_const_values(const_values);
+
+    // Mark taint sources from the finding's flow steps
+    for step in &finding.flow_steps {
+        if matches!(step.op_kind, crate::evidence::FlowStepKind::Source) {
+            if let Some(&ssa_val) = ssa.cfg_node_map.get(&step.cfg_node) {
+                sym_state.mark_tainted(ssa_val);
+                sym_state.set(ssa_val, value::SymbolicValue::Symbol(ssa_val));
+            }
+        }
+    }
+
     // Build set of on-path blocks for successor determination
     let on_path: HashSet<BlockId> = path_blocks.iter().copied().collect();
 
-    // Seed PathEnv from optimization results
+    // Seed PathEnv from optimization results (preserved for constraint solving)
     let mut env = constraint::PathEnv::empty();
     env.seed_from_optimization(const_values, type_facts);
 
     let mut constraints_checked: u32 = 0;
     let mut unknown_count: u32 = 0;
 
-    // Walk each block on the path, apply branch conditions
+    // Walk each block on the path
     for &block_id in &path_blocks {
         let block = &ssa.blocks[block_id.0 as usize];
+
+        // Phase 18a: Run symbolic transfer over this block's instructions
+        transfer::transfer_block(&mut sym_state, block, cfg, ssa);
+
+        // Process terminator for branch constraints
         match &block.terminator {
             Terminator::Branch {
                 cond,
@@ -158,6 +189,13 @@ fn analyse_finding_path(
                     continue;
                 }
 
+                // Record symbolic path constraint
+                sym_state.add_constraint(state::PathConstraint {
+                    block: block_id,
+                    condition: cond_expr.clone(),
+                    polarity,
+                });
+
                 env = constraint::refine_env(&env, &cond_expr, polarity);
                 constraints_checked += 1;
 
@@ -174,6 +212,9 @@ fn analyse_finding_path(
         }
     }
 
+    // Phase 18a: Generate witness from symbolic state at the sink
+    let witness = sym_state.get_sink_witness(finding, ssa);
+
     // Determine verdict based on what we learned
     let verdict = if constraints_checked == 0 && unknown_count > 0 {
         Verdict::Inconclusive
@@ -188,7 +229,7 @@ fn analyse_finding_path(
         verdict,
         constraints_checked,
         paths_explored: 1,
-        witness: None,
+        witness,
     }
 }
 

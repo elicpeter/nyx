@@ -1,0 +1,36 @@
+{
+  "description": "SQL injection where table name comes from a conditional assignment (phi merge). Tests that symex handles phi nodes at control-flow joins.",
+  "tags": [
+    "taint",
+    "sqli",
+    "symex",
+    "phi-merge"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.id flows through conditional phi merge into client.query"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "structural: cfg-unguarded-sink on client.query"
+    }
+  ]
+}

@@ -31,7 +31,7 @@ impl ConstLattice {
     }
 
     /// Parse a raw constant text into a typed lattice value.
-    fn parse(text: &str) -> Self {
+    pub(crate) fn parse(text: &str) -> Self {
         let trimmed = text.trim();
 
         // Boolean
