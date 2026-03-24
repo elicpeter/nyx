@@ -12,6 +12,7 @@ use crate::ssa::const_prop::ConstLattice;
 use crate::ssa::heap::PointsToResult;
 use crate::ssa::ir::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue};
 use crate::ssa::pointsto::{classify_container_op, ContainerOp};
+use crate::ssa::type_facts::TypeFactResult;
 use crate::summary::ssa_summary::TaintTransform;
 use crate::summary::{CalleeResolution, GlobalSummaries};
 use crate::symbol::Lang;
@@ -32,6 +33,9 @@ pub struct SymexSummaryCtx<'a> {
     pub global_summaries: &'a GlobalSummaries,
     pub lang: Lang,
     pub namespace: &'a str,
+    /// Phase 31: Type facts for type-qualified symbolic summary resolution.
+    /// When present, receiver types guide callee name qualification.
+    pub type_facts: Option<&'a TypeFactResult>,
 }
 
 /// Context for field-sensitive heap operations during transfer (Phase 21).
@@ -290,7 +294,7 @@ pub fn transfer_inst(
             // Try cross-file summary modeling before falling back to mk_call
             if let Some(ctx) = summary_ctx {
                 if let Some(result) = resolve_callee_symbolically(
-                    ctx, callee, &arg_syms, &all_operands, state, inst.value,
+                    ctx, callee, &arg_syms, &all_operands, state, inst.value, *receiver,
                 ) {
                     state.set(inst.value, result.value);
                     if result.tainted {
@@ -605,43 +609,23 @@ fn try_string_method(
 //  Cross-file symbolic summary resolution
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Attempt to resolve a callee's return value symbolically using its
-/// `SsaFuncSummary` from `GlobalSummaries`.
+/// Model a callee's return value from its SSA summary.
 ///
-/// Returns `Some(SymbolicCallResult)` if the summary provides actionable
-/// modeling. Returns `None` to fall through to the opaque `mk_call` path.
+/// Shared by both type-qualified and bare-name resolution paths.
 ///
 /// Resolution rules:
 /// - **Exactly one `Identity`**: pass through that argument's symbolic value
 /// - **Multiple `Identity` entries**: ambiguous → fall back (do NOT pick arbitrarily)
 /// - **`StripBits`**: sanitizer → `Unknown`, not tainted
 /// - **`AddBits` or `source_caps != empty`**: source → fresh tainted Symbol
-///   (conservative: loses concrete structure from callee body)
 /// - **`NotFound` / `Ambiguous`**: hard fallback to mk_call
-fn resolve_callee_symbolically(
-    ctx: &SymexSummaryCtx,
-    callee: &str,
+fn model_from_summary(
+    summary: &crate::summary::ssa_summary::SsaFuncSummary,
     arg_syms: &[SymbolicValue],
     all_operands: &[SsaValue],
     state: &SymbolicState,
     result_value: SsaValue,
 ) -> Option<SymbolicCallResult> {
-    let normalized = crate::callgraph::normalize_callee_name(callee);
-    let resolution = ctx.global_summaries.resolve_callee_key(
-        normalized,
-        ctx.lang,
-        ctx.namespace,
-        Some(all_operands.len()),
-    );
-
-    let key = match resolution {
-        CalleeResolution::Resolved(k) => k,
-        // NotFound or Ambiguous: hard fallback — never pretend precision
-        CalleeResolution::NotFound | CalleeResolution::Ambiguous(_) => return None,
-    };
-
-    let summary = ctx.global_summaries.get_ssa(&key)?;
-
     // Check for source-producing function
     if !summary.source_caps.is_empty() {
         return Some(SymbolicCallResult {
@@ -652,7 +636,6 @@ fn resolve_callee_symbolically(
 
     // Inspect param_to_return transforms
     if summary.param_to_return.is_empty() {
-        // No information about return value — fall back to mk_call
         return None;
     }
 
@@ -676,7 +659,6 @@ fn resolve_callee_symbolically(
         .any(|(_, t)| matches!(t, TaintTransform::AddBits(_)));
 
     if has_add {
-        // AddBits: function introduces new taint on return
         return Some(SymbolicCallResult {
             value: SymbolicValue::Symbol(result_value),
             tainted: true,
@@ -684,7 +666,6 @@ fn resolve_callee_symbolically(
     }
 
     if has_strip && identities.is_empty() {
-        // Pure sanitizer: return value is cleaned
         return Some(SymbolicCallResult {
             value: SymbolicValue::Unknown,
             tainted: false,
@@ -692,7 +673,6 @@ fn resolve_callee_symbolically(
     }
 
     if identities.len() == 1 {
-        // Exactly one Identity: pass through the argument's symbolic value
         let (param_idx, _) = identities[0];
         if let Some(sym) = arg_syms.get(*param_idx) {
             let is_tainted = all_operands
@@ -708,6 +688,95 @@ fn resolve_callee_symbolically(
 
     // Multiple Identity entries or other ambiguous cases: fall back
     None
+}
+
+/// Attempt to resolve a callee's return value symbolically using its
+/// `SsaFuncSummary` from `GlobalSummaries`.
+///
+/// Returns `Some(SymbolicCallResult)` if the summary provides actionable
+/// modeling. Returns `None` to fall through to the opaque `mk_call` path.
+///
+/// Phase 31: When a receiver has a known type via type facts, tries
+/// type-qualified callee name (e.g., `"HttpClient.send"`) before bare-name
+/// resolution. This improves summary-based modeling only — not general
+/// virtual dispatch.
+fn resolve_callee_symbolically(
+    ctx: &SymexSummaryCtx,
+    callee: &str,
+    arg_syms: &[SymbolicValue],
+    all_operands: &[SsaValue],
+    state: &SymbolicState,
+    result_value: SsaValue,
+    receiver: Option<SsaValue>,
+) -> Option<SymbolicCallResult> {
+    // Phase 31: Type-qualified symbolic resolution when receiver has a known type.
+    // Improves summary-based modeling only — not general virtual dispatch.
+    // Precedence: exact qualified > type-aided disambiguation > bare-name fallback.
+    if let (Some(tf), Some(recv)) = (ctx.type_facts, receiver)
+        && let Some(receiver_type) = tf.get_type(recv)
+        && let Some(prefix) = receiver_type.label_prefix()
+    {
+        let method = crate::callgraph::normalize_callee_name(callee);
+        let qualified = format!("{}.{}", prefix, method);
+
+        // Attempt 1: Exact lookup under type-qualified name.
+        // Arity=None to avoid receiver-in-operands vs formal-param mismatch.
+        let resolution = ctx.global_summaries.resolve_callee_key(
+            &qualified,
+            ctx.lang,
+            ctx.namespace,
+            None,
+        );
+        if let CalleeResolution::Resolved(key) = resolution
+            && let Some(summary) = ctx.global_summaries.get_ssa(&key)
+        {
+            return model_from_summary(
+                summary, arg_syms, all_operands, state, result_value,
+            );
+        }
+
+        // Attempt 2: Disambiguate among ambiguous bare-name candidates.
+        // Only select when a candidate's FuncKey.name EXACTLY equals the
+        // qualified name — no substring matching, never guess.
+        let bare_resolution = ctx.global_summaries.resolve_callee_key(
+            method,
+            ctx.lang,
+            ctx.namespace,
+            None,
+        );
+        if let CalleeResolution::Ambiguous(candidates) = bare_resolution {
+            let exact_match: Vec<_> = candidates
+                .iter()
+                .filter(|k| k.name == qualified)
+                .collect();
+            if exact_match.len() == 1
+                && let Some(summary) = ctx.global_summaries.get_ssa(exact_match[0])
+            {
+                return model_from_summary(
+                    summary, arg_syms, all_operands, state, result_value,
+                );
+            }
+            // >1 or 0 exact matches: do NOT guess, fall through
+        }
+        // Fall through to existing bare-name resolution
+    }
+
+    // Existing bare-name resolution path
+    let normalized = crate::callgraph::normalize_callee_name(callee);
+    let resolution = ctx.global_summaries.resolve_callee_key(
+        normalized,
+        ctx.lang,
+        ctx.namespace,
+        Some(all_operands.len()),
+    );
+
+    let key = match resolution {
+        CalleeResolution::Resolved(k) => k,
+        CalleeResolution::NotFound | CalleeResolution::Ambiguous(_) => return None,
+    };
+
+    let summary = ctx.global_summaries.get_ssa(&key)?;
+    model_from_summary(summary, arg_syms, all_operands, state, result_value)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1262,6 +1331,7 @@ mod tests {
             global_summaries: gs,
             lang: Lang::JavaScript,
             namespace: "test.js",
+            type_facts: None,
         }
     }
 
@@ -1547,5 +1617,342 @@ mod tests {
             other => panic!("expected Call fallback, got {:?}", other),
         }
         assert!(state.is_tainted(SsaValue(1)));
+    }
+
+    // ─── Phase 31: Type-qualified symbolic resolution tests ──────────
+
+    use crate::ssa::type_facts::{TypeFact, TypeFactResult};
+    use std::collections::HashMap;
+
+    fn make_type_facts(entries: Vec<(SsaValue, TypeKind)>) -> TypeFactResult {
+        let facts = entries
+            .into_iter()
+            .map(|(v, kind)| (v, TypeFact { kind, nullable: false }))
+            .collect::<HashMap<_, _>>();
+        TypeFactResult { facts }
+    }
+
+    fn insert_java_summary(
+        gs: &mut GlobalSummaries,
+        name: &str,
+        namespace: &str,
+        arity: usize,
+        ssa: SsaFuncSummary,
+    ) {
+        let key = FuncKey {
+            lang: Lang::Java,
+            namespace: namespace.into(),
+            name: name.into(),
+            arity: Some(arity),
+        };
+        gs.insert(
+            key.clone(),
+            FuncSummary {
+                name: name.into(),
+                file_path: namespace.into(),
+                lang: "java".into(),
+                param_count: arity,
+                param_names: vec![],
+                source_caps: 0,
+                sanitizer_caps: 0,
+                sink_caps: 0,
+                propagating_params: vec![],
+                propagates_taint: false,
+                tainted_sink_params: vec![],
+                callees: vec![],
+            },
+        );
+        gs.insert_ssa(key, ssa);
+    }
+
+    #[test]
+    fn transfer_call_type_qualified_resolution() {
+        // Receiver v1 typed as HttpClient, callee "send" → qualified "HttpClient.send"
+        // Summary registered under "HttpClient.send" should be found.
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        // v0 = tainted URL argument
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+        state.mark_tainted(SsaValue(0));
+        // v1 = receiver (HttpClient instance)
+        state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
+
+        let mut gs = GlobalSummaries::new();
+        insert_java_summary(&mut gs, "HttpClient.send", "HttpClient.java", 1, SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+
+        let tf = make_type_facts(vec![(SsaValue(1), TypeKind::HttpClient)]);
+        let ctx = SymexSummaryCtx {
+            global_summaries: &gs,
+            lang: Lang::Java,
+            namespace: "Caller.java",
+            type_facts: Some(&tf),
+        };
+
+        // v2 = v1.send(v0)
+        let inst = make_inst(
+            2,
+            SsaOp::Call {
+                callee: "send".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: Some(SsaValue(1)),
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+
+        // Identity(0) maps to arg_syms[0] which is the receiver (prepended).
+        // So return value should be the receiver's symbolic value.
+        assert_eq!(state.get(SsaValue(2)), SymbolicValue::Symbol(SsaValue(1)));
+    }
+
+    #[test]
+    fn transfer_call_type_qualified_fallback_no_type() {
+        // Receiver has no known type → type-qualified resolution does not fire,
+        // bare-name resolution works normally.
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+        state.mark_tainted(SsaValue(0));
+
+        // Register summary under bare name "passthrough" (Java, arity 1)
+        let mut gs = GlobalSummaries::new();
+        insert_java_summary(&mut gs, "passthrough", "helper.java", 1, SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+
+        // Empty type facts — no receiver type info
+        let tf = make_type_facts(vec![]);
+        let ctx = SymexSummaryCtx {
+            global_summaries: &gs,
+            lang: Lang::Java,
+            namespace: "test.java",
+            type_facts: Some(&tf),
+        };
+
+        let inst = make_inst(
+            1,
+            SsaOp::Call {
+                callee: "passthrough".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: None,
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+
+        // Bare-name resolution: Identity(0) → pass through arg
+        assert_eq!(state.get(SsaValue(1)), SymbolicValue::Symbol(SsaValue(0)));
+        assert!(state.is_tainted(SsaValue(1)));
+    }
+
+    #[test]
+    fn transfer_call_type_qualified_disambiguation() {
+        // Two summaries both named "send" in different namespaces.
+        // One named "HttpClient.send" — type disambiguation picks it.
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+        state.mark_tainted(SsaValue(0));
+        state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
+
+        let mut gs = GlobalSummaries::new();
+        // First "send" — generic, in ns A (Identity: passes through)
+        insert_java_summary(&mut gs, "send", "SocketClient.java", 1, SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+        // Second "send" — in ns B, also with same arity → ambiguous bare-name
+        insert_java_summary(&mut gs, "send", "WebSocketClient.java", 1, SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+        // Also register the type-qualified name so Attempt 1 can find it
+        insert_java_summary(&mut gs, "HttpClient.send", "HttpClient.java", 1, SsaFuncSummary {
+            param_to_return: vec![],
+            param_to_sink: vec![],
+            source_caps: Cap::ENV_VAR, // Source — distinct signal
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+
+        let tf = make_type_facts(vec![(SsaValue(1), TypeKind::HttpClient)]);
+        let ctx = SymexSummaryCtx {
+            global_summaries: &gs,
+            lang: Lang::Java,
+            namespace: "Caller.java",
+            type_facts: Some(&tf),
+        };
+
+        // v2 = v1.send(v0) — receiver v1 is HttpClient
+        let inst = make_inst(
+            2,
+            SsaOp::Call {
+                callee: "send".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: Some(SsaValue(1)),
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+
+        // Should resolve to "HttpClient.send" summary (source_caps=ENV_VAR → tainted Symbol)
+        assert_eq!(state.get(SsaValue(2)), SymbolicValue::Symbol(SsaValue(2)));
+        assert!(state.is_tainted(SsaValue(2)));
+    }
+
+    #[test]
+    fn transfer_call_type_qualified_wrong_owner() {
+        // Receiver is HttpClient, but summary is registered as "DatabaseConnection.send".
+        // Must NOT resolve to the wrong summary.
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+        state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
+
+        let mut gs = GlobalSummaries::new();
+        // Summary under "DatabaseConnection.send" — wrong type
+        insert_java_summary(
+            &mut gs,
+            "DatabaseConnection.send",
+            "DatabaseConnection.java",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![],
+                param_to_sink: vec![],
+                source_caps: Cap::ENV_VAR,
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
+
+        // Receiver typed as HttpClient — constructs "HttpClient.send", not "DatabaseConnection.send"
+        let tf = make_type_facts(vec![(SsaValue(1), TypeKind::HttpClient)]);
+        let ctx = SymexSummaryCtx {
+            global_summaries: &gs,
+            lang: Lang::Java,
+            namespace: "Caller.java",
+            type_facts: Some(&tf),
+        };
+
+        let inst = make_inst(
+            2,
+            SsaOp::Call {
+                callee: "send".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: Some(SsaValue(1)),
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+
+        // "HttpClient.send" not found, bare "send" not found → opaque mk_call fallback
+        match state.get(SsaValue(2)) {
+            SymbolicValue::Call(name, _) => assert_eq!(name, "send"),
+            other => panic!("expected Call fallback, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn transfer_call_type_qualified_ambiguous_no_force() {
+        // Ambiguous bare-name candidates, receiver type known, but no candidate's
+        // name exactly matches the qualified name → must NOT force-pick.
+        let (cfg, node) = cfg_with_node(None);
+        let ssa = empty_ssa();
+        let mut state = SymbolicState::new();
+
+        state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
+        state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
+
+        let mut gs = GlobalSummaries::new();
+        // Two "send" summaries — different namespaces → ambiguous
+        insert_java_summary(&mut gs, "send", "ModuleA.java", 1, SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+        insert_java_summary(&mut gs, "send", "ModuleB.java", 1, SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        });
+        // No "HttpClient.send" summary registered — disambiguation has 0 exact matches
+
+        let tf = make_type_facts(vec![(SsaValue(1), TypeKind::HttpClient)]);
+        let ctx = SymexSummaryCtx {
+            global_summaries: &gs,
+            lang: Lang::Java,
+            namespace: "Caller.java",
+            type_facts: Some(&tf),
+        };
+
+        let inst = make_inst(
+            2,
+            SsaOp::Call {
+                callee: "send".into(),
+                args: vec![smallvec![SsaValue(0)]],
+                receiver: Some(SsaValue(1)),
+            },
+            node,
+        );
+        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+
+        // Neither qualified lookup nor disambiguation found a match.
+        // Bare-name path returns Ambiguous → falls through to mk_call.
+        match state.get(SsaValue(2)) {
+            SymbolicValue::Call(name, _) => assert_eq!(name, "send"),
+            other => panic!("expected Call fallback for ambiguous case, got {:?}", other),
+        }
     }
 }

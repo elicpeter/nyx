@@ -281,6 +281,7 @@ pub(super) fn explore_finding(
         global_summaries: gs,
         lang: ctx.lang,
         namespace: ctx.namespace,
+        type_facts: Some(ctx.type_facts),
     });
     let summary_ctx_ref = summary_ctx.as_ref();
 
