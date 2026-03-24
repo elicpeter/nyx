@@ -4267,6 +4267,56 @@ fn ssa_phi_preserves_taint_on_non_reassigned_path_rust() {
     );
 }
 
+/// Smoke test: linear SSRF prefix suppression (no phi, no branches).
+///
+/// The prefix must be in a named variable so the CFG captures it as a
+/// separate SSA Const value. Inline string literals in binary expressions
+/// are not currently tracked as SSA operands.
+#[test]
+fn abstract_ssrf_prefix_linear_suppression() {
+    let src = b"var userId = document.location();\nvar prefix = 'https://api.example.com/users/';\nvar url = prefix + userId;\nfetch(url);\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[], None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Linear SSRF prefix: 'https://api.example.com/users/' + userId should be \
+         suppressed by abstract string domain. Got {} findings.",
+        findings.len()
+    );
+}
+
+/// Regression test for Phase 17B: abstract phi replay in collect_block_events.
+///
+/// Two predecessor blocks produce string concat values with different safe
+/// prefixes ("https://api.example.com/users/" and "https://api.example.com/admins/").
+/// A phi merges them. The LCP of the prefixes is "https://api.example.com/" which
+/// still has scheme://host/ — so SSRF suppression should fire.
+///
+/// Before the phi replay fix, collect_block_events did NOT replay abstract phis,
+/// leaving the phi result's abstract value as Top (stale). The SSRF suppression
+/// would fail because there was no known prefix.
+///
+/// Note: prefix must be in a named variable so the CFG captures it as an SSA Const.
+#[test]
+fn abstract_phi_replay_ssrf_suppression() {
+    let src = b"var userId = document.location();\nvar prefix1 = 'https://api.example.com/users/';\nvar prefix2 = 'https://api.example.com/admins/';\nvar url;\nif (userId.length > 5) {\n  url = prefix1 + userId;\n} else {\n  url = prefix2 + userId;\n}\nfetch(url);\n";
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let findings = analyse_file(
+        &cfg, entry, &summaries, None, Lang::JavaScript, "test.js", &[], None,
+    );
+    assert!(
+        findings.is_empty(),
+        "Abstract phi replay: both branches produce safe SSRF prefixes, \
+         phi merge should preserve the common prefix 'https://api.example.com/' \
+         and suppress the SSRF finding. Got {} findings.",
+        findings.len()
+    );
+}
+
 #[test]
 fn ruby_type_check_guard_suppresses_taint() {
     // Ruby `unless user_id.is_a?(Integer)` guard should validate user_id

@@ -2023,13 +2023,45 @@ fn transfer_abstract(
             }
         }
 
-        SsaOp::Source | SsaOp::CatchParam | SsaOp::Param { .. } | SsaOp::Call { .. } => {
+        SsaOp::Call { callee, .. } => {
+            // Known integer-producing calls get a bounded interval so downstream
+            // arithmetic transfer produces useful facts (e.g. parseInt(x) * 10).
+            if is_int_producing_callee(callee) {
+                abs.set(inst.value, AbstractValue {
+                    interval: IntervalFact {
+                        lo: Some(i32::MIN as i64),
+                        hi: Some(i32::MAX as i64),
+                    },
+                    string: StringFact::top(),
+                });
+            }
+            // Unknown calls: implicit Top (don't store)
+        }
+
+        SsaOp::Source | SsaOp::CatchParam | SsaOp::Param { .. } => {
             // Untrusted / unknown: Top (no abstract knowledge)
-            // Don't store Top — AbstractState.get() already returns Top for absent keys
         }
 
         _ => {}
     }
+}
+
+/// Check if a callee is a known integer/numeric-producing function.
+///
+/// Conservative list: only includes functions whose return type is unambiguously
+/// numeric across supported languages. Excludes overloaded or collection-returning
+/// functions (valueOf, count, length, size, abs).
+fn is_int_producing_callee(callee: &str) -> bool {
+    let suffix = callee.rsplit(['.', ':']).next().unwrap_or(callee);
+    matches!(
+        suffix,
+        "parseInt" | "parseFloat" | "Number"        // JS/TS
+        | "int" | "float" | "ord"                    // Python
+        | "parseLong" | "parseDouble" | "parseShort" // Java
+        | "Atoi" | "ParseInt" | "ParseFloat"         // Go
+        | "intval" | "floatval"                       // PHP
+        | "to_i" | "to_f"                             // Ruby
+    )
 }
 
 /// Check if a constant text is a string literal (quoted).
@@ -2144,6 +2176,48 @@ fn collect_block_events(
                             state.validated_may.insert(sym);
                             state.validated_must.insert(sym);
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase 17: Replay abstract value phi join (from predecessor exit states).
+    // Mirrors the same logic in transfer_block() — without this, abstract
+    // values for phi-defined SSA values would be stale during sink suppression.
+    if state.abstract_state.is_some() {
+        for phi in &block.phis {
+            if let SsaOp::Phi(ref operands) = phi.op {
+                use crate::abstract_interp::AbstractValue;
+                let is_induction = induction_vars.contains(&phi.value);
+                let mut joined = AbstractValue::bottom();
+                let mut any_operand = false;
+
+                for &(pred_blk, operand_val) in operands {
+                    if is_induction && pred_blk.0 >= block.id.0 {
+                        continue;
+                    }
+                    // Skip infeasible predecessors
+                    if let Some(ps) = pred_states {
+                        if let Some(pred_st) = ps.get(&(block_idx, pred_blk.0 as usize)) {
+                            if pred_st.path_env.as_ref().is_some_and(|e| e.is_unsat()) {
+                                continue;
+                            }
+                        }
+                    }
+                    // Look up operand abstract value from predecessor exit state
+                    let pred_abs = pred_states
+                        .and_then(|ps| ps.get(&(block_idx, pred_blk.0 as usize)))
+                        .and_then(|s| s.abstract_state.as_ref())
+                        .map(|a| a.get(operand_val))
+                        .unwrap_or_else(AbstractValue::top);
+                    joined = joined.join(&pred_abs);
+                    any_operand = true;
+                }
+
+                if any_operand {
+                    if let Some(ref mut abs) = state.abstract_state {
+                        abs.set(phi.value, joined);
                     }
                 }
             }
@@ -3217,8 +3291,11 @@ fn is_path_type_safe_for_sink(
 
 /// Check if abstract domain facts prove a sink is safe.
 ///
-/// Suppression 1: SSRF — URL prefix proves host is locked.
-/// Suppression 2: SQL_QUERY/FILE_IO — forward-propagated bounded integer.
+/// Currently limited to SSRF suppression: if the URL prefix contains
+/// `scheme://host/`, the attacker cannot control the destination host.
+///
+/// Broader suppressions (bounded-integer for SQL_QUERY/FILE_IO) are
+/// intentionally excluded — the policy is too broad to be sound.
 fn is_abstract_safe_for_sink(
     inst: &SsaInst,
     sink_caps: Cap,
@@ -3229,22 +3306,11 @@ fn is_abstract_safe_for_sink(
         return false;
     }
 
-    // Suppression 1: SSRF — string prefix with locked host
+    // SSRF — string prefix with locked host
     if sink_caps.intersects(Cap::SSRF) {
         if used
             .iter()
             .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string))
-        {
-            return true;
-        }
-    }
-
-    // Suppression 2: Proven-bounded integer cannot carry injection payload.
-    // Matches existing is_type_safe_for_sink policy: SQL_QUERY + FILE_IO only.
-    if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO) {
-        if used
-            .iter()
-            .all(|v| abs.get(*v).interval.is_proven_bounded())
         {
             return true;
         }
@@ -3262,8 +3328,14 @@ fn is_call_abstract_safe(
     if !sink_caps.intersects(Cap::SSRF) {
         return false;
     }
-    // For SSRF sinks, check if the URL argument (first arg) has a safe prefix
+    // For SSRF sinks, check if the URL argument (first arg) has a safe prefix.
+    // Guard: if the first arg group is empty (receiver couldn't be resolved to
+    // an SSA value), we cannot prove safety — return false to avoid vacuous
+    // truth from `.all()` on an empty iterator.
     if let Some(first_arg) = args.first() {
+        if first_arg.is_empty() {
+            return false;
+        }
         return first_arg
             .iter()
             .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string));

@@ -1,5 +1,5 @@
 {
-  "description": "SQL safe: offset is computed via integer arithmetic (page * 10). The abstract interval domain tracks it as a bounded integer, suppressing SQL injection.",
+  "description": "SQL: offset is computed via integer arithmetic (page * 10). Abstract interval domain tracks bounded range but does not suppress SQL injection (Phase 17 suppression is SSRF-only).",
   "tags": ["taint", "sqli", "abstract-interp", "interval-domain"],
   "modes": ["full"],
   "expected": [
@@ -9,7 +9,7 @@
       "must_match": false,
       "line_range": [6, 7],
       "evidence_contains": [],
-      "notes": "TN: offset is a bounded integer from arithmetic — cannot carry SQL injection payload"
+      "notes": "FP: offset is a bounded integer but Phase 17 abstract suppression is limited to SSRF safe-prefix. SQL suppression deferred to future targeted analysis."
     }
   ]
 }
