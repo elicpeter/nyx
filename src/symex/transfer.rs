@@ -252,7 +252,14 @@ pub fn transfer_inst(
                     heap_ctx,
                 ) {
                     if !outcome.exit_states.is_empty() {
-                        let merged = super::interproc::merge_exit_states(&outcome.exit_states);
+                        let policy = super::interproc::select_merge_policy(
+                            outcome.exit_states.len(),
+                            !outcome.cutoff_reasons.is_empty(),
+                        );
+                        let merged = super::interproc::merge_exit_states(
+                            &outcome.exit_states,
+                            policy,
+                        );
                         state.set(inst.value, merged.return_value);
                         if merged.return_tainted {
                             state.mark_tainted(inst.value);

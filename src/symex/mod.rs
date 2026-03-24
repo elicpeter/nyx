@@ -58,6 +58,9 @@ pub struct SymexContext<'a> {
     /// Pre-lowered intra-file function bodies for interprocedural symbolic
     /// execution (Phase 24A).
     pub callee_bodies: Option<&'a std::collections::HashMap<String, crate::taint::ssa_transfer::CalleeSsaBody>>,
+    /// SCC membership: maps normalized function name → SCC index.
+    /// Used by interprocedural symex for mutual recursion detection (Phase 24B).
+    pub scc_membership: Option<&'a HashMap<String, usize>>,
 }
 
 /// Maximum candidates to analyse per file (budget bound).
@@ -149,6 +152,8 @@ fn analyse_finding_path(
             constraints_checked: 0,
             paths_explored: 1,
             witness: None,
+            interproc_call_chains: Vec::new(),
+            cutoff_notes: Vec::new(),
         };
     }
 
@@ -158,6 +163,8 @@ fn analyse_finding_path(
             constraints_checked: 0,
             paths_explored: 0,
             witness: Some("path too long for symex budget".into()),
+            interproc_call_chains: Vec::new(),
+            cutoff_notes: Vec::new(),
         };
     }
 
@@ -345,6 +352,7 @@ mod tests {
             namespace: "test.js",
             points_to: None,
             callee_bodies: None,
+            scc_membership: None,
         };
         let verdict = analyse_finding_path(&finding, &ctx);
         assert_eq!(verdict.verdict, Verdict::Confirmed);
@@ -402,6 +410,7 @@ mod tests {
             namespace: "test.js",
             points_to: None,
             callee_bodies: None,
+            scc_membership: None,
         };
         annotate_findings(
             std::slice::from_mut(&mut finding),
@@ -453,6 +462,7 @@ mod tests {
             namespace: "test.js",
             points_to: None,
             callee_bodies: None,
+            scc_membership: None,
         };
         annotate_findings(
             std::slice::from_mut(&mut finding),

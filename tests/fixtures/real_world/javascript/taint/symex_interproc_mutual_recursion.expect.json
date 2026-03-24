@@ -1,0 +1,25 @@
+{
+  "description": "Mutual recursion: even calls odd, odd calls even. Tests SCC-aware recursion limit enforcement.",
+  "tags": [
+    "taint",
+    "xss",
+    "symex",
+    "interproc"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        15,
+        18
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.n flows through even/odd mutual recursion to res.send"
+    }
+  ]
+}

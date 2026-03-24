@@ -1,0 +1,25 @@
+{
+  "description": "Callee sanitizes input via replace before SQL use. Tests interprocedural symbolic execution tracing sanitization through a helper function.",
+  "tags": [
+    "taint",
+    "sqli",
+    "symex",
+    "interproc"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        9,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "Finding expected — taint still flows structurally. Sanitization detection is aspirational for interprocedural symex."
+    }
+  ]
+}

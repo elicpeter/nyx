@@ -1,0 +1,25 @@
+{
+  "description": "Callee with conditional return: tainted branch vs constant. Tests intra-callee forking — both branches should be explored, tainted branch reaches sink.",
+  "tags": [
+    "taint",
+    "sqli",
+    "symex",
+    "interproc"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        16
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.x flows through wrap (tainted branch) to client.query"
+    }
+  ]
+}

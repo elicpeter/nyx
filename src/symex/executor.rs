@@ -89,6 +89,10 @@ pub(super) struct ExplorationResult {
     /// True IFF the relevant search space was fully explored under budget.
     /// False if any fork/path/step budget prevented exploring a relevant path.
     pub search_exhausted: bool,
+    /// Interprocedural internal sink findings collected across all paths.
+    pub interproc_findings: Vec<super::interproc::InternalSinkFinding>,
+    /// Interprocedural cutoff reasons collected across all paths.
+    pub interproc_cutoffs: Vec<super::interproc::CutoffReason>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,6 +176,8 @@ pub(super) fn explore_finding(
             paths_pruned: 0,
             total_steps: 0,
             search_exhausted: true,
+            interproc_findings: Vec::new(),
+            interproc_cutoffs: Vec::new(),
         };
     }
 
@@ -235,9 +241,11 @@ pub(super) fn explore_finding(
     });
     let heap_ctx_ref = heap_ctx.as_ref();
 
-    // Phase 24A: Build interprocedural context for callee body execution.
+    // Phase 24A+B: Build interprocedural context for callee body execution.
     let interproc_budget = std::cell::Cell::new(super::interproc::InterprocBudget::new());
     let interproc_cache = std::cell::RefCell::new(std::collections::HashMap::new());
+    let interproc_reentry = std::cell::RefCell::new(std::collections::HashMap::new());
+    let interproc_stats = std::cell::Cell::new(super::interproc::InterprocStats::default());
     let interproc_ctx = ctx.callee_bodies.map(|bodies| super::interproc::InterprocCtx {
         callee_bodies: bodies,
         cfg,
@@ -245,6 +253,11 @@ pub(super) fn explore_finding(
         max_depth: 3,
         budget: &interproc_budget,
         cache: &interproc_cache,
+        reentry_counts: &interproc_reentry,
+        max_reentry_per_func: 2,
+        scc_membership: ctx.scc_membership,
+        max_scc_reentry: 3,
+        stats: &interproc_stats,
     });
     let interproc_ctx_ref = interproc_ctx.as_ref();
 
@@ -302,6 +315,8 @@ pub(super) fn explore_finding(
         paths_pruned,
         total_steps,
         search_exhausted,
+        interproc_findings: Vec::new(),
+        interproc_cutoffs: Vec::new(),
     }
 }
 
@@ -819,12 +834,89 @@ impl ExplorationResult {
                     .find_map(|p| p.witness.clone())
             });
 
+        // Collect unique interprocedural call chains
+        let mut interproc_call_chains: Vec<Vec<String>> = Vec::new();
+        let mut seen_chains: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for finding in &self.interproc_findings {
+            let key = finding.call_chain.join(" → ");
+            if seen_chains.insert(key) {
+                interproc_call_chains.push(finding.call_chain.clone());
+            }
+        }
+
+        // Deduplicated cutoff notes
+        let mut cutoff_notes: Vec<String> = Vec::new();
+        let mut seen_notes: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for reason in &self.interproc_cutoffs {
+            let note = format!("{}", reason);
+            if seen_notes.insert(note.clone()) {
+                cutoff_notes.push(note);
+            }
+        }
+
+        // Enrich witness with interprocedural context
+        let enriched_witness = append_interproc_context(
+            witness,
+            &interproc_call_chains,
+            &cutoff_notes,
+        );
+
         SymbolicVerdict {
             verdict,
             constraints_checked,
             paths_explored,
-            witness,
+            witness: enriched_witness,
+            interproc_call_chains,
+            cutoff_notes,
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Witness enrichment
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Append interprocedural context to a witness string.
+///
+/// Adds call chain info (e.g., " [via helper → inner_query]") and cutoff
+/// notes for transparency about analysis limitations.
+fn append_interproc_context(
+    witness: Option<String>,
+    call_chains: &[Vec<String>],
+    cutoff_notes: &[String],
+) -> Option<String> {
+    if call_chains.is_empty() && cutoff_notes.is_empty() {
+        return witness;
+    }
+
+    let mut result = witness.unwrap_or_default();
+
+    if !call_chains.is_empty() {
+        for chain in call_chains {
+            if !chain.is_empty() {
+                if !result.is_empty() {
+                    result.push(' ');
+                }
+                result.push_str("[via ");
+                result.push_str(&chain.join(" → "));
+                result.push(']');
+            }
+        }
+    }
+
+    if !cutoff_notes.is_empty() {
+        if !result.is_empty() {
+            result.push(' ');
+        }
+        result.push_str("[cutoff: ");
+        result.push_str(&cutoff_notes.join("; "));
+        result.push(']');
+    }
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
     }
 }
 
@@ -1014,6 +1106,8 @@ mod tests {
             paths_pruned: 0,
             total_steps: 10,
             search_exhausted: true,
+            interproc_findings: Vec::new(),
+            interproc_cutoffs: Vec::new(),
         };
         let v = result.aggregate_verdict();
         assert_eq!(v.verdict, Verdict::Confirmed);
@@ -1039,6 +1133,8 @@ mod tests {
             paths_pruned: 0,
             total_steps: 10,
             search_exhausted: true,
+            interproc_findings: Vec::new(),
+            interproc_cutoffs: Vec::new(),
         };
         let v = result.aggregate_verdict();
         assert_eq!(v.verdict, Verdict::Infeasible);
@@ -1056,6 +1152,8 @@ mod tests {
             paths_pruned: 2,
             total_steps: 500,
             search_exhausted: false, // budget prevented full exploration
+            interproc_findings: Vec::new(),
+            interproc_cutoffs: Vec::new(),
         };
         let v = result.aggregate_verdict();
         assert_eq!(v.verdict, Verdict::Inconclusive);
@@ -1068,6 +1166,8 @@ mod tests {
             paths_pruned: 0,
             total_steps: 0,
             search_exhausted: true,
+            interproc_findings: Vec::new(),
+            interproc_cutoffs: Vec::new(),
         };
         let v = result.aggregate_verdict();
         assert_eq!(v.verdict, Verdict::Inconclusive);
@@ -1124,6 +1224,7 @@ mod tests {
             namespace: "test.js",
             points_to: None,
             callee_bodies: None,
+            scc_membership: None,
         };
         let result = explore_finding(&finding, &ctx);
 
@@ -1279,6 +1380,7 @@ mod tests {
             namespace: "test.js",
             points_to: None,
             callee_bodies: None,
+            scc_membership: None,
         };
         let result = explore_finding(&finding, &ctx);
 
@@ -1438,6 +1540,7 @@ mod tests {
             namespace: "test.js",
             points_to: None,
             callee_bodies: None,
+            scc_membership: None,
         };
         let result = explore_finding(&finding, &ctx);
 

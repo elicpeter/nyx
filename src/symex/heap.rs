@@ -142,6 +142,53 @@ impl SymbolicHeap {
         &self.field_accesses
     }
 
+    /// Compute a compact 64-bit fingerprint of the heap state.
+    ///
+    /// Used as part of the interprocedural cache key (Phase 24B).
+    /// Deterministic: entries are sorted by key for consistent hashing.
+    pub fn fingerprint(&self) -> u64 {
+        if self.fields.is_empty() {
+            return 0;
+        }
+        // Sort keys for deterministic ordering
+        let mut keys: Vec<&HeapKey> = self.fields.keys().collect();
+        keys.sort_by(|a, b| {
+            let obj_a = (a.object.0).0;
+            let obj_b = (b.object.0).0;
+            obj_a.cmp(&obj_b).then_with(|| {
+                let fa = match &a.field {
+                    FieldSlot::Named(n) => n.as_str(),
+                    FieldSlot::Elements => "\x00elements",
+                };
+                let fb = match &b.field {
+                    FieldSlot::Named(n) => n.as_str(),
+                    FieldSlot::Elements => "\x00elements",
+                };
+                fa.cmp(fb)
+            })
+        });
+
+        let mut h: u64 = 0;
+        for key in keys {
+            let val = &self.fields[key];
+            let tainted: u64 = if self.tainted_keys.contains(key) { 1 } else { 0 };
+            let val_tag: u64 = match val {
+                SymbolicValue::Concrete(n) => (*n as u64).wrapping_mul(31),
+                SymbolicValue::ConcreteStr(s) => {
+                    let mut sh: u64 = 0;
+                    for b in s.bytes().take(8) {
+                        sh = sh.wrapping_mul(31).wrapping_add(b as u64);
+                    }
+                    sh
+                }
+                SymbolicValue::Unknown => 0xFF,
+                _ => 0xFE,
+            };
+            h = h.wrapping_mul(67).wrapping_add(val_tag).wrapping_add(tainted << 32);
+        }
+        h
+    }
+
     /// Widen all heap entries to `Unknown`, preserving taint flags.
     ///
     /// Called at loop heads after bounded unrolling.  Symbolic precision is

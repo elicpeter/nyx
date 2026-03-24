@@ -162,6 +162,7 @@ pub fn analyse_file(
                         namespace: caller_namespace,
                         points_to: Some(&opt.points_to),
                         callee_bodies: callee_bodies_ref,
+                        scc_membership: None,
                     };
                     crate::symex::annotate_findings(&mut f, &symex_ctx);
                 }
@@ -450,6 +451,7 @@ fn analyse_ssa_js_two_level(
             namespace,
             points_to: Some(&toplevel_opt.points_to),
             callee_bodies,
+            scc_membership: None,
         };
         crate::symex::annotate_findings(&mut all_findings, &symex_ctx);
     }
@@ -509,6 +511,7 @@ fn analyse_ssa_js_two_level(
                     namespace,
                     points_to: Some(&func_opt.points_to),
                     callee_bodies,
+                    scc_membership: None,
                 };
                 crate::symex::annotate_findings(&mut func_findings, &symex_ctx);
             }

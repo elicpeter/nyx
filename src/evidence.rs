@@ -130,6 +130,12 @@ pub struct SymbolicVerdict {
     /// Human-readable witness or proof sketch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witness: Option<String>,
+    /// Interprocedural call chains leading to callee-internal sinks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interproc_call_chains: Vec<Vec<String>>,
+    /// Cutoff/fallback reasons that limited analysis precision.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cutoff_notes: Vec<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -903,6 +909,8 @@ mod tests {
                 constraints_checked: 42,
                 paths_explored: 7,
                 witness: Some("x=null forces false branch".into()),
+                interproc_call_chains: Vec::new(),
+                cutoff_notes: Vec::new(),
             };
             let json = serde_json::to_string(&sv).unwrap();
             let rt: SymbolicVerdict = serde_json::from_str(&json).unwrap();
@@ -924,6 +932,8 @@ mod tests {
                 constraints_checked: 1,
                 paths_explored: 1,
                 witness: None,
+                interproc_call_chains: Vec::new(),
+                cutoff_notes: Vec::new(),
             }),
             ..Default::default()
         };
@@ -937,6 +947,8 @@ mod tests {
             constraints_checked: 0,
             paths_explored: 0,
             witness: None,
+            interproc_call_chains: Vec::new(),
+            cutoff_notes: Vec::new(),
         };
         let json = serde_json::to_string(&sv).unwrap();
         assert!(!json.contains("witness"));
@@ -1024,6 +1036,8 @@ mod tests {
                 constraints_checked: 3,
                 paths_explored: 1,
                 witness: None,
+                interproc_call_chains: Vec::new(),
+                cutoff_notes: Vec::new(),
             }),
             ..Default::default()
         });
@@ -1055,6 +1069,8 @@ mod tests {
                 constraints_checked: 2,
                 paths_explored: 1,
                 witness: None,
+                interproc_call_chains: Vec::new(),
+                cutoff_notes: Vec::new(),
             }),
             ..Default::default()
         });
