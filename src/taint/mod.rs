@@ -50,6 +50,8 @@ pub struct Finding {
     pub uses_summary: bool,
     /// Reconstructed flow path from source to sink (CFG-level, pre-resolution).
     pub flow_steps: Vec<FlowStepRaw>,
+    /// Symbolic constraint analysis verdict, if attempted.
+    pub symbolic: Option<crate::evidence::SymbolicVerdict>,
 }
 
 /// Run taint analysis on a single file's CFG.
@@ -147,7 +149,14 @@ pub fn analyse_file(
                 };
                 let events =
                     ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
-                ssa_transfer::ssa_events_to_findings(&events, &ssa_body, cfg)
+                let mut f =
+                    ssa_transfer::ssa_events_to_findings(&events, &ssa_body, cfg);
+                if crate::symex::is_enabled() {
+                    crate::symex::annotate_findings(
+                        &mut f, &ssa_body, cfg, &opt.const_values, &opt.type_facts,
+                    );
+                }
+                f
             }
             Err(e) => {
                 tracing::warn!("SSA lowering failed: {e}");
@@ -419,6 +428,12 @@ fn analyse_ssa_js_two_level(
 
     // Collect top-level findings
     let mut all_findings = ssa_transfer::ssa_events_to_findings(&toplevel_events, &toplevel_ssa, cfg);
+    if crate::symex::is_enabled() {
+        crate::symex::annotate_findings(
+            &mut all_findings, &toplevel_ssa, cfg,
+            &toplevel_opt.const_values, &toplevel_opt.type_facts,
+        );
+    }
 
     let func_entries = find_function_entries(cfg);
     let toplevel_syms = collect_toplevel_symbols(cfg, interner);
@@ -462,9 +477,15 @@ fn analyse_ssa_js_two_level(
             };
             let (func_events, func_block_states) =
                 ssa_transfer::run_ssa_taint_full(&func_ssa, cfg, &func_transfer);
-            round_findings.extend(
-                ssa_transfer::ssa_events_to_findings(&func_events, &func_ssa, cfg),
-            );
+            let mut func_findings =
+                ssa_transfer::ssa_events_to_findings(&func_events, &func_ssa, cfg);
+            if crate::symex::is_enabled() {
+                crate::symex::annotate_findings(
+                    &mut func_findings, &func_ssa, cfg,
+                    &func_opt.const_values, &func_opt.type_facts,
+                );
+            }
+            round_findings.extend(func_findings);
 
             // Extract exit state, filter to globals, join into combined
             let func_exit =

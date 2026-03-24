@@ -163,6 +163,22 @@ pub struct Evidence {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 
+    /// Kind of taint source (structured; replaces "source_kind:..." in notes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<crate::labels::SourceKind>,
+
+    /// Number of SSA blocks between source and sink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hop_count: Option<u16>,
+
+    /// Whether this finding was resolved via a cross-function summary.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uses_summary: bool,
+
+    /// Number of matching capability bits between source and sink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap_specificity: Option<u8>,
+
     /// Step-by-step taint flow from source to sink.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flow_steps: Vec<FlowStep>,
@@ -189,6 +205,10 @@ impl Evidence {
             && self.sanitizers.is_empty()
             && self.state.is_none()
             && self.notes.is_empty()
+            && self.source_kind.is_none()
+            && self.hop_count.is_none()
+            && !self.uses_summary
+            && self.cap_specificity.is_none()
             && self.flow_steps.is_empty()
             && self.explanation.is_none()
             && self.confidence_limiters.is_empty()
@@ -282,8 +302,11 @@ fn compute_taint_confidence(diag: &Diag) -> Confidence {
 
     let mut score: i32 = 0;
 
-    // Source kind
-    score += source_kind_score(&ev.notes);
+    // Source kind (prefer structured field, fall back to notes)
+    score += match ev.source_kind {
+        Some(kind) => structured_source_kind_score(kind),
+        None => source_kind_score(&ev.notes),
+    };
 
     // Evidence completeness
     let has_source = ev.source.is_some();
@@ -298,20 +321,39 @@ fn compute_taint_confidence(diag: &Diag) -> Confidence {
         1
     };
 
-    // Hop count penalty
-    score += hop_count_score(&ev.notes);
+    // Hop count penalty (prefer structured field)
+    score += match ev.hop_count {
+        Some(count) => match count {
+            0..=3 => 0,
+            4..=8 => -1,
+            _ => -2,
+        },
+        None => hop_count_score(&ev.notes),
+    };
 
-    // Path validation penalty
-    if ev.notes.iter().any(|n| n == "path_validated") {
+    // Path validation penalty (use Diag field directly)
+    if diag.path_validated {
         score -= 3;
     }
 
-    // Cap specificity bonus
-    score += cap_specificity_score(&ev.notes);
+    // Cap specificity bonus (prefer structured field)
+    score += match ev.cap_specificity {
+        Some(count) => if count == 1 { 1 } else { 0 },
+        None => cap_specificity_score(&ev.notes),
+    };
 
-    // Summary resolution penalty
-    if ev.notes.iter().any(|n| n == "uses_summary") {
+    // Summary resolution penalty (prefer structured field)
+    if ev.uses_summary || ev.notes.iter().any(|n| n == "uses_summary") {
         score -= 1;
+    }
+
+    // Symbolic verdict adjustments
+    if let Some(ref sv) = ev.symbolic {
+        match sv.verdict {
+            Verdict::Infeasible => score -= 5,
+            Verdict::Confirmed => score += 2,
+            Verdict::Inconclusive | Verdict::NotAttempted => {}
+        }
     }
 
     match score {
@@ -321,7 +363,20 @@ fn compute_taint_confidence(diag: &Diag) -> Confidence {
     }
 }
 
-/// Extract source_kind from evidence notes and return points.
+/// Score a structured `SourceKind` value.
+///
+/// UserInput=+3, EnvironmentConfig=+2, Unknown/FileSystem=+1, Database/CaughtException=0.
+fn structured_source_kind_score(kind: crate::labels::SourceKind) -> i32 {
+    use crate::labels::SourceKind;
+    match kind {
+        SourceKind::UserInput => 3,
+        SourceKind::EnvironmentConfig => 2,
+        SourceKind::Unknown | SourceKind::FileSystem => 1,
+        SourceKind::Database | SourceKind::CaughtException => 0,
+    }
+}
+
+/// Extract source_kind from evidence notes and return points (legacy fallback).
 ///
 /// UserInput=+3, EnvironmentConfig=+2, Unknown/FileSystem=+1, Database/CaughtException=0.
 fn source_kind_score(notes: &[String]) -> i32 {
@@ -389,19 +444,32 @@ pub fn generate_explanation(diag: &Diag) -> Option<String> {
         .as_deref()
         .unwrap_or("(unknown sink)");
 
-    // Extract source kind label
-    let source_kind = ev
-        .notes
-        .iter()
-        .find_map(|n| n.strip_prefix("source_kind:"))
-        .unwrap_or("unknown");
-    let source_kind_label = match source_kind {
-        "UserInput" => "user input",
-        "EnvironmentConfig" => "environment/config",
-        "Database" => "database",
-        "FileSystem" => "file system",
-        "CaughtException" => "caught exception",
-        _ => "unclassified",
+    // Extract source kind label (prefer structured field)
+    let source_kind_label = if let Some(kind) = ev.source_kind {
+        use crate::labels::SourceKind;
+        match kind {
+            SourceKind::UserInput => "user input",
+            SourceKind::EnvironmentConfig => "environment/config",
+            SourceKind::Database => "database",
+            SourceKind::FileSystem => "file system",
+            SourceKind::CaughtException => "caught exception",
+            SourceKind::Unknown => "unclassified",
+        }
+    } else {
+        // Legacy fallback: parse from notes
+        let kind_str = ev
+            .notes
+            .iter()
+            .find_map(|n| n.strip_prefix("source_kind:"))
+            .unwrap_or("unknown");
+        match kind_str {
+            "UserInput" => "user input",
+            "EnvironmentConfig" => "environment/config",
+            "Database" => "database",
+            "FileSystem" => "file system",
+            "CaughtException" => "caught exception",
+            _ => "unclassified",
+        }
     };
 
     // Extract category from rule ID
@@ -435,7 +503,7 @@ pub fn generate_explanation(diag: &Diag) -> Option<String> {
             ));
         }
     }
-    if ev.notes.iter().any(|n| n == "uses_summary") {
+    if ev.uses_summary || ev.notes.iter().any(|n| n == "uses_summary") {
         explanation
             .push_str(" The flow crosses function boundaries via summary resolution.");
     }
@@ -464,53 +532,62 @@ pub fn compute_confidence_limiters(diag: &Diag) -> Vec<String> {
         None => return limiters,
     };
 
-    // Hop count
-    for note in &ev.notes {
-        if let Some(count_str) = note.strip_prefix("hop_count:") {
-            if let Ok(count) = count_str.parse::<u16>() {
-                if count >= 4 {
-                    limiters.push(format!(
-                        "Taint path spans {count} blocks, increasing chance of intermediate sanitization"
-                    ));
-                }
-            }
+    // Hop count (prefer structured field)
+    let hop = ev.hop_count.or_else(|| {
+        ev.notes.iter().find_map(|n| {
+            n.strip_prefix("hop_count:")?.parse::<u16>().ok()
+        })
+    });
+    if let Some(count) = hop {
+        if count >= 4 {
+            limiters.push(format!(
+                "Taint path spans {count} blocks, increasing chance of intermediate sanitization"
+            ));
         }
     }
 
-    // Summary resolution
-    if ev.notes.iter().any(|n| n == "uses_summary") {
+    // Summary resolution (prefer structured field)
+    if ev.uses_summary || ev.notes.iter().any(|n| n == "uses_summary") {
         limiters.push(
             "Flow resolved via cross-function summary (may be imprecise)".into(),
         );
     }
 
-    // Path validated
-    if ev.notes.iter().any(|n| n == "path_validated") {
+    // Path validated (use Diag field directly)
+    if diag.path_validated {
         limiters.push(
             "Validation guard detected on path (may provide protection)".into(),
         );
     }
 
-    // Cap specificity
-    for note in &ev.notes {
-        if let Some(count_str) = note.strip_prefix("cap_specificity:") {
-            if let Ok(0) = count_str.parse::<u8>() {
-                limiters.push(
-                    "Source and sink capability types do not match specifically".into(),
-                );
-            }
-        }
+    // Cap specificity (prefer structured field)
+    let cap_spec = ev.cap_specificity.or_else(|| {
+        ev.notes.iter().find_map(|n| {
+            n.strip_prefix("cap_specificity:")?.parse::<u8>().ok()
+        })
+    });
+    if cap_spec == Some(0) {
+        limiters.push(
+            "Source and sink capability types do not match specifically".into(),
+        );
     }
 
-    // Source kind unknown
-    if ev
-        .notes
-        .iter()
-        .any(|n| n == "source_kind:Unknown")
-    {
+    // Source kind unknown (prefer structured field)
+    let is_unknown = ev.source_kind == Some(crate::labels::SourceKind::Unknown)
+        || ev.notes.iter().any(|n| n == "source_kind:Unknown");
+    if is_unknown {
         limiters.push(
             "Source type is unclassified (lower exploitation confidence)".into(),
         );
+    }
+
+    // Symbolic verdict
+    if let Some(ref sv) = ev.symbolic {
+        if sv.verdict == Verdict::Infeasible {
+            limiters.push(
+                "Symbolic analysis proved this path is infeasible".into(),
+            );
+        }
     }
 
     limiters
@@ -573,6 +650,9 @@ mod tests {
                 "hop_count:1".into(),
                 "cap_specificity:1".into(),
             ],
+            source_kind: Some(crate::labels::SourceKind::UserInput),
+            hop_count: Some(1),
+            cap_specificity: Some(1),
             ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::High);
@@ -604,6 +684,8 @@ mod tests {
                 "source_kind:EnvironmentConfig".into(),
                 "hop_count:5".into(),
             ],
+            source_kind: Some(crate::labels::SourceKind::EnvironmentConfig),
+            hop_count: Some(5),
             ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::Medium);
@@ -636,6 +718,9 @@ mod tests {
                 "hop_count:12".into(),
                 "uses_summary".into(),
             ],
+            source_kind: Some(crate::labels::SourceKind::Database),
+            hop_count: Some(12),
+            uses_summary: true,
             ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::Low);
@@ -645,6 +730,7 @@ mod tests {
     fn compute_confidence_taint_validated_with_source() {
         // UserInput(+3) + source+sink+snippet(+3) + path_validated(−3) = 3 → Medium
         let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
+        d.path_validated = true;
         d.evidence = Some(Evidence {
             source: Some(SpanEvidence {
                 path: "test.rs".into(),
@@ -667,6 +753,7 @@ mod tests {
                 "path_validated".into(),
                 "source_kind:UserInput".into(),
             ],
+            source_kind: Some(crate::labels::SourceKind::UserInput),
             ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::Medium);
@@ -844,5 +931,159 @@ mod tests {
         };
         let json = serde_json::to_string(&sv).unwrap();
         assert!(!json.contains("witness"));
+    }
+
+    #[test]
+    fn compute_confidence_structured_fields_only() {
+        // Structured fields without notes → same result as with notes
+        // UserInput(+3) + source+sink+snippet(+3) + hop_count:1(0) + cap_specificity:1(+1) = 7 → High
+        let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
+        d.evidence = Some(Evidence {
+            source: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 1,
+                col: 1,
+                kind: "source".into(),
+                snippet: Some("req.query".into()),
+            }),
+            sink: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 10,
+                col: 5,
+                kind: "sink".into(),
+                snippet: Some("exec()".into()),
+            }),
+            source_kind: Some(crate::labels::SourceKind::UserInput),
+            hop_count: Some(1),
+            cap_specificity: Some(1),
+            ..Default::default()
+        });
+        assert_eq!(compute_confidence(&d), Confidence::High);
+    }
+
+    #[test]
+    fn compute_confidence_notes_only_backward_compat() {
+        // Notes only (no structured fields) → backward compatible
+        // EnvironmentConfig(+2) + source+sink(+2) + hop_count:5(−1) = 3 → Medium
+        let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
+        d.evidence = Some(Evidence {
+            source: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 1,
+                col: 1,
+                kind: "source".into(),
+                snippet: None,
+            }),
+            sink: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 10,
+                col: 5,
+                kind: "sink".into(),
+                snippet: None,
+            }),
+            notes: vec![
+                "source_kind:EnvironmentConfig".into(),
+                "hop_count:5".into(),
+            ],
+            ..Default::default()
+        });
+        assert_eq!(compute_confidence(&d), Confidence::Medium);
+    }
+
+    #[test]
+    fn compute_confidence_symbolic_infeasible_demotes() {
+        // UserInput(+3) + source+sink+snippet(+3) + Infeasible(−5) = 1 → Low
+        let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
+        d.evidence = Some(Evidence {
+            source: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 1,
+                col: 1,
+                kind: "source".into(),
+                snippet: Some("req.query".into()),
+            }),
+            sink: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 10,
+                col: 5,
+                kind: "sink".into(),
+                snippet: Some("exec()".into()),
+            }),
+            source_kind: Some(crate::labels::SourceKind::UserInput),
+            symbolic: Some(SymbolicVerdict {
+                verdict: Verdict::Infeasible,
+                constraints_checked: 3,
+                paths_explored: 1,
+                witness: None,
+            }),
+            ..Default::default()
+        });
+        assert_eq!(compute_confidence(&d), Confidence::Low);
+    }
+
+    #[test]
+    fn compute_confidence_symbolic_confirmed_boosts() {
+        // EnvironmentConfig(+2) + source+sink(+2) + Confirmed(+2) = 6 → High
+        let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
+        d.evidence = Some(Evidence {
+            source: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 1,
+                col: 1,
+                kind: "source".into(),
+                snippet: None,
+            }),
+            sink: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 10,
+                col: 5,
+                kind: "sink".into(),
+                snippet: None,
+            }),
+            source_kind: Some(crate::labels::SourceKind::EnvironmentConfig),
+            symbolic: Some(SymbolicVerdict {
+                verdict: Verdict::Confirmed,
+                constraints_checked: 2,
+                paths_explored: 1,
+                witness: None,
+            }),
+            ..Default::default()
+        });
+        assert_eq!(compute_confidence(&d), Confidence::High);
+    }
+
+    #[test]
+    fn evidence_with_structured_fields_not_empty() {
+        let ev = Evidence {
+            source_kind: Some(crate::labels::SourceKind::UserInput),
+            ..Default::default()
+        };
+        assert!(!ev.is_empty());
+
+        let ev2 = Evidence {
+            uses_summary: true,
+            ..Default::default()
+        };
+        assert!(!ev2.is_empty());
+    }
+
+    #[test]
+    fn source_kind_serde_round_trip() {
+        use crate::labels::SourceKind;
+        for kind in [
+            SourceKind::UserInput,
+            SourceKind::EnvironmentConfig,
+            SourceKind::FileSystem,
+            SourceKind::Database,
+            SourceKind::CaughtException,
+            SourceKind::Unknown,
+        ] {
+            let json = serde_json::to_string(&kind).unwrap();
+            let rt: SourceKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(rt, kind);
+        }
+        // Verify snake_case serialization
+        let json = serde_json::to_string(&crate::labels::SourceKind::UserInput).unwrap();
+        assert_eq!(json, "\"user_input\"");
     }
 }

@@ -4014,6 +4014,7 @@ pub fn ssa_events_to_findings(
                         cap_specificity,
                         uses_summary: event.uses_summary,
                         flow_steps,
+                        symbolic: None,
                     });
                 }
             }

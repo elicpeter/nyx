@@ -12,7 +12,7 @@ mod typescript;
 use bitflags::bitflags;
 use once_cell::sync::Lazy;
 use phf::Map;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
@@ -257,7 +257,8 @@ pub fn lookup(lang: &str, raw: &str) -> Kind {
 }
 
 /// The kind of taint source, used to refine finding severity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     /// Direct user input (request params, argv, stdin, form data)
     UserInput,

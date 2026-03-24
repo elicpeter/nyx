@@ -186,7 +186,12 @@ fn build_taint_diag(
             sanitizers: vec![],
             state: None,
             notes: evidence_notes,
+            source_kind: Some(finding.source_kind),
+            hop_count: Some(finding.hop_count),
+            uses_summary: finding.uses_summary,
+            cap_specificity: Some(finding.cap_specificity),
             flow_steps,
+            symbolic: finding.symbolic.clone(),
             ..Default::default()
         }),
         rank_score: None,

@@ -21,6 +21,7 @@ mod ssa;
 mod state;
 mod summary;
 mod suppress;
+mod symex;
 mod symbol;
 mod taint;
 mod utils;
