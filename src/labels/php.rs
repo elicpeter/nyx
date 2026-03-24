@@ -118,6 +118,14 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },
+    // Laravel Eloquent: raw SQL methods.
+    // DB::raw() → scoped_call_expression, callee text "DB.raw".
+    // whereRaw/selectRaw/orderByRaw/havingRaw → member_call_expression on query builder.
+    LabelRule {
+        matchers: &["DB.raw", "whereRaw", "selectRaw", "orderByRaw", "havingRaw"],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
     // NOTE: `file_get_contents` can fetch URLs (SSRF vector) and local files (LFI vector).
     // As a Sink(SSRF) it only fires when the argument is tainted.
     LabelRule {
@@ -162,6 +170,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     // data-flow
     "function_call_expression"      => Kind::CallFn,
     "member_call_expression"        => Kind::CallMethod,
+    "scoped_call_expression"        => Kind::CallMethod,
     "assignment_expression"         => Kind::Assignment,
     "expression_statement"          => Kind::CallWrapper,
     "echo_statement"                => Kind::CallWrapper,

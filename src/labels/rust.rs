@@ -1,4 +1,5 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule};
+use crate::utils::project::FrameworkContext;
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -117,3 +118,14 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &["self_parameter"],
     ident_fields: &["pattern"],
 };
+
+/// Framework-conditional rules for Rust.
+///
+/// Rust web framework source detection requires parameter-type analysis
+/// (e.g. `web::Json<T>` in actix-web), which is not yet supported.
+/// Sink detection for chained builders like `HttpResponse::Ok().body()`
+/// also requires deeper receiver resolution. This scaffolding exists
+/// for future expansion once those capabilities are added.
+pub fn framework_rules(_ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    Vec::new()
+}

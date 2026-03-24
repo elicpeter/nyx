@@ -210,6 +210,7 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                         let recv = c
                             .child_by_field_name("object")
                             .or_else(|| c.child_by_field_name("receiver"))
+                            .or_else(|| c.child_by_field_name("scope"))
                             .and_then(|f| root_receiver_text(f, lang, code));
                         match (recv, func) {
                             (Some(r), Some(f)) => Some(format!("{r}.{f}")),
@@ -261,6 +262,7 @@ fn find_classifiable_inner_call<'a>(
                         let recv = c
                             .child_by_field_name("object")
                             .or_else(|| c.child_by_field_name("receiver"))
+                            .or_else(|| c.child_by_field_name("scope"))
                             .and_then(|f| root_receiver_text(f, lang, code));
                         match (recv, func) {
                             (Some(r), Some(f)) => Some(format!("{r}.{f}")),
@@ -1023,6 +1025,7 @@ fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> 
             let recv = n
                 .child_by_field_name("object")
                 .or_else(|| n.child_by_field_name("receiver"))
+                .or_else(|| n.child_by_field_name("scope"))
                 .and_then(|f| root_receiver_text(f, lang, code));
             match (recv, func) {
                 (Some(r), Some(f)) => Some(format!("{r}.{f}")),
@@ -1501,6 +1504,7 @@ fn push_node<'a>(
             let recv = ast
                 .child_by_field_name("object")
                 .or_else(|| ast.child_by_field_name("receiver"))
+                .or_else(|| ast.child_by_field_name("scope"))
                 .and_then(|n| root_receiver_text(n, lang, code));
             match (recv, func) {
                 (Some(r), Some(f)) => format!("{r}.{f}"),
@@ -1777,7 +1781,8 @@ fn push_node<'a>(
     {
         let recv_node = cn
             .child_by_field_name("object")
-            .or_else(|| cn.child_by_field_name("receiver"));
+            .or_else(|| cn.child_by_field_name("receiver"))
+            .or_else(|| cn.child_by_field_name("scope"));
         if let Some(rn) = recv_node
             && matches!(rn.kind(), "identifier" | "variable_name")
             && let Some(recv_text) = text_of(rn, code)

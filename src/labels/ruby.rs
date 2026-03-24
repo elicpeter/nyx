@@ -183,5 +183,14 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
         });
     }
 
+    if ctx.has(DetectedFramework::Sinatra) {
+        // Sinatra template rendering — user content flows to rendered output
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["erb".into(), "haml".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        });
+    }
+
     rules
 }

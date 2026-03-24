@@ -428,6 +428,8 @@ fn framework_rules_for_lang(
         "ruby" | "rb" => ruby::framework_rules(ctx),
         "java" => java::framework_rules(ctx),
         "php" => php::framework_rules(ctx),
+        "python" | "py" => python::framework_rules(ctx),
+        "rust" | "rs" => rust::framework_rules(ctx),
         "javascript" | "js" => javascript::framework_rules(ctx),
         "typescript" | "ts" => typescript::framework_rules(ctx),
         _ => Vec::new(),
@@ -1186,5 +1188,57 @@ mod tests {
             "expected Sink(DESERIALIZE), got {:?}",
             result
         );
+    }
+
+    #[test]
+    fn classify_go_echo_sinks_with_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Echo],
+        };
+        let rules = go::framework_rules(&ctx);
+        let extras: Vec<_> = rules.iter().map(|r| r.clone()).collect();
+
+        assert_eq!(
+            classify("go", "c.String", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("go", "c.HTML", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("go", "c.JSON", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+
+        // Without Echo framework, these should not match
+        let empty = go::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("go", "c.String", Some(&empty)), None);
+    }
+
+    #[test]
+    fn classify_ruby_sinatra_template_sinks() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Sinatra],
+        };
+        let rules = ruby::framework_rules(&ctx);
+        let extras: Vec<_> = rules.iter().map(|r| r.clone()).collect();
+
+        assert_eq!(
+            classify("ruby", "erb", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("ruby", "haml", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+
+        // Without Sinatra, erb should not match
+        let empty = ruby::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("ruby", "erb", Some(&empty)), None);
     }
 }

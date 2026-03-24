@@ -1,0 +1,15 @@
+{
+  "description": "Sinatra XSS: params flows to erb() (requires Sinatra framework detection via Gemfile)",
+  "tags": ["taint", "xss", "sinatra", "framework"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [3, 6],
+      "evidence_contains": [],
+      "notes": "params[:name] flows to erb() — requires Gemfile with sinatra for framework detection"
+    }
+  ]
+}

@@ -39,7 +39,7 @@ pub static RULES: &[LabelRule] = &[
     },
     // ─────────── Sinks ─────────────
     LabelRule {
-        matchers: &["system", "popen", "execve", "execvp"],
+        matchers: &["system", "popen", "execl", "execlp", "execle", "execve", "execvp"],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
     },

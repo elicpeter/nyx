@@ -179,6 +179,11 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
             label: DataLabel::Source(Cap::all()),
             case_sensitive: false,
         });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["c.HTML".into(), "c.String".into(), "c.JSON".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        });
     }
 
     rules

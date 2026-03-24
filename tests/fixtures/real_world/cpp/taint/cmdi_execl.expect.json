@@ -1,0 +1,15 @@
+{
+  "description": "C++ command injection: getenv flows to execl()",
+  "tags": ["taint", "cmdi"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 7],
+      "evidence_contains": [],
+      "notes": "std::getenv(\"USER_PROGRAM\") flows to execl() without sanitization"
+    }
+  ]
+}

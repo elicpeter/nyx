@@ -43,6 +43,9 @@ pub enum DetectedFramework {
     Laravel,
     Rails,
     Sinatra,
+    ActixWeb,
+    Rocket,
+    Axum,
 }
 
 /// Frameworks detected in the project root.
@@ -131,6 +134,19 @@ pub fn detect_frameworks(root: &Path) -> FrameworkContext {
         }
         if content.contains("'sinatra'") || content.contains("\"sinatra\"") {
             fws.push(DetectedFramework::Sinatra);
+        }
+    }
+
+    // ── Rust (Cargo.toml) ──
+    if let Some(content) = read_bounded(&root.join("Cargo.toml")) {
+        if content.contains("actix-web") {
+            fws.push(DetectedFramework::ActixWeb);
+        }
+        if content.contains("rocket") && !fws.contains(&DetectedFramework::Rocket) {
+            fws.push(DetectedFramework::Rocket);
+        }
+        if content.contains("axum") {
+            fws.push(DetectedFramework::Axum);
         }
     }
 

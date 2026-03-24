@@ -1,0 +1,23 @@
+{
+  "description": "Laravel Eloquent raw SQL: $_GET flows to DB::raw() and whereRaw()",
+  "tags": ["taint", "sqli", "php", "laravel"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 6],
+      "evidence_contains": [],
+      "notes": "$_GET['search'] flows to DB::raw() — SQL injection via Laravel DB facade"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 7],
+      "evidence_contains": [],
+      "notes": "$_GET['search'] flows to whereRaw() — SQL injection via Eloquent query builder"
+    }
+  ]
+}

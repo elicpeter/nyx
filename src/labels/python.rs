@@ -1,4 +1,5 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, SinkGate};
+use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule, SinkGate};
+use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -153,6 +154,12 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },
+    // Django ORM raw SQL execution
+    LabelRule {
+        matchers: &["objects.raw"],
+        label: DataLabel::Sink(Cap::SQL_QUERY),
+        case_sensitive: false,
+    },
     // SQL injection: sqlite3 / SQLAlchemy / generic DB connection execute.
     LabelRule {
         matchers: &[
@@ -177,6 +184,12 @@ pub static RULES: &[LabelRule] = &[
     },
     LabelRule {
         matchers: &["urllib.request.urlopen", "requests.get", "requests.post", "requests.put", "requests.delete", "requests.patch", "requests.head", "requests.request", "httpx.get", "httpx.post", "httpx.put", "httpx.delete", "httpx.patch", "httpx.head", "httpx.request"],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+    },
+    // aiohttp HTTP client — SSRF sinks
+    LabelRule {
+        matchers: &["aiohttp.get", "aiohttp.post", "aiohttp.put", "aiohttp.delete", "aiohttp.request"],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
@@ -256,3 +269,20 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["name"],
 };
+
+/// Framework-conditional rules for Python.
+pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    let mut rules = Vec::new();
+
+    if ctx.has(DetectedFramework::Django) {
+        // QuerySet.extra() — raw SQL injection risk.
+        // Framework-conditional because `extra` is too generic as a static matcher.
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["extra".into()],
+            label: DataLabel::Sink(Cap::SQL_QUERY),
+            case_sensitive: false,
+        });
+    }
+
+    rules
+}
