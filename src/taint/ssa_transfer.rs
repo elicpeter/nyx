@@ -1036,7 +1036,7 @@ fn compute_succ_states(
         Terminator::Goto(target) => {
             smallvec::smallvec![(*target, exit_state.clone())]
         }
-        Terminator::Return | Terminator::Unreachable => {
+        Terminator::Return(_) | Terminator::Unreachable => {
             SmallVec::new()
         }
     }
@@ -1314,7 +1314,7 @@ fn extract_inline_return_taint(
     let mut param_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
     for (bid, block) in ssa.blocks.iter().enumerate() {
-        if !matches!(block.terminator, Terminator::Return) {
+        if !matches!(block.terminator, Terminator::Return(_)) {
             continue;
         }
         if let Some(entry_state) = &block_states[bid] {
@@ -4227,7 +4227,7 @@ pub fn extract_ssa_func_summary(
 
     // Identify return-reaching blocks
     let return_blocks: Vec<usize> = ssa.blocks.iter().enumerate()
-        .filter(|(_, b)| matches!(b.terminator, Terminator::Return))
+        .filter(|(_, b)| matches!(b.terminator, Terminator::Return(_)))
         .map(|(i, _)| i)
         .collect();
 
@@ -4407,7 +4407,7 @@ fn infer_summary_return_type(
     // Find blocks with Return terminators, then look at the last defined value
     // in those blocks — if it's a Call with a known constructor, that's our type.
     for block in &ssa.blocks {
-        if !matches!(block.terminator, Terminator::Return) {
+        if !matches!(block.terminator, Terminator::Return(_)) {
             continue;
         }
         // Walk body in reverse to find the last Call that defines the return value.
@@ -4489,7 +4489,7 @@ pub(crate) fn extract_container_flow_summary(
 
     // 1. param_container_to_return: trace Assign/Phi ops in return blocks to params
     for block in &ssa.blocks {
-        if !matches!(block.terminator, Terminator::Return) {
+        if !matches!(block.terminator, Terminator::Return(_)) {
             continue;
         }
         for inst in block.phis.iter().chain(block.body.iter()) {

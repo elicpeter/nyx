@@ -235,6 +235,19 @@ pub(super) fn explore_finding(
     });
     let heap_ctx_ref = heap_ctx.as_ref();
 
+    // Phase 24A: Build interprocedural context for callee body execution.
+    let interproc_budget = std::cell::Cell::new(super::interproc::InterprocBudget::new());
+    let interproc_cache = std::cell::RefCell::new(std::collections::HashMap::new());
+    let interproc_ctx = ctx.callee_bodies.map(|bodies| super::interproc::InterprocCtx {
+        callee_bodies: bodies,
+        cfg,
+        lang: ctx.lang,
+        max_depth: 3,
+        budget: &interproc_budget,
+        cache: &interproc_cache,
+    });
+    let interproc_ctx_ref = interproc_ctx.as_ref();
+
     // Phase 23: Create SMT context for cross-variable constraint solving.
     #[cfg(feature = "smt")]
     let mut smt_ctx = if super::smt_enabled() {
@@ -274,6 +287,7 @@ pub(super) fn explore_finding(
             finding,
             summary_ctx_ref,
             heap_ctx_ref,
+            interproc_ctx_ref,
             #[cfg(feature = "smt")]
             &mut smt_ctx,
         );
@@ -311,6 +325,7 @@ fn run_path(
     finding: &Finding,
     summary_ctx: Option<&SymexSummaryCtx>,
     heap_ctx: Option<&SymexHeapCtx>,
+    interproc_ctx: Option<&super::interproc::InterprocCtx>,
     #[cfg(feature = "smt")] smt_ctx: &mut Option<super::smt::SmtContext>,
 ) -> Option<PathOutcome> {
     loop {
@@ -385,6 +400,7 @@ fn run_path(
             state.predecessor,
             summary_ctx,
             heap_ctx,
+            interproc_ctx,
             lang,
         );
 
@@ -513,7 +529,7 @@ fn run_path(
                 state.predecessor = Some(block_id);
                 state.current_block = *target;
             }
-            Terminator::Return | Terminator::Unreachable => {
+            Terminator::Return(_) | Terminator::Unreachable => {
                 return Some(record_outcome(state, finding, ssa, cfg));
             }
         }
@@ -898,7 +914,7 @@ mod tests {
                     id: b2,
                     phis: vec![],
                     body: vec![],
-                    terminator: Terminator::Return,
+                    terminator: Terminator::Return(None),
                     preds: smallvec![b0],
                     succs: smallvec![],
                 },
@@ -906,7 +922,7 @@ mod tests {
                     id: b3,
                     phis: vec![],
                     body: vec![],
-                    terminator: Terminator::Return,
+                    terminator: Terminator::Return(None),
                     preds: smallvec![b1],
                     succs: smallvec![],
                 },
@@ -961,7 +977,7 @@ mod tests {
                     id: b3,
                     phis: vec![],
                     body: vec![],
-                    terminator: Terminator::Return,
+                    terminator: Terminator::Return(None),
                     preds: smallvec![b1, b2],
                     succs: smallvec![],
                 },
@@ -1081,7 +1097,7 @@ mod tests {
                     id: b1,
                     phis: vec![],
                     body: vec![],
-                    terminator: Terminator::Return,
+                    terminator: Terminator::Return(None),
                     preds: smallvec![b0],
                     succs: smallvec![],
                 },
@@ -1107,6 +1123,7 @@ mod tests {
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
             points_to: None,
+            callee_bodies: None,
         };
         let result = explore_finding(&finding, &ctx);
 
@@ -1198,7 +1215,7 @@ mod tests {
                     id: b3,
                     phis: vec![],
                     body: vec![],
-                    terminator: Terminator::Return,
+                    terminator: Terminator::Return(None),
                     preds: smallvec![b1, b2],
                     succs: smallvec![],
                 },
@@ -1261,6 +1278,7 @@ mod tests {
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
             points_to: None,
+            callee_bodies: None,
         };
         let result = explore_finding(&finding, &ctx);
 
@@ -1346,7 +1364,7 @@ mod tests {
                     id: b2,
                     phis: vec![],
                     body: vec![],
-                    terminator: Terminator::Return, // dead-end: doesn't reach sink
+                    terminator: Terminator::Return(None), // dead-end: doesn't reach sink
                     preds: smallvec![b0],
                     succs: smallvec![],
                 },
@@ -1354,7 +1372,7 @@ mod tests {
                     id: b3,
                     phis: vec![],
                     body: vec![],
-                    terminator: Terminator::Return,
+                    terminator: Terminator::Return(None),
                     preds: smallvec![b1],
                     succs: smallvec![],
                 },
@@ -1419,6 +1437,7 @@ mod tests {
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
             points_to: None,
+            callee_bodies: None,
         };
         let result = explore_finding(&finding, &ctx);
 

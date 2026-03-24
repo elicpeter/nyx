@@ -17,6 +17,7 @@ pub mod witness;
 pub mod loops;
 pub mod heap;
 pub mod strings;
+pub mod interproc;
 #[cfg(feature = "smt")]
 pub mod smt;
 
@@ -54,6 +55,9 @@ pub struct SymexContext<'a> {
     /// Points-to analysis results for object identity resolution in the
     /// field-sensitive symbolic heap (Phase 21).
     pub points_to: Option<&'a PointsToResult>,
+    /// Pre-lowered intra-file function bodies for interprocedural symbolic
+    /// execution (Phase 24A).
+    pub callee_bodies: Option<&'a std::collections::HashMap<String, crate::taint::ssa_transfer::CalleeSsaBody>>,
 }
 
 /// Maximum candidates to analyse per file (budget bound).
@@ -222,7 +226,7 @@ mod tests {
                     id: b1,
                     phis: vec![],
                     body: vec![],
-                    terminator: Terminator::Return,
+                    terminator: Terminator::Return(None),
                     preds: smallvec![b0],
                     succs: smallvec![],
                 },
@@ -290,7 +294,7 @@ mod tests {
                     id: b1,
                     phis: vec![],
                     body: vec![],
-                    terminator: Terminator::Return,
+                    terminator: Terminator::Return(None),
                     preds: smallvec![b0],
                     succs: smallvec![],
                 },
@@ -340,6 +344,7 @@ mod tests {
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
             points_to: None,
+            callee_bodies: None,
         };
         let verdict = analyse_finding_path(&finding, &ctx);
         assert_eq!(verdict.verdict, Verdict::Confirmed);
@@ -396,6 +401,7 @@ mod tests {
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
             points_to: None,
+            callee_bodies: None,
         };
         annotate_findings(
             std::slice::from_mut(&mut finding),
@@ -446,6 +452,7 @@ mod tests {
             lang: crate::symbol::Lang::JavaScript,
             namespace: "test.js",
             points_to: None,
+            callee_bodies: None,
         };
         annotate_findings(
             std::slice::from_mut(&mut finding),

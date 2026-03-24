@@ -184,7 +184,7 @@ mod tests {
                         span: (6, 8),
                     },
                 ],
-                terminator: Terminator::Return,
+                terminator: Terminator::Return(None),
                 preds: SmallVec::new(),
                 succs: SmallVec::new(),
             }],

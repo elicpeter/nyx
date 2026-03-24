@@ -884,10 +884,20 @@ fn rename_variables(
         let last_info = &cfg[last_node];
 
         ssa_blocks[block_idx].terminator = if succs.is_empty() {
+            // Find the return value: last non-Nop body instruction that defines
+            // a meaningful value.  This is canonical — the SSA lowerer places the
+            // return expression's evaluation as the last body instruction before
+            // setting the Return terminator.
+            let ret_val = ssa_blocks[block_idx]
+                .body
+                .iter()
+                .rev()
+                .find(|inst| !matches!(inst.op, SsaOp::Nop))
+                .map(|inst| inst.value);
             if last_info.kind == StmtKind::Return {
-                Terminator::Return
+                Terminator::Return(ret_val)
             } else {
-                Terminator::Return // Exit or dead end
+                Terminator::Return(ret_val) // Exit or dead end
             }
         } else if succs.len() == 1 {
             Terminator::Goto(BlockId(succs[0] as u32))

@@ -98,7 +98,13 @@ impl fmt::Display for SsaBody {
                     "  branch → B{} (true), B{} (false)",
                     true_blk.0, false_blk.0
                 )?,
-                Terminator::Return => writeln!(f, "  return")?,
+                Terminator::Return(ret_val) => {
+                    if let Some(v) = ret_val {
+                        writeln!(f, "  return v{}", v.0)?
+                    } else {
+                        writeln!(f, "  return")?
+                    }
+                }
                 Terminator::Unreachable => writeln!(f, "  unreachable")?,
             }
 

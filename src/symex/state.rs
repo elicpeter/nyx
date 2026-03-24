@@ -87,6 +87,11 @@ impl SymbolicState {
         self.tainted_roots.contains(&v)
     }
 
+    /// Get the set of all tainted SSA values.
+    pub fn tainted_values(&self) -> &HashSet<SsaValue> {
+        &self.tainted_roots
+    }
+
     /// Propagate taint: if any operand is tainted, mark `result` as tainted.
     pub fn propagate_taint(&mut self, result: SsaValue, operands: &[SsaValue]) {
         if operands.iter().any(|op| self.tainted_roots.contains(op)) {
@@ -400,7 +405,7 @@ mod tests {
                     span: (0, 0),
                 }],
                 body: vec![],
-                terminator: Terminator::Return,
+                terminator: Terminator::Return(None),
                 preds: smallvec![],
                 succs: smallvec![],
             }],
@@ -441,7 +446,7 @@ mod tests {
                     span: (0, 0),
                 }],
                 body: vec![],
-                terminator: Terminator::Return,
+                terminator: Terminator::Return(None),
                 preds: smallvec![],
                 succs: smallvec![],
             }],
@@ -482,7 +487,7 @@ mod tests {
                     span: (0, 0),
                 }],
                 body: vec![],
-                terminator: Terminator::Return,
+                terminator: Terminator::Return(None),
                 preds: smallvec![],
                 succs: smallvec![],
             }],

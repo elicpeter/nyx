@@ -1718,7 +1718,7 @@ Phase 18b (multi-path exploration — Z3 scoping mirrors fork points). Phase 22 
 
 ---
 
-## Phase 24: Interprocedural Symbolic Inlining
+## Phase 24A: Interprocedural Symbolic Execution — Core
 
 **Category:** Analysis Depth — Symbolic Execution Precision
 
@@ -1858,6 +1858,31 @@ Phase 18b (multi-path exploration — Z3 scoping mirrors fork points). Phase 22 
 
 ### Dependencies
 Phase 18c (cross-file summaries — inline resolution precedes summary in the resolution chain). Phase 11 (context sensitivity — `CalleeSsaBody` and `InlineCache` design patterns reused from taint engine). Phase 20 (loop awareness — callee bodies may contain loops; inline exploration needs bounded unrolling).
+
+---
+
+## Phase 24B: Interprocedural Symbolic Execution — Controls, Scaling & Hardening
+
+**Category:** Analysis Depth — Symbolic Execution Robustness
+
+**Why now:** Phase 24A introduces the interprocedural symbolic execution core: callee body execution as nested frames, full state propagation (return values, heap mutations, taint), canonical return semantics via `Terminator::Return(Option<SsaValue>)`, and transitive call descent. Phase 24B completes this capability by adding the controls, bounds, and diagnostics needed for production use.
+
+### Goals
+- Add full budget and cutoff controls: max call depth, max recursive re-entry per function / SCC, max frames per finding, max executed blocks / instructions, max symbolic forks, max solver checks, max retained path states
+- Add explicit recursion and SCC policy: bounded recursive unrolling, SCC-aware limits (detect mutual recursion via call graph), widen / summarize / cut off when limits are reached, record cutoff reasons in evidence
+- Formalize interprocedural branch handling: mid-block forking when callee has multiple feasible exit states, prune infeasible branches inside callees (PathEnv + SMT), fork both feasible branches when budget allows, rank/collapse only under budget pressure, define merge behavior explicitly (phi, union, widening)
+- Add richer memoization / caching for interprocedural outcomes: key by function identity + argument abstraction + heap state abstraction, include concrete value hashes not just discriminant/taint, context-sensitive cache invalidation
+- Harden diagnostics and traces: preserve full caller → callee → ... → sink call chains in evidence, mark fallback / cutoff / summary-replacement points clearly, witness strings include callee-internal operations
+- Add comprehensive fixtures and benchmarks: nested helper chains (depth 3+), callee heap mutation affecting later caller sinks, callee sanitization of shared state, multiple feasible callee return paths with forking, recursive / mutually recursive helpers, callee-internal sink findings, budget exhaustion behavior, cross-file transitive execution
+- Validate benchmark impact and ensure stable behavior under pressure
+
+### Architecture notes
+Phase B completes the interprocedural symbolic execution capability by adding recursion/SCC controls, execution budgets, interprocedural branch management, richer memoization, and diagnostic hardening. After this phase, interprocedural symex is not just functional, but bounded, explainable, and robust enough for production benchmarking and release use.
+
+Phase A is about correctness and semantics. Phase B is about boundedness, scaling, and release hardening.
+
+### Dependencies
+Phase 24A (interprocedural execution core — provides `InterprocCtx`, `CallOutcome`, `execute_callee()`, canonical return semantics). Phase 20 (loop awareness — callee bodies may contain loops). Phase 23 (SMT solving — interprocedural branch feasibility).
 
 ---
 

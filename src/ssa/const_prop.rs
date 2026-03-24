@@ -325,7 +325,7 @@ fn process_terminator(
                 }
             }
         }
-        Terminator::Return | Terminator::Unreachable => {}
+        Terminator::Return(_) | Terminator::Unreachable => {}
     }
 }
 
@@ -465,7 +465,7 @@ mod tests {
                 var_name: Some("x".into()),
                 span: (0, 2),
             }],
-            terminator: Terminator::Return,
+            terminator: Terminator::Return(None),
             preds: SmallVec::new(),
             succs: SmallVec::new(),
         };
@@ -503,7 +503,7 @@ mod tests {
                     span: (5, 9),
                 },
             ],
-            terminator: Terminator::Return,
+            terminator: Terminator::Return(None),
             preds: SmallVec::new(),
             succs: SmallVec::new(),
         };

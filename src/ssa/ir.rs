@@ -66,7 +66,7 @@ pub enum Terminator {
         /// lowering in taint transfer).
         condition: Option<Box<ConditionExpr>>,
     },
-    Return,
+    Return(Option<SsaValue>),
     Unreachable,
 }
 

@@ -1,0 +1,36 @@
+{
+  "description": "SQL injection via helper function that wraps tainted input into a query string. Tests interprocedural symbolic execution: inline callee exploration should reveal the SQL structure through the callee's control flow.",
+  "tags": [
+    "taint",
+    "sqli",
+    "symex",
+    "interproc"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        8,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.id flows through wrapQuery into client.query — interprocedural symex should trace through the helper"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "LOW",
+      "must_match": false,
+      "line_range": [
+        8,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "structural: cfg-unguarded-sink on client.query"
+    }
+  ]
+}

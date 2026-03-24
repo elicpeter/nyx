@@ -127,6 +127,11 @@ impl SymbolicHeap {
         self.tainted_keys.contains(key)
     }
 
+    /// Iterate over all heap entries (key → value).
+    pub fn entries(&self) -> impl Iterator<Item = (&HeapKey, &SymbolicValue)> {
+        self.fields.iter()
+    }
+
     /// Record a field access for witness generation.
     pub fn record_access(&mut self, record: FieldAccessRecord) {
         self.field_accesses.push(record);

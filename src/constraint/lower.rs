@@ -611,7 +611,7 @@ mod tests {
                 id: BlockId(0),
                 phis: vec![],
                 body: vec![],
-                terminator: Terminator::Return,
+                terminator: Terminator::Return(None),
                 preds: SmallVec::new(),
                 succs: SmallVec::new(),
             }],
