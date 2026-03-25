@@ -13,8 +13,8 @@ use crate::labels::{Cap, DataLabel};
 use crate::ssa::ir::*;
 use crate::ssa::{self, OptimizeResult};
 use crate::state::symbol::SymbolInterner;
-use crate::summary::GlobalSummaries;
 use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+use crate::summary::GlobalSummaries;
 use crate::symbol::{FuncKey, Lang};
 use crate::symex::state::SymbolicState;
 use crate::taint::domain::VarTaint;
@@ -178,22 +178,34 @@ impl CfgGraphView {
         func_name: &str,
         bytes: &[u8],
     ) -> Option<Self> {
-        // Find the function's entry/exit in local summaries
+        // Find the function's entry/exit in local summaries.
         let summary = summaries
             .iter()
             .find(|(k, _)| k.name == func_name)
             .map(|(_, s)| s)?;
 
-        // Collect reachable nodes from the function entry
+        // The underlying CFG is file-scoped: sibling functions are wired in
+        // sequence at the module level. For a per-function debug view, only
+        // traverse nodes that belong to the selected function scope.
+        let in_scope = |idx: NodeIndex| cfg[idx].enclosing_func.as_deref() == Some(func_name);
+
+        if !in_scope(summary.entry) {
+            return None;
+        }
+
         let mut reachable = std::collections::HashSet::new();
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(summary.entry);
         reachable.insert(summary.entry);
 
         while let Some(node) = queue.pop_front() {
-            for neighbor in cfg.neighbors(node) {
-                if reachable.insert(neighbor) {
-                    queue.push_back(neighbor);
+            for edge in cfg.edges(node) {
+                let target = edge.target();
+                if !in_scope(target) {
+                    continue;
+                }
+                if reachable.insert(target) {
+                    queue.push_back(target);
                 }
             }
         }
@@ -1160,6 +1172,75 @@ function demo() {
                 .iter()
                 .any(|state| !state.values.is_empty()),
             "serialized debug taint view should expose the populated exit states"
+        );
+    }
+
+    #[test]
+    fn cfg_function_view_does_not_bleed_into_sibling_functions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("admin.js");
+        std::fs::write(
+            &path,
+            r#"
+const db = require("../db");
+
+async function writeAuditLog({ actorId, action, targetType, targetId, metadata }) {
+  await db.query(
+    `
+      INSERT INTO audit_logs (actor_id, action, target_type, target_id, metadata)
+      VALUES ($1, $2, $3, $4, $5)
+    `,
+    [actorId, action, targetType, targetId, metadata]
+  );
+}
+
+async function recentAuditLogs() {
+  const result = await db.query(
+    `
+      SELECT a.*, u.full_name AS actor_name
+      FROM audit_logs a
+      LEFT JOIN users u ON u.id = a.actor_id
+      ORDER BY a.created_at DESC
+      LIMIT 20
+    `
+  );
+  return result.rows;
+}
+"#,
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let analysis = analyse_file(&path, &config).expect("file should analyse");
+        let view = CfgGraphView::from_cfg_function(
+            &analysis.cfg,
+            &analysis.summaries,
+            "writeAuditLog",
+            &analysis.bytes,
+        )
+        .expect("function view should exist");
+
+        assert!(
+            !view.nodes.is_empty(),
+            "expected writeAuditLog to produce CFG nodes"
+        );
+        assert!(
+            view.nodes
+                .iter()
+                .all(|node| node.enclosing_func.as_deref() == Some("writeAuditLog")),
+            "function-scoped CFG view should only contain writeAuditLog nodes"
+        );
+        assert!(
+            view.nodes.iter().any(|node| node.line == 4),
+            "expected function entry/header for writeAuditLog"
+        );
+        assert!(
+            view.nodes.iter().any(|node| node.line == 5),
+            "expected db.query call inside writeAuditLog"
+        );
+        assert!(
+            view.nodes.iter().all(|node| node.line < 13),
+            "sibling function nodes should not appear in writeAuditLog view"
         );
     }
 }
