@@ -43,8 +43,11 @@ impl ConstLattice {
         }
 
         // Null variants
-        if trimmed == "null" || trimmed == "nil" || trimmed == "None"
-            || trimmed == "NULL" || trimmed == "nullptr"
+        if trimmed == "null"
+            || trimmed == "nil"
+            || trimmed == "None"
+            || trimmed == "NULL"
+            || trimmed == "nullptr"
         {
             return ConstLattice::Null;
         }
@@ -148,7 +151,10 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
 
             // Evaluate body instructions
             for inst in &block.body {
-                let old = values.get(&inst.value).cloned().unwrap_or(ConstLattice::Top);
+                let old = values
+                    .get(&inst.value)
+                    .cloned()
+                    .unwrap_or(ConstLattice::Top);
                 let new_val = eval_inst(inst, &values);
                 if new_val != old {
                     values.insert(inst.value, new_val);
@@ -181,8 +187,10 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
                     for phi in &block.phis {
                         if let SsaOp::Phi(operands) = &phi.op {
                             if operands.iter().any(|(_, v)| *v == val) {
-                                let old = values.get(&phi.value).cloned().unwrap_or(ConstLattice::Top);
-                                let new_val = eval_phi(operands, &values, &executable_edges, block_id);
+                                let old =
+                                    values.get(&phi.value).cloned().unwrap_or(ConstLattice::Top);
+                                let new_val =
+                                    eval_phi(operands, &values, &executable_edges, block_id);
                                 if new_val != old {
                                     values.insert(phi.value, new_val);
                                     ssa_worklist.push_back(phi.value);
@@ -195,7 +203,10 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
                     // Re-evaluate body instructions using this value
                     for inst in &block.body {
                         if inst_uses(inst).iter().any(|v| *v == val) {
-                            let old = values.get(&inst.value).cloned().unwrap_or(ConstLattice::Top);
+                            let old = values
+                                .get(&inst.value)
+                                .cloned()
+                                .unwrap_or(ConstLattice::Top);
                             let new_val = eval_inst(inst, &values);
                             if new_val != old {
                                 values.insert(inst.value, new_val);
@@ -303,25 +314,62 @@ fn process_terminator(
 ) {
     match &block.terminator {
         Terminator::Goto(target) => {
-            mark_edge_executable(block.id, *target, executable_edges, executable_blocks, cfg_worklist);
+            mark_edge_executable(
+                block.id,
+                *target,
+                executable_edges,
+                executable_blocks,
+                cfg_worklist,
+            );
         }
-        Terminator::Branch { cond, true_blk, false_blk, condition: _ } => {
+        Terminator::Branch {
+            cond,
+            true_blk,
+            false_blk,
+            condition: _,
+        } => {
             // Try to resolve the condition to a known boolean
-            let cond_val = body.cfg_node_map.get(cond)
+            let cond_val = body
+                .cfg_node_map
+                .get(cond)
                 .and_then(|v| values.get(v))
                 .and_then(|c| c.as_bool());
 
             match cond_val {
                 Some(true) => {
-                    mark_edge_executable(block.id, *true_blk, executable_edges, executable_blocks, cfg_worklist);
+                    mark_edge_executable(
+                        block.id,
+                        *true_blk,
+                        executable_edges,
+                        executable_blocks,
+                        cfg_worklist,
+                    );
                 }
                 Some(false) => {
-                    mark_edge_executable(block.id, *false_blk, executable_edges, executable_blocks, cfg_worklist);
+                    mark_edge_executable(
+                        block.id,
+                        *false_blk,
+                        executable_edges,
+                        executable_blocks,
+                        cfg_worklist,
+                    );
                 }
                 None => {
                     // Unknown: both successors executable
-                    mark_edge_executable(block.id, *true_blk, executable_edges, executable_blocks, cfg_worklist);
-                    mark_edge_executable(block.id, *false_blk, executable_edges, executable_blocks, cfg_worklist);
+                    mark_edge_executable(
+                        block.id,
+                        *true_blk,
+                        executable_edges,
+                        executable_blocks,
+                        cfg_worklist,
+                    );
+                    mark_edge_executable(
+                        block.id,
+                        *false_blk,
+                        executable_edges,
+                        executable_blocks,
+                        cfg_worklist,
+                    );
                 }
             }
         }
@@ -355,8 +403,16 @@ pub fn apply_const_prop(body: &mut SsaBody, result: &ConstPropResult) -> usize {
     let mut prune_ops: Vec<(usize, BlockId, BlockId)> = Vec::new();
 
     for (block_idx, block) in body.blocks.iter().enumerate() {
-        if let Terminator::Branch { cond, true_blk, false_blk, condition: _ } = &block.terminator {
-            let cond_val = body.cfg_node_map.get(cond)
+        if let Terminator::Branch {
+            cond,
+            true_blk,
+            false_blk,
+            condition: _,
+        } = &block.terminator
+        {
+            let cond_val = body
+                .cfg_node_map
+                .get(cond)
                 .and_then(|v| result.values.get(v))
                 .and_then(|c| c.as_bool());
 
@@ -406,8 +462,8 @@ pub fn apply_const_prop(body: &mut SsaBody, result: &ConstPropResult) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use smallvec::SmallVec;
     use petgraph::graph::NodeIndex;
+    use smallvec::SmallVec;
 
     fn make_body(blocks: Vec<SsaBlock>, value_defs: Vec<ValueDef>) -> SsaBody {
         let cfg_node_map = value_defs
@@ -432,8 +488,14 @@ mod tests {
         assert_eq!(ConstLattice::parse("false"), ConstLattice::Bool(false));
         assert_eq!(ConstLattice::parse("null"), ConstLattice::Null);
         assert_eq!(ConstLattice::parse("nil"), ConstLattice::Null);
-        assert_eq!(ConstLattice::parse("\"hello\""), ConstLattice::Str("hello".into()));
-        assert_eq!(ConstLattice::parse("'world'"), ConstLattice::Str("world".into()));
+        assert_eq!(
+            ConstLattice::parse("\"hello\""),
+            ConstLattice::Str("hello".into())
+        );
+        assert_eq!(
+            ConstLattice::parse("'world'"),
+            ConstLattice::Str("world".into())
+        );
     }
 
     #[test]
@@ -471,11 +533,18 @@ mod tests {
         };
         let body = make_body(
             vec![block],
-            vec![ValueDef { var_name: Some("x".into()), cfg_node: n0, block: BlockId(0) }],
+            vec![ValueDef {
+                var_name: Some("x".into()),
+                cfg_node: n0,
+                block: BlockId(0),
+            }],
         );
 
         let result = const_propagate(&body);
-        assert_eq!(result.values.get(&SsaValue(0)), Some(&ConstLattice::Int(42)));
+        assert_eq!(
+            result.values.get(&SsaValue(0)),
+            Some(&ConstLattice::Int(42))
+        );
         assert!(result.unreachable_blocks.is_empty());
     }
 
@@ -510,13 +579,27 @@ mod tests {
         let body = make_body(
             vec![block],
             vec![
-                ValueDef { var_name: Some("x".into()), cfg_node: n0, block: BlockId(0) },
-                ValueDef { var_name: Some("y".into()), cfg_node: n1, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("x".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("y".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
             ],
         );
 
         let result = const_propagate(&body);
-        assert_eq!(result.values.get(&SsaValue(0)), Some(&ConstLattice::Bool(true)));
-        assert_eq!(result.values.get(&SsaValue(1)), Some(&ConstLattice::Bool(true)));
+        assert_eq!(
+            result.values.get(&SsaValue(0)),
+            Some(&ConstLattice::Bool(true))
+        );
+        assert_eq!(
+            result.values.get(&SsaValue(1)),
+            Some(&ConstLattice::Bool(true))
+        );
     }
 }

@@ -221,11 +221,7 @@ fn is_known_str(v: SsaValue, env: &PathEnv) -> bool {
 /// Get or create a Z3 integer variable for an SSA value, but only if the
 /// sort is known to be Int. Returns `None` if the sort is unknown or
 /// conflicts with an existing string assignment.
-fn ensure_int_var(
-    var_map: &mut VarMap,
-    v: SsaValue,
-    env: &PathEnv,
-) -> Option<Z3Int> {
+fn ensure_int_var(var_map: &mut VarMap, v: SsaValue, env: &PathEnv) -> Option<Z3Int> {
     match var_map.get(&v) {
         Some(Z3Var::Int(z)) => return Some(z.clone()),
         Some(Z3Var::Str(_)) => return None, // sort conflict
@@ -243,10 +239,7 @@ fn ensure_int_var(
 /// Create a Z3 integer variable unconditionally (used when context proves
 /// the sort, e.g., both sides of an integer comparison).
 /// Returns `None` on sort conflict (variable already assigned as string).
-fn force_int_var(
-    var_map: &mut VarMap,
-    v: SsaValue,
-) -> Option<Z3Int> {
+fn force_int_var(var_map: &mut VarMap, v: SsaValue) -> Option<Z3Int> {
     match var_map.get(&v) {
         Some(Z3Var::Int(z)) => return Some(z.clone()),
         Some(Z3Var::Str(_)) => return None, // sort conflict
@@ -260,11 +253,7 @@ fn force_int_var(
 /// Get or create a Z3 string variable for an SSA value, but only if the
 /// sort is known to be Str. Returns `None` if the sort is unknown or
 /// conflicts with an existing integer assignment.
-fn ensure_str_var(
-    var_map: &mut VarMap,
-    v: SsaValue,
-    env: &PathEnv,
-) -> Option<Z3Str> {
+fn ensure_str_var(var_map: &mut VarMap, v: SsaValue, env: &PathEnv) -> Option<Z3Str> {
     match var_map.get(&v) {
         Some(Z3Var::Str(z)) => return Some(z.clone()),
         Some(Z3Var::Int(_)) => return None, // sort conflict
@@ -281,10 +270,7 @@ fn ensure_str_var(
 
 /// Create a Z3 string variable unconditionally (used when comparison context
 /// proves the sort). Returns `None` on sort conflict.
-fn force_str_var(
-    var_map: &mut VarMap,
-    v: SsaValue,
-) -> Option<Z3Str> {
+fn force_str_var(var_map: &mut VarMap, v: SsaValue) -> Option<Z3Str> {
     match var_map.get(&v) {
         Some(Z3Var::Str(z)) => return Some(z.clone()),
         Some(Z3Var::Int(_)) => return None, // sort conflict
@@ -303,11 +289,7 @@ fn force_str_var(
 ///
 /// Seeds both integer-typed and string-typed facts. Unknown-sort values are
 /// skipped.
-fn seed_from_path_env(
-    solver: &Solver,
-    var_map: &mut VarMap,
-    env: &PathEnv,
-) {
+fn seed_from_path_env(solver: &Solver, var_map: &mut VarMap, env: &PathEnv) {
     // Interval bounds, exact values, and excluded values.
     for &(v, ref fact) in env.facts() {
         // Integer evidence path.
@@ -398,9 +380,7 @@ fn seed_from_path_env(
 
     // Relational constraints (integer-domain only: Lt/Le).
     for &(a, op, b) in env.relational() {
-        if let (Some(Z3Var::Int(za)), Some(Z3Var::Int(zb))) =
-            (var_map.get(&a), var_map.get(&b))
-        {
+        if let (Some(Z3Var::Int(za)), Some(Z3Var::Int(zb))) = (var_map.get(&a), var_map.get(&b)) {
             match op {
                 RelOp::Lt => solver.assert(&za.lt(zb)),
                 RelOp::Le => solver.assert(&za.le(zb)),
@@ -480,19 +460,13 @@ fn operand_sort_hint(op: &Operand) -> Option<VarSort> {
 /// 1. Existing var_map entry (already assigned sort)
 /// 2. PathEnv evidence (`is_known_str` / `is_known_int`)
 /// 3. Unknown → return `None` (caller may apply context hint)
-fn translate_operand(
-    var_map: &mut VarMap,
-    op: &Operand,
-    env: &PathEnv,
-) -> Option<Z3Expr> {
+fn translate_operand(var_map: &mut VarMap, op: &Operand, env: &PathEnv) -> Option<Z3Expr> {
     match op {
         Operand::Const(ConstValue::Int(n)) => Some(Z3Expr::Int(Z3Int::from_i64(*n))),
         Operand::Const(ConstValue::Bool(b)) => {
             Some(Z3Expr::Int(Z3Int::from_i64(if *b { 1 } else { 0 })))
         }
-        Operand::Const(ConstValue::Str(s)) => {
-            Some(Z3Expr::Str(Z3Str::from(s.as_str())))
-        }
+        Operand::Const(ConstValue::Str(s)) => Some(Z3Expr::Str(Z3Str::from(s.as_str()))),
         Operand::Value(v) => {
             // 1. Existing var_map entry wins.
             match var_map.get(v) {
@@ -601,8 +575,7 @@ fn build_comparison_str(lhs: &Z3Str, op: CompOp, rhs: &Z3Str) -> z3::ast::Bool {
 pub fn should_escalate(constraints: &[PathConstraint]) -> bool {
     constraints.iter().any(|c| match &c.condition {
         ConditionExpr::Comparison { lhs, rhs, .. } => {
-            let has_value =
-                matches!(lhs, Operand::Value(_)) || matches!(rhs, Operand::Value(_));
+            let has_value = matches!(lhs, Operand::Value(_)) || matches!(rhs, Operand::Value(_));
             has_value && can_translate_operand(lhs) && can_translate_operand(rhs)
         }
         _ => false,
@@ -658,12 +631,7 @@ mod tests {
 
     #[test]
     fn escalation_fires_on_value_vs_value() {
-        let constraints = vec![comparison_constraint(
-            val(0),
-            CompOp::Gt,
-            val(1),
-            true,
-        )];
+        let constraints = vec![comparison_constraint(val(0), CompOp::Gt, val(1), true)];
         assert!(should_escalate(&constraints));
     }
 
@@ -711,9 +679,7 @@ mod tests {
     fn escalation_skips_non_comparison() {
         let constraints = vec![PathConstraint {
             block: BlockId(0),
-            condition: ConditionExpr::BoolTest {
-                var: SsaValue(0),
-            },
+            condition: ConditionExpr::BoolTest { var: SsaValue(0) },
             polarity: true,
         }];
         assert!(!should_escalate(&constraints));
@@ -855,9 +821,7 @@ mod tests {
         // The constraint is effectively ignored, so result should be Sat.
         let constraints = vec![PathConstraint {
             block: BlockId(0),
-            condition: ConditionExpr::BoolTest {
-                var: SsaValue(99),
-            },
+            condition: ConditionExpr::BoolTest { var: SsaValue(99) },
             polarity: true,
         }];
         let mut ctx = SmtContext::new();

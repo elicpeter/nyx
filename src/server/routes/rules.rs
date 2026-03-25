@@ -105,13 +105,23 @@ async fn get_rule(
     Path(id): Path<String>,
 ) -> Result<Json<RuleDetailView>, StatusCode> {
     let rules = build_rule_list(&state);
-    let rule = rules.iter().find(|r| r.id == id).ok_or(StatusCode::NOT_FOUND)?;
+    let rule = rules
+        .iter()
+        .find(|r| r.id == id)
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     let findings = state.job_manager.latest_findings();
     let examples = match_findings_for_rule(rule, &findings, 5);
     let total = match_findings_for_rule(rule, &findings, usize::MAX).len();
-    let suppressed = examples.iter().filter(|f| f.severity == crate::patterns::Severity::Low).count();
-    let rate = if total > 0 { suppressed as f64 / total as f64 } else { 0.0 };
+    let suppressed = examples
+        .iter()
+        .filter(|f| f.severity == crate::patterns::Severity::Low)
+        .count();
+    let rate = if total > 0 {
+        suppressed as f64 / total as f64
+    } else {
+        0.0
+    };
 
     Ok(Json(RuleDetailView {
         id: rule.id.clone(),
@@ -176,10 +186,8 @@ async fn clone_rule(
         _ => return Err(bad_request("invalid kind")),
     };
 
-    let cap_name: crate::utils::config::CapName = source
-        .cap
-        .parse()
-        .map_err(|e: String| bad_request(&e))?;
+    let cap_name: crate::utils::config::CapName =
+        source.cap.parse().map_err(|e: String| bad_request(&e))?;
 
     let new_rule = crate::utils::config::ConfigLabelRule {
         matchers: source.matchers.clone(),
@@ -201,11 +209,7 @@ async fn clone_rule(
             lang_cfg.rules.push(new_rule);
         }
 
-        new_id = labels::custom_rule_id(
-            &source.language,
-            &source.kind,
-            &source.matchers,
-        );
+        new_id = labels::custom_rule_id(&source.language, &source.kind, &source.matchers);
 
         let local_path = state.config_dir.join("nyx.local");
         config_cmd::save_local_config(&local_path, &config)
@@ -245,9 +249,10 @@ fn compute_finding_counts(
             .unwrap_or("");
 
         for (i, rule) in rules.iter().enumerate() {
-            let matched = rule.matchers.iter().any(|m| {
-                sink_snippet.contains(m.as_str()) || source_snippet.contains(m.as_str())
-            });
+            let matched = rule
+                .matchers
+                .iter()
+                .any(|m| sink_snippet.contains(m.as_str()) || source_snippet.contains(m.as_str()));
             if matched {
                 counts[i].0 += 1;
                 if d.suppressed {
@@ -285,9 +290,10 @@ fn match_findings_for_rule(
             .and_then(|s| s.snippet.as_deref())
             .unwrap_or("");
 
-        let matched = rule.matchers.iter().any(|m| {
-            sink_snippet.contains(m.as_str()) || source_snippet.contains(m.as_str())
-        });
+        let matched = rule
+            .matchers
+            .iter()
+            .any(|m| sink_snippet.contains(m.as_str()) || source_snippet.contains(m.as_str()));
         if matched {
             out.push(RelatedFindingView {
                 index: i,

@@ -40,7 +40,8 @@ async fn get_file(
     }
 
     // Canonicalize and validate the path is within scan_root
-    let scan_root = fs::canonicalize(&state.scan_root).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let scan_root =
+        fs::canonicalize(&state.scan_root).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let requested = scan_root.join(&query.path);
     let canonical = fs::canonicalize(&requested).map_err(|_| StatusCode::NOT_FOUND)?;
 

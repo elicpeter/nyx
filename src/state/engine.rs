@@ -107,9 +107,9 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
             // branch-aware state, so it dilutes the auth elevation that
             // the True edge provides. Dropping it preserves correct semantics.
             if matches!(edge_kind, EdgeKind::Seq)
-                && edges.iter().any(|&(k, t)| {
-                    t == target && matches!(k, EdgeKind::True | EdgeKind::False)
-                })
+                && edges
+                    .iter()
+                    .any(|&(k, t)| t == target && matches!(k, EdgeKind::True | EdgeKind::False))
             {
                 continue;
             }
@@ -163,9 +163,9 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
         for &(edge_kind, target) in &edges {
             // Same redundant-Seq-edge skip as Phase 1.
             if matches!(edge_kind, EdgeKind::Seq)
-                && edges.iter().any(|&(k, t)| {
-                    t == target && matches!(k, EdgeKind::True | EdgeKind::False)
-                })
+                && edges
+                    .iter()
+                    .any(|&(k, t)| t == target && matches!(k, EdgeKind::True | EdgeKind::False))
             {
                 continue;
             }

@@ -3,7 +3,10 @@ use petgraph::prelude::*;
 use tracing::debug;
 use tree_sitter::{Node, Tree};
 
-use crate::labels::{Cap, DataLabel, Kind, LangAnalysisRules, classify, classify_all, classify_gated_sink, lookup, param_config};
+use crate::labels::{
+    Cap, DataLabel, Kind, LangAnalysisRules, classify, classify_all, classify_gated_sink, lookup,
+    param_config,
+};
 use crate::summary::FuncSummary;
 use crate::symbol::{FuncKey, Lang};
 use smallvec::SmallVec;
@@ -68,13 +71,13 @@ pub enum BinOp {
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     pub kind: StmtKind,
-    pub span: (usize, usize),     // byte offsets in the original file
+    pub span: (usize, usize), // byte offsets in the original file
     pub labels: SmallVec<[DataLabel; 2]>, // taint classifications (multi-label)
-    pub defines: Option<String>,  // variable written by this stmt
+    pub defines: Option<String>, // variable written by this stmt
     /// Additional variable definitions from destructuring patterns.
     /// E.g. `const { a, b, c } = source()` → defines="a", extra_defines=["b", "c"].
     pub extra_defines: Vec<String>,
-    pub uses: Vec<String>,        // variables read
+    pub uses: Vec<String>, // variables read
     pub callee: Option<String>,
     /// For `CallMethod` nodes: the receiver identifier (e.g. `tainted` in
     /// `tainted.foo()`).  `None` for non-method calls or complex receivers
@@ -226,9 +229,7 @@ fn is_raii_factory(lang: &str, callee: &str) -> bool {
         let cl = callee.to_ascii_lowercase();
         // Strip C++ template arguments: make_unique<int> → make_unique
         let base = cl.split('<').next().unwrap_or(&cl);
-        patterns
-            .iter()
-            .any(|p| base == *p || base.ends_with(p))
+        patterns.iter().any(|p| base == *p || base.ends_with(p))
     }
 
     match lang {
@@ -270,9 +271,8 @@ fn is_raii_factory(lang: &str, callee: &str) -> bool {
 /// Returns the first child whose kind is `"name"` or `"type_identifier"`.
 fn find_constructor_type_child(n: Node) -> Option<Node> {
     let mut cursor = n.walk();
-    n.children(&mut cursor).find(|c| {
-        matches!(c.kind(), "name" | "type_identifier" | "qualified_name")
-    })
+    n.children(&mut cursor)
+        .find(|c| matches!(c.kind(), "name" | "type_identifier" | "qualified_name"))
 }
 
 /// Return the callee identifier for the first call / method / macro inside `n`.
@@ -572,7 +572,12 @@ fn has_call_descendant(n: Node, lang: &str) -> bool {
 /// nodes the full dotted path (via `member_expr_text`) is pushed into `paths`,
 /// and the individual leaf identifiers are pushed into `idents` as a fallback.
 /// Plain identifiers go only into `idents`.
-fn collect_idents_with_paths(n: Node, code: &[u8], idents: &mut Vec<String>, paths: &mut Vec<String>) {
+fn collect_idents_with_paths(
+    n: Node,
+    code: &[u8],
+    idents: &mut Vec<String>,
+    paths: &mut Vec<String>,
+) {
     match n.kind() {
         "member_expression" | "attribute" | "selector_expression" | "field_expression" => {
             if let Some(path) = member_expr_text(n, code) {
@@ -581,7 +586,9 @@ fn collect_idents_with_paths(n: Node, code: &[u8], idents: &mut Vec<String>, pat
             // Also collect individual idents as fallback
             collect_idents(n, code, idents);
         }
-        "identifier" | "field_identifier" | "property_identifier"
+        "identifier"
+        | "field_identifier"
+        | "property_identifier"
         | "shorthand_property_identifier_pattern" => {
             if let Some(txt) = text_of(n, code) {
                 idents.push(txt);
@@ -608,7 +615,9 @@ fn collect_idents_with_paths(n: Node, code: &[u8], idents: &mut Vec<String>, pat
 /// `shorthand_property_identifier_pattern` (JS/TS destructuring).
 fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
     match n.kind() {
-        "identifier" | "field_identifier" | "property_identifier"
+        "identifier"
+        | "field_identifier"
+        | "property_identifier"
         | "shorthand_property_identifier_pattern" => {
             if let Some(txt) = text_of(n, code) {
                 out.push(txt);
@@ -733,7 +742,7 @@ fn push_condition_node<'a>(
         bin_op: None,
         bin_op_const: None,
         managed_resource: false,
-            in_defer: false,
+        in_defer: false,
     })
 }
 
@@ -760,8 +769,15 @@ fn build_condition_chain<'a>(
                 let (left_true, left_false) =
                     build_condition_chain(left, preds, pred_edge, g, lang, code, enclosing_func);
                 // Right operand only evaluated when left is true
-                let (right_true, right_false) =
-                    build_condition_chain(right, &left_true, EdgeKind::True, g, lang, code, enclosing_func);
+                let (right_true, right_false) = build_condition_chain(
+                    right,
+                    &left_true,
+                    EdgeKind::True,
+                    g,
+                    lang,
+                    code,
+                    enclosing_func,
+                );
                 // AND: true only when both true; false when either false
                 let mut false_exits = left_false;
                 false_exits.extend(right_false);
@@ -779,8 +795,15 @@ fn build_condition_chain<'a>(
                 let (left_true, left_false) =
                     build_condition_chain(left, preds, pred_edge, g, lang, code, enclosing_func);
                 // Right operand only evaluated when left is false
-                let (right_true, right_false) =
-                    build_condition_chain(right, &left_false, EdgeKind::False, g, lang, code, enclosing_func);
+                let (right_true, right_false) = build_condition_chain(
+                    right,
+                    &left_false,
+                    EdgeKind::False,
+                    g,
+                    lang,
+                    code,
+                    enclosing_func,
+                );
                 // OR: true when either true; false only when both false
                 let mut true_exits = left_true;
                 true_exits.extend(right_true);
@@ -851,7 +874,10 @@ fn extract_const_string_arg(call_node: Node, index: usize, code: &[u8]) -> Optio
         "template_string" => {
             // Only treat as constant if no interpolation (no template_substitution children)
             let mut c = arg.walk();
-            if arg.named_children(&mut c).any(|ch| ch.kind() == "template_substitution") {
+            if arg
+                .named_children(&mut c)
+                .any(|ch| ch.kind() == "template_substitution")
+            {
                 return None; // dynamic
             }
             let raw = text_of(arg, code)?;
@@ -898,18 +924,21 @@ fn is_syntactic_literal(node: Node, code: &[u8]) -> bool {
     match node.kind() {
         // Scalar strings — but reject if they contain interpolation
         // (e.g. Ruby `"hello #{name}"`, Python f-strings).
-        "string" | "string_literal" | "interpreted_string_literal"
-        | "raw_string_literal" | "string_content" | "string_fragment" => {
-            !has_string_interpolation(node)
-        }
+        "string"
+        | "string_literal"
+        | "interpreted_string_literal"
+        | "raw_string_literal"
+        | "string_content"
+        | "string_fragment" => !has_string_interpolation(node),
 
         // Numbers
-        "integer" | "integer_literal" | "int_literal"
-        | "float" | "float_literal" | "number" => true,
+        "integer" | "integer_literal" | "int_literal" | "float" | "float_literal" | "number" => {
+            true
+        }
 
         // Booleans / null / nil / none
-        "true" | "false" | "null" | "nil" | "none" | "null_literal"
-        | "boolean" | "boolean_literal" => true,
+        "true" | "false" | "null" | "nil" | "none" | "null_literal" | "boolean"
+        | "boolean_literal" => true,
 
         // PHP encapsed_string: safe only if no variable interpolation
         "encapsed_string" => !has_interpolation_cfg(node),
@@ -917,13 +946,17 @@ fn is_syntactic_literal(node: Node, code: &[u8]) -> bool {
         // Wrapper: PHP/Go wrap each arg in an `argument` node — unwrap
         "argument" => {
             node.named_child_count() == 1
-                && node.named_child(0).is_some_and(|c| is_syntactic_literal(c, code))
+                && node
+                    .named_child(0)
+                    .is_some_and(|c| is_syntactic_literal(c, code))
         }
 
         // Unary minus on a number literal: `-42`
         "unary_expression" | "unary_op" => {
             node.named_child_count() == 1
-                && node.named_child(0).is_some_and(|c| is_syntactic_literal(c, code))
+                && node
+                    .named_child(0)
+                    .is_some_and(|c| is_syntactic_literal(c, code))
         }
 
         // String concatenation of literals: `"a" + "b"` or `"a" . "b"`
@@ -931,27 +964,36 @@ fn is_syntactic_literal(node: Node, code: &[u8]) -> bool {
             let count = node.named_child_count();
             count >= 2
                 && (0..count).all(|i| {
-                    node.named_child(i as u32).is_some_and(|c| is_syntactic_literal(c, code))
+                    node.named_child(i as u32)
+                        .is_some_and(|c| is_syntactic_literal(c, code))
                 })
         }
 
         // JS/TS template string: only if no interpolation substitution
         "template_string" => {
             let mut c = node.walk();
-            !node.named_children(&mut c).any(|ch| ch.kind() == "template_substitution")
+            !node
+                .named_children(&mut c)
+                .any(|ch| ch.kind() == "template_substitution")
         }
 
         // Containers: all elements must be syntactic literals
-        "list" | "array" | "array_expression" | "array_creation_expression"
-        | "tuple" | "tuple_expression" => {
+        "list"
+        | "array"
+        | "array_expression"
+        | "array_creation_expression"
+        | "tuple"
+        | "tuple_expression" => {
             let mut c = node.walk();
-            node.named_children(&mut c).all(|ch| is_syntactic_literal(ch, code))
+            node.named_children(&mut c)
+                .all(|ch| is_syntactic_literal(ch, code))
         }
 
         // Container entries: `{"key": "value"}` style pairs
         "pair" => {
             let mut c = node.walk();
-            node.named_children(&mut c).all(|ch| is_syntactic_literal(ch, code))
+            node.named_children(&mut c)
+                .all(|ch| is_syntactic_literal(ch, code))
         }
 
         _ => false,
@@ -976,7 +1018,10 @@ fn has_interpolation_cfg(node: Node) -> bool {
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             let kind = child.kind();
-            if kind == "variable_name" || kind == "simple_variable" || kind.contains("interpolation") {
+            if kind == "variable_name"
+                || kind == "simple_variable"
+                || kind.contains("interpolation")
+            {
                 return true;
             }
         }
@@ -1003,18 +1048,19 @@ fn extract_literal_rhs(ast: Node, lang: &str, code: &[u8]) -> Option<String> {
     }
 
     // Nested declarator pattern (JS let/const → variable_declarator, etc.)
-    if matches!(lookup(lang, ast.kind()), Kind::CallWrapper | Kind::Assignment) {
+    if matches!(
+        lookup(lang, ast.kind()),
+        Kind::CallWrapper | Kind::Assignment
+    ) {
         let mut cursor = ast.walk();
         for child in ast.children(&mut cursor) {
-            let child_val = child
-                .child_by_field_name("value")
-                .or_else(|| {
-                    if matches!(lookup(lang, child.kind()), Kind::Assignment) {
-                        child.child_by_field_name("right")
-                    } else {
-                        None
-                    }
-                });
+            let child_val = child.child_by_field_name("value").or_else(|| {
+                if matches!(lookup(lang, child.kind()), Kind::Assignment) {
+                    child.child_by_field_name("right")
+                } else {
+                    None
+                }
+            });
             if let Some(val) = child_val {
                 if is_syntactic_literal(val, code) {
                     return text_of(val, code);
@@ -1243,15 +1289,13 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>, 
                                 None
                             }
                         });
-                    let child_value = child
-                        .child_by_field_name("value")
-                        .or_else(|| {
-                            if is_assign {
-                                child.child_by_field_name("right")
-                            } else {
-                                None
-                            }
-                        });
+                    let child_value = child.child_by_field_name("value").or_else(|| {
+                        if is_assign {
+                            child.child_by_field_name("right")
+                        } else {
+                            None
+                        }
+                    });
 
                     // Only treat this child as a declarator if it has BOTH a name
                     // and a value (or at least a value). This prevents method_invocation
@@ -1534,8 +1578,11 @@ fn extract_bin_op_const(ast: Node, lang: &str, code: &[u8]) -> Option<i64> {
 
     fn try_parse_number(n: Node, code: &[u8]) -> Option<i64> {
         let kind = n.kind();
-        if kind == "number" || kind == "integer" || kind == "integer_literal"
-            || kind == "number_literal" || kind == "float"
+        if kind == "number"
+            || kind == "integer"
+            || kind == "integer_literal"
+            || kind == "number_literal"
+            || kind == "float"
         {
             let text = std::str::from_utf8(&code[n.byte_range()]).ok()?.trim();
             // Try standard decimal parse first
@@ -1559,8 +1606,7 @@ fn extract_bin_op_const(ast: Node, lang: &str, code: &[u8]) -> Option<i64> {
     }
 
     // Try left, then right — one of them should be a literal
-    try_parse_number(left, code)
-        .or_else(|| try_parse_number(right, code))
+    try_parse_number(left, code).or_else(|| try_parse_number(right, code))
 }
 
 /// Find a single binary expression node at or directly under `ast`.
@@ -1579,10 +1625,8 @@ fn find_single_binary_expr<'a>(ast: Node<'a>, lang: &str) -> Option<Node<'a>> {
             // mean the operator is for a compound expression like `a + b * c`)
             let left = ast.named_child(0);
             let right = ast.named_child(1);
-            let left_is_bin =
-                left.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
-            let right_is_bin =
-                right.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+            let left_is_bin = left.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+            let right_is_bin = right.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
             if !left_is_bin && !right_is_bin {
                 return Some(ast);
             }
@@ -1630,10 +1674,8 @@ fn find_single_binary_expr<'a>(ast: Node<'a>, lang: &str) -> Option<Node<'a>> {
                         if grandchild.named_child_count() == 2 {
                             let l = grandchild.named_child(0);
                             let r = grandchild.named_child(1);
-                            let l_bin =
-                                l.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
-                            let r_bin =
-                                r.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+                            let l_bin = l.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
+                            let r_bin = r.is_some_and(|n| is_binary_expr_kind(n.kind(), lang));
                             if !l_bin && !r_bin {
                                 found = Some(grandchild);
                             }
@@ -1944,7 +1986,9 @@ fn push_node<'a>(
 
     // Check whether all arguments are syntactic literals (for taint sink suppression).
     let all_args_literal = if kind == StmtKind::Call {
-        call_ast.map(|cn| has_only_literal_args(cn, code)).unwrap_or(false)
+        call_ast
+            .map(|cn| has_only_literal_args(cn, code))
+            .unwrap_or(false)
     } else {
         false
     };
@@ -2054,7 +2098,8 @@ fn push_node<'a>(
     let is_ruby_block_managed = lang == "ruby"
         && call_ast.is_some_and(|cn| {
             let mut c = cn.walk();
-            cn.children(&mut c).any(|ch| ch.kind() == "do_block" || ch.kind() == "block")
+            cn.children(&mut c)
+                .any(|ch| ch.kind() == "do_block" || ch.kind() == "block")
         });
 
     let idx = g.add_node(NodeInfo {
@@ -2082,7 +2127,7 @@ fn push_node<'a>(
         bin_op: extract_bin_op(ast, lang),
         bin_op_const: extract_bin_op_const(ast, lang, code),
         managed_resource: is_raii_managed || is_ruby_block_managed,
-            in_defer: false,
+        in_defer: false,
     });
 
     debug!(
@@ -2187,7 +2232,11 @@ fn is_exception_source(info: &NodeInfo) -> bool {
 ///
 /// Returns `None` for parameter-less catch (`catch {}` in JS) or
 /// catch-all (`catch(...)` in C++).
-fn extract_catch_param_name<'a>(catch_node: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
+fn extract_catch_param_name<'a>(
+    catch_node: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+) -> Option<String> {
     match lang {
         "javascript" | "js" | "typescript" | "ts" | "tsx" => {
             // JS/TS: catch_clause has a "parameter" field
@@ -2345,9 +2394,9 @@ fn build_begin_rescue<'a>(
                 outer_callee: None,
                 cast_target_type: None,
                 bin_op: None,
-        bin_op_const: None,
+                bin_op_const: None,
                 managed_resource: false,
-            in_defer: false,
+                in_defer: false,
             });
 
             // Wire exception edges from every exception source → synthetic node
@@ -2658,9 +2707,9 @@ fn build_try<'a>(
                     outer_callee: None,
                     cast_target_type: None,
                     bin_op: None,
-        bin_op_const: None,
+                    bin_op_const: None,
                     managed_resource: false,
-            in_defer: false,
+                    in_defer: false,
                 });
 
                 // Wire exception edges from every exception source → synthetic node
@@ -2791,13 +2840,17 @@ fn build_sub<'a>(
 
             // Check for negation wrapping the entire condition (e.g. `!(a && b)`)
             // — if present, skip short-circuit decomposition (De Morgan out of scope).
-            let has_short_circuit = has_short_circuit && cond_subtree.map_or(false, |c| {
-                let unwrapped = unwrap_parens(c);
-                !matches!(
-                    unwrapped.kind(),
-                    "unary_expression" | "not_operator" | "prefix_unary_expression" | "unary_not"
-                )
-            });
+            let has_short_circuit = has_short_circuit
+                && cond_subtree.map_or(false, |c| {
+                    let unwrapped = unwrap_parens(c);
+                    !matches!(
+                        unwrapped.kind(),
+                        "unary_expression"
+                            | "not_operator"
+                            | "prefix_unary_expression"
+                            | "unary_not"
+                    )
+                });
 
             let is_unless = ast.kind() == "unless";
 
@@ -2805,7 +2858,13 @@ fn build_sub<'a>(
             let (true_exits, false_exits) = if has_short_circuit {
                 let cond_ast = cond_subtree.unwrap();
                 build_condition_chain(
-                    cond_ast, preds, EdgeKind::Seq, g, lang, code, enclosing_func,
+                    cond_ast,
+                    preds,
+                    EdgeKind::Seq,
+                    g,
+                    lang,
+                    code,
+                    enclosing_func,
                 )
             } else {
                 // Single-node path (original behavior)
@@ -2935,9 +2994,9 @@ fn build_sub<'a>(
                     outer_callee: None,
                     cast_target_type: None,
                     bin_op: None,
-        bin_op_const: None,
+                    bin_op_const: None,
                     managed_resource: false,
-            in_defer: false,
+                    in_defer: false,
                 });
                 connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
@@ -3025,8 +3084,10 @@ fn build_sub<'a>(
                     is_boolean_operator(unwrapped).is_some()
                         && !matches!(
                             unwrapped.kind(),
-                            "unary_expression" | "not_operator"
-                                | "prefix_unary_expression" | "unary_not"
+                            "unary_expression"
+                                | "not_operator"
+                                | "prefix_unary_expression"
+                                | "unary_not"
                         )
                 })
                 .unwrap_or(false);
@@ -3599,9 +3660,9 @@ fn build_sub<'a>(
                 outer_callee: None,
                 cast_target_type: None,
                 bin_op: None,
-        bin_op_const: None,
+                bin_op_const: None,
                 managed_resource: false,
-            in_defer: false,
+                in_defer: false,
             });
             // Wire body exits (fall-through) to the exit node.
             for &b in &body_exits {
@@ -3894,7 +3955,7 @@ pub(crate) fn build_cfg<'a>(
         bin_op: None,
         bin_op_const: None,
         managed_resource: false,
-            in_defer: false,
+        in_defer: false,
     });
     let exit = g.add_node(NodeInfo {
         kind: StmtKind::Exit,
@@ -3921,7 +3982,7 @@ pub(crate) fn build_cfg<'a>(
         bin_op: None,
         bin_op_const: None,
         managed_resource: false,
-            in_defer: false,
+        in_defer: false,
     });
 
     // Build the body below the synthetic ENTRY.
@@ -4187,10 +4248,8 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
         // Find the synthetic catch-param node
-        let catch_param_nodes: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].catch_param)
-            .collect();
+        let catch_param_nodes: Vec<_> =
+            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
         assert_eq!(
             catch_param_nodes.len(),
             1,
@@ -4215,10 +4274,8 @@ mod cfg_tests {
         let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
         let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
 
-        let catch_param_nodes: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].catch_param)
-            .collect();
+        let catch_param_nodes: Vec<_> =
+            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
         assert_eq!(
             catch_param_nodes.len(),
             1,
@@ -4234,10 +4291,8 @@ mod cfg_tests {
         let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
         let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
-        let catch_param_nodes: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].catch_param)
-            .collect();
+        let catch_param_nodes: Vec<_> =
+            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
         assert!(
             catch_param_nodes.is_empty(),
             "catch without parameter should not create a catch_param node"
@@ -4266,14 +4321,13 @@ mod cfg_tests {
 
     #[test]
     fn ruby_rescue_catch_param_defines_variable() {
-        let src = b"def f()\n  begin\n    foo()\n  rescue StandardError => e\n    bar(e)\n  end\nend";
+        let src =
+            b"def f()\n  begin\n    foo()\n  rescue StandardError => e\n    bar(e)\n  end\nend";
         let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
         let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
 
-        let catch_param_nodes: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].catch_param)
-            .collect();
+        let catch_param_nodes: Vec<_> =
+            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
         assert_eq!(
             catch_param_nodes.len(),
             1,
@@ -4321,10 +4375,8 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
 
         // No catch_param node should be created
-        let catch_param_nodes: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].catch_param)
-            .collect();
+        let catch_param_nodes: Vec<_> =
+            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
         assert!(
             catch_param_nodes.is_empty(),
             "rescue without variable should not create a catch_param node"
@@ -4357,10 +4409,8 @@ mod cfg_tests {
             "implicit begin via body_statement should produce exception edges"
         );
 
-        let catch_param_nodes: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].catch_param)
-            .collect();
+        let catch_param_nodes: Vec<_> =
+            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
         assert_eq!(
             catch_param_nodes.len(),
             1,
@@ -4375,10 +4425,8 @@ mod cfg_tests {
         let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
         let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
 
-        let catch_param_nodes: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].catch_param)
-            .collect();
+        let catch_param_nodes: Vec<_> =
+            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
         assert_eq!(
             catch_param_nodes.len(),
             2,
@@ -4416,8 +4464,14 @@ mod cfg_tests {
     }
 
     /// Helper: check if an edge of the given kind exists from `src` to `dst`.
-    fn has_edge(cfg: &Cfg, src: NodeIndex, dst: NodeIndex, kind_match: fn(&EdgeKind) -> bool) -> bool {
-        cfg.edges(src).any(|e| e.target() == dst && kind_match(e.weight()))
+    fn has_edge(
+        cfg: &Cfg,
+        src: NodeIndex,
+        dst: NodeIndex,
+        kind_match: fn(&EdgeKind) -> bool,
+    ) -> bool {
+        cfg.edges(src)
+            .any(|e| e.target() == dst && kind_match(e.weight()))
     }
 
     #[test]
@@ -4430,19 +4484,40 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
         let ifs = if_nodes(&cfg);
-        assert_eq!(ifs.len(), 2, "Expected 2 If nodes for `a && b`, got {}", ifs.len());
+        assert_eq!(
+            ifs.len(),
+            2,
+            "Expected 2 If nodes for `a && b`, got {}",
+            ifs.len()
+        );
 
         // Find which is `a` and which is `b` by condition_vars
-        let a_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"a".to_string())).copied().unwrap();
-        let b_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"b".to_string())).copied().unwrap();
+        let a_node = ifs
+            .iter()
+            .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
+            .copied()
+            .unwrap();
+        let b_node = ifs
+            .iter()
+            .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
+            .copied()
+            .unwrap();
 
         // True edge from a to b
-        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
-            "Expected True edge from a to b");
+        assert!(
+            has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
+            "Expected True edge from a to b"
+        );
 
         // Both a and b should have False edges going somewhere (else-path)
-        let a_false: Vec<_> = cfg.edges(a_node).filter(|e| matches!(e.weight(), EdgeKind::False)).collect();
-        let b_false: Vec<_> = cfg.edges(b_node).filter(|e| matches!(e.weight(), EdgeKind::False)).collect();
+        let a_false: Vec<_> = cfg
+            .edges(a_node)
+            .filter(|e| matches!(e.weight(), EdgeKind::False))
+            .collect();
+        let b_false: Vec<_> = cfg
+            .edges(b_node)
+            .filter(|e| matches!(e.weight(), EdgeKind::False))
+            .collect();
         assert!(!a_false.is_empty(), "Expected False edge from a");
         assert!(!b_false.is_empty(), "Expected False edge from b");
     }
@@ -4457,18 +4532,39 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
         let ifs = if_nodes(&cfg);
-        assert_eq!(ifs.len(), 2, "Expected 2 If nodes for `a || b`, got {}", ifs.len());
+        assert_eq!(
+            ifs.len(),
+            2,
+            "Expected 2 If nodes for `a || b`, got {}",
+            ifs.len()
+        );
 
-        let a_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"a".to_string())).copied().unwrap();
-        let b_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"b".to_string())).copied().unwrap();
+        let a_node = ifs
+            .iter()
+            .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
+            .copied()
+            .unwrap();
+        let b_node = ifs
+            .iter()
+            .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
+            .copied()
+            .unwrap();
 
         // False edge from a to b
-        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::False)),
-            "Expected False edge from a to b");
+        assert!(
+            has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::False)),
+            "Expected False edge from a to b"
+        );
 
         // Both a and b should have True edges
-        let a_true: Vec<_> = cfg.edges(a_node).filter(|e| matches!(e.weight(), EdgeKind::True)).collect();
-        let b_true: Vec<_> = cfg.edges(b_node).filter(|e| matches!(e.weight(), EdgeKind::True)).collect();
+        let a_true: Vec<_> = cfg
+            .edges(a_node)
+            .filter(|e| matches!(e.weight(), EdgeKind::True))
+            .collect();
+        let b_true: Vec<_> = cfg
+            .edges(b_node)
+            .filter(|e| matches!(e.weight(), EdgeKind::True))
+            .collect();
         assert!(!a_true.is_empty(), "Expected True edge from a");
         assert!(!b_true.is_empty(), "Expected True edge from b");
     }
@@ -4483,25 +4579,48 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
         let ifs = if_nodes(&cfg);
-        assert_eq!(ifs.len(), 3, "Expected 3 If nodes for `a && (b || c)`, got {}", ifs.len());
+        assert_eq!(
+            ifs.len(),
+            3,
+            "Expected 3 If nodes for `a && (b || c)`, got {}",
+            ifs.len()
+        );
 
-        let a_node = ifs.iter().find(|&&n| {
-            let vars = &cfg[n].condition_vars;
-            vars.contains(&"a".to_string()) && vars.len() == 1
-        }).copied().unwrap();
-        let b_node = ifs.iter().find(|&&n| {
-            let vars = &cfg[n].condition_vars;
-            vars.contains(&"b".to_string()) && vars.len() == 1
-        }).copied().unwrap();
-        let c_node = ifs.iter().find(|&&n| {
-            let vars = &cfg[n].condition_vars;
-            vars.contains(&"c".to_string()) && vars.len() == 1
-        }).copied().unwrap();
+        let a_node = ifs
+            .iter()
+            .find(|&&n| {
+                let vars = &cfg[n].condition_vars;
+                vars.contains(&"a".to_string()) && vars.len() == 1
+            })
+            .copied()
+            .unwrap();
+        let b_node = ifs
+            .iter()
+            .find(|&&n| {
+                let vars = &cfg[n].condition_vars;
+                vars.contains(&"b".to_string()) && vars.len() == 1
+            })
+            .copied()
+            .unwrap();
+        let c_node = ifs
+            .iter()
+            .find(|&&n| {
+                let vars = &cfg[n].condition_vars;
+                vars.contains(&"c".to_string()) && vars.len() == 1
+            })
+            .copied()
+            .unwrap();
 
         // a --True--> b
-        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)));
+        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(
+            e,
+            EdgeKind::True
+        )));
         // b --False--> c
-        assert!(has_edge(&cfg, b_node, c_node, |e| matches!(e, EdgeKind::False)));
+        assert!(has_edge(&cfg, b_node, c_node, |e| matches!(
+            e,
+            EdgeKind::False
+        )));
     }
 
     #[test]
@@ -4513,22 +4632,33 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
         let ifs = if_nodes(&cfg);
-        assert_eq!(ifs.len(), 2, "Expected 2 If nodes in while condition, got {}", ifs.len());
+        assert_eq!(
+            ifs.len(),
+            2,
+            "Expected 2 If nodes in while condition, got {}",
+            ifs.len()
+        );
 
         // There should be a Loop header
-        let loop_headers: Vec<_> = cfg.node_indices()
+        let loop_headers: Vec<_> = cfg
+            .node_indices()
             .filter(|&n| cfg[n].kind == StmtKind::Loop)
             .collect();
         assert_eq!(loop_headers.len(), 1, "Expected 1 Loop header");
         let header = loop_headers[0];
 
         // Back-edges should go to header
-        let back_edges: Vec<_> = cfg.edge_references()
+        let back_edges: Vec<_> = cfg
+            .edge_references()
             .filter(|e| matches!(e.weight(), EdgeKind::Back))
             .collect();
         assert!(!back_edges.is_empty(), "Expected back edges");
         for e in &back_edges {
-            assert_eq!(e.target(), header, "Back edge should go to loop header, not into condition chain");
+            assert_eq!(
+                e.target(),
+                header,
+                "Back edge should go to loop header, not into condition chain"
+            );
         }
     }
 
@@ -4540,13 +4670,28 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
 
         let ifs = if_nodes(&cfg);
-        assert_eq!(ifs.len(), 2, "Expected 2 If nodes for Python `a and b`, got {}", ifs.len());
+        assert_eq!(
+            ifs.len(),
+            2,
+            "Expected 2 If nodes for Python `a and b`, got {}",
+            ifs.len()
+        );
 
-        let a_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"a".to_string())).copied().unwrap();
-        let b_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"b".to_string())).copied().unwrap();
+        let a_node = ifs
+            .iter()
+            .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
+            .copied()
+            .unwrap();
+        let b_node = ifs
+            .iter()
+            .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
+            .copied()
+            .unwrap();
 
-        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
-            "Expected True edge from a to b in Python and");
+        assert!(
+            has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
+            "Expected True edge from a to b in Python and"
+        );
     }
 
     #[test]
@@ -4558,25 +4703,44 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
 
         let ifs = if_nodes(&cfg);
-        assert_eq!(ifs.len(), 2, "Expected 2 If nodes for Ruby `unless a && b`, got {}", ifs.len());
+        assert_eq!(
+            ifs.len(),
+            2,
+            "Expected 2 If nodes for Ruby `unless a && b`, got {}",
+            ifs.len()
+        );
 
-        let a_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"a".to_string())).copied().unwrap();
-        let b_node = ifs.iter().find(|&&n| cfg[n].condition_vars.contains(&"b".to_string())).copied().unwrap();
+        let a_node = ifs
+            .iter()
+            .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
+            .copied()
+            .unwrap();
+        let b_node = ifs
+            .iter()
+            .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
+            .copied()
+            .unwrap();
 
         // Still has True edge from a to b (the chain is the same)
-        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
-            "Expected True edge from a to b in unless");
+        assert!(
+            has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
+            "Expected True edge from a to b in unless"
+        );
 
         // For `unless`, the False exits should connect to the body with False edge
         // (since body runs when condition is false)
-        let a_false_targets: Vec<_> = cfg.edges(a_node)
+        let a_false_targets: Vec<_> = cfg
+            .edges(a_node)
             .filter(|e| matches!(e.weight(), EdgeKind::False))
             .map(|e| e.target())
             .collect();
         // a's false exit should connect to the body (not to a pass-through)
         // because for `unless (a && b)`, when a is false the full condition is false,
         // meaning the body should execute
-        assert!(!a_false_targets.is_empty(), "a should have False edges in unless");
+        assert!(
+            !a_false_targets.is_empty(),
+            "a should have False edges in unless"
+        );
     }
 
     #[test]
@@ -4587,20 +4751,24 @@ mod cfg_tests {
         let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
         let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
-        let loop_headers: Vec<_> = cfg.node_indices()
+        let loop_headers: Vec<_> = cfg
+            .node_indices()
             .filter(|&n| cfg[n].kind == StmtKind::Loop)
             .collect();
         assert_eq!(loop_headers.len(), 1);
         let header = loop_headers[0];
 
         // Continue nodes should have back-edge to header
-        let continue_nodes: Vec<_> = cfg.node_indices()
+        let continue_nodes: Vec<_> = cfg
+            .node_indices()
             .filter(|&n| cfg[n].kind == StmtKind::Continue)
             .collect();
         assert!(!continue_nodes.is_empty(), "Expected continue node");
         for &cont in &continue_nodes {
-            assert!(has_edge(&cfg, cont, header, |e| matches!(e, EdgeKind::Back)),
-                "Continue should have back-edge to loop header");
+            assert!(
+                has_edge(&cfg, cont, header, |e| matches!(e, EdgeKind::Back)),
+                "Continue should have back-edge to loop header"
+            );
         }
     }
 
@@ -4613,7 +4781,12 @@ mod cfg_tests {
 
         let ifs = if_nodes(&cfg);
         // Should be exactly 1 If node (no decomposition)
-        assert_eq!(ifs.len(), 1, "Negated boolean should NOT be decomposed, got {} If nodes", ifs.len());
+        assert_eq!(
+            ifs.len(),
+            1,
+            "Negated boolean should NOT be decomposed, got {} If nodes",
+            ifs.len()
+        );
     }
 
     #[test]
@@ -4625,7 +4798,12 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
         let ifs = if_nodes(&cfg);
-        assert_eq!(ifs.len(), 3, "Expected 3 If nodes for `a && b && c`, got {}", ifs.len());
+        assert_eq!(
+            ifs.len(),
+            3,
+            "Expected 3 If nodes for `a && b && c`, got {}",
+            ifs.len()
+        );
     }
 
     #[test]
@@ -4639,7 +4817,11 @@ mod cfg_tests {
         let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
         let ifs = if_nodes(&cfg);
-        assert_eq!(ifs.len(), 3, "Expected 3 If nodes for `a || b && c`, got {}", ifs.len());
+        assert_eq!(
+            ifs.len(),
+            3,
+            "Expected 3 If nodes for `a || b && c`, got {}",
+            ifs.len()
+        );
     }
-
 }

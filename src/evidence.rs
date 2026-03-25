@@ -344,7 +344,13 @@ fn compute_taint_confidence(diag: &Diag) -> Confidence {
 
     // Cap specificity bonus (prefer structured field)
     score += match ev.cap_specificity {
-        Some(count) => if count == 1 { 1 } else { 0 },
+        Some(count) => {
+            if count == 1 {
+                1
+            } else {
+                0
+            }
+        }
         None => cap_specificity_score(&ev.notes),
     };
 
@@ -361,7 +367,11 @@ fn compute_taint_confidence(diag: &Diag) -> Confidence {
                 // Stronger bonus when extract_witness produced a concrete payload
                 // (contains "flows to" or "reaches"); raw Display-only fallback
                 // from get_sink_witness does not contain these phrases.
-                if sv.witness.as_ref().is_some_and(|w| w.contains("flows to") || w.contains("reaches")) {
+                if sv
+                    .witness
+                    .as_ref()
+                    .is_some_and(|w| w.contains("flows to") || w.contains("reaches"))
+                {
                     score += 3;
                 } else {
                     score += 2;
@@ -450,14 +460,8 @@ pub fn generate_explanation(diag: &Diag) -> Option<String> {
     let source = ev.source.as_ref()?;
     let sink = ev.sink.as_ref()?;
 
-    let source_callee = source
-        .snippet
-        .as_deref()
-        .unwrap_or("(unknown source)");
-    let sink_callee = sink
-        .snippet
-        .as_deref()
-        .unwrap_or("(unknown sink)");
+    let source_callee = source.snippet.as_deref().unwrap_or("(unknown source)");
+    let sink_callee = sink.snippet.as_deref().unwrap_or("(unknown sink)");
 
     // Extract source kind label (prefer structured field)
     let source_kind_label = if let Some(kind) = ev.source_kind {
@@ -505,8 +509,7 @@ pub fn generate_explanation(diag: &Diag) -> Option<String> {
     } else {
         format!(
             "Unsanitised {source_kind_label} data flows from {source_callee} (line {}) to {sink_callee} (line {}), creating a potential {category} vulnerability.",
-            source.line,
-            sink.line,
+            source.line, sink.line,
         )
     };
 
@@ -519,8 +522,7 @@ pub fn generate_explanation(diag: &Diag) -> Option<String> {
         }
     }
     if ev.uses_summary || ev.notes.iter().any(|n| n == "uses_summary") {
-        explanation
-            .push_str(" The flow crosses function boundaries via summary resolution.");
+        explanation.push_str(" The flow crosses function boundaries via summary resolution.");
     }
 
     Some(explanation)
@@ -549,9 +551,9 @@ pub fn compute_confidence_limiters(diag: &Diag) -> Vec<String> {
 
     // Hop count (prefer structured field)
     let hop = ev.hop_count.or_else(|| {
-        ev.notes.iter().find_map(|n| {
-            n.strip_prefix("hop_count:")?.parse::<u16>().ok()
-        })
+        ev.notes
+            .iter()
+            .find_map(|n| n.strip_prefix("hop_count:")?.parse::<u16>().ok())
     });
     if let Some(count) = hop {
         if count >= 4 {
@@ -563,45 +565,35 @@ pub fn compute_confidence_limiters(diag: &Diag) -> Vec<String> {
 
     // Summary resolution (prefer structured field)
     if ev.uses_summary || ev.notes.iter().any(|n| n == "uses_summary") {
-        limiters.push(
-            "Flow resolved via cross-function summary (may be imprecise)".into(),
-        );
+        limiters.push("Flow resolved via cross-function summary (may be imprecise)".into());
     }
 
     // Path validated (use Diag field directly)
     if diag.path_validated {
-        limiters.push(
-            "Validation guard detected on path (may provide protection)".into(),
-        );
+        limiters.push("Validation guard detected on path (may provide protection)".into());
     }
 
     // Cap specificity (prefer structured field)
     let cap_spec = ev.cap_specificity.or_else(|| {
-        ev.notes.iter().find_map(|n| {
-            n.strip_prefix("cap_specificity:")?.parse::<u8>().ok()
-        })
+        ev.notes
+            .iter()
+            .find_map(|n| n.strip_prefix("cap_specificity:")?.parse::<u8>().ok())
     });
     if cap_spec == Some(0) {
-        limiters.push(
-            "Source and sink capability types do not match specifically".into(),
-        );
+        limiters.push("Source and sink capability types do not match specifically".into());
     }
 
     // Source kind unknown (prefer structured field)
     let is_unknown = ev.source_kind == Some(crate::labels::SourceKind::Unknown)
         || ev.notes.iter().any(|n| n == "source_kind:Unknown");
     if is_unknown {
-        limiters.push(
-            "Source type is unclassified (lower exploitation confidence)".into(),
-        );
+        limiters.push("Source type is unclassified (lower exploitation confidence)".into());
     }
 
     // Symbolic verdict
     if let Some(ref sv) = ev.symbolic {
         if sv.verdict == Verdict::Infeasible {
-            limiters.push(
-                "Symbolic analysis proved this path is infeasible".into(),
-            );
+            limiters.push("Symbolic analysis proved this path is infeasible".into());
         }
     }
 
@@ -695,10 +687,7 @@ mod tests {
             guards: vec![],
             sanitizers: vec![],
             state: None,
-            notes: vec![
-                "source_kind:EnvironmentConfig".into(),
-                "hop_count:5".into(),
-            ],
+            notes: vec!["source_kind:EnvironmentConfig".into(), "hop_count:5".into()],
             source_kind: Some(crate::labels::SourceKind::EnvironmentConfig),
             hop_count: Some(5),
             ..Default::default()
@@ -764,10 +753,7 @@ mod tests {
             guards: vec![],
             sanitizers: vec![],
             state: None,
-            notes: vec![
-                "path_validated".into(),
-                "source_kind:UserInput".into(),
-            ],
+            notes: vec!["path_validated".into(), "source_kind:UserInput".into()],
             source_kind: Some(crate::labels::SourceKind::UserInput),
             ..Default::default()
         });
@@ -1002,10 +988,7 @@ mod tests {
                 kind: "sink".into(),
                 snippet: None,
             }),
-            notes: vec![
-                "source_kind:EnvironmentConfig".into(),
-                "hop_count:5".into(),
-            ],
+            notes: vec!["source_kind:EnvironmentConfig".into(), "hop_count:5".into()],
             ..Default::default()
         });
         assert_eq!(compute_confidence(&d), Confidence::Medium);

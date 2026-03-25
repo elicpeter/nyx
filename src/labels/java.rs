@@ -61,7 +61,14 @@ pub static RULES: &[LabelRule] = &[
     },
     // Type-check sanitizers — parsing to a primitive erases taint
     LabelRule {
-        matchers: &["Integer.parseInt", "Long.parseLong", "Short.parseShort", "Double.parseDouble", "Integer.valueOf", "Boolean.parseBoolean"],
+        matchers: &[
+            "Integer.parseInt",
+            "Long.parseLong",
+            "Short.parseShort",
+            "Double.parseDouble",
+            "Integer.valueOf",
+            "Boolean.parseBoolean",
+        ],
         label: DataLabel::Sanitizer(Cap::all()),
         case_sensitive: false,
     },
@@ -102,12 +109,25 @@ pub static RULES: &[LabelRule] = &[
     // openConnection() is the standard java.net.URL API for initiating a connection.
     // It is the correct interception point — the URL is already set on the object.
     LabelRule {
-        matchers: &["openConnection", "HttpClient.send", "HttpClient.sendAsync", "getForObject", "RestTemplate.exchange", "postForObject", "postForEntity"],
+        matchers: &[
+            "openConnection",
+            "HttpClient.send",
+            "HttpClient.sendAsync",
+            "getForObject",
+            "RestTemplate.exchange",
+            "postForObject",
+            "postForEntity",
+        ],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["readObject", "readUnshared", "XMLDecoder.readObject", "ObjectMapper.readValue"],
+        matchers: &[
+            "readObject",
+            "readUnshared",
+            "XMLDecoder.readObject",
+            "ObjectMapper.readValue",
+        ],
         label: DataLabel::Sink(Cap::DESERIALIZE),
         case_sensitive: false,
     },

@@ -191,9 +191,21 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("x".into()), cfg_node: n0, block: BlockId(0) },
-                ValueDef { var_name: Some("y".into()), cfg_node: n1, block: BlockId(0) },
-                ValueDef { var_name: Some("z".into()), cfg_node: n2, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("x".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("y".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("z".into()),
+                    cfg_node: n2,
+                    block: BlockId(0),
+                },
             ],
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1)), (n2, SsaValue(2))]
                 .into_iter()

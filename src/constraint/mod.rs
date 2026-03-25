@@ -41,11 +41,11 @@ pub mod solver;
 mod tests;
 
 pub use domain::{
-    BoolState, ConstValue, Nullability, PathEnv, RelOp, TypeSet, ValueFact,
-    MAX_DISEQUALITY_EDGES, MAX_EQUALITY_EDGES, MAX_PATH_ENV_ENTRIES,
-    MAX_REFINE_PER_BLOCK, MAX_RELATIONAL, WIDEN_THRESHOLD,
+    BoolState, ConstValue, MAX_DISEQUALITY_EDGES, MAX_EQUALITY_EDGES, MAX_PATH_ENV_ENTRIES,
+    MAX_REFINE_PER_BLOCK, MAX_RELATIONAL, Nullability, PathEnv, RelOp, TypeSet, ValueFact,
+    WIDEN_THRESHOLD,
 };
-pub use lower::{lower_condition, CompOp, ConditionExpr, Operand};
+pub use lower::{CompOp, ConditionExpr, Operand, lower_condition};
 pub use solver::{is_satisfiable, refine_env};
 
 /// Feature gate: check if constraint solving is enabled.

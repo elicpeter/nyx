@@ -39,7 +39,12 @@ pub static RULES: &[LabelRule] = &[
     },
     // Django-specific sources (case-sensitive to avoid request.get() dict method FP)
     LabelRule {
-        matchers: &["request.GET", "request.POST", "request.META", "request.body"],
+        matchers: &[
+            "request.GET",
+            "request.POST",
+            "request.META",
+            "request.body",
+        ],
         label: DataLabel::Source(Cap::all()),
         case_sensitive: true,
     },
@@ -75,7 +80,11 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["bleach.clean", "markupsafe.escape", "django.utils.html.escape"],
+        matchers: &[
+            "bleach.clean",
+            "markupsafe.escape",
+            "django.utils.html.escape",
+        ],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
@@ -183,13 +192,35 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["urllib.request.urlopen", "requests.get", "requests.post", "requests.put", "requests.delete", "requests.patch", "requests.head", "requests.request", "httpx.get", "httpx.post", "httpx.put", "httpx.delete", "httpx.patch", "httpx.head", "httpx.request"],
+        matchers: &[
+            "urllib.request.urlopen",
+            "requests.get",
+            "requests.post",
+            "requests.put",
+            "requests.delete",
+            "requests.patch",
+            "requests.head",
+            "requests.request",
+            "httpx.get",
+            "httpx.post",
+            "httpx.put",
+            "httpx.delete",
+            "httpx.patch",
+            "httpx.head",
+            "httpx.request",
+        ],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
     // aiohttp HTTP client — SSRF sinks
     LabelRule {
-        matchers: &["aiohttp.get", "aiohttp.post", "aiohttp.put", "aiohttp.delete", "aiohttp.request"],
+        matchers: &[
+            "aiohttp.get",
+            "aiohttp.post",
+            "aiohttp.put",
+            "aiohttp.delete",
+            "aiohttp.request",
+        ],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },

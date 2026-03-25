@@ -13,8 +13,8 @@ use crate::labels::{Cap, DataLabel};
 use crate::ssa::ir::*;
 use crate::ssa::{self, OptimizeResult};
 use crate::state::symbol::SymbolInterner;
-use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
 use crate::summary::GlobalSummaries;
+use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
 use crate::symbol::{FuncKey, Lang};
 use crate::symex::state::SymbolicState;
 use crate::taint::domain::VarTaint;
@@ -388,10 +388,7 @@ fn terminator_str(t: &Terminator) -> String {
                 .as_ref()
                 .map(|c| format!("{:?}", c))
                 .unwrap_or_else(|| "?".into());
-            format!(
-                "branch {} -> B{}, B{}",
-                cond_str, true_blk.0, false_blk.0
-            )
+            format!("branch {} -> B{}, B{}", cond_str, true_blk.0, false_blk.0)
         }
         Terminator::Return(v) => match v {
             Some(val) => format!("return v{}", val.0),
@@ -678,7 +675,10 @@ impl SymexView {
             .iter_values()
             .map(|(&v, sym)| SymexValueView {
                 ssa_value: v.0,
-                var_name: ssa.value_defs.get(v.0 as usize).and_then(|d| d.var_name.clone()),
+                var_name: ssa
+                    .value_defs
+                    .get(v.0 as usize)
+                    .and_then(|d| d.var_name.clone()),
                 expression: format!("{}", sym),
             })
             .collect();
@@ -694,8 +694,7 @@ impl SymexView {
             })
             .collect();
 
-        let mut tainted_roots: Vec<u32> =
-            state.tainted_values().iter().map(|v| v.0).collect();
+        let mut tainted_roots: Vec<u32> = state.tainted_values().iter().map(|v| v.0).collect();
         tainted_roots.sort();
 
         SymexView {
@@ -882,18 +881,13 @@ pub struct FileAnalysis {
 }
 
 /// Parse a file and build its CFG. Returns an error status code on failure.
-pub fn analyse_file(
-    file_path: &Path,
-    config: &Config,
-) -> Result<FileAnalysis, StatusCode> {
-    let result = build_cfg_for_file(file_path, config).map_err(|_| {
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+pub fn analyse_file(file_path: &Path, config: &Config) -> Result<FileAnalysis, StatusCode> {
+    let result =
+        build_cfg_for_file(file_path, config).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     match result {
         Some((cfg, entry, summaries, lang)) => {
-            let bytes =
-                std::fs::read(file_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let bytes = std::fs::read(file_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             Ok(FileAnalysis {
                 cfg,
                 entry,
@@ -996,13 +990,11 @@ pub fn analyse_function_symex(
     let mut state = SymbolicState::new();
     state.seed_from_const_values(&opt.const_values);
 
-    let summary_ctx = global_summaries.map(|gs| {
-        crate::symex::transfer::SymexSummaryCtx {
-            global_summaries: gs,
-            lang,
-            namespace: "",
-            type_facts: Some(&opt.type_facts),
-        }
+    let summary_ctx = global_summaries.map(|gs| crate::symex::transfer::SymexSummaryCtx {
+        global_summaries: gs,
+        lang,
+        namespace: "",
+        type_facts: Some(&opt.type_facts),
     });
     let heap_ctx = crate::symex::transfer::SymexHeapCtx {
         points_to: &opt.points_to,

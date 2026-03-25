@@ -1,5 +1,5 @@
-use serde::de::StdError;
 use serde::Serialize;
+use serde::de::StdError;
 use std::fmt;
 use std::sync::PoisonError;
 use thiserror::Error;

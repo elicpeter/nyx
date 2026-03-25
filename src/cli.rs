@@ -24,7 +24,8 @@ impl Commands {
     /// stdout, meaning human status messages must be suppressed entirely.
     pub fn is_structured_output(&self, config: &crate::utils::config::Config) -> bool {
         let fmt = self.effective_format(config);
-        matches!(self, Commands::Scan { .. }) && (fmt == OutputFormat::Json || fmt == OutputFormat::Sarif)
+        matches!(self, Commands::Scan { .. })
+            && (fmt == OutputFormat::Json || fmt == OutputFormat::Sarif)
     }
 
     /// Whether this is a long-running server command (skip timing output).

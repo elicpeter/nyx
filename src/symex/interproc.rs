@@ -35,7 +35,7 @@ use crate::taint::ssa_transfer::CalleeSsaBody;
 use super::heap::{HeapKey, SymbolicHeap};
 use super::state::{PathConstraint, SymbolicState};
 use super::transfer::{self, SymexHeapCtx, SymexSummaryCtx};
-use super::value::{mk_phi, SymbolicValue};
+use super::value::{SymbolicValue, mk_phi};
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Constants
@@ -102,17 +102,53 @@ pub fn interproc_enabled() -> bool {
 /// Carried on `CallOutcome` and surfaced in `SymbolicVerdict` diagnostics.
 #[derive(Clone, Debug)]
 pub enum CutoffReason {
-    DepthExceeded { max_depth: usize },
-    BudgetBlocks { executed: usize, max: usize },
-    BudgetFrames { created: usize, max: usize },
-    BudgetInstructions { executed: usize, max: usize },
-    BudgetForks { used: usize, max: usize },
-    BudgetSolverChecks { used: usize, max: usize },
-    BudgetPathStates { retained: usize, max: usize },
-    RecursionLimit { function: String, re_entries: usize, max: usize },
-    SccRecursionLimit { scc_functions: Vec<String>, total_entries: usize, max: usize },
-    CalleeBodyTooLarge { callee: String, blocks: usize, max: usize },
-    StepBudgetPerFrame { callee: String, steps: usize, max: usize },
+    DepthExceeded {
+        max_depth: usize,
+    },
+    BudgetBlocks {
+        executed: usize,
+        max: usize,
+    },
+    BudgetFrames {
+        created: usize,
+        max: usize,
+    },
+    BudgetInstructions {
+        executed: usize,
+        max: usize,
+    },
+    BudgetForks {
+        used: usize,
+        max: usize,
+    },
+    BudgetSolverChecks {
+        used: usize,
+        max: usize,
+    },
+    BudgetPathStates {
+        retained: usize,
+        max: usize,
+    },
+    RecursionLimit {
+        function: String,
+        re_entries: usize,
+        max: usize,
+    },
+    SccRecursionLimit {
+        scc_functions: Vec<String>,
+        total_entries: usize,
+        max: usize,
+    },
+    CalleeBodyTooLarge {
+        callee: String,
+        blocks: usize,
+        max: usize,
+    },
+    StepBudgetPerFrame {
+        callee: String,
+        steps: usize,
+        max: usize,
+    },
 }
 
 impl fmt::Display for CutoffReason {
@@ -139,10 +175,22 @@ impl fmt::Display for CutoffReason {
             CutoffReason::BudgetPathStates { retained, max } => {
                 write!(f, "path state budget exhausted ({}/{})", retained, max)
             }
-            CutoffReason::RecursionLimit { function, re_entries, max } => {
-                write!(f, "recursion limit for '{}' ({}/{})", function, re_entries, max)
+            CutoffReason::RecursionLimit {
+                function,
+                re_entries,
+                max,
+            } => {
+                write!(
+                    f,
+                    "recursion limit for '{}' ({}/{})",
+                    function, re_entries, max
+                )
             }
-            CutoffReason::SccRecursionLimit { scc_functions, total_entries, max } => {
+            CutoffReason::SccRecursionLimit {
+                scc_functions,
+                total_entries,
+                max,
+            } => {
                 write!(
                     f,
                     "SCC recursion limit for [{}] ({}/{})",
@@ -151,11 +199,23 @@ impl fmt::Display for CutoffReason {
                     max,
                 )
             }
-            CutoffReason::CalleeBodyTooLarge { callee, blocks, max } => {
-                write!(f, "callee '{}' too large ({} blocks, max {})", callee, blocks, max)
+            CutoffReason::CalleeBodyTooLarge {
+                callee,
+                blocks,
+                max,
+            } => {
+                write!(
+                    f,
+                    "callee '{}' too large ({} blocks, max {})",
+                    callee, blocks, max
+                )
             }
             CutoffReason::StepBudgetPerFrame { callee, steps, max } => {
-                write!(f, "per-frame step budget for '{}' ({}/{})", callee, steps, max)
+                write!(
+                    f,
+                    "per-frame step budget for '{}' ({}/{})",
+                    callee, steps, max
+                )
             }
         }
     }
@@ -403,9 +463,7 @@ pub struct ArgAbstraction(SmallVec<[(usize, u16); 4]>);
 
 impl ArgAbstraction {
     /// Build an argument abstraction from the call-site's symbolic values.
-    pub fn build(
-        arg_values: &[(SsaValue, SymbolicValue, bool)],
-    ) -> Self {
+    pub fn build(arg_values: &[(SsaValue, SymbolicValue, bool)]) -> Self {
         let mut entries: SmallVec<[(usize, u16); 4]> = SmallVec::new();
         for (pos, (_, sym, tainted)) in arg_values.iter().enumerate() {
             let taint_bit: u16 = if *tainted { 1 } else { 0 };
@@ -513,7 +571,9 @@ pub fn execute_callee(
         s.cutoffs += 1;
         ctx.stats.set(s);
         return Some(CallOutcome::cutoff(
-            CutoffReason::DepthExceeded { max_depth: ctx.max_depth },
+            CutoffReason::DepthExceeded {
+                max_depth: ctx.max_depth,
+            },
             any_arg_tainted,
         ));
     }
@@ -790,7 +850,11 @@ pub fn execute_callee(
                     path.predecessor = Some(path.current_block);
                     path.current_block = *target;
                 }
-                Terminator::Branch { true_blk, false_blk, .. } => {
+                Terminator::Branch {
+                    true_blk,
+                    false_blk,
+                    ..
+                } => {
                     // Phase 24B: fork both branches when budget allows
                     let can_fork = path.forks_used < MAX_FORKS_PER_CALLEE && {
                         let b = ctx.budget.get();
@@ -935,10 +999,18 @@ fn handle_nested_calls(
     cutoff_reasons: &mut Vec<CutoffReason>,
 ) {
     for inst in block.body.iter() {
-        if let SsaOp::Call { callee, args, receiver } = &inst.op {
+        if let SsaOp::Call {
+            callee,
+            args,
+            receiver,
+        } = &inst.op
+        {
             // Only attempt if the current result is opaque
             let current_val = callee_state.get(inst.value);
-            if !matches!(current_val, SymbolicValue::Call(..) | SymbolicValue::Unknown) {
+            if !matches!(
+                current_val,
+                SymbolicValue::Call(..) | SymbolicValue::Unknown
+            ) {
                 continue;
             }
             // Build arg_values for nested call
@@ -1140,36 +1212,24 @@ mod tests {
     #[test]
     fn arg_abstraction_different_taint() {
         let v0 = SsaValue(0);
-        let a1 = ArgAbstraction::build(&[
-            (v0, SymbolicValue::Symbol(v0), false),
-        ]);
-        let a2 = ArgAbstraction::build(&[
-            (v0, SymbolicValue::Symbol(v0), true),
-        ]);
+        let a1 = ArgAbstraction::build(&[(v0, SymbolicValue::Symbol(v0), false)]);
+        let a2 = ArgAbstraction::build(&[(v0, SymbolicValue::Symbol(v0), true)]);
         assert_ne!(a1, a2);
     }
 
     #[test]
     fn arg_abstraction_same_values() {
         let v0 = SsaValue(0);
-        let a1 = ArgAbstraction::build(&[
-            (v0, SymbolicValue::Concrete(42), false),
-        ]);
-        let a2 = ArgAbstraction::build(&[
-            (v0, SymbolicValue::Concrete(42), false),
-        ]);
+        let a1 = ArgAbstraction::build(&[(v0, SymbolicValue::Concrete(42), false)]);
+        let a2 = ArgAbstraction::build(&[(v0, SymbolicValue::Concrete(42), false)]);
         assert_eq!(a1, a2);
     }
 
     #[test]
     fn arg_abstraction_different_concrete() {
         let v0 = SsaValue(0);
-        let a1 = ArgAbstraction::build(&[
-            (v0, SymbolicValue::Concrete(1), false),
-        ]);
-        let a2 = ArgAbstraction::build(&[
-            (v0, SymbolicValue::Concrete(2), false),
-        ]);
+        let a1 = ArgAbstraction::build(&[(v0, SymbolicValue::Concrete(1), false)]);
+        let a2 = ArgAbstraction::build(&[(v0, SymbolicValue::Concrete(2), false)]);
         assert_ne!(a1, a2);
     }
 
@@ -1409,22 +1469,19 @@ mod tests {
 
     #[test]
     fn calloutcome_cutoff_preserves_taint() {
-        let outcome = CallOutcome::cutoff(
-            CutoffReason::DepthExceeded { max_depth: 3 },
-            true,
-        );
+        let outcome = CallOutcome::cutoff(CutoffReason::DepthExceeded { max_depth: 3 }, true);
         assert_eq!(outcome.exit_states.len(), 1);
         assert!(outcome.exit_states[0].return_tainted);
-        assert!(matches!(outcome.exit_states[0].return_value, SymbolicValue::Unknown));
+        assert!(matches!(
+            outcome.exit_states[0].return_value,
+            SymbolicValue::Unknown
+        ));
         assert_eq!(outcome.cutoff_reasons.len(), 1);
     }
 
     #[test]
     fn calloutcome_cutoff_no_taint() {
-        let outcome = CallOutcome::cutoff(
-            CutoffReason::DepthExceeded { max_depth: 3 },
-            false,
-        );
+        let outcome = CallOutcome::cutoff(CutoffReason::DepthExceeded { max_depth: 3 }, false);
         assert!(outcome.exit_states.is_empty());
         assert_eq!(outcome.cutoff_reasons.len(), 1);
     }

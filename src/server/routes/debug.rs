@@ -76,7 +76,10 @@ async fn list_functions(
     Query(q): Query<FileQuery>,
 ) -> Result<Json<Vec<FunctionInfo>>, StatusCode> {
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
-    let config = state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let config = state
+        .config
+        .read()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let analysis = debug::analyse_file(&path, &config)?;
     Ok(Json(debug::function_list(&analysis)))
 }
@@ -88,12 +91,19 @@ async fn get_cfg(
     Query(q): Query<FileFunctionQuery>,
 ) -> Result<Json<CfgGraphView>, StatusCode> {
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
-    let config = state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let config = state
+        .config
+        .read()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let analysis = debug::analyse_file(&path, &config)?;
 
-    let view =
-        CfgGraphView::from_cfg_function(&analysis.cfg, &analysis.summaries, &q.function, &analysis.bytes)
-            .ok_or(StatusCode::NOT_FOUND)?;
+    let view = CfgGraphView::from_cfg_function(
+        &analysis.cfg,
+        &analysis.summaries,
+        &q.function,
+        &analysis.bytes,
+    )
+    .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(view))
 }
 
@@ -104,7 +114,10 @@ async fn get_ssa(
     Query(q): Query<FileFunctionQuery>,
 ) -> Result<Json<SsaBodyView>, StatusCode> {
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
-    let config = state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let config = state
+        .config
+        .read()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let analysis = debug::analyse_file(&path, &config)?;
     let (ssa, _opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
     Ok(Json(SsaBodyView::from_ssa(&ssa, &analysis.bytes)))
@@ -117,7 +130,10 @@ async fn get_taint(
     Query(q): Query<FileFunctionQuery>,
 ) -> Result<Json<TaintAnalysisView>, StatusCode> {
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
-    let config = state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let config = state
+        .config
+        .read()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let analysis = debug::analyse_file(&path, &config)?;
     let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
@@ -147,7 +163,10 @@ async fn get_abstract_interp(
     Query(q): Query<FileFunctionQuery>,
 ) -> Result<Json<AbstractInterpView>, StatusCode> {
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
-    let config = state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let config = state
+        .config
+        .read()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let analysis = debug::analyse_file(&path, &config)?;
     let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
@@ -181,8 +200,10 @@ async fn get_summaries(
         _ => {
             if let Some(ref file) = q.file {
                 let path = validate_and_resolve(&state.scan_root, file)?;
-                let config =
-                    state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                let config = state
+                    .config
+                    .read()
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                 debug::analyse_file_summaries(&path, &config)?
             } else {
                 return Ok(Json(vec![]));
@@ -193,11 +214,7 @@ async fn get_summaries(
     let views: Vec<FuncSummaryView> = global
         .iter()
         .filter(|(key, summary)| {
-            let name_matches = q
-                .function
-                .as_ref()
-                .map(|f| key.name == *f)
-                .unwrap_or(true);
+            let name_matches = q.function.as_ref().map(|f| key.name == *f).unwrap_or(true);
             let file_matches = q
                 .file
                 .as_ref()
@@ -226,7 +243,10 @@ async fn get_call_graph(
         // On-demand: parse the specified file and extract summaries
         let file = q.file.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
         let path = validate_and_resolve(&state.scan_root, file)?;
-        let config = state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let config = state
+            .config
+            .read()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         debug::analyse_file_summaries(&path, &config)?
     } else {
         // Project scope: try DB, fall back to empty graph
@@ -246,19 +266,17 @@ async fn get_symex(
     Query(q): Query<FileFunctionQuery>,
 ) -> Result<Json<SymexView>, StatusCode> {
     let path = validate_and_resolve(&state.scan_root, &q.file)?;
-    let config = state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let config = state
+        .config
+        .read()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let analysis = debug::analyse_file(&path, &config)?;
     let (ssa, opt) = debug::analyse_function_ssa(&analysis, &q.function)?;
 
     let global = load_global_summaries(&state);
 
-    let sym_state = debug::analyse_function_symex(
-        &ssa,
-        &analysis.cfg,
-        analysis.lang,
-        &opt,
-        global.as_ref(),
-    );
+    let sym_state =
+        debug::analyse_function_symex(&ssa, &analysis.cfg, analysis.lang, &opt, global.as_ref());
 
     Ok(Json(SymexView::from_symbolic_state(&sym_state, &ssa)))
 }

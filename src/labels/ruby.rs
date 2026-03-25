@@ -18,7 +18,13 @@ pub static RULES: &[LabelRule] = &[
     // Dotted matchers work via push_node receiver.method text construction
     // (confirmed by existing Net::HTTP.get matcher in ssrf_net_http fixture).
     LabelRule {
-        matchers: &["request.headers", "request.body", "request.url", "request.referrer", "request.path"],
+        matchers: &[
+            "request.headers",
+            "request.body",
+            "request.url",
+            "request.referrer",
+            "request.path",
+        ],
         label: DataLabel::Source(Cap::all()),
         case_sensitive: false,
     },
@@ -30,7 +36,12 @@ pub static RULES: &[LabelRule] = &[
     },
     // Rails HTML escaping / sanitization helpers.
     LabelRule {
-        matchers: &["CGI.escape", "Rack::Utils.escape_html", "sanitize", "strip_tags"],
+        matchers: &[
+            "CGI.escape",
+            "Rack::Utils.escape_html",
+            "sanitize",
+            "strip_tags",
+        ],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
@@ -75,7 +86,13 @@ pub static RULES: &[LabelRule] = &[
     // URI.open is the network-capable Kernel#open wrapper — more specific than
     // plain `open` (excluded to avoid file I/O false positives).
     LabelRule {
-        matchers: &["Net::HTTP.get", "Net::HTTP.post", "URI.open", "HTTParty.get", "HTTParty.post"],
+        matchers: &[
+            "Net::HTTP.get",
+            "Net::HTTP.post",
+            "URI.open",
+            "HTTParty.get",
+            "HTTParty.post",
+        ],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },

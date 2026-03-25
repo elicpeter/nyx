@@ -772,10 +772,7 @@ impl Config {
 
         // --- profiles ---
         for name in self.profiles.keys() {
-            if !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
+            if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                 errors.push(ConfigError {
                     section: "profiles".into(),
                     field: name.clone(),
@@ -1077,9 +1074,19 @@ fn enum_roundtrip_rule_kind() {
 #[test]
 fn enum_roundtrip_cap_name() {
     let caps = [
-        "env_var", "html_escape", "shell_escape", "url_encode", "json_parse",
-        "file_io", "fmt_string", "sql_query", "deserialize", "ssrf",
-        "code_exec", "crypto", "all",
+        "env_var",
+        "html_escape",
+        "shell_escape",
+        "url_encode",
+        "json_parse",
+        "file_io",
+        "fmt_string",
+        "sql_query",
+        "deserialize",
+        "ssrf",
+        "code_exec",
+        "crypto",
+        "all",
     ];
     for cap_str in caps {
         let toml_str = format!(
@@ -1308,8 +1315,5 @@ fn merge_excluded_files_union() {
     user_cfg.scanner.excluded_files = vec!["b.rs".into(), "c.rs".into()];
 
     let merged = merge_configs(default_cfg, user_cfg);
-    assert_eq!(
-        merged.scanner.excluded_files,
-        vec!["a.rs", "b.rs", "c.rs"]
-    );
+    assert_eq!(merged.scanner.excluded_files, vec!["a.rs", "b.rs", "c.rs"]);
 }

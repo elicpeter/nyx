@@ -9,20 +9,20 @@
 //! Phase 18a adds symbolic expression trees (`SymbolicValue`) that preserve
 //! computation structure through the path walk, enabling richer witness strings.
 
-pub mod value;
-pub mod state;
-pub mod transfer;
 pub mod executor;
-pub mod witness;
-pub mod loops;
 pub mod heap;
-pub mod strings;
 pub mod interproc;
+pub mod loops;
 #[cfg(feature = "smt")]
 pub mod smt;
+pub mod state;
+pub mod strings;
+pub mod transfer;
+pub mod value;
+pub mod witness;
 
-pub use value::{SymbolicValue, Op, MAX_EXPR_DEPTH};
-pub use state::{SymbolicState, PathConstraint};
+pub use state::{PathConstraint, SymbolicState};
+pub use value::{MAX_EXPR_DEPTH, Op, SymbolicValue};
 
 use std::collections::{HashMap, HashSet};
 
@@ -57,7 +57,8 @@ pub struct SymexContext<'a> {
     pub points_to: Option<&'a PointsToResult>,
     /// Pre-lowered intra-file function bodies for interprocedural symbolic
     /// execution (Phase 24A).
-    pub callee_bodies: Option<&'a std::collections::HashMap<String, crate::taint::ssa_transfer::CalleeSsaBody>>,
+    pub callee_bodies:
+        Option<&'a std::collections::HashMap<String, crate::taint::ssa_transfer::CalleeSsaBody>>,
     /// SCC membership: maps normalized function name → SCC index.
     /// Used by interprocedural symex for mutual recursion detection (Phase 24B).
     pub scc_membership: Option<&'a HashMap<String, usize>>,
@@ -97,10 +98,7 @@ pub fn is_enabled() -> bool {
 ///
 /// Pre-filters: skips path_validated findings and those with fewer than 2
 /// flow steps. Respects the per-file candidate budget.
-pub fn annotate_findings(
-    findings: &mut [Finding],
-    ctx: &SymexContext,
-) {
+pub fn annotate_findings(findings: &mut [Finding], ctx: &SymexContext) {
     let mut budget = MAX_CANDIDATES;
     for finding in findings.iter_mut() {
         if budget == 0 {
@@ -140,10 +138,7 @@ pub(super) fn extract_path_blocks(finding: &Finding, ssa: &SsaBody) -> Vec<Block
 /// the CFG from source to sink, forking at branch points where both
 /// successors lie on some source-to-sink path. Produces an aggregate
 /// verdict across all explored paths.
-fn analyse_finding_path(
-    finding: &Finding,
-    ctx: &SymexContext,
-) -> SymbolicVerdict {
+fn analyse_finding_path(finding: &Finding, ctx: &SymexContext) -> SymbolicVerdict {
     let path_blocks = extract_path_blocks(finding, ctx.ssa);
 
     if path_blocks.is_empty() {
@@ -362,13 +357,8 @@ mod tests {
                 },
             ],
             entry: b0,
-            value_defs: vec![
-                make_value_def(b0, n0),
-                make_value_def(b1, n1),
-            ],
-            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))]
-                .into_iter()
-                .collect(),
+            value_defs: vec![make_value_def(b0, n0), make_value_def(b1, n1)],
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
         };
 
@@ -430,13 +420,8 @@ mod tests {
                 },
             ],
             entry: b0,
-            value_defs: vec![
-                make_value_def(b0, n0),
-                make_value_def(b1, n1),
-            ],
-            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))]
-                .into_iter()
-                .collect(),
+            value_defs: vec![make_value_def(b0, n0), make_value_def(b1, n1)],
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
         };
 
@@ -535,10 +520,7 @@ mod tests {
             callee_bodies: None,
             scc_membership: None,
         };
-        annotate_findings(
-            std::slice::from_mut(&mut finding),
-            &ctx,
-        );
+        annotate_findings(std::slice::from_mut(&mut finding), &ctx);
         // Should remain None — skipped due to path_validated
         assert!(finding.symbolic.is_none());
     }
@@ -587,10 +569,7 @@ mod tests {
             callee_bodies: None,
             scc_membership: None,
         };
-        annotate_findings(
-            std::slice::from_mut(&mut finding),
-            &ctx,
-        );
+        annotate_findings(std::slice::from_mut(&mut finding), &ctx);
         // Should remain None — only 1 flow step
         assert!(finding.symbolic.is_none());
     }

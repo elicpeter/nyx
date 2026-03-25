@@ -295,12 +295,18 @@ impl IntervalFact {
         // the sign bit, producing a non-negative result ≤ mask).
         if let Some(m) = other.as_singleton() {
             if m >= 0 {
-                return Self { lo: Some(0), hi: Some(m) };
+                return Self {
+                    lo: Some(0),
+                    hi: Some(m),
+                };
             }
         }
         if let Some(m) = self.as_singleton() {
             if m >= 0 {
-                return Self { lo: Some(0), hi: Some(m) };
+                return Self {
+                    lo: Some(0),
+                    hi: Some(m),
+                };
             }
         }
         // Both non-negative
@@ -506,7 +512,7 @@ impl AbstractDomain for IntervalFact {
 fn checked_add_opt(a: Option<i64>, b: Option<i64>) -> Option<i64> {
     match (a, b) {
         (Some(x), Some(y)) => x.checked_add(y), // None on overflow
-        _ => None,                               // unbounded
+        _ => None,                              // unbounded
     }
 }
 
@@ -692,7 +698,10 @@ mod tests {
 
     #[test]
     fn add_exact() {
-        assert_eq!(IntervalFact::exact(5).add(&IntervalFact::exact(3)), IntervalFact::exact(8));
+        assert_eq!(
+            IntervalFact::exact(5).add(&IntervalFact::exact(3)),
+            IntervalFact::exact(8)
+        );
     }
 
     #[test]
@@ -817,7 +826,10 @@ mod tests {
 
     #[test]
     fn bit_and_constant_mask() {
-        let x = IntervalFact { lo: Some(0), hi: Some(1000) };
+        let x = IntervalFact {
+            lo: Some(0),
+            hi: Some(1000),
+        };
         let mask = IntervalFact::exact(0xFF);
         let r = x.bit_and(&mask);
         assert_eq!(r.lo, Some(0));
@@ -826,7 +838,10 @@ mod tests {
 
     #[test]
     fn bit_and_zero() {
-        let x = IntervalFact { lo: Some(0), hi: Some(1000) };
+        let x = IntervalFact {
+            lo: Some(0),
+            hi: Some(1000),
+        };
         let zero = IntervalFact::exact(0);
         assert_eq!(x.bit_and(&zero), IntervalFact::exact(0));
         assert_eq!(zero.bit_and(&x), IntervalFact::exact(0));
@@ -836,7 +851,10 @@ mod tests {
     fn bit_and_negative_operand_with_nonneg_mask() {
         // Even with negative input, AND with non-negative singleton mask
         // always produces [0, mask] (two's complement guarantee).
-        let x = IntervalFact { lo: Some(-5), hi: Some(10) };
+        let x = IntervalFact {
+            lo: Some(-5),
+            hi: Some(10),
+        };
         let mask = IntervalFact::exact(0xFF);
         let r = x.bit_and(&mask);
         assert_eq!(r.lo, Some(0));
@@ -846,8 +864,14 @@ mod tests {
     #[test]
     fn bit_and_both_negative_no_singleton() {
         // No singleton mask available and negative operands → Top
-        let a = IntervalFact { lo: Some(-100), hi: Some(-1) };
-        let b = IntervalFact { lo: Some(-50), hi: Some(-10) };
+        let a = IntervalFact {
+            lo: Some(-100),
+            hi: Some(-1),
+        };
+        let b = IntervalFact {
+            lo: Some(-50),
+            hi: Some(-10),
+        };
         assert!(a.bit_and(&b).is_top());
     }
 
@@ -861,8 +885,14 @@ mod tests {
 
     #[test]
     fn bit_or_basic() {
-        let a = IntervalFact { lo: Some(0), hi: Some(0xF0) };
-        let b = IntervalFact { lo: Some(0), hi: Some(0x0F) };
+        let a = IntervalFact {
+            lo: Some(0),
+            hi: Some(0xF0),
+        };
+        let b = IntervalFact {
+            lo: Some(0),
+            hi: Some(0x0F),
+        };
         let r = a.bit_or(&b);
         assert_eq!(r.lo, Some(0));
         // next_pow2_minus1(0xF0) = 0xFF
@@ -871,7 +901,10 @@ mod tests {
 
     #[test]
     fn bit_or_zero_identity() {
-        let x = IntervalFact { lo: Some(3), hi: Some(10) };
+        let x = IntervalFact {
+            lo: Some(3),
+            hi: Some(10),
+        };
         let zero = IntervalFact::exact(0);
         assert_eq!(x.bit_or(&zero), x);
         assert_eq!(zero.bit_or(&x), x);
@@ -887,8 +920,14 @@ mod tests {
 
     #[test]
     fn bit_xor_basic() {
-        let a = IntervalFact { lo: Some(0), hi: Some(255) };
-        let b = IntervalFact { lo: Some(0), hi: Some(255) };
+        let a = IntervalFact {
+            lo: Some(0),
+            hi: Some(255),
+        };
+        let b = IntervalFact {
+            lo: Some(0),
+            hi: Some(255),
+        };
         let r = a.bit_xor(&b);
         assert_eq!(r.lo, Some(0));
         assert_eq!(r.hi, Some(255)); // next_pow2_minus1(255) = 255
@@ -896,7 +935,10 @@ mod tests {
 
     #[test]
     fn bit_xor_zero_identity() {
-        let x = IntervalFact { lo: Some(3), hi: Some(10) };
+        let x = IntervalFact {
+            lo: Some(3),
+            hi: Some(10),
+        };
         let zero = IntervalFact::exact(0);
         assert_eq!(x.bit_xor(&zero), x);
         assert_eq!(zero.bit_xor(&x), x);
@@ -920,8 +962,14 @@ mod tests {
 
     #[test]
     fn left_shift_range() {
-        let x = IntervalFact { lo: Some(0), hi: Some(7) };
-        let shift = IntervalFact { lo: Some(1), hi: Some(2) };
+        let x = IntervalFact {
+            lo: Some(0),
+            hi: Some(7),
+        };
+        let shift = IntervalFact {
+            lo: Some(1),
+            hi: Some(2),
+        };
         let r = x.left_shift(&shift);
         assert_eq!(r.lo, Some(0));
         assert_eq!(r.hi, Some(28)); // 7 << 2
@@ -960,8 +1008,14 @@ mod tests {
 
     #[test]
     fn right_shift_range() {
-        let x = IntervalFact { lo: Some(0), hi: Some(255) };
-        let shift = IntervalFact { lo: Some(1), hi: Some(3) };
+        let x = IntervalFact {
+            lo: Some(0),
+            hi: Some(255),
+        };
+        let shift = IntervalFact {
+            lo: Some(1),
+            hi: Some(3),
+        };
         let r = x.right_shift(&shift);
         // lo: 0 >> 3 = 0, hi: 255 >> 1 = 127
         assert_eq!(r.lo, Some(0));
@@ -970,7 +1024,10 @@ mod tests {
 
     #[test]
     fn right_shift_negative_dividend() {
-        let x = IntervalFact { lo: Some(-10), hi: Some(10) };
+        let x = IntervalFact {
+            lo: Some(-10),
+            hi: Some(10),
+        };
         let shift = IntervalFact::exact(1);
         assert!(x.right_shift(&shift).is_top());
     }

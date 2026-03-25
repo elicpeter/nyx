@@ -51,7 +51,10 @@ async fn start_scan(
     let event_tx = state.event_tx.clone();
     let db_pool = state.db_pool.clone();
 
-    match state.job_manager.start_scan(scan_root, config, event_tx, db_pool) {
+    match state
+        .job_manager
+        .start_scan(scan_root, config, event_tx, db_pool)
+    {
         Ok(job_id) => Ok((
             StatusCode::ACCEPTED,
             Json(serde_json::json!({ "job_id": job_id })),
@@ -75,8 +78,7 @@ async fn list_scans(State(state): State<AppState>) -> Json<Vec<ScanView>> {
     if let Some(ref pool) = state.db_pool {
         if let Ok(idx) = Indexer::from_pool("_scans", pool) {
             if let Ok(records) = idx.list_scans(100) {
-                let in_memory_ids: HashSet<String> =
-                    views.iter().map(|v| v.id.clone()).collect();
+                let in_memory_ids: HashSet<String> = views.iter().map(|v| v.id.clone()).collect();
                 for record in records {
                     if !in_memory_ids.contains(&record.id) {
                         views.push(scan_record_to_view(&record));
@@ -92,10 +94,11 @@ async fn list_scans(State(state): State<AppState>) -> Json<Vec<ScanView>> {
     Json(views)
 }
 
-async fn active_scan(
-    State(state): State<AppState>,
-) -> Result<Json<ScanView>, StatusCode> {
-    let job = state.job_manager.active_job().ok_or(StatusCode::NOT_FOUND)?;
+async fn active_scan(State(state): State<AppState>) -> Result<Json<ScanView>, StatusCode> {
+    let job = state
+        .job_manager
+        .active_job()
+        .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(job_to_view(&job)))
 }
 
@@ -481,7 +484,10 @@ async fn get_scan_metrics(
 fn job_to_view(job: &crate::server::jobs::ScanJob) -> ScanView {
     let (timing, metrics_snap) = if let Some(ref progress) = job.progress {
         let snap = progress.snapshot();
-        (Some(snap.timing), job.metrics.as_ref().map(|m| m.snapshot()))
+        (
+            Some(snap.timing),
+            job.metrics.as_ref().map(|m| m.snapshot()),
+        )
     } else {
         (job.timing.clone(), None)
     };

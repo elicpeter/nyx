@@ -233,11 +233,7 @@ fn collect_tainted_symbols(expr: &SymbolicValue, state: &SymbolicState) -> HashS
     tainted
 }
 
-fn collect_tainted_inner(
-    expr: &SymbolicValue,
-    state: &SymbolicState,
-    out: &mut HashSet<SsaValue>,
-) {
+fn collect_tainted_inner(expr: &SymbolicValue, state: &SymbolicState, out: &mut HashSet<SsaValue>) {
     match expr {
         SymbolicValue::Symbol(v) => {
             if state.is_tainted(*v) {
@@ -294,8 +290,7 @@ fn substitute_tainted(
             let new_l = substitute_tainted(l, tainted, payload);
             let new_r = substitute_tainted(r, tainted, payload);
             // Try to fold if both sides are concrete strings
-            if let (SymbolicValue::ConcreteStr(a), SymbolicValue::ConcreteStr(b)) =
-                (&new_l, &new_r)
+            if let (SymbolicValue::ConcreteStr(a), SymbolicValue::ConcreteStr(b)) = (&new_l, &new_r)
             {
                 SymbolicValue::ConcreteStr(format!("{}{}", a, b))
             } else {
@@ -346,14 +341,12 @@ fn substitute_tainted(
                 .map(|e| Box::new(substitute_tainted(e, tainted, payload))),
         ),
         // Phase 28: Encoding/decoding transforms — preserve structure
-        SymbolicValue::Encode(kind, s) => SymbolicValue::Encode(
-            *kind,
-            Box::new(substitute_tainted(s, tainted, payload)),
-        ),
-        SymbolicValue::Decode(kind, s) => SymbolicValue::Decode(
-            *kind,
-            Box::new(substitute_tainted(s, tainted, payload)),
-        ),
+        SymbolicValue::Encode(kind, s) => {
+            SymbolicValue::Encode(*kind, Box::new(substitute_tainted(s, tainted, payload)))
+        }
+        SymbolicValue::Decode(kind, s) => {
+            SymbolicValue::Decode(*kind, Box::new(substitute_tainted(s, tainted, payload)))
+        }
         // Leaf nodes that are not tainted symbols — return unchanged
         other => other.clone(),
     }
@@ -594,18 +587,29 @@ mod tests {
 
     #[test]
     fn test_witness_payload_per_cap() {
-        assert_eq!(witness_payload(Cap::CODE_EXEC), "<script>alert('xss')</script>");
+        assert_eq!(
+            witness_payload(Cap::CODE_EXEC),
+            "<script>alert('xss')</script>"
+        );
         assert_eq!(witness_payload(Cap::SQL_QUERY), "' OR 1=1 --");
         assert_eq!(witness_payload(Cap::SHELL_ESCAPE), "$(id)");
         assert_eq!(witness_payload(Cap::FILE_IO), "../../etc/passwd");
-        assert_eq!(witness_payload(Cap::SSRF), "http://169.254.169.254/metadata");
-        assert_eq!(witness_payload(Cap::DESERIALIZE), "malicious_serialized_object");
+        assert_eq!(
+            witness_payload(Cap::SSRF),
+            "http://169.254.169.254/metadata"
+        );
+        assert_eq!(
+            witness_payload(Cap::DESERIALIZE),
+            "malicious_serialized_object"
+        );
         assert_eq!(witness_payload(Cap::CRYPTO), "TAINTED"); // fallback
     }
 
     #[test]
     fn test_is_string_renderable() {
-        assert!(is_string_renderable(&SymbolicValue::ConcreteStr("hello".into())));
+        assert!(is_string_renderable(&SymbolicValue::ConcreteStr(
+            "hello".into()
+        )));
         assert!(is_string_renderable(&SymbolicValue::Symbol(SsaValue(0))));
         assert!(is_string_renderable(&SymbolicValue::Concat(
             Box::new(SymbolicValue::ConcreteStr("a".into())),
@@ -628,7 +632,9 @@ mod tests {
     #[test]
     fn test_substitute_tainted_concat() {
         let expr = SymbolicValue::Concat(
-            Box::new(SymbolicValue::ConcreteStr("SELECT * FROM t WHERE id = ".into())),
+            Box::new(SymbolicValue::ConcreteStr(
+                "SELECT * FROM t WHERE id = ".into(),
+            )),
             Box::new(SymbolicValue::Symbol(SsaValue(5))),
         );
         let mut tainted = HashSet::new();
@@ -653,7 +659,9 @@ mod tests {
         state.set(
             sink_val,
             SymbolicValue::Concat(
-                Box::new(SymbolicValue::ConcreteStr("SELECT * FROM t WHERE id = ".into())),
+                Box::new(SymbolicValue::ConcreteStr(
+                    "SELECT * FROM t WHERE id = ".into(),
+                )),
                 Box::new(SymbolicValue::Symbol(tainted_val)),
             ),
         );
@@ -806,10 +814,7 @@ mod tests {
         let mut state = SymbolicState::new();
         let sink_val = SsaValue(10);
         // Fully concrete — no taint
-        state.set(
-            sink_val,
-            SymbolicValue::ConcreteStr("SELECT 1".into()),
-        );
+        state.set(sink_val, SymbolicValue::ConcreteStr("SELECT 1".into()));
 
         let mut cfg = Cfg::new();
         let sink_node = cfg.add_node(make_node_info(
@@ -856,15 +861,15 @@ mod tests {
     #[test]
     fn test_string_ops_are_string_renderable() {
         // Trim, ToLower, ToUpper, Replace on string-renderable inner → renderable
-        assert!(is_string_renderable(&SymbolicValue::Trim(
-            Box::new(SymbolicValue::Symbol(SsaValue(0)))
-        )));
-        assert!(is_string_renderable(&SymbolicValue::ToLower(
-            Box::new(SymbolicValue::Symbol(SsaValue(0)))
-        )));
-        assert!(is_string_renderable(&SymbolicValue::ToUpper(
-            Box::new(SymbolicValue::Symbol(SsaValue(0)))
-        )));
+        assert!(is_string_renderable(&SymbolicValue::Trim(Box::new(
+            SymbolicValue::Symbol(SsaValue(0))
+        ))));
+        assert!(is_string_renderable(&SymbolicValue::ToLower(Box::new(
+            SymbolicValue::Symbol(SsaValue(0))
+        ))));
+        assert!(is_string_renderable(&SymbolicValue::ToUpper(Box::new(
+            SymbolicValue::Symbol(SsaValue(0))
+        ))));
         assert!(is_string_renderable(&SymbolicValue::Replace(
             Box::new(SymbolicValue::Symbol(SsaValue(0))),
             "<".into(),
@@ -876,9 +881,9 @@ mod tests {
             Some(Box::new(SymbolicValue::Concrete(5))),
         )));
         // StrLen returns int — NOT string-renderable
-        assert!(!is_string_renderable(&SymbolicValue::StrLen(
-            Box::new(SymbolicValue::Symbol(SsaValue(0)))
-        )));
+        assert!(!is_string_renderable(&SymbolicValue::StrLen(Box::new(
+            SymbolicValue::Symbol(SsaValue(0))
+        ))));
     }
 
     #[test]

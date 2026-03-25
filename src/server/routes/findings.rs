@@ -2,8 +2,8 @@ use crate::commands::scan::Diag;
 use crate::database::index::Indexer;
 use crate::server::app::AppState;
 use crate::server::models::{
-    collect_filter_values, finding_from_diag, finding_from_diag_with_detail,
-    overlay_triage_states, summarize_findings, FilterValues, FindingSummary, FindingView,
+    FilterValues, FindingSummary, FindingView, collect_filter_values, finding_from_diag,
+    finding_from_diag_with_detail, overlay_triage_states, summarize_findings,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -184,16 +184,12 @@ async fn list_findings(
     })))
 }
 
-async fn findings_summary(
-    State(state): State<AppState>,
-) -> Json<FindingSummary> {
+async fn findings_summary(State(state): State<AppState>) -> Json<FindingSummary> {
     let findings = load_latest_findings(&state);
     Json(summarize_findings(&findings))
 }
 
-async fn findings_filters(
-    State(state): State<AppState>,
-) -> Json<FilterValues> {
+async fn findings_filters(State(state): State<AppState>) -> Json<FilterValues> {
     let findings = load_latest_findings(&state);
     Json(collect_filter_values(&findings))
 }

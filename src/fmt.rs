@@ -180,7 +180,10 @@ pub fn render_welcome() -> String {
         style(format!("v{version}")).dim(),
         style("static analysis engine").dim(),
     ));
-    out.push_str(&format!("{}\n", style("────────────────────────────────────────").dim()));
+    out.push_str(&format!(
+        "{}\n",
+        style("────────────────────────────────────────").dim()
+    ));
     out.push('\n');
 
     out.push_str(&format!("{}\n\n", style("Getting started").bold()));
@@ -378,9 +381,9 @@ fn state_remediation_hint(rule_id: &str) -> Option<&'static str> {
             "Ensure the resource is not accessed after calling close/free. \
              Consider restructuring to use the resource before releasing it.",
         ),
-        "state-double-close" => Some(
-            "Remove the duplicate close call, or guard with a null/closed check.",
-        ),
+        "state-double-close" => {
+            Some("Remove the duplicate close call, or guard with a null/closed check.")
+        }
         "state-resource-leak" => Some(
             "Add a close/free call before the function exits, or use a \
              language-specific cleanup pattern (defer, with, try-with-resources, RAII).",
@@ -1219,7 +1222,13 @@ mod tests {
                 }),
                 ..Default::default()
             }),
-            ..make_state_diag("state-resource-leak", "resource", Some("f"), "open", "leaked")
+            ..make_state_diag(
+                "state-resource-leak",
+                "resource",
+                Some("f"),
+                "open",
+                "leaked",
+            )
         };
         let output = render_diag(&d, 120);
         let stripped = strip_ansi(&output);
@@ -1246,13 +1255,7 @@ mod tests {
 
     #[test]
     fn render_state_evidence_auth() {
-        let d = make_state_diag(
-            "state-unauthed-access",
-            "auth",
-            None,
-            "unauthed",
-            "access",
-        );
+        let d = make_state_diag("state-unauthed-access", "auth", None, "unauthed", "access");
         let output = render_diag(&d, 120);
         let stripped = strip_ansi(&output);
         assert!(stripped.contains("auth"), "should contain auth: {stripped}");

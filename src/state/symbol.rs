@@ -184,7 +184,10 @@ mod tests {
         let mut interner = SymbolInterner::new();
         let a = interner.intern_scoped(Some("funcA"), "f");
         let b = interner.intern_scoped(Some("funcB"), "f");
-        assert_ne!(a, b, "same variable name in different functions must get different IDs");
+        assert_ne!(
+            a, b,
+            "same variable name in different functions must get different IDs"
+        );
     }
 
     #[test]
@@ -199,7 +202,11 @@ mod tests {
     fn scoped_resolve_returns_clean_name() {
         let mut interner = SymbolInterner::new();
         let id = interner.intern_scoped(Some("my_function"), "resource");
-        assert_eq!(interner.resolve(id), "resource", "resolve must return clean name, not scoped key");
+        assert_eq!(
+            interner.resolve(id),
+            "resource",
+            "resolve must return clean name, not scoped key"
+        );
     }
 
     #[test]
@@ -227,7 +234,10 @@ mod tests {
         let mut interner = SymbolInterner::new();
         let a = interner.intern_scoped(None, "x");
         let b = interner.intern("x");
-        assert_eq!(a, b, "intern() and intern_scoped(None, ..) must produce the same ID");
+        assert_eq!(
+            a, b,
+            "intern() and intern_scoped(None, ..) must produce the same ID"
+        );
     }
 
     #[test]

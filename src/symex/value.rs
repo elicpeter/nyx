@@ -102,7 +102,11 @@ pub enum SymbolicValue {
     Phi(Vec<(BlockId, SymbolicValue)>),
     // ── Phase 22: String operations ─────────────────────────────────────
     /// String substring extraction: `str.substring(start, end?)`.
-    Substr(Box<SymbolicValue>, Box<SymbolicValue>, Option<Box<SymbolicValue>>),
+    Substr(
+        Box<SymbolicValue>,
+        Box<SymbolicValue>,
+        Option<Box<SymbolicValue>>,
+    ),
     /// String replacement with concrete pattern/replacement: `str.replace(pat, rep)`.
     Replace(Box<SymbolicValue>, String, String),
     /// To lowercase: `str.toLowerCase()`.
@@ -137,9 +141,7 @@ impl SymbolicValue {
             SymbolicValue::BinOp(_, l, r) | SymbolicValue::Concat(l, r) => {
                 1 + l.depth().max(r.depth())
             }
-            SymbolicValue::Call(_, args) => {
-                1 + args.iter().map(|a| a.depth()).max().unwrap_or(0)
-            }
+            SymbolicValue::Call(_, args) => 1 + args.iter().map(|a| a.depth()).max().unwrap_or(0),
             SymbolicValue::Phi(operands) => {
                 1 + operands.iter().map(|(_, v)| v.depth()).max().unwrap_or(0)
             }
@@ -162,7 +164,10 @@ impl SymbolicValue {
 
     /// Returns `true` if this is a known concrete value (int or string).
     pub fn is_concrete(&self) -> bool {
-        matches!(self, SymbolicValue::Concrete(_) | SymbolicValue::ConcreteStr(_))
+        matches!(
+            self,
+            SymbolicValue::Concrete(_) | SymbolicValue::ConcreteStr(_)
+        )
     }
 
     /// Extract a concrete integer if this is `Concrete(n)`.
@@ -315,10 +320,9 @@ pub fn mk_phi(operands: Vec<(BlockId, SymbolicValue)>) -> SymbolicValue {
 
 /// Build a `Trim` expression with concrete folding and depth bounding.
 pub fn mk_trim(s: SymbolicValue) -> SymbolicValue {
-    if let Some(result) = s
-        .as_concrete_str()
-        .and_then(|cs| super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::Trim, cs))
-    {
+    if let Some(result) = s.as_concrete_str().and_then(|cs| {
+        super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::Trim, cs)
+    }) {
         return result;
     }
     if 1 + s.depth() > MAX_EXPR_DEPTH {
@@ -329,10 +333,9 @@ pub fn mk_trim(s: SymbolicValue) -> SymbolicValue {
 
 /// Build a `ToLower` expression with concrete folding and depth bounding.
 pub fn mk_to_lower(s: SymbolicValue) -> SymbolicValue {
-    if let Some(result) = s
-        .as_concrete_str()
-        .and_then(|cs| super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::ToLower, cs))
-    {
+    if let Some(result) = s.as_concrete_str().and_then(|cs| {
+        super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::ToLower, cs)
+    }) {
         return result;
     }
     if 1 + s.depth() > MAX_EXPR_DEPTH {
@@ -343,10 +346,9 @@ pub fn mk_to_lower(s: SymbolicValue) -> SymbolicValue {
 
 /// Build a `ToUpper` expression with concrete folding and depth bounding.
 pub fn mk_to_upper(s: SymbolicValue) -> SymbolicValue {
-    if let Some(result) = s
-        .as_concrete_str()
-        .and_then(|cs| super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::ToUpper, cs))
-    {
+    if let Some(result) = s.as_concrete_str().and_then(|cs| {
+        super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::ToUpper, cs)
+    }) {
         return result;
     }
     if 1 + s.depth() > MAX_EXPR_DEPTH {
@@ -411,10 +413,9 @@ pub fn mk_substr(
 
 /// Build a `StrLen` expression with concrete folding and depth bounding.
 pub fn mk_strlen(s: SymbolicValue) -> SymbolicValue {
-    if let Some(result) = s
-        .as_concrete_str()
-        .and_then(|cs| super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::StrLen, cs))
-    {
+    if let Some(result) = s.as_concrete_str().and_then(|cs| {
+        super::strings::evaluate_string_op_concrete(&super::strings::StringMethod::StrLen, cs)
+    }) {
         return result;
     }
     if 1 + s.depth() > MAX_EXPR_DEPTH {
@@ -541,7 +542,11 @@ mod tests {
     #[test]
     fn concrete_fold_add() {
         assert_eq!(
-            mk_binop(Op::Add, SymbolicValue::Concrete(3), SymbolicValue::Concrete(5)),
+            mk_binop(
+                Op::Add,
+                SymbolicValue::Concrete(3),
+                SymbolicValue::Concrete(5)
+            ),
             SymbolicValue::Concrete(8)
         );
     }
@@ -549,7 +554,11 @@ mod tests {
     #[test]
     fn concrete_fold_sub() {
         assert_eq!(
-            mk_binop(Op::Sub, SymbolicValue::Concrete(10), SymbolicValue::Concrete(3)),
+            mk_binop(
+                Op::Sub,
+                SymbolicValue::Concrete(10),
+                SymbolicValue::Concrete(3)
+            ),
             SymbolicValue::Concrete(7)
         );
     }
@@ -557,7 +566,11 @@ mod tests {
     #[test]
     fn concrete_fold_mul() {
         assert_eq!(
-            mk_binop(Op::Mul, SymbolicValue::Concrete(4), SymbolicValue::Concrete(7)),
+            mk_binop(
+                Op::Mul,
+                SymbolicValue::Concrete(4),
+                SymbolicValue::Concrete(7)
+            ),
             SymbolicValue::Concrete(28)
         );
     }
@@ -565,7 +578,11 @@ mod tests {
     #[test]
     fn concrete_fold_div() {
         assert_eq!(
-            mk_binop(Op::Div, SymbolicValue::Concrete(15), SymbolicValue::Concrete(3)),
+            mk_binop(
+                Op::Div,
+                SymbolicValue::Concrete(15),
+                SymbolicValue::Concrete(3)
+            ),
             SymbolicValue::Concrete(5)
         );
     }
@@ -573,7 +590,11 @@ mod tests {
     #[test]
     fn concrete_fold_mod() {
         assert_eq!(
-            mk_binop(Op::Mod, SymbolicValue::Concrete(17), SymbolicValue::Concrete(5)),
+            mk_binop(
+                Op::Mod,
+                SymbolicValue::Concrete(17),
+                SymbolicValue::Concrete(5)
+            ),
             SymbolicValue::Concrete(2)
         );
     }
@@ -581,7 +602,11 @@ mod tests {
     #[test]
     fn overflow_add() {
         assert_eq!(
-            mk_binop(Op::Add, SymbolicValue::Concrete(i64::MAX), SymbolicValue::Concrete(1)),
+            mk_binop(
+                Op::Add,
+                SymbolicValue::Concrete(i64::MAX),
+                SymbolicValue::Concrete(1)
+            ),
             SymbolicValue::Unknown
         );
     }
@@ -589,7 +614,11 @@ mod tests {
     #[test]
     fn overflow_sub() {
         assert_eq!(
-            mk_binop(Op::Sub, SymbolicValue::Concrete(i64::MIN), SymbolicValue::Concrete(1)),
+            mk_binop(
+                Op::Sub,
+                SymbolicValue::Concrete(i64::MIN),
+                SymbolicValue::Concrete(1)
+            ),
             SymbolicValue::Unknown
         );
     }
@@ -597,7 +626,11 @@ mod tests {
     #[test]
     fn overflow_mul() {
         assert_eq!(
-            mk_binop(Op::Mul, SymbolicValue::Concrete(i64::MAX), SymbolicValue::Concrete(2)),
+            mk_binop(
+                Op::Mul,
+                SymbolicValue::Concrete(i64::MAX),
+                SymbolicValue::Concrete(2)
+            ),
             SymbolicValue::Unknown
         );
     }
@@ -605,7 +638,11 @@ mod tests {
     #[test]
     fn div_by_zero() {
         assert_eq!(
-            mk_binop(Op::Div, SymbolicValue::Concrete(10), SymbolicValue::Concrete(0)),
+            mk_binop(
+                Op::Div,
+                SymbolicValue::Concrete(10),
+                SymbolicValue::Concrete(0)
+            ),
             SymbolicValue::Unknown
         );
     }
@@ -613,7 +650,11 @@ mod tests {
     #[test]
     fn mod_by_zero() {
         assert_eq!(
-            mk_binop(Op::Mod, SymbolicValue::Concrete(10), SymbolicValue::Concrete(0)),
+            mk_binop(
+                Op::Mod,
+                SymbolicValue::Concrete(10),
+                SymbolicValue::Concrete(0)
+            ),
             SymbolicValue::Unknown
         );
     }
@@ -622,7 +663,11 @@ mod tests {
     fn min_mod_neg_one() {
         // i64::MIN % -1 overflows
         assert_eq!(
-            mk_binop(Op::Mod, SymbolicValue::Concrete(i64::MIN), SymbolicValue::Concrete(-1)),
+            mk_binop(
+                Op::Mod,
+                SymbolicValue::Concrete(i64::MIN),
+                SymbolicValue::Concrete(-1)
+            ),
             SymbolicValue::Unknown
         );
     }
@@ -730,7 +775,11 @@ mod tests {
     fn depth_nested() {
         let v = mk_binop(
             Op::Add,
-            mk_binop(Op::Mul, SymbolicValue::Concrete(2), SymbolicValue::Symbol(SsaValue(0))),
+            mk_binop(
+                Op::Mul,
+                SymbolicValue::Concrete(2),
+                SymbolicValue::Symbol(SsaValue(0)),
+            ),
             SymbolicValue::Concrete(1),
         );
         assert_eq!(v.depth(), 2);
@@ -747,13 +796,19 @@ mod tests {
     #[test]
     fn as_concrete_int_checks() {
         assert_eq!(SymbolicValue::Concrete(42).as_concrete_int(), Some(42));
-        assert_eq!(SymbolicValue::ConcreteStr("x".into()).as_concrete_int(), None);
+        assert_eq!(
+            SymbolicValue::ConcreteStr("x".into()).as_concrete_int(),
+            None
+        );
         assert_eq!(SymbolicValue::Unknown.as_concrete_int(), None);
     }
 
     #[test]
     fn as_concrete_str_checks() {
-        assert_eq!(SymbolicValue::ConcreteStr("hi".into()).as_concrete_str(), Some("hi"));
+        assert_eq!(
+            SymbolicValue::ConcreteStr("hi".into()).as_concrete_str(),
+            Some("hi")
+        );
         assert_eq!(SymbolicValue::Concrete(1).as_concrete_str(), None);
     }
 
@@ -777,7 +832,11 @@ mod tests {
 
     #[test]
     fn display_binop() {
-        let v = mk_binop(Op::Add, SymbolicValue::Symbol(SsaValue(1)), SymbolicValue::Concrete(2));
+        let v = mk_binop(
+            Op::Add,
+            SymbolicValue::Symbol(SsaValue(1)),
+            SymbolicValue::Concrete(2),
+        );
         assert_eq!(format!("{}", v), "(sym(v1) + 2)");
     }
 
@@ -792,10 +851,7 @@ mod tests {
 
     #[test]
     fn display_call() {
-        let v = mk_call(
-            "parseInt".into(),
-            vec![SymbolicValue::Symbol(SsaValue(2))],
-        );
+        let v = mk_call("parseInt".into(), vec![SymbolicValue::Symbol(SsaValue(2))]);
         assert_eq!(format!("{}", v), "parseInt(sym(v2))");
     }
 
@@ -883,27 +939,18 @@ mod tests {
 
     #[test]
     fn concrete_fold_bit_and() {
-        assert_eq!(
-            mk_binop(Op::BitAnd, c(0xFF), c(0x0F)),
-            c(0x0F)
-        );
+        assert_eq!(mk_binop(Op::BitAnd, c(0xFF), c(0x0F)), c(0x0F));
         assert_eq!(mk_binop(Op::BitAnd, c(-1), c(0x07)), c(0x07));
     }
 
     #[test]
     fn concrete_fold_bit_or() {
-        assert_eq!(
-            mk_binop(Op::BitOr, c(0xF0), c(0x0F)),
-            c(0xFF)
-        );
+        assert_eq!(mk_binop(Op::BitOr, c(0xF0), c(0x0F)), c(0xFF));
     }
 
     #[test]
     fn concrete_fold_bit_xor() {
-        assert_eq!(
-            mk_binop(Op::BitXor, c(0xFF), c(0x0F)),
-            c(0xF0)
-        );
+        assert_eq!(mk_binop(Op::BitXor, c(0xFF), c(0x0F)), c(0xF0));
         // x ^ x = 0
         assert_eq!(mk_binop(Op::BitXor, c(42), c(42)), c(0));
     }
@@ -939,12 +986,18 @@ mod tests {
 
     #[test]
     fn right_shift_negative_amount() {
-        assert_eq!(mk_binop(Op::RightShift, c(1), c(-1)), SymbolicValue::Unknown);
+        assert_eq!(
+            mk_binop(Op::RightShift, c(1), c(-1)),
+            SymbolicValue::Unknown
+        );
     }
 
     #[test]
     fn right_shift_amount_64() {
-        assert_eq!(mk_binop(Op::RightShift, c(1), c(64)), SymbolicValue::Unknown);
+        assert_eq!(
+            mk_binop(Op::RightShift, c(1), c(64)),
+            SymbolicValue::Unknown
+        );
     }
 
     #[test]
@@ -1112,7 +1165,11 @@ mod tests {
         let v = mk_to_upper(SymbolicValue::Symbol(SsaValue(3)));
         assert_eq!(format!("{}", v), "sym(v3).toUpperCase()");
 
-        let v = mk_replace(SymbolicValue::Symbol(SsaValue(4)), "<".into(), "&lt;".into());
+        let v = mk_replace(
+            SymbolicValue::Symbol(SsaValue(4)),
+            "<".into(),
+            "&lt;".into(),
+        );
         assert_eq!(format!("{}", v), "sym(v4).replace(\"<\", \"&lt;\")");
 
         let v = mk_strlen(SymbolicValue::Symbol(SsaValue(5)));
@@ -1187,10 +1244,16 @@ mod tests {
     #[test]
     fn encode_display_format() {
         use super::super::strings::TransformKind;
-        let v = mk_encode(TransformKind::HtmlEscape, SymbolicValue::Symbol(SsaValue(0)));
+        let v = mk_encode(
+            TransformKind::HtmlEscape,
+            SymbolicValue::Symbol(SsaValue(0)),
+        );
         assert_eq!(format!("{}", v), "htmlEscape(sym(v0))");
 
-        let v = mk_decode(TransformKind::Base64Decode, SymbolicValue::Symbol(SsaValue(1)));
+        let v = mk_decode(
+            TransformKind::Base64Decode,
+            SymbolicValue::Symbol(SsaValue(1)),
+        );
         assert_eq!(format!("{}", v), "decode_base64Decode(sym(v1))");
     }
 

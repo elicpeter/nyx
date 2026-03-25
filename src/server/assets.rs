@@ -1,5 +1,5 @@
 use axum::extract::Request;
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 
 static INDEX_HTML: &str = include_str!("assets/dist/index.html");
@@ -20,7 +20,10 @@ pub async fn static_handler(req: Request) -> Response {
             .into_response(),
         "/app.js" => (
             StatusCode::OK,
-            [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+            [(
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            )],
             APP_JS,
         )
             .into_response(),

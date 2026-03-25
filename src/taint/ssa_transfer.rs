@@ -1,17 +1,19 @@
+use crate::abstract_interp::{self, AbstractState};
 use crate::callgraph::normalize_callee_name;
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
+use crate::constraint;
 use crate::interop::InteropEdge;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule, SourceKind};
 use crate::ssa::heap::{HeapSlot, HeapState, PointsToResult, PointsToSet};
 use crate::ssa::ir::*;
 use crate::state::lattice::Lattice;
+use crate::state::symbol::{SymbolId, SymbolInterner};
 use crate::summary::{CalleeResolution, GlobalSummaries};
 use crate::symbol::Lang;
-use crate::state::symbol::{SymbolId, SymbolInterner};
-use crate::taint::domain::{PredicateSummary, SmallBitSet, TaintOrigin, VarTaint, predicate_kind_bit};
+use crate::taint::domain::{
+    PredicateSummary, SmallBitSet, TaintOrigin, VarTaint, predicate_kind_bit,
+};
 use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
-use crate::abstract_interp::{self, AbstractState};
-use crate::constraint;
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 use std::cell::RefCell;
@@ -112,7 +114,15 @@ impl Lattice for SsaTaintState {
             (Some(a), Some(b)) => Some(a.join(b)),
             _ => None,
         };
-        SsaTaintState { values, validated_must, validated_may, predicates, heap, path_env, abstract_state }
+        SsaTaintState {
+            values,
+            validated_must,
+            validated_may,
+            predicates,
+            heap,
+            path_env,
+            abstract_state,
+        }
     }
 
     fn leq(&self, other: &Self) -> bool {
@@ -131,7 +141,7 @@ impl Lattice for SsaTaintState {
         // path_env: None (Top) ≥ everything; Some(a) ≤ None only if a is Top-equivalent
         match (&self.path_env, &other.path_env) {
             (None, Some(_)) => return false, // Top is NOT ≤ constrained
-            (Some(_), None) => {} // constrained ≤ Top: ok
+            (Some(_), None) => {}            // constrained ≤ Top: ok
             (None, None) => {}
             (Some(a), Some(b)) => {
                 // a ≤ b means a has at least as many constraints as b.
@@ -182,7 +192,14 @@ fn merge_join_ssa_vars(
                 let caps = a[i].1.caps | b[j].1.caps;
                 let origins = merge_origins(&a[i].1.origins, &b[j].1.origins);
                 let uses_summary = a[i].1.uses_summary || b[j].1.uses_summary;
-                result.push((a[i].0, VarTaint { caps, origins, uses_summary }));
+                result.push((
+                    a[i].0,
+                    VarTaint {
+                        caps,
+                        origins,
+                        uses_summary,
+                    },
+                ));
                 i += 1;
                 j += 1;
             }
@@ -261,8 +278,12 @@ fn merge_join_ssa_predicates(
 
     while i < a.len() && j < b.len() {
         match a[i].0.cmp(&b[j].0) {
-            std::cmp::Ordering::Less => { i += 1; }
-            std::cmp::Ordering::Greater => { j += 1; }
+            std::cmp::Ordering::Less => {
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                j += 1;
+            }
             std::cmp::Ordering::Equal => {
                 let joined = a[i].1.join(b[j].1);
                 if !joined.is_empty() {
@@ -409,18 +430,24 @@ pub fn run_ssa_taint_full(
                 for (v, cl) in cv {
                     match cl {
                         ConstLattice::Int(n) => {
-                            abs.set(*v, AbstractValue {
-                                interval: IntervalFact::exact(*n),
-                                string: StringFact::top(),
-                                bits: BitFact::from_const(*n),
-                            });
+                            abs.set(
+                                *v,
+                                AbstractValue {
+                                    interval: IntervalFact::exact(*n),
+                                    string: StringFact::top(),
+                                    bits: BitFact::from_const(*n),
+                                },
+                            );
                         }
                         ConstLattice::Str(s) => {
-                            abs.set(*v, AbstractValue {
-                                interval: IntervalFact::top(),
-                                string: StringFact::exact(s),
-                                bits: BitFact::top(),
-                            });
+                            abs.set(
+                                *v,
+                                AbstractValue {
+                                    interval: IntervalFact::top(),
+                                    string: StringFact::exact(s),
+                                    bits: BitFact::top(),
+                                },
+                            );
                         }
                         _ => {}
                     }
@@ -473,8 +500,13 @@ pub fn run_ssa_taint_full(
 
         let block = &ssa.blocks[bid];
         let exit_state = transfer_block(
-            block, cfg, ssa, transfer, entry_state,
-            &induction_vars, Some(&pred_states),
+            block,
+            cfg,
+            ssa,
+            transfer,
+            entry_state,
+            &induction_vars,
+            Some(&pred_states),
         );
 
         // Build per-successor states (branch-aware for Branch terminators)
@@ -532,7 +564,6 @@ pub fn run_ssa_taint_full(
             exc_state.predicates.clear();
             exc_state.path_env = None; // constraints don't survive exceptions
 
-
             let new_catch_state = match &block_states[catch_idx] {
                 Some(existing) => existing.join(&exc_state),
                 None => exc_state,
@@ -562,8 +593,14 @@ pub fn run_ssa_taint_full(
 
         let block = &ssa.blocks[bid];
         collect_block_events(
-            block, cfg, ssa, transfer, entry_state, &mut events,
-            &induction_vars, Some(&pred_states),
+            block,
+            cfg,
+            ssa,
+            transfer,
+            entry_state,
+            &mut events,
+            &induction_vars,
+            Some(&pred_states),
         );
     }
 
@@ -571,11 +608,7 @@ pub fn run_ssa_taint_full(
 }
 
 /// Convenience wrapper: returns only events (existing signature).
-pub fn run_ssa_taint(
-    ssa: &SsaBody,
-    cfg: &Cfg,
-    transfer: &SsaTaintTransfer,
-) -> Vec<SsaTaintEvent> {
+pub fn run_ssa_taint(ssa: &SsaBody, cfg: &Cfg, transfer: &SsaTaintTransfer) -> Vec<SsaTaintEvent> {
     run_ssa_taint_full(ssa, cfg, transfer).0
 }
 
@@ -594,8 +627,13 @@ pub fn extract_ssa_exit_state(
     for (bid, entry_state) in block_states.iter().enumerate() {
         if let Some(state) = entry_state {
             let exit_state = transfer_block(
-                &ssa.blocks[bid], cfg, ssa, transfer, state.clone(),
-                &empty_induction, None,
+                &ssa.blocks[bid],
+                cfg,
+                ssa,
+                transfer,
+                state.clone(),
+                &empty_induction,
+                None,
             );
             joined = joined.join(&exit_state);
         }
@@ -604,11 +642,14 @@ pub fn extract_ssa_exit_state(
     // Map SsaValue → var_name → SymbolId
     let mut result: HashMap<SymbolId, VarTaint> = HashMap::new();
     for (val, taint) in &joined.values {
-        let var_name = ssa.value_defs.get(val.0 as usize)
+        let var_name = ssa
+            .value_defs
+            .get(val.0 as usize)
             .and_then(|vd| vd.var_name.as_deref());
         if let Some(name) = var_name {
             if let Some(sym) = interner.get(name) {
-                result.entry(sym)
+                result
+                    .entry(sym)
                     .and_modify(|existing| {
                         existing.caps |= taint.caps;
                         for orig in &taint.origins {
@@ -634,7 +675,8 @@ pub fn join_seed_maps(
 ) -> HashMap<SymbolId, VarTaint> {
     let mut result = a.clone();
     for (sym, taint) in b {
-        result.entry(*sym)
+        result
+            .entry(*sym)
             .and_modify(|existing| {
                 existing.caps |= taint.caps;
                 for orig in &taint.origins {
@@ -708,7 +750,10 @@ fn is_simple_increment(ssa: &SsaBody, inc_val: SsaValue, phi_val: SsaValue) -> b
 
 /// Detect phi nodes that represent loop induction variables.
 /// Returns the set of SsaValues (phi results) that are simple induction variables.
-fn detect_induction_phis(ssa: &SsaBody, back_edges: &HashSet<(BlockId, BlockId)>) -> HashSet<SsaValue> {
+fn detect_induction_phis(
+    ssa: &SsaBody,
+    back_edges: &HashSet<(BlockId, BlockId)>,
+) -> HashSet<SsaValue> {
     let mut induction_vars = HashSet::new();
 
     for block in &ssa.blocks {
@@ -802,7 +847,9 @@ fn transfer_block(
                     // Path sensitivity: check if this operand is validated in its predecessor
                     if let Some(ps) = pred_states {
                         if let Some(pred_st) = ps.get(&(block_idx, pred_blk.0 as usize)) {
-                            let var_name = ssa.value_defs.get(operand_val.0 as usize)
+                            let var_name = ssa
+                                .value_defs
+                                .get(operand_val.0 as usize)
                                 .and_then(|vd| vd.var_name.as_deref());
                             if let Some(name) = var_name {
                                 if let Some(sym) = transfer.interner.get(name) {
@@ -838,7 +885,9 @@ fn transfer_block(
 
                 // Path sensitivity: if all tainted predecessors validated, propagate to phi result
                 if any_tainted && all_tainted_validated {
-                    if let Some(name) = ssa.value_defs.get(phi.value.0 as usize)
+                    if let Some(name) = ssa
+                        .value_defs
+                        .get(phi.value.0 as usize)
                         .and_then(|vd| vd.var_name.as_deref())
                     {
                         if let Some(sym) = transfer.interner.get(name) {
@@ -912,7 +961,12 @@ fn compute_succ_states(
     exit_state: &SsaTaintState,
 ) -> SmallVec<[(BlockId, SsaTaintState); 2]> {
     match &block.terminator {
-        Terminator::Branch { cond, true_blk, false_blk, condition } => {
+        Terminator::Branch {
+            cond,
+            true_blk,
+            false_blk,
+            condition,
+        } => {
             let cond_info = &cfg[*cond];
             if cond_info.kind == crate::cfg::StmtKind::If && !cond_info.condition_vars.is_empty() {
                 let cond_text = cond_info.condition_text.as_deref().unwrap_or("");
@@ -941,8 +995,8 @@ fn compute_succ_states(
                 // - TypeCheck with `!==`/`!=`: "typeof x !== 'number'" means
                 //   the true branch is the REJECT path (type mismatch)
                 let cond_lower = cond_text.to_ascii_lowercase();
-                let has_semantic_negation =
-                    (kind == PredicateKind::AllowlistCheck && cond_lower.contains(" not in "))
+                let has_semantic_negation = (kind == PredicateKind::AllowlistCheck
+                    && cond_lower.contains(" not in "))
                     || (kind == PredicateKind::TypeCheck
                         && (cond_lower.contains("!==") || cond_lower.contains("!=")));
                 let effective_negated = if has_semantic_negation {
@@ -987,9 +1041,7 @@ fn compute_succ_states(
                     let cond_expr = if let Some(pre_lowered) = condition {
                         (**pre_lowered).clone()
                     } else {
-                        constraint::lower_condition(
-                            cond_info, ssa, block.id, transfer.const_values,
-                        )
+                        constraint::lower_condition(cond_info, ssa, block.id, transfer.const_values)
                     };
                     if !matches!(cond_expr, constraint::ConditionExpr::Unknown) {
                         if let Some(ref mut env) = true_state.path_env {
@@ -1023,10 +1075,7 @@ fn compute_succ_states(
                     false_state = SsaTaintState::bot();
                 }
 
-                smallvec::smallvec![
-                    (*true_blk, true_state),
-                    (*false_blk, false_state),
-                ]
+                smallvec::smallvec![(*true_blk, true_state), (*false_blk, false_state),]
             } else {
                 // Non-If condition or no condition vars — uniform propagation
                 smallvec::smallvec![
@@ -1038,9 +1087,7 @@ fn compute_succ_states(
         Terminator::Goto(target) => {
             smallvec::smallvec![(*target, exit_state.clone())]
         }
-        Terminator::Return(_) | Terminator::Unreachable => {
-            SmallVec::new()
-        }
+        Terminator::Return(_) | Terminator::Unreachable => SmallVec::new(),
     }
 }
 
@@ -1053,7 +1100,11 @@ fn apply_branch_predicates(
     interner: &SymbolInterner,
 ) {
     // Validation-like predicates: mark condition vars as validated when polarity is true
-    if matches!(kind, PredicateKind::ValidationCall | PredicateKind::AllowlistCheck | PredicateKind::TypeCheck) && polarity {
+    if matches!(
+        kind,
+        PredicateKind::ValidationCall | PredicateKind::AllowlistCheck | PredicateKind::TypeCheck
+    ) && polarity
+    {
         for var in condition_vars {
             if let Some(sym) = interner.get(var) {
                 state.validated_may.insert(sym);
@@ -1066,7 +1117,8 @@ fn apply_branch_predicates(
     if let Some(bit_idx) = predicate_kind_bit(kind) {
         for var in condition_vars {
             if let Some(sym) = interner.get(var) {
-                let mut summary = state.predicates
+                let mut summary = state
+                    .predicates
                     .binary_search_by_key(&sym, |(id, _)| *id)
                     .ok()
                     .map(|idx| state.predicates[idx].1)
@@ -1204,11 +1256,14 @@ fn inline_analyse_callee(
                         }
 
                         if !combined_caps.is_empty() {
-                            param_seed.insert(sym, VarTaint {
-                                caps: combined_caps,
-                                origins: combined_origins,
-                                uses_summary: false,
-                            });
+                            param_seed.insert(
+                                sym,
+                                VarTaint {
+                                    caps: combined_caps,
+                                    origins: combined_origins,
+                                    uses_summary: false,
+                                },
+                            );
                         }
                     }
                 }
@@ -1228,14 +1283,16 @@ fn inline_analyse_callee(
                         if *index < args.len() {
                             // Look up the caller-side argument's var name
                             for v in &args[*index] {
-                                if let Some(arg_var_name) = caller_ssa.value_defs
+                                if let Some(arg_var_name) = caller_ssa
+                                    .value_defs
                                     .get(v.0 as usize)
                                     .and_then(|vd| vd.var_name.as_deref())
                                 {
                                     // Check if the argument name matches a known callee body
                                     let norm = normalize_callee_name(arg_var_name);
                                     if callee_bodies.contains_key(norm) {
-                                        callback_bindings.insert(param_name.clone(), norm.to_string());
+                                        callback_bindings
+                                            .insert(param_name.clone(), norm.to_string());
                                     }
                                 }
                             }
@@ -1246,8 +1303,16 @@ fn inline_analyse_callee(
         }
     }
 
-    let seed_ref = if param_seed.is_empty() { None } else { Some(&param_seed) };
-    let cb_ref = if callback_bindings.is_empty() { None } else { Some(&callback_bindings) };
+    let seed_ref = if param_seed.is_empty() {
+        None
+    } else {
+        Some(&param_seed)
+    };
+    let cb_ref = if callback_bindings.is_empty() {
+        None
+    } else {
+        Some(&callback_bindings)
+    };
     let child_transfer = SsaTaintTransfer {
         lang: transfer.lang,
         namespace: transfer.namespace,
@@ -1269,14 +1334,17 @@ fn inline_analyse_callee(
         dynamic_pts: None, // no inter-procedural container propagation at k>1
     };
 
-    let (_, callee_block_states) =
-        run_ssa_taint_full(&callee_body.ssa, cfg, &child_transfer);
+    let (_, callee_block_states) = run_ssa_taint_full(&callee_body.ssa, cfg, &child_transfer);
 
     // Extract return taint from return-block exit states
     let empty_induction = HashSet::new();
     let return_taint = extract_inline_return_taint(
-        &callee_body.ssa, cfg, &child_transfer, &callee_block_states,
-        &empty_induction, call_inst.cfg_node,
+        &callee_body.ssa,
+        cfg,
+        &child_transfer,
+        &callee_block_states,
+        &empty_induction,
+        call_inst.cfg_node,
     );
 
     let result = InlineResult { return_taint };
@@ -1304,7 +1372,9 @@ fn extract_inline_return_taint(
     _call_site_node: NodeIndex,
 ) -> Option<VarTaint> {
     // Collect all param SSA values to separate from derived values
-    let param_values: HashSet<SsaValue> = ssa.blocks.iter()
+    let param_values: HashSet<SsaValue> = ssa
+        .blocks
+        .iter()
         .flat_map(|b| b.phis.iter().chain(b.body.iter()))
         .filter(|i| matches!(i.op, SsaOp::Param { .. }))
         .map(|i| i.value)
@@ -1321,8 +1391,13 @@ fn extract_inline_return_taint(
         }
         if let Some(entry_state) = &block_states[bid] {
             let exit = transfer_block(
-                block, cfg, ssa, transfer, entry_state.clone(),
-                induction_vars, None,
+                block,
+                cfg,
+                ssa,
+                transfer,
+                entry_state.clone(),
+                induction_vars,
+                None,
             );
             for (val, taint) in &exit.values {
                 let (target_caps, target_origins) = if param_values.contains(val) {
@@ -1444,17 +1519,20 @@ fn transfer_inst(
             // write to a buffer argument (fgets, getline, recv, etc.), taint
             // the argument SSA values at the registered output positions.
             if !return_bits.is_empty() {
-                if let Some(positions) = crate::labels::output_param_source_positions(
-                    transfer.lang.as_str(), callee,
-                ) {
+                if let Some(positions) =
+                    crate::labels::output_param_source_positions(transfer.lang.as_str(), callee)
+                {
                     for &pos in positions {
                         if let Some(arg_group) = args.get(pos) {
                             for &arg_v in arg_group {
-                                state.set(arg_v, VarTaint {
-                                    caps: return_bits,
-                                    origins: return_origins.clone(),
-                                    uses_summary: false,
-                                });
+                                state.set(
+                                    arg_v,
+                                    VarTaint {
+                                        caps: return_bits,
+                                        origins: return_origins.clone(),
+                                        uses_summary: false,
+                                    },
+                                );
                             }
                         }
                     }
@@ -1487,9 +1565,9 @@ fn transfer_inst(
             // return taint — otherwise falls through to summary for cases like
             // receiver-only method calls where summary propagation is needed.
             if transfer.inline_cache.is_some() && transfer.context_depth < 1 {
-                if let Some(result) = inline_analyse_callee(
-                    callee, args, receiver, state, transfer, cfg, ssa, inst,
-                ) {
+                if let Some(result) =
+                    inline_analyse_callee(callee, args, receiver, state, transfer, cfg, ssa, inst)
+                {
                     if let Some(ref ret) = result.return_taint {
                         resolved_callee = true;
                         return_bits |= ret.caps;
@@ -1541,27 +1619,26 @@ fn transfer_inst(
             // container fields that depend on the wrapping function's summary.
             if resolved_container_store.is_empty() {
                 if let Some(ref oc) = info.outer_callee {
-                    if let Some(ref resolved) = resolve_callee(transfer, oc, caller_func, info.call_ordinal) {
+                    if let Some(ref resolved) =
+                        resolve_callee(transfer, oc, caller_func, info.call_ordinal)
+                    {
                         if resolved_container_to_return.is_empty() {
-                            resolved_container_to_return = resolved.param_container_to_return.clone();
+                            resolved_container_to_return =
+                                resolved.param_container_to_return.clone();
                         }
                         resolved_container_store = resolved.param_to_container_store.clone();
                     }
                 }
             }
 
-            if !resolved_callee
-                && let Some(resolved) = callee_summary
-            {
+            if !resolved_callee && let Some(resolved) = callee_summary {
                 resolved_callee = true;
 
                 // Source caps from summary: only when no explicit Source label
                 if !has_source_label && !resolved.source_caps.is_empty() {
                     return_bits |= resolved.source_caps;
-                    let source_kind = crate::labels::infer_source_kind(
-                        resolved.source_caps,
-                        callee,
-                    );
+                    let source_kind =
+                        crate::labels::infer_source_kind(resolved.source_caps, callee);
                     let origin = TaintOrigin {
                         node: inst.cfg_node,
                         source_kind,
@@ -1603,8 +1680,12 @@ fn transfer_inst(
                 if let Some(rv) = receiver {
                     if transfer.type_facts.is_some() || state.path_env.is_some() {
                         let tq_labels = resolve_type_qualified_labels(
-                            callee, *rv, transfer.type_facts, state.path_env.as_ref(),
-                            transfer.lang, transfer.extra_labels,
+                            callee,
+                            *rv,
+                            transfer.type_facts,
+                            state.path_env.as_ref(),
+                            transfer.lang,
+                            transfer.extra_labels,
                         );
                         for lbl in &tq_labels {
                             match lbl {
@@ -1669,12 +1750,17 @@ fn transfer_inst(
                     // the source taint into the container receiver too.
                     if !return_bits.is_empty() {
                         let recv_callee = info.outer_callee.as_deref().unwrap_or(callee);
-                        if let Some(container_val) = find_container_receiver(
-                            recv_callee, receiver, args, ssa, transfer.lang,
-                        ) {
+                        if let Some(container_val) =
+                            find_container_receiver(recv_callee, receiver, args, ssa, transfer.lang)
+                        {
                             // Also store into heap objects when available
                             if let Some(pts) = lookup_pts(transfer, container_val) {
-                                state.heap.store_set(&pts, HeapSlot::Elements, return_bits, &return_origins);
+                                state.heap.store_set(
+                                    &pts,
+                                    HeapSlot::Elements,
+                                    return_bits,
+                                    &return_origins,
+                                );
                             }
                             merge_taint_into(state, container_val, return_bits, &return_origins);
                         }
@@ -1692,9 +1778,9 @@ fn transfer_inst(
                     // Arg-to-arg propagation for known C/C++ functions (e.g.,
                     // inet_pton). When an input arg is tainted, propagate to
                     // all SSA values in the output arg positions.
-                    if let Some(prop) = crate::labels::arg_propagation(
-                        transfer.lang.as_str(), callee,
-                    ) {
+                    if let Some(prop) =
+                        crate::labels::arg_propagation(transfer.lang.as_str(), callee)
+                    {
                         let mut input_caps = Cap::empty();
                         let mut input_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
                         for &from_pos in prop.from_args {
@@ -1704,7 +1790,9 @@ fn transfer_inst(
                                         input_caps |= taint.caps;
                                         for orig in &taint.origins {
                                             if input_origins.len() < MAX_ORIGINS
-                                                && !input_origins.iter().any(|o| o.node == orig.node)
+                                                && !input_origins
+                                                    .iter()
+                                                    .any(|o| o.node == orig.node)
                                             {
                                                 input_origins.push(*orig);
                                             }
@@ -1717,11 +1805,14 @@ fn transfer_inst(
                             for &to_pos in prop.to_args {
                                 if let Some(arg_group) = args.get(to_pos) {
                                     for &arg_v in arg_group {
-                                        state.set(arg_v, VarTaint {
-                                            caps: input_caps,
-                                            origins: input_origins.clone(),
-                                            uses_summary: false,
-                                        });
+                                        state.set(
+                                            arg_v,
+                                            VarTaint {
+                                                caps: input_caps,
+                                                origins: input_origins.clone(),
+                                                uses_summary: false,
+                                            },
+                                        );
                                     }
                                 }
                             }
@@ -1741,7 +1832,13 @@ fn transfer_inst(
             if !sanitizer_bits.is_empty() {
                 if let Some(aliases) = transfer.base_aliases {
                     if !aliases.is_empty() {
-                        propagate_sanitization_to_aliases(inst, state, sanitizer_bits, aliases, ssa);
+                        propagate_sanitization_to_aliases(
+                            inst,
+                            state,
+                            sanitizer_bits,
+                            aliases,
+                            ssa,
+                        );
                     }
                 }
             }
@@ -1826,7 +1923,9 @@ fn transfer_inst(
                     // Store source taint into container's heap objects
                     if !src_caps.is_empty() {
                         for pts in &container_pts {
-                            state.heap.store_set(pts, HeapSlot::Elements, src_caps, &src_origins);
+                            state
+                                .heap
+                                .store_set(pts, HeapSlot::Elements, src_caps, &src_origins);
                         }
                     }
                 }
@@ -1899,7 +1998,13 @@ fn transfer_inst(
             if !sanitizer_bits.is_empty() {
                 if let Some(aliases) = transfer.base_aliases {
                     if !aliases.is_empty() {
-                        propagate_sanitization_to_aliases(inst, state, sanitizer_bits, aliases, ssa);
+                        propagate_sanitization_to_aliases(
+                            inst,
+                            state,
+                            sanitizer_bits,
+                            aliases,
+                            ssa,
+                        );
                     }
                 }
             }
@@ -1960,7 +2065,9 @@ fn transfer_inst(
         SsaOp::Param { .. } => {
             // Seed from global scope (JS/TS two-level solve)
             if let Some(seed) = &transfer.global_seed {
-                if let Some(var_name) = ssa.value_defs.get(inst.value.0 as usize)
+                if let Some(var_name) = ssa
+                    .value_defs
+                    .get(inst.value.0 as usize)
                     .and_then(|vd| vd.var_name.as_deref())
                 {
                     if let Some(sym) = transfer.interner.get(var_name) {
@@ -2001,12 +2108,9 @@ fn transfer_inst(
                 // erase taint — a tainted value cast to String is still tainted.
                 let node_info = &cfg[inst.cfg_node];
                 if let Some(ref cast_type) = node_info.cast_target_type {
-                    if let Some(kind) =
-                        crate::constraint::solver::parse_type_name(cast_type)
-                    {
+                    if let Some(kind) = crate::constraint::solver::parse_type_name(cast_type) {
                         let mut fact = constraint::ValueFact::top();
-                        fact.types =
-                            constraint::TypeSet::singleton(&kind);
+                        fact.types = constraint::TypeSet::singleton(&kind);
                         fact.null = constraint::Nullability::NonNull;
                         env.refine(inst.value, &fact);
                     }
@@ -2079,11 +2183,7 @@ fn transfer_inst(
 /// Propagates interval and string domain facts forward through constants,
 /// copies, binary arithmetic, and concatenation. Conservative (Top) for
 /// unknown operations (calls, sources, params).
-fn transfer_abstract(
-    inst: &SsaInst,
-    cfg: &Cfg,
-    abs: &mut AbstractState,
-) {
+fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
     use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, StringFact};
     use crate::cfg::BinOp;
 
@@ -2093,18 +2193,24 @@ fn transfer_abstract(
             let trimmed = text.trim();
             // Try integer
             if let Ok(n) = trimmed.parse::<i64>() {
-                abs.set(inst.value, AbstractValue {
-                    interval: IntervalFact::exact(n),
-                    string: StringFact::top(),
-                    bits: BitFact::from_const(n),
-                });
+                abs.set(
+                    inst.value,
+                    AbstractValue {
+                        interval: IntervalFact::exact(n),
+                        string: StringFact::top(),
+                        bits: BitFact::from_const(n),
+                    },
+                );
             } else if is_string_const(trimmed) {
                 let s = strip_string_quotes(trimmed);
-                abs.set(inst.value, AbstractValue {
-                    interval: IntervalFact::top(),
-                    string: StringFact::exact(&s),
-                    bits: BitFact::top(),
-                });
+                abs.set(
+                    inst.value,
+                    AbstractValue {
+                        interval: IntervalFact::top(),
+                        string: StringFact::exact(&s),
+                        bits: BitFact::top(),
+                    },
+                );
             }
             // Bool/Null/other: leave as Top
         }
@@ -2133,8 +2239,12 @@ fn transfer_abstract(
                     BinOp::BitXor => var_abs.interval.bit_xor(&const_abs.interval),
                     BinOp::LeftShift => var_abs.interval.left_shift(&const_abs.interval),
                     BinOp::RightShift => var_abs.interval.right_shift(&const_abs.interval),
-                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq
-                    | BinOp::Gt | BinOp::GtEq => IntervalFact {
+                    BinOp::Eq
+                    | BinOp::NotEq
+                    | BinOp::Lt
+                    | BinOp::LtEq
+                    | BinOp::Gt
+                    | BinOp::GtEq => IntervalFact {
                         lo: Some(0),
                         hi: Some(1),
                     },
@@ -2182,8 +2292,12 @@ fn transfer_abstract(
                     BinOp::LeftShift => lhs_abs.interval.left_shift(&rhs_abs.interval),
                     BinOp::RightShift => lhs_abs.interval.right_shift(&rhs_abs.interval),
                     // Comparisons produce boolean 0/1
-                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq
-                    | BinOp::Gt | BinOp::GtEq => IntervalFact {
+                    BinOp::Eq
+                    | BinOp::NotEq
+                    | BinOp::Lt
+                    | BinOp::LtEq
+                    | BinOp::Gt
+                    | BinOp::GtEq => IntervalFact {
                         lo: Some(0),
                         hi: Some(1),
                     },
@@ -2216,11 +2330,14 @@ fn transfer_abstract(
                 // but still propagate string concat (prefix from LHS, suffix from RHS)
                 let string_result = lhs_abs.string.concat(&rhs_abs.string);
                 if !string_result.is_top() {
-                    abs.set(inst.value, AbstractValue {
-                        interval: IntervalFact::top(),
-                        string: string_result,
-                        bits: BitFact::top(),
-                    });
+                    abs.set(
+                        inst.value,
+                        AbstractValue {
+                            interval: IntervalFact::top(),
+                            string: string_result,
+                            bits: BitFact::top(),
+                        },
+                    );
                 }
             }
         }
@@ -2229,14 +2346,17 @@ fn transfer_abstract(
             // Known integer-producing calls get a bounded interval so downstream
             // arithmetic transfer produces useful facts (e.g. parseInt(x) * 10).
             if is_int_producing_callee(callee) {
-                abs.set(inst.value, AbstractValue {
-                    interval: IntervalFact {
-                        lo: Some(i32::MIN as i64),
-                        hi: Some(i32::MAX as i64),
+                abs.set(
+                    inst.value,
+                    AbstractValue {
+                        interval: IntervalFact {
+                            lo: Some(i32::MIN as i64),
+                            hi: Some(i32::MAX as i64),
+                        },
+                        string: StringFact::top(),
+                        bits: BitFact::top(),
                     },
-                    string: StringFact::top(),
-                    bits: BitFact::top(),
-                });
+                );
             }
             // Unknown calls: implicit Top (don't store)
         }
@@ -2323,7 +2443,9 @@ fn collect_block_events(
                     // Path sensitivity: check if this operand is validated in predecessor
                     if let Some(ps) = pred_states {
                         if let Some(pred_st) = ps.get(&(block_idx, pred_blk.0 as usize)) {
-                            let var_name = ssa.value_defs.get(operand_val.0 as usize)
+                            let var_name = ssa
+                                .value_defs
+                                .get(operand_val.0 as usize)
                                 .and_then(|vd| vd.var_name.as_deref());
                             if let Some(name) = var_name {
                                 if let Some(sym) = transfer.interner.get(name) {
@@ -2359,7 +2481,9 @@ fn collect_block_events(
 
                 // Path sensitivity: if all tainted predecessors validated, propagate
                 if any_tainted && all_tainted_validated {
-                    if let Some(name) = ssa.value_defs.get(phi.value.0 as usize)
+                    if let Some(name) = ssa
+                        .value_defs
+                        .get(phi.value.0 as usize)
                         .and_then(|vd| vd.var_name.as_deref())
                     {
                         if let Some(sym) = transfer.interner.get(name) {
@@ -2430,11 +2554,20 @@ fn collect_block_events(
         // Type-qualified sink resolution: when normal sink resolution found nothing,
         // try using the receiver's inferred type to construct a qualified callee name.
         if sink_caps.is_empty() {
-            if let SsaOp::Call { callee, receiver: Some(rv), .. } = &inst.op {
+            if let SsaOp::Call {
+                callee,
+                receiver: Some(rv),
+                ..
+            } = &inst.op
+            {
                 if transfer.type_facts.is_some() || state.path_env.is_some() {
                     let tq_labels = resolve_type_qualified_labels(
-                        callee, *rv, transfer.type_facts, state.path_env.as_ref(),
-                        transfer.lang, transfer.extra_labels,
+                        callee,
+                        *rv,
+                        transfer.type_facts,
+                        state.path_env.as_ref(),
+                        transfer.lang,
+                        transfer.extra_labels,
                     );
                     for lbl in &tq_labels {
                         if let DataLabel::Sink(bits) = lbl {
@@ -2454,7 +2587,10 @@ fn collect_block_events(
         // of object the sink expects (e.g., Int receiver → not an HTTP response
         // sink), strip those sink caps.
         if let Some(ref env) = state.path_env {
-            if let SsaOp::Call { receiver: Some(rv), .. } = &inst.op {
+            if let SsaOp::Call {
+                receiver: Some(rv), ..
+            } = &inst.op
+            {
                 if let Some(kind) = env.get(*rv).types.as_singleton() {
                     sink_caps &= !receiver_incompatible_sink_caps(&kind, sink_caps);
                 }
@@ -2512,11 +2648,8 @@ fn collect_block_events(
                     // This handles sanitizers that have no function summary (e.g.
                     // external libraries like `escapeHtml`, `DOMPurify.sanitize`).
                     let lang_str = transfer.lang.as_str();
-                    let labels = crate::labels::classify_all(
-                        lang_str,
-                        inner_callee,
-                        transfer.extra_labels,
-                    );
+                    let labels =
+                        crate::labels::classify_all(lang_str, inner_callee, transfer.extra_labels);
                     for lbl in &labels {
                         if let DataLabel::Sanitizer(bits) = lbl {
                             sink_caps &= !*bits;
@@ -2568,25 +2701,52 @@ fn collect_block_events(
         // Phase 17: Abstract-domain-aware sink suppression.
         // Includes SSRF prefix locking and dual-gate (type + interval) for SQL/FILE_IO.
         if let Some(ref abs) = state.abstract_state {
-            if is_abstract_safe_for_sink(inst, sink_caps, abs, transfer.type_facts, &state, ssa, cfg) {
+            if is_abstract_safe_for_sink(
+                inst,
+                sink_caps,
+                abs,
+                transfer.type_facts,
+                &state,
+                ssa,
+                cfg,
+            ) {
                 continue;
             }
         }
         // Phase 17: Call-site abstract suppression.
         if let SsaOp::Call { ref args, .. } = inst.op {
             if let Some(ref abs) = state.abstract_state {
-                if is_call_abstract_safe(inst, args, sink_caps, abs, transfer.type_facts, &state, ssa, cfg) {
+                if is_call_abstract_safe(
+                    inst,
+                    args,
+                    sink_caps,
+                    abs,
+                    transfer.type_facts,
+                    &state,
+                    ssa,
+                    cfg,
+                ) {
                     continue;
                 }
             }
         }
 
         // Collect tainted SSA values that flow into this sink
-        let tainted = collect_tainted_sink_values(inst, info, &state, sink_caps, ssa, transfer, &sink_info.param_to_sink);
+        let tainted = collect_tainted_sink_values(
+            inst,
+            info,
+            &state,
+            sink_caps,
+            ssa,
+            transfer,
+            &sink_info.param_to_sink,
+        );
         if !tainted.is_empty() {
             // Compute all_validated: check if all tainted vars are validated
             let all_validated = tainted.iter().all(|(val, _, _)| {
-                let var_name = ssa.value_defs.get(val.0 as usize)
+                let var_name = ssa
+                    .value_defs
+                    .get(val.0 as usize)
                     .and_then(|vd| vd.var_name.as_deref());
                 if let Some(name) = var_name {
                     if let Some(sym) = transfer.interner.get(name) {
@@ -2601,9 +2761,9 @@ fn collect_block_events(
                 None
             };
             // Check if any tainted value's taint chain used summary resolution
-            let any_uses_summary = tainted.iter().any(|(val, _, _)| {
-                state.get(*val).is_some_and(|t| t.uses_summary)
-            });
+            let any_uses_summary = tainted
+                .iter()
+                .any(|(val, _, _)| state.get(*val).is_some_and(|t| t.uses_summary));
             events.push(SsaTaintEvent {
                 sink_node: inst.cfg_node,
                 tainted_values: tainted,
@@ -2795,10 +2955,7 @@ fn try_curl_url_propagation(
 ///   sets `const_values: Some(&callee_body.opt.const_values)` on the child
 ///   transfer, so callee-local constants are resolved.
 /// - Unknown / non-integer / out-of-bounds: falls back to `HeapSlot::Elements`.
-fn resolve_container_index(
-    index_val: SsaValue,
-    transfer: &SsaTaintTransfer,
-) -> HeapSlot {
+fn resolve_container_index(index_val: SsaValue, transfer: &SsaTaintTransfer) -> HeapSlot {
     use crate::ssa::heap::MAX_TRACKED_INDICES;
 
     if let Some(cv) = transfer.const_values {
@@ -2853,7 +3010,7 @@ fn try_container_propagation(
     ssa: &SsaBody,
 ) -> bool {
     let lang = transfer.lang;
-    use crate::ssa::pointsto::{classify_container_op, ContainerOp};
+    use crate::ssa::pointsto::{ContainerOp, classify_container_op};
 
     let op = match classify_container_op(callee, lang) {
         Some(op) => op,
@@ -2891,7 +3048,10 @@ fn try_container_propagation(
     };
 
     match op {
-        ContainerOp::Store { value_args, index_arg } => {
+        ContainerOp::Store {
+            value_args,
+            index_arg,
+        } => {
             let container_val = match resolve_container(receiver) {
                 Some(v) => v,
                 None => return false,
@@ -2943,11 +3103,14 @@ fn try_container_propagation(
                 // For Go append, result also points to same heap objects
                 if lang == Lang::Go && receiver.is_none() {
                     if let Some(ht) = state.heap.load_set(&pts, HeapSlot::Elements) {
-                        state.set(inst.value, VarTaint {
-                            caps: ht.caps,
-                            origins: ht.origins,
-                            uses_summary: false,
-                        });
+                        state.set(
+                            inst.value,
+                            VarTaint {
+                                caps: ht.caps,
+                                origins: ht.origins,
+                                uses_summary: false,
+                            },
+                        );
                     }
                 }
                 return true;
@@ -2983,11 +3146,14 @@ fn try_container_propagation(
             // When points-to info available, load from heap objects
             if let Some(pts) = lookup_pts(transfer, container_val) {
                 if let Some(ht) = state.heap.load_set(&pts, slot) {
-                    state.set(inst.value, VarTaint {
-                        caps: ht.caps,
-                        origins: ht.origins,
-                        uses_summary: false,
-                    });
+                    state.set(
+                        inst.value,
+                        VarTaint {
+                            caps: ht.caps,
+                            origins: ht.origins,
+                            uses_summary: false,
+                        },
+                    );
                 }
                 return true;
             }
@@ -3097,7 +3263,10 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
         }
     });
     if !label_sink_caps.is_empty() {
-        return SinkInfo { caps: label_sink_caps, param_to_sink: vec![] };
+        return SinkInfo {
+            caps: label_sink_caps,
+            param_to_sink: vec![],
+        };
     }
 
     let caller_func = info.enclosing_func.as_deref().unwrap_or("");
@@ -3109,7 +3278,10 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
             caps: r.sink_caps,
             param_to_sink: r.param_to_sink,
         })
-        .unwrap_or(SinkInfo { caps: Cap::empty(), param_to_sink: vec![] })
+        .unwrap_or(SinkInfo {
+            caps: Cap::empty(),
+            param_to_sink: vec![],
+        })
 }
 
 /// Collect tainted SSA values at a sink instruction.
@@ -3129,16 +3301,17 @@ fn collect_tainted_sink_values(
 
     // Helper: check heap taint for an SSA value that may point to container(s).
     // At sinks we use Elements to conservatively see all indexed taint.
-    let check_heap_taint = |v: SsaValue, result: &mut Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>| {
-        if let Some(pts) = lookup_pts(transfer, v) {
-            if let Some(ht) = state.heap.load_set(&pts, HeapSlot::Elements) {
-                let effective = ht.caps & sink_caps;
-                if !effective.is_empty() && !result.iter().any(|&(rv, _, _)| rv == v) {
-                    result.push((v, ht.caps, ht.origins));
+    let check_heap_taint =
+        |v: SsaValue, result: &mut Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>| {
+            if let Some(pts) = lookup_pts(transfer, v) {
+                if let Some(ht) = state.heap.load_set(&pts, HeapSlot::Elements) {
+                    let effective = ht.caps & sink_caps;
+                    if !effective.is_empty() && !result.iter().any(|&(rv, _, _)| rv == v) {
+                        result.push((v, ht.caps, ht.origins));
+                    }
                 }
             }
-        }
-    };
+        };
 
     // Collect SSA values used by this instruction
     let used_values = inst_use_values(inst);
@@ -3277,17 +3450,63 @@ fn is_likely_method_expression(name: &str) -> bool {
     // false negatives just mean slightly more conservative (no suppression).
     matches!(
         suffix,
-        "push" | "pop" | "shift" | "unshift"
-            | "join" | "split" | "concat" | "slice" | "splice"
-            | "map" | "filter" | "reduce" | "forEach" | "find" | "some" | "every"
-            | "get" | "set" | "has" | "delete" | "add" | "remove" | "clear"
-            | "keys" | "values" | "entries" | "toString" | "valueOf"
-            | "send" | "write" | "end" | "render" | "redirect"
-            | "append" | "extend" | "insert" | "update" | "items"
-            | "call" | "apply" | "bind" | "then" | "catch"
-            | "trim" | "replace" | "match" | "search" | "test"
-            | "log" | "warn" | "error" | "info" | "debug"
-            | "execute" | "query" | "fetch" | "request"
+        "push"
+            | "pop"
+            | "shift"
+            | "unshift"
+            | "join"
+            | "split"
+            | "concat"
+            | "slice"
+            | "splice"
+            | "map"
+            | "filter"
+            | "reduce"
+            | "forEach"
+            | "find"
+            | "some"
+            | "every"
+            | "get"
+            | "set"
+            | "has"
+            | "delete"
+            | "add"
+            | "remove"
+            | "clear"
+            | "keys"
+            | "values"
+            | "entries"
+            | "toString"
+            | "valueOf"
+            | "send"
+            | "write"
+            | "end"
+            | "render"
+            | "redirect"
+            | "append"
+            | "extend"
+            | "insert"
+            | "update"
+            | "items"
+            | "call"
+            | "apply"
+            | "bind"
+            | "then"
+            | "catch"
+            | "trim"
+            | "replace"
+            | "match"
+            | "search"
+            | "test"
+            | "log"
+            | "warn"
+            | "error"
+            | "info"
+            | "debug"
+            | "execute"
+            | "query"
+            | "fetch"
+            | "request"
     )
 }
 
@@ -3296,9 +3515,7 @@ fn inst_use_values(inst: &SsaInst) -> Vec<SsaValue> {
     match &inst.op {
         SsaOp::Phi(operands) => operands.iter().map(|(_, v)| *v).collect(),
         SsaOp::Assign(uses) => uses.to_vec(),
-        SsaOp::Call {
-            args, receiver, ..
-        } => {
+        SsaOp::Call { args, receiver, .. } => {
             let mut vals = Vec::new();
             if let Some(rv) = receiver {
                 vals.push(*rv);
@@ -3519,9 +3736,9 @@ fn all_args_const(
             const_values.get(v),
             Some(
                 crate::ssa::const_prop::ConstLattice::Str(_)
-                | crate::ssa::const_prop::ConstLattice::Int(_)
-                | crate::ssa::const_prop::ConstLattice::Bool(_)
-                | crate::ssa::const_prop::ConstLattice::Null
+                    | crate::ssa::const_prop::ConstLattice::Int(_)
+                    | crate::ssa::const_prop::ConstLattice::Bool(_)
+                    | crate::ssa::const_prop::ConstLattice::Null
             )
         )
     })
@@ -3550,8 +3767,7 @@ fn resolve_type_qualified_labels(
             if let Some(prefix) = receiver_type.label_prefix() {
                 let method = callee.rsplit('.').next().unwrap_or(callee);
                 let qualified = format!("{}.{}", prefix, method);
-                let labels =
-                    crate::labels::classify_all(lang.as_str(), &qualified, extra_labels);
+                let labels = crate::labels::classify_all(lang.as_str(), &qualified, extra_labels);
                 if !labels.is_empty() {
                     return labels;
                 }
@@ -3566,11 +3782,7 @@ fn resolve_type_qualified_labels(
             if let Some(prefix) = kind.label_prefix() {
                 let method = callee.rsplit('.').next().unwrap_or(callee);
                 let qualified = format!("{}.{}", prefix, method);
-                return crate::labels::classify_all(
-                    lang.as_str(),
-                    &qualified,
-                    extra_labels,
-                );
+                return crate::labels::classify_all(lang.as_str(), &qualified, extra_labels);
             }
         }
     }
@@ -3642,16 +3854,13 @@ fn type_safe_for_taint_sink(kind: &crate::ssa::type_facts::TypeKind, cap: Cap) -
 /// proves the sink doesn't apply. For example, `HTML_ESCAPE` sinks require
 /// an HTTP-response-like receiver — if the receiver is known to be
 /// Int/Bool/String, `HTML_ESCAPE` doesn't apply.
-fn receiver_incompatible_sink_caps(
-    kind: &crate::ssa::type_facts::TypeKind,
-    sink_caps: Cap,
-) -> Cap {
+fn receiver_incompatible_sink_caps(kind: &crate::ssa::type_facts::TypeKind, sink_caps: Cap) -> Cap {
     use crate::ssa::type_facts::TypeKind;
     let mut remove = Cap::empty();
     // HTML_ESCAPE requires HTTP response-like receiver
     if sink_caps.intersects(Cap::HTML_ESCAPE) {
         match kind {
-            TypeKind::HttpResponse => {} // compatible
+            TypeKind::HttpResponse => {}               // compatible
             TypeKind::Unknown | TypeKind::Object => {} // could be response
             _ => {
                 remove |= Cap::HTML_ESCAPE;
@@ -3667,11 +3876,7 @@ fn receiver_incompatible_sink_caps(
 
 /// Check if all argument values of an instruction have types that are safe
 /// for the given sink (path-sensitive, via [`PathEnv`]).
-fn is_path_type_safe_for_sink(
-    inst: &SsaInst,
-    sink_caps: Cap,
-    env: &constraint::PathEnv,
-) -> bool {
+fn is_path_type_safe_for_sink(inst: &SsaInst, sink_caps: Cap, env: &constraint::PathEnv) -> bool {
     let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO | Cap::CODE_EXEC;
     if !sink_caps.intersects(type_suppressible) {
         return false;
@@ -3841,14 +4046,23 @@ fn trace_single_leaf(
             let bin_op = cfg.node_weight(inst.cfg_node).and_then(|ni| ni.bin_op);
             let is_numeric_op = matches!(
                 bin_op,
-                Some(crate::cfg::BinOp::Sub | crate::cfg::BinOp::Mul
-                    | crate::cfg::BinOp::Div | crate::cfg::BinOp::Mod
-                    | crate::cfg::BinOp::BitAnd | crate::cfg::BinOp::BitOr
-                    | crate::cfg::BinOp::BitXor | crate::cfg::BinOp::LeftShift
-                    | crate::cfg::BinOp::RightShift
-                    | crate::cfg::BinOp::Eq | crate::cfg::BinOp::NotEq
-                    | crate::cfg::BinOp::Lt | crate::cfg::BinOp::LtEq
-                    | crate::cfg::BinOp::Gt | crate::cfg::BinOp::GtEq)
+                Some(
+                    crate::cfg::BinOp::Sub
+                        | crate::cfg::BinOp::Mul
+                        | crate::cfg::BinOp::Div
+                        | crate::cfg::BinOp::Mod
+                        | crate::cfg::BinOp::BitAnd
+                        | crate::cfg::BinOp::BitOr
+                        | crate::cfg::BinOp::BitXor
+                        | crate::cfg::BinOp::LeftShift
+                        | crate::cfg::BinOp::RightShift
+                        | crate::cfg::BinOp::Eq
+                        | crate::cfg::BinOp::NotEq
+                        | crate::cfg::BinOp::Lt
+                        | crate::cfg::BinOp::LtEq
+                        | crate::cfg::BinOp::Gt
+                        | crate::cfg::BinOp::GtEq
+                )
             );
             if is_numeric_op {
                 leaves.push(v);
@@ -3947,7 +4161,11 @@ fn resolve_callee(
                     source_caps: ls.source_caps,
                     sanitizer_caps: ls.sanitizer_caps,
                     sink_caps: ls.sink_caps,
-                    param_to_sink: ls.tainted_sink_params.iter().map(|&i| (i, ls.sink_caps)).collect(),
+                    param_to_sink: ls
+                        .tainted_sink_params
+                        .iter()
+                        .map(|&i| (i, ls.sink_caps))
+                        .collect(),
                     propagates_taint: !ls.propagating_params.is_empty(),
                     propagating_params: ls.propagating_params.clone(),
                     param_container_to_return: vec![],
@@ -4023,7 +4241,11 @@ fn resolve_callee(
             source_caps: ls.source_caps,
             sanitizer_caps: ls.sanitizer_caps,
             sink_caps: ls.sink_caps,
-            param_to_sink: ls.tainted_sink_params.iter().map(|&i| (i, ls.sink_caps)).collect(),
+            param_to_sink: ls
+                .tainted_sink_params
+                .iter()
+                .map(|&i| (i, ls.sink_caps))
+                .collect(),
             propagates_taint: !ls.propagating_params.is_empty(),
             propagating_params: ls.propagating_params.clone(),
             param_container_to_return: vec![],
@@ -4045,7 +4267,11 @@ fn resolve_callee(
                         source_caps: fs.source_caps(),
                         sanitizer_caps: fs.sanitizer_caps(),
                         sink_caps: fs.sink_caps(),
-                        param_to_sink: fs.tainted_sink_params.iter().map(|&i| (i, fs.sink_caps())).collect(),
+                        param_to_sink: fs
+                            .tainted_sink_params
+                            .iter()
+                            .map(|&i| (i, fs.sink_caps()))
+                            .collect(),
                         propagates_taint: fs.propagates_any(),
                         propagating_params: fs.propagating_params.clone(),
                         param_container_to_return: vec![],
@@ -4073,7 +4299,11 @@ fn resolve_callee(
                 source_caps: fs.source_caps(),
                 sanitizer_caps: fs.sanitizer_caps(),
                 sink_caps: fs.sink_caps(),
-                param_to_sink: fs.tainted_sink_params.iter().map(|&i| (i, fs.sink_caps())).collect(),
+                param_to_sink: fs
+                    .tainted_sink_params
+                    .iter()
+                    .map(|&i| (i, fs.sink_caps()))
+                    .collect(),
                 propagates_taint: fs.propagates_any(),
                 propagating_params: fs.propagating_params.clone(),
                 param_container_to_return: vec![],
@@ -4270,8 +4500,7 @@ fn reconstruct_flow_path(
                     var_name: inst.var_name.clone(),
                     op_kind: FlowStepKind::Phi,
                 });
-                let vals: SmallVec<[SsaValue; 4]> =
-                    operands.iter().map(|(_, v)| *v).collect();
+                let vals: SmallVec<[SsaValue; 4]> = operands.iter().map(|(_, v)| *v).collect();
                 if vals.is_empty() {
                     break;
                 }
@@ -4341,8 +4570,7 @@ pub fn ssa_events_to_findings(
             for origin in origins {
                 if seen.insert((origin.node.index(), event.sink_node.index())) {
                     let hop_count = block_distance(ssa, origin.node, event.sink_node);
-                    let flow_steps =
-                        reconstruct_flow_path(*val, origin, event.sink_node, ssa, cfg);
+                    let flow_steps = reconstruct_flow_path(*val, origin, event.sink_node, ssa, cfg);
                     findings.push(crate::taint::Finding {
                         sink: event.sink_node,
                         source: origin.node,
@@ -4368,10 +4596,7 @@ pub fn ssa_events_to_findings(
 
 /// Given an SSA taint event at a sink, find which argument positions of the
 /// sink call instruction were tainted.
-fn extract_sink_arg_positions(
-    event: &SsaTaintEvent,
-    ssa: &SsaBody,
-) -> Vec<usize> {
+fn extract_sink_arg_positions(event: &SsaTaintEvent, ssa: &SsaBody) -> Vec<usize> {
     let ssa_val = match ssa.cfg_node_map.get(&event.sink_node) {
         Some(v) => *v,
         None => return vec![],
@@ -4392,11 +4617,8 @@ fn extract_sink_arg_positions(
     };
 
     if let SsaOp::Call { args, .. } = &inst.op {
-        let tainted_vals: HashSet<SsaValue> = event
-            .tainted_values
-            .iter()
-            .map(|(v, _, _)| *v)
-            .collect();
+        let tainted_vals: HashSet<SsaValue> =
+            event.tainted_values.iter().map(|(v, _, _)| *v).collect();
 
         let mut positions = Vec::new();
         for (i, arg_vals) in args.iter().enumerate() {
@@ -4449,7 +4671,10 @@ pub fn extract_ssa_func_summary(
     }
 
     // Identify return-reaching blocks
-    let return_blocks: Vec<usize> = ssa.blocks.iter().enumerate()
+    let return_blocks: Vec<usize> = ssa
+        .blocks
+        .iter()
+        .enumerate()
         .filter(|(_, b)| matches!(b.terminator, Terminator::Return(_)))
         .map(|(i, _)| i)
         .collect();
@@ -4457,16 +4682,18 @@ pub fn extract_ssa_func_summary(
     // Collect all param SSA values to exclude from return cap collection.
     // Param values persist with their seeded taint throughout the function —
     // we only want caps on derived values (call results, assigns) at return.
-    let all_param_values: std::collections::HashSet<SsaValue> = param_info
-        .iter()
-        .map(|(_, _, v)| *v)
-        .collect();
+    let all_param_values: std::collections::HashSet<SsaValue> =
+        param_info.iter().map(|(_, _, v)| *v).collect();
 
     // Helper: run a taint probe with a given global_seed and return
     // (surviving_return_caps, sink_events, return_abstract).
     // The return_abstract is the joined abstract value of the return SSA value
     // across all return blocks (None if Top or abstract interp disabled).
-    let run_probe = |seed: HashMap<SymbolId, VarTaint>| -> (Cap, Vec<SsaTaintEvent>, Option<crate::abstract_interp::AbstractValue>) {
+    let run_probe = |seed: HashMap<SymbolId, VarTaint>| -> (
+        Cap,
+        Vec<SsaTaintEvent>,
+        Option<crate::abstract_interp::AbstractValue>,
+    ) {
         let seed_ref = if seed.is_empty() { None } else { Some(&seed) };
         let transfer = SsaTaintTransfer {
             lang,
@@ -4503,8 +4730,13 @@ pub fn extract_ssa_func_summary(
             if let Some(entry) = &block_states[bid] {
                 let empty_induction = HashSet::new();
                 let exit = transfer_block(
-                    &ssa.blocks[bid], cfg, ssa, &transfer, entry.clone(),
-                    &empty_induction, None,
+                    &ssa.blocks[bid],
+                    cfg,
+                    ssa,
+                    &transfer,
+                    entry.clone(),
+                    &empty_induction,
+                    None,
                 );
                 for (val, taint) in &exit.values {
                     if all_param_values.contains(val) {
@@ -4516,7 +4748,9 @@ pub fn extract_ssa_func_summary(
                 // Abstract return: find the last instruction's SSA value in this
                 // return block and extract its abstract value from the exit state.
                 if let Some(ref abs) = exit.abstract_state {
-                    let ret_val = ssa.blocks[bid].body.last()
+                    let ret_val = ssa.blocks[bid]
+                        .body
+                        .last()
                         .or_else(|| ssa.blocks[bid].phis.last())
                         .map(|inst| inst.value);
                     if let Some(rv) = ret_val {
@@ -4567,11 +4801,14 @@ pub fn extract_ssa_func_summary(
             node: NodeIndex::new(0), // synthetic origin for probing
             source_kind: SourceKind::UserInput,
         };
-        seed.insert(sym, VarTaint {
-            caps: Cap::all(),
-            origins: SmallVec::from_elem(origin, 1),
-            uses_summary: false,
-        });
+        seed.insert(
+            sym,
+            VarTaint {
+                caps: Cap::all(),
+                origins: SmallVec::from_elem(origin, 1),
+                uses_summary: false,
+            },
+        );
 
         let (return_caps, events, _) = run_probe(seed);
 
@@ -4633,14 +4870,12 @@ fn infer_summary_return_type(
         if !matches!(block.terminator, Terminator::Return(_)) {
             continue;
         }
-        // Walk body in reverse to find the last Call that defines the return value.
-        for inst in block.body.iter().rev() {
-            if let SsaOp::Call { callee, .. } = &inst.op {
-                if let Some(ty) = crate::ssa::type_facts::constructor_type(lang, callee) {
-                    return Some(ty);
-                }
-            }
-            break; // only check the very last instruction
+        // Only inspect the very last instruction in the returning block.
+        if let Some(inst) = block.body.last()
+            && let SsaOp::Call { callee, .. } = &inst.op
+            && let Some(ty) = crate::ssa::type_facts::constructor_type(lang, callee)
+        {
+            return Some(ty);
         }
     }
     None
@@ -4704,7 +4939,7 @@ pub(crate) fn extract_container_flow_summary(
     ssa: &SsaBody,
     lang: Lang,
 ) -> (Vec<usize>, Vec<(usize, usize)>) {
-    use crate::ssa::pointsto::{classify_container_op, ContainerOp};
+    use crate::ssa::pointsto::{ContainerOp, classify_container_op};
 
     let inst_map = build_inst_map(ssa);
     let mut container_to_return: HashSet<usize> = HashSet::new();
@@ -4721,7 +4956,9 @@ pub(crate) fn extract_container_flow_summary(
                 // Skip Param (would cause false positives in single-block functions),
                 // Call (new identity), Const, Source, Nop, CatchParam.
                 SsaOp::Assign(_) | SsaOp::Phi(_) => {
-                    if let Some(idx) = trace_to_param(inst.value, ssa, &inst_map, &mut HashSet::new()) {
+                    if let Some(idx) =
+                        trace_to_param(inst.value, ssa, &inst_map, &mut HashSet::new())
+                    {
                         container_to_return.insert(idx);
                     }
                 }
@@ -4733,7 +4970,12 @@ pub(crate) fn extract_container_flow_summary(
     // 2. param_to_container_store: find container Store calls, trace args to params
     for block in &ssa.blocks {
         for inst in block.body.iter() {
-            if let SsaOp::Call { callee, args, receiver } = &inst.op {
+            if let SsaOp::Call {
+                callee,
+                args,
+                receiver,
+            } = &inst.op
+            {
                 let op = match classify_container_op(callee, lang) {
                     Some(ContainerOp::Store { value_args, .. }) => value_args,
                     _ => continue,
@@ -4749,7 +4991,8 @@ pub(crate) fn extract_container_flow_summary(
                     args.iter()
                         .flat_map(|a| a.iter())
                         .find(|&&v| {
-                            ssa.value_defs.get(v.0 as usize)
+                            ssa.value_defs
+                                .get(v.0 as usize)
                                 .and_then(|d| d.var_name.as_deref())
                                 == Some(receiver_name)
                         })
@@ -4764,10 +5007,11 @@ pub(crate) fn extract_container_flow_summary(
                 };
 
                 // Trace container to param
-                let container_param = match trace_to_param(container_val, ssa, &inst_map, &mut HashSet::new()) {
-                    Some(idx) => idx,
-                    None => continue,
-                };
+                let container_param =
+                    match trace_to_param(container_val, ssa, &inst_map, &mut HashSet::new()) {
+                        Some(idx) => idx,
+                        None => continue,
+                    };
 
                 // Compute arg offset (receiver-based languages prepend receiver to args)
                 let arg_offset = if lang == Lang::Go && receiver.is_none() {
@@ -4783,7 +5027,9 @@ pub(crate) fn extract_container_flow_summary(
                     let effective_idx = va_idx + arg_offset;
                     if let Some(arg_vals) = args.get(effective_idx) {
                         for &av in arg_vals {
-                            if let Some(src_param) = trace_to_param(av, ssa, &inst_map, &mut HashSet::new()) {
+                            if let Some(src_param) =
+                                trace_to_param(av, ssa, &inst_map, &mut HashSet::new())
+                            {
                                 if src_param != container_param
                                     && !container_store.contains(&(src_param, container_param))
                                 {

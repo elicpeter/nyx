@@ -318,15 +318,24 @@ mod tests {
         // FileInputStream: not in tier 1 or tier 2 directly.
         // Tier 3 hierarchy: FileInputStream → supertypes ["InputStream"].
         // "InputStream" IS in tier 2 (Phase 16) → FileHandle.
-        assert_eq!(parse_type_name("FileInputStream"), Some(TypeKind::FileHandle));
+        assert_eq!(
+            parse_type_name("FileInputStream"),
+            Some(TypeKind::FileHandle)
+        );
     }
 
     // ── Phase 16: Java I/O and JDBC types ───────────────────────────────
 
     #[test]
     fn parse_java_statement_to_db() {
-        assert_eq!(parse_type_name("Statement"), Some(TypeKind::DatabaseConnection));
-        assert_eq!(parse_type_name("PreparedStatement"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(
+            parse_type_name("Statement"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            parse_type_name("PreparedStatement"),
+            Some(TypeKind::DatabaseConnection)
+        );
     }
 
     #[test]
@@ -340,18 +349,33 @@ mod tests {
 
     #[test]
     fn parse_java_response_entity() {
-        assert_eq!(parse_type_name("ResponseEntity"), Some(TypeKind::HttpResponse));
+        assert_eq!(
+            parse_type_name("ResponseEntity"),
+            Some(TypeKind::HttpResponse)
+        );
     }
 
     // ── Phase 16: Python qualified type names ───────────────────────────
 
     #[test]
     fn parse_python_qualified_http_client() {
-        assert_eq!(parse_type_name("requests.Session"), Some(TypeKind::HttpClient));
-        assert_eq!(parse_type_name("aiohttp.ClientSession"), Some(TypeKind::HttpClient));
+        assert_eq!(
+            parse_type_name("requests.Session"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            parse_type_name("aiohttp.ClientSession"),
+            Some(TypeKind::HttpClient)
+        );
         assert_eq!(parse_type_name("httpx.Client"), Some(TypeKind::HttpClient));
-        assert_eq!(parse_type_name("httpx.AsyncClient"), Some(TypeKind::HttpClient));
-        assert_eq!(parse_type_name("urllib3.PoolManager"), Some(TypeKind::HttpClient));
+        assert_eq!(
+            parse_type_name("httpx.AsyncClient"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            parse_type_name("urllib3.PoolManager"),
+            Some(TypeKind::HttpClient)
+        );
     }
 
     #[test]
@@ -372,8 +396,14 @@ mod tests {
 
     #[test]
     fn parse_python_qualified_http_response() {
-        assert_eq!(parse_type_name("requests.Response"), Some(TypeKind::HttpResponse));
-        assert_eq!(parse_type_name("httpx.Response"), Some(TypeKind::HttpResponse));
+        assert_eq!(
+            parse_type_name("requests.Response"),
+            Some(TypeKind::HttpResponse)
+        );
+        assert_eq!(
+            parse_type_name("httpx.Response"),
+            Some(TypeKind::HttpResponse)
+        );
         assert_eq!(
             parse_type_name("aiohttp.ClientResponse"),
             Some(TypeKind::HttpResponse)
@@ -382,7 +412,10 @@ mod tests {
 
     #[test]
     fn parse_python_qualified_file_handle() {
-        assert_eq!(parse_type_name("io.TextIOWrapper"), Some(TypeKind::FileHandle));
+        assert_eq!(
+            parse_type_name("io.TextIOWrapper"),
+            Some(TypeKind::FileHandle)
+        );
         assert_eq!(parse_type_name("io.BytesIO"), Some(TypeKind::FileHandle));
         assert_eq!(parse_type_name("io.StringIO"), Some(TypeKind::FileHandle));
     }

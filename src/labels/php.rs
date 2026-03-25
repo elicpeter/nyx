@@ -114,7 +114,12 @@ pub static RULES: &[LabelRule] = &[
     },
     // PDO and MySQLi OOP: exec/prepare+execute patterns.
     LabelRule {
-        matchers: &["pdo.exec", "pdo.query", "mysqli.real_query", "mysqli_real_query"],
+        matchers: &[
+            "pdo.exec",
+            "pdo.query",
+            "mysqli.real_query",
+            "mysqli_real_query",
+        ],
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: false,
     },
@@ -201,8 +206,10 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     if ctx.has(DetectedFramework::Laravel) {
         rules.push(RuntimeLabelRule {
             matchers: vec![
-                "Request::input".into(), "Request::get".into(),
-                "Request::query".into(), "Request::post".into(),
+                "Request::input".into(),
+                "Request::get".into(),
+                "Request::query".into(),
+                "Request::post".into(),
                 "Request::all".into(),
             ],
             label: DataLabel::Source(Cap::all()),

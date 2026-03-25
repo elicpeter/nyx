@@ -3,8 +3,8 @@ use crate::database::index::{Indexer, ScanRecord};
 use crate::evidence::Confidence;
 use crate::server::app::AppState;
 use crate::server::models::{
-    by_language_from_findings, compute_fingerprint, summarize_findings, top_directories_from_findings,
-    top_n_from_map, Insight, NoisyRule, OverviewResponse, ScanSummary, TrendPoint,
+    Insight, NoisyRule, OverviewResponse, ScanSummary, TrendPoint, by_language_from_findings,
+    compute_fingerprint, summarize_findings, top_directories_from_findings, top_n_from_map,
 };
 use axum::extract::State;
 use axum::routing::get;
@@ -30,9 +30,7 @@ async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
     let by_language = by_language_from_findings(&findings);
 
     // 4. Find latest completed scan info
-    let latest_completed = recent_scans
-        .iter()
-        .find(|s| s.status == "completed");
+    let latest_completed = recent_scans.iter().find(|s| s.status == "completed");
     let latest_scan_id = latest_completed.map(|s| s.id.clone());
     let latest_scan_at = latest_completed.and_then(|s| s.started_at.clone());
     let latest_scan_duration = latest_completed.and_then(|s| s.duration_secs);
@@ -97,10 +95,7 @@ async fn overview(State(state): State<AppState>) -> Json<OverviewResponse> {
         top_directories,
         top_rules,
         noisy_rules,
-        recent_scans: recent_scans
-            .into_iter()
-            .take(10)
-            .collect(),
+        recent_scans: recent_scans.into_iter().take(10).collect(),
         insights,
     })
 }
@@ -112,10 +107,8 @@ async fn overview_trends(State(state): State<AppState>) -> Json<Vec<TrendPoint>>
     if let Some(ref pool) = state.db_pool {
         if let Ok(idx) = Indexer::from_pool("_scans", pool) {
             if let Ok(scans) = idx.list_scans(20) {
-                let completed: Vec<&ScanRecord> = scans
-                    .iter()
-                    .filter(|s| s.status == "completed")
-                    .collect();
+                let completed: Vec<&ScanRecord> =
+                    scans.iter().filter(|s| s.status == "completed").collect();
 
                 // Cap at 10 for performance
                 for scan in completed.iter().rev().take(10) {
@@ -198,10 +191,7 @@ fn compute_delta(state: &AppState, current_findings: &[Diag]) -> (usize, usize) 
         return (0, 0);
     }
 
-    let current_fps: HashSet<String> = current_findings
-        .iter()
-        .map(compute_fingerprint)
-        .collect();
+    let current_fps: HashSet<String> = current_findings.iter().map(compute_fingerprint).collect();
 
     // Find previous completed scan's findings
     let previous_fps = load_previous_scan_fingerprints(state);
@@ -312,15 +302,15 @@ fn compute_noisy_rules(
             .get(&fp)
             .map(|(s, _, _)| s == "suppressed" || s == "false_positive")
             .unwrap_or(false)
-            || suppression_rules.iter().any(|rule| {
-                match rule.suppress_by.as_str() {
+            || suppression_rules
+                .iter()
+                .any(|rule| match rule.suppress_by.as_str() {
                     "fingerprint" => fp == rule.match_value,
                     "rule" => d.id == rule.match_value,
                     "rule_in_file" => format!("{}:{}", d.id, d.path) == rule.match_value,
                     "file" => d.path == rule.match_value,
                     _ => false,
-                }
-            });
+                });
         if is_suppressed {
             *suppressed_per_rule.entry(d.id.clone()).or_insert(0) += 1;
         }
@@ -365,7 +355,10 @@ fn generate_insights(
     if high_count > 0 {
         insights.push(Insight {
             kind: "untriaged_high".into(),
-            message: format!("{high_count} High severity finding{} to review", if high_count == 1 { "" } else { "s" }),
+            message: format!(
+                "{high_count} High severity finding{} to review",
+                if high_count == 1 { "" } else { "s" }
+            ),
             severity: "warning".into(),
             action_url: Some("/findings?severity=HIGH&status=open".into()),
         });
@@ -375,7 +368,10 @@ fn generate_insights(
     if new_since_last > 0 {
         insights.push(Insight {
             kind: "new_findings".into(),
-            message: format!("{new_since_last} new finding{} since last scan", if new_since_last == 1 { "" } else { "s" }),
+            message: format!(
+                "{new_since_last} new finding{} since last scan",
+                if new_since_last == 1 { "" } else { "s" }
+            ),
             severity: "warning".into(),
             action_url: Some("/findings".into()),
         });
@@ -385,7 +381,10 @@ fn generate_insights(
     if fixed_since_last > 0 {
         insights.push(Insight {
             kind: "fixed_findings".into(),
-            message: format!("{fixed_since_last} finding{} fixed since last scan", if fixed_since_last == 1 { "" } else { "s" }),
+            message: format!(
+                "{fixed_since_last} finding{} fixed since last scan",
+                if fixed_since_last == 1 { "" } else { "s" }
+            ),
             severity: "success".into(),
             action_url: None,
         });

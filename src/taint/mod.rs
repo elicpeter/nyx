@@ -84,10 +84,18 @@ pub fn analyse_file(
 
     // 2a. Lower all functions: produce both SSA summaries and cached bodies
     let (ssa_summaries, callee_bodies) = lower_all_functions(
-        cfg, &interner, caller_lang, caller_namespace,
-        local_summaries, global_summaries,
+        cfg,
+        &interner,
+        caller_lang,
+        caller_namespace,
+        local_summaries,
+        global_summaries,
     );
-    let ssa_sums_ref = if ssa_summaries.is_empty() { None } else { Some(&ssa_summaries) };
+    let ssa_sums_ref = if ssa_summaries.is_empty() {
+        None
+    } else {
+        Some(&ssa_summaries)
+    };
 
     // 2b. Context-sensitive inline analysis setup
     let context_sensitive = std::env::var("NYX_CONTEXT_SENSITIVE")
@@ -99,14 +107,27 @@ pub fn analyse_file(
     } else {
         None
     };
-    let inline_cache_ref = if context_sensitive { Some(&inline_cache) } else { None };
+    let inline_cache_ref = if context_sensitive {
+        Some(&inline_cache)
+    } else {
+        None
+    };
 
     // 2c. Run SSA analysis (two-level for JS/TS, single-pass for others)
     let mut findings = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
         match analyse_ssa_js_two_level(
-            cfg, entry, &interner, caller_lang, caller_namespace,
-            local_summaries, global_summaries, interop_edges, ssa_sums_ref,
-            extra_labels, callee_bodies_ref, inline_cache_ref,
+            cfg,
+            entry,
+            &interner,
+            caller_lang,
+            caller_namespace,
+            local_summaries,
+            global_summaries,
+            interop_edges,
+            ssa_sums_ref,
+            extra_labels,
+            callee_bodies_ref,
+            inline_cache_ref,
         ) {
             Ok(f) => f,
             Err(e) => {
@@ -147,10 +168,8 @@ pub fn analyse_file(
                     points_to: Some(&opt.points_to),
                     dynamic_pts: Some(&dynamic_pts),
                 };
-                let events =
-                    ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
-                let mut f =
-                    ssa_transfer::ssa_events_to_findings(&events, &ssa_body, cfg);
+                let events = ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
+                let mut f = ssa_transfer::ssa_events_to_findings(&events, &ssa_body, cfg);
                 if crate::symex::is_enabled() {
                     let symex_ctx = crate::symex::SymexContext {
                         ssa: &ssa_body,
@@ -224,7 +243,8 @@ fn find_function_entries(cfg: &Cfg) -> Vec<(String, NodeIndex)> {
 /// Look up formal parameter names (in declaration order) for a function from
 /// the CFG-level local summaries. Returns empty vec if not found.
 fn lookup_formal_params(local_summaries: &FuncSummaries, func_name: &str) -> Vec<String> {
-    local_summaries.iter()
+    local_summaries
+        .iter()
         .find(|(k, _)| k.name == func_name)
         .map(|(_, s)| s.param_names.clone())
         .unwrap_or_default()
@@ -248,7 +268,11 @@ pub(crate) fn extract_intra_file_ssa_summaries(
     for (func_name, func_entry) in &func_entries {
         let formal_params = lookup_formal_params(local_summaries, func_name);
         let func_ssa = match crate::ssa::lower_to_ssa_with_params(
-            cfg, *func_entry, Some(func_name), false, &formal_params,
+            cfg,
+            *func_entry,
+            Some(func_name),
+            false,
+            &formal_params,
         ) {
             Ok(ssa) => ssa,
             Err(_) => continue,
@@ -259,7 +283,9 @@ pub(crate) fn extract_intra_file_ssa_summaries(
         let param_count = if !formal_params.is_empty() {
             formal_params.len()
         } else {
-            func_ssa.blocks.iter()
+            func_ssa
+                .blocks
+                .iter()
                 .flat_map(|b| b.phis.iter().chain(b.body.iter()))
                 .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
                 .count()
@@ -270,8 +296,14 @@ pub(crate) fn extract_intra_file_ssa_summaries(
         }
 
         let summary = ssa_transfer::extract_ssa_func_summary(
-            &func_ssa, cfg, local_summaries, global_summaries,
-            lang, namespace, interner, param_count,
+            &func_ssa,
+            cfg,
+            local_summaries,
+            global_summaries,
+            lang,
+            namespace,
+            interner,
+            param_count,
         );
 
         // Only store if the summary has observable effects
@@ -319,7 +351,11 @@ fn lower_all_functions(
     for (func_name, func_entry) in &func_entries {
         let formal_params = lookup_formal_params(local_summaries, func_name);
         let mut func_ssa = match crate::ssa::lower_to_ssa_with_params(
-            cfg, *func_entry, Some(func_name), false, &formal_params,
+            cfg,
+            *func_entry,
+            Some(func_name),
+            false,
+            &formal_params,
         ) {
             Ok(ssa) => ssa,
             Err(_) => continue,
@@ -330,7 +366,9 @@ fn lower_all_functions(
         let param_count = if !formal_params.is_empty() {
             formal_params.len()
         } else {
-            func_ssa.blocks.iter()
+            func_ssa
+                .blocks
+                .iter()
                 .flat_map(|b| b.phis.iter().chain(b.body.iter()))
                 .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
                 .count()
@@ -339,8 +377,14 @@ fn lower_all_functions(
         // Extract summary from unoptimized SSA (matches original behavior)
         if param_count > 0 {
             let summary = ssa_transfer::extract_ssa_func_summary(
-                &func_ssa, cfg, local_summaries, global_summaries,
-                lang, namespace, interner, param_count,
+                &func_ssa,
+                cfg,
+                local_summaries,
+                global_summaries,
+                lang,
+                namespace,
+                interner,
+                param_count,
             );
 
             if !summary.param_to_return.is_empty()
@@ -358,11 +402,14 @@ fn lower_all_functions(
         let opt = crate::ssa::optimize_ssa(&mut func_ssa, cfg, Some(lang));
 
         // Cache the optimized body for inline analysis
-        bodies.insert(func_name.clone(), ssa_transfer::CalleeSsaBody {
-            ssa: func_ssa,
-            opt,
-            param_count,
-        });
+        bodies.insert(
+            func_name.clone(),
+            ssa_transfer::CalleeSsaBody {
+                ssa: func_ssa,
+                opt,
+                param_count,
+            },
+        );
     }
 
     if !summaries.is_empty() {
@@ -391,7 +438,9 @@ fn analyse_ssa_js_two_level(
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
     interop_edges: &[InteropEdge],
-    ssa_summaries: Option<&std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>>,
+    ssa_summaries: Option<
+        &std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
+    >,
     extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
     callee_bodies: Option<&std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>>,
     inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
@@ -430,8 +479,13 @@ fn analyse_ssa_js_two_level(
     };
     let (toplevel_events, toplevel_block_states) =
         ssa_transfer::run_ssa_taint_full(&toplevel_ssa, cfg, &toplevel_transfer);
-    let toplevel_seed =
-        ssa_transfer::extract_ssa_exit_state(&toplevel_block_states, &toplevel_ssa, cfg, &toplevel_transfer, interner);
+    let toplevel_seed = ssa_transfer::extract_ssa_exit_state(
+        &toplevel_block_states,
+        &toplevel_ssa,
+        cfg,
+        &toplevel_transfer,
+        interner,
+    );
     tracing::debug!(
         events = toplevel_events.len(),
         seed_entries = toplevel_seed.len(),
@@ -439,7 +493,8 @@ fn analyse_ssa_js_two_level(
     );
 
     // Collect top-level findings
-    let mut all_findings = ssa_transfer::ssa_events_to_findings(&toplevel_events, &toplevel_ssa, cfg);
+    let mut all_findings =
+        ssa_transfer::ssa_events_to_findings(&toplevel_events, &toplevel_ssa, cfg);
     if crate::symex::is_enabled() {
         let symex_ctx = crate::symex::SymexContext {
             ssa: &toplevel_ssa,
@@ -469,7 +524,11 @@ fn analyse_ssa_js_two_level(
         for (func_name, func_entry) in &func_entries {
             let formal_params = lookup_formal_params(local_summaries, func_name);
             let mut func_ssa = match crate::ssa::lower_to_ssa_with_params(
-                cfg, *func_entry, Some(func_name), false, &formal_params,
+                cfg,
+                *func_entry,
+                Some(func_name),
+                false,
+                &formal_params,
             ) {
                 Ok(ssa) => ssa,
                 Err(_) => continue, // empty function → skip
@@ -518,8 +577,13 @@ fn analyse_ssa_js_two_level(
             round_findings.extend(func_findings);
 
             // Extract exit state, filter to globals, join into combined
-            let func_exit =
-                ssa_transfer::extract_ssa_exit_state(&func_block_states, &func_ssa, cfg, &func_transfer, interner);
+            let func_exit = ssa_transfer::extract_ssa_exit_state(
+                &func_block_states,
+                &func_ssa,
+                cfg,
+                &func_transfer,
+                interner,
+            );
             let filtered = ssa_transfer::filter_seed_to_toplevel(&func_exit, &toplevel_syms);
             combined_exit = ssa_transfer::join_seed_maps(&combined_exit, &filtered);
         }

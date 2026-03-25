@@ -1,5 +1,5 @@
-use crate::server::routes;
 use crate::server::jobs::JobManager;
+use crate::server::routes;
 use crate::utils::config::Config;
 use axum::Router;
 use r2d2::Pool;
@@ -12,9 +12,16 @@ use tokio::sync::broadcast;
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", content = "data")]
 pub enum ServerEvent {
-    ScanStarted { job_id: String },
-    ScanCompleted { job_id: String },
-    ScanFailed { job_id: String, error: String },
+    ScanStarted {
+        job_id: String,
+    },
+    ScanCompleted {
+        job_id: String,
+    },
+    ScanFailed {
+        job_id: String,
+        error: String,
+    },
     ScanProgress {
         job_id: String,
         stage: String,

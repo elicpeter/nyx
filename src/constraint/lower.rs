@@ -182,9 +182,7 @@ pub fn lower_condition(
         .unwrap_or_else(|| {
             // Fallback: if exactly one condition_var, treat as BoolTest
             if resolved.len() == 1 {
-                ConditionExpr::BoolTest {
-                    var: resolved[0].1,
-                }
+                ConditionExpr::BoolTest { var: resolved[0].1 }
             } else {
                 ConditionExpr::Unknown
             }
@@ -249,9 +247,7 @@ pub fn lower_condition_with_stacks(
         .or_else(|| try_lower_comparison(text, &var_lookup, &const_lookup))
         .unwrap_or_else(|| {
             if resolved.len() == 1 {
-                ConditionExpr::BoolTest {
-                    var: resolved[0].1,
-                }
+                ConditionExpr::BoolTest { var: resolved[0].1 }
             } else {
                 ConditionExpr::Unknown
             }
@@ -551,12 +547,7 @@ fn resolve_operand(
 /// Returns (lhs, rhs, is_negated).
 fn try_split_equality(text: &str) -> Option<(&str, &str, bool)> {
     // Try longest operators first
-    for (op, negated) in &[
-        ("!==", true),
-        ("===", false),
-        ("!=", true),
-        ("==", false),
-    ] {
+    for (op, negated) in &[("!==", true), ("===", false), ("!=", true), ("==", false)] {
         if let Some(pos) = text.find(op) {
             return Some((&text[..pos], &text[pos + op.len()..], *negated));
         }

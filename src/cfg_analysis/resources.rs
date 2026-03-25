@@ -354,8 +354,7 @@ impl CfgAnalysis for ResourceMisuse {
                 // Defer guarantees cleanup on all exit paths including early returns.
                 if let Some(acquired_var) = ctx.cfg[acquire].defines.as_deref() {
                     let has_deferred_release = release_nodes.iter().any(|&r| {
-                        ctx.cfg[r].in_defer
-                            && ctx.cfg[r].uses.iter().any(|u| u == acquired_var)
+                        ctx.cfg[r].in_defer && ctx.cfg[r].uses.iter().any(|u| u == acquired_var)
                     });
                     if has_deferred_release {
                         continue;

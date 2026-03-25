@@ -115,10 +115,7 @@ impl ScanLogCollector {
 
     /// Clone all entries without clearing.
     pub fn snapshot(&self) -> Vec<ScanLogEntry> {
-        self.entries
-            .lock()
-            .map(|e| e.clone())
-            .unwrap_or_default()
+        self.entries.lock().map(|e| e.clone()).unwrap_or_default()
     }
 
     /// Take all entries, leaving the collector empty.

@@ -140,8 +140,12 @@ pub fn compute_base_aliases(
         }
 
         // Ensure both exist in the parent map.
-        parent.entry(dst_name.to_string()).or_insert_with(|| dst_name.to_string());
-        parent.entry(src_name.to_string()).or_insert_with(|| src_name.to_string());
+        parent
+            .entry(dst_name.to_string())
+            .or_insert_with(|| dst_name.to_string());
+        parent
+            .entry(src_name.to_string())
+            .or_insert_with(|| src_name.to_string());
 
         union(&mut parent, dst_name, src_name);
     }
@@ -173,14 +177,17 @@ pub fn compute_base_aliases(
         }
     }
 
-    BaseAliasResult { canonical, members: groups }
+    BaseAliasResult {
+        canonical,
+        members: groups,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use petgraph::graph::NodeIndex;
+    use std::collections::HashMap;
 
     /// Helper: create a ValueDef with the given var_name.
     fn vdef(name: &str) -> ValueDef {

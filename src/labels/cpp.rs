@@ -33,13 +33,21 @@ pub static RULES: &[LabelRule] = &[
     },
     // Type conversion sanitizers
     LabelRule {
-        matchers: &["std::stoi", "std::stol", "std::stoul", "std::stof", "std::stod"],
+        matchers: &[
+            "std::stoi",
+            "std::stol",
+            "std::stoul",
+            "std::stof",
+            "std::stod",
+        ],
         label: DataLabel::Sanitizer(Cap::all()),
         case_sensitive: false,
     },
     // ─────────── Sinks ─────────────
     LabelRule {
-        matchers: &["system", "popen", "execl", "execlp", "execle", "execve", "execvp"],
+        matchers: &[
+            "system", "popen", "execl", "execlp", "execle", "execve", "execvp",
+        ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
     },
@@ -119,7 +127,7 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
 
 /// Benchmark-driven output-parameter source positions for known C++ APIs.
 pub static OUTPUT_PARAM_SOURCES: &[(&str, &[usize])] = &[
-    ("getline", &[1]),      // std::getline(stream, str) — str receives input
+    ("getline", &[1]), // std::getline(stream, str) — str receives input
     ("std::getline", &[1]),
     ("fgets", &[0]),
     ("gets", &[0]),
@@ -129,6 +137,14 @@ pub static OUTPUT_PARAM_SOURCES: &[(&str, &[usize])] = &[
 
 /// Arg-to-arg taint propagation for known C++ functions.
 pub static ARG_PROPAGATIONS: &[super::ArgPropagation] = &[
-    super::ArgPropagation { callee: "inet_pton", from_args: &[1], to_args: &[2] },
-    super::ArgPropagation { callee: "inet_aton", from_args: &[0], to_args: &[1] },
+    super::ArgPropagation {
+        callee: "inet_pton",
+        from_args: &[1],
+        to_args: &[2],
+    },
+    super::ArgPropagation {
+        callee: "inet_aton",
+        from_args: &[0],
+        to_args: &[1],
+    },
 ];

@@ -366,7 +366,12 @@ static RUST_RESOURCES: &[ResourcePair] = &[
 
 static JAVA_RESOURCES: &[ResourcePair] = &[
     ResourcePair {
-        acquire: &["FileInputStream", "FileOutputStream", "BufferedReader", "openConnection"],
+        acquire: &[
+            "FileInputStream",
+            "FileOutputStream",
+            "BufferedReader",
+            "openConnection",
+        ],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "stream/connection",
@@ -377,7 +382,12 @@ static JAVA_RESOURCES: &[ResourcePair] = &[
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "db connection",
-        use_patterns: &[".executeQuery", ".executeUpdate", ".createStatement", ".prepareStatement"],
+        use_patterns: &[
+            ".executeQuery",
+            ".executeUpdate",
+            ".createStatement",
+            ".prepareStatement",
+        ],
     },
     ResourcePair {
         acquire: &["Socket"],
@@ -469,7 +479,11 @@ static PYTHON_RESOURCES: &[ResourcePair] = &[
         use_patterns: &[".read", ".readline", ".readlines"],
     },
     ResourcePair {
-        acquire: &["http.client.HTTPConnection", "HTTPConnection", "HTTPSConnection"],
+        acquire: &[
+            "http.client.HTTPConnection",
+            "HTTPConnection",
+            "HTTPSConnection",
+        ],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "http connection",
@@ -505,12 +519,24 @@ static RUBY_RESOURCES: &[ResourcePair] = &[
         exclude_acquire: &[],
         resource_name: "file handle",
         use_patterns: &[
-            ".read", ".write", ".gets", ".puts", ".each_line",
-            ".readline", ".readlines", ".sysread", ".syswrite",
+            ".read",
+            ".write",
+            ".gets",
+            ".puts",
+            ".each_line",
+            ".readline",
+            ".readlines",
+            ".sysread",
+            ".syswrite",
         ],
     },
     ResourcePair {
-        acquire: &["TCPSocket.new", "UDPSocket.new", "TCPServer.new", "UNIXSocket.new"],
+        acquire: &[
+            "TCPSocket.new",
+            "UDPSocket.new",
+            "TCPServer.new",
+            "UNIXSocket.new",
+        ],
         release: &[".close"],
         exclude_acquire: &[],
         resource_name: "socket",
@@ -524,8 +550,13 @@ static RUBY_RESOURCES: &[ResourcePair] = &[
         use_patterns: &[],
     },
     ResourcePair {
-        acquire: &["PG.connect", "PG::Connection.new", "Sequel.connect",
-                    "Mysql2::Client.new", "SQLite3::Database.new"],
+        acquire: &[
+            "PG.connect",
+            "PG::Connection.new",
+            "Sequel.connect",
+            "Mysql2::Client.new",
+            "SQLite3::Database.new",
+        ],
         release: &[".close", ".disconnect"],
         exclude_acquire: &[],
         resource_name: "db connection",

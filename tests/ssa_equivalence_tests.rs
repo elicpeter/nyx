@@ -26,8 +26,16 @@ fn discover_fixtures() -> Vec<Fixture> {
     let mut fixtures = Vec::new();
 
     let langs = [
-        "rust", "c", "cpp", "java", "go", "php", "python", "ruby",
-        "typescript", "javascript",
+        "rust",
+        "c",
+        "cpp",
+        "java",
+        "go",
+        "php",
+        "python",
+        "ruby",
+        "typescript",
+        "javascript",
     ];
     let categories = ["taint", "cfg", "state", "mixed"];
 
@@ -37,7 +45,9 @@ fn discover_fixtures() -> Vec<Fixture> {
             if !dir.is_dir() {
                 continue;
             }
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 let path = entry.path();
                 let fname = path.file_name().unwrap().to_string_lossy().to_string();
@@ -60,8 +70,7 @@ fn discover_fixtures() -> Vec<Fixture> {
 
 fn find_source_file(dir: &Path, stem: &str) -> Option<PathBuf> {
     let extensions = [
-        "rs", "c", "cpp", "cc", "cxx", "java", "go", "php", "py", "rb",
-        "ts", "tsx", "js", "jsx",
+        "rs", "c", "cpp", "cc", "cxx", "java", "go", "php", "py", "rb", "ts", "tsx", "js", "jsx",
     ];
     for ext in &extensions {
         let candidate = dir.join(format!("{stem}.{ext}"));
@@ -110,11 +119,7 @@ fn ssa_corpus_validation() {
         let result = std::panic::catch_unwind(|| scan_fixture(fixture));
         match result {
             Ok(diags) => {
-                eprintln!(
-                    "OK {}: {} findings",
-                    fixture.name,
-                    diags.len()
-                );
+                eprintln!("OK {}: {} findings", fixture.name, diags.len());
             }
             Err(_) => {
                 let msg = format!("PANIC in {}", fixture.name);

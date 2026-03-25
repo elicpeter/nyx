@@ -672,11 +672,7 @@ impl UnionFind {
     /// Find the canonical representative for a value (with path compression).
     pub fn find(&mut self, x: SsaValue) -> SsaValue {
         // Look up parent
-        let parent = self
-            .parent
-            .iter()
-            .find(|(k, _)| *k == x)
-            .map(|(_, v)| *v);
+        let parent = self.parent.iter().find(|(k, _)| *k == x).map(|(_, v)| *v);
         match parent {
             None => x, // x is its own representative
             Some(p) if p == x => x,
@@ -1026,7 +1022,10 @@ impl PathEnv {
         }
 
         // Step 4: dedup check — if this exact constraint already exists, skip
-        let already_present = self.relational.iter().any(|&(l, o, r)| l == ra && o == op && r == rb);
+        let already_present = self
+            .relational
+            .iter()
+            .any(|&(l, o, r)| l == ra && o == op && r == rb);
         if already_present {
             // Still do interval refinement (may have new facts since last time)
         } else {
@@ -1051,7 +1050,12 @@ impl PathEnv {
     /// This is conservative, not complete: chains longer than 4 hops are
     /// missed. Missing a cycle means we fail to prune an infeasible path,
     /// not that we wrongly prune a feasible one.
-    fn check_relational_cycle(&self, target: SsaValue, start: SsaValue, new_edge_op: RelOp) -> bool {
+    fn check_relational_cycle(
+        &self,
+        target: SsaValue,
+        start: SsaValue,
+        new_edge_op: RelOp,
+    ) -> bool {
         const MAX_DEPTH: u8 = 4;
         // Track whether any edge in the chain is strict
         let mut has_strict = new_edge_op == RelOp::Lt;

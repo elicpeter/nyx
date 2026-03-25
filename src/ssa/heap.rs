@@ -19,7 +19,7 @@
 use crate::cfg::Cfg;
 use crate::labels::Cap;
 use crate::ssa::ir::*;
-use crate::ssa::pointsto::{classify_container_op, ContainerOp};
+use crate::ssa::pointsto::{ContainerOp, classify_container_op};
 use crate::symbol::Lang;
 use crate::taint::domain::TaintOrigin;
 use smallvec::SmallVec;
@@ -77,7 +77,9 @@ pub struct PointsToSet {
 impl PointsToSet {
     /// Empty points-to set.
     pub fn empty() -> Self {
-        Self { ids: SmallVec::new() }
+        Self {
+            ids: SmallVec::new(),
+        }
     }
 
     /// Points-to set containing a single heap object.
@@ -199,7 +201,9 @@ pub struct HeapState {
 
 impl HeapState {
     pub fn empty() -> Self {
-        Self { entries: SmallVec::new() }
+        Self {
+            entries: SmallVec::new(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -211,13 +215,7 @@ impl HeapState {
     /// If storing to `Index(n)` would exceed `MAX_TRACKED_INDICES` distinct
     /// indices for this object, all `Index(*)` entries for the object are
     /// collapsed into `Elements` and the new taint is merged there instead.
-    pub fn store(
-        &mut self,
-        id: HeapObjectId,
-        slot: HeapSlot,
-        caps: Cap,
-        origins: &[TaintOrigin],
-    ) {
+    pub fn store(&mut self, id: HeapObjectId, slot: HeapSlot, caps: Cap, origins: &[TaintOrigin]) {
         if caps.is_empty() {
             return;
         }
@@ -242,13 +240,7 @@ impl HeapState {
     }
 
     /// Raw store without overflow checking.
-    fn store_raw(
-        &mut self,
-        id: HeapObjectId,
-        slot: HeapSlot,
-        caps: Cap,
-        origins: &[TaintOrigin],
-    ) {
+    fn store_raw(&mut self, id: HeapObjectId, slot: HeapSlot, caps: Cap, origins: &[TaintOrigin]) {
         let key = (id, slot);
         match self.entries.binary_search_by_key(&key, |(k, _)| *k) {
             Ok(idx) => {
@@ -446,7 +438,9 @@ pub struct PointsToResult {
 
 impl PointsToResult {
     pub fn empty() -> Self {
-        Self { pts: HashMap::new() }
+        Self {
+            pts: HashMap::new(),
+        }
     }
 
     /// Look up the points-to set for an SSA value.
@@ -491,14 +485,19 @@ pub fn is_container_constructor(callee: &str, lang: Lang) -> bool {
     let suffix_lower = suffix.to_ascii_lowercase();
 
     match lang {
-        Lang::JavaScript | Lang::TypeScript => matches!(
-            suffix,
-            "Array" | "Map" | "Set" | "WeakMap" | "WeakSet"
-        ),
+        Lang::JavaScript | Lang::TypeScript => {
+            matches!(suffix, "Array" | "Map" | "Set" | "WeakMap" | "WeakSet")
+        }
         Lang::Python => matches!(
             suffix,
-            "list" | "dict" | "set" | "frozenset" | "defaultdict"
-                | "OrderedDict" | "deque" | "Counter"
+            "list"
+                | "dict"
+                | "set"
+                | "frozenset"
+                | "defaultdict"
+                | "OrderedDict"
+                | "deque"
+                | "Counter"
         ),
         Lang::Java => matches!(
             suffix,
@@ -518,30 +517,45 @@ pub fn is_container_constructor(callee: &str, lang: Lang) -> bool {
                 | "CopyOnWriteArrayList"
         ),
         Lang::Go => callee == "make",
-        Lang::Ruby => matches!(suffix, "new") && {
-            // Only for known container types
-            let prefix = callee.rsplit('.').nth(1).unwrap_or("");
-            matches!(prefix, "Array" | "Hash" | "Set")
-        },
+        Lang::Ruby => {
+            matches!(suffix, "new") && {
+                // Only for known container types
+                let prefix = callee.rsplit('.').nth(1).unwrap_or("");
+                matches!(prefix, "Array" | "Hash" | "Set")
+            }
+        }
         Lang::Php => matches!(suffix, "array"),
         Lang::C | Lang::Cpp => matches!(
             suffix_lower.as_str(),
-            "vector" | "map" | "set" | "unordered_map" | "unordered_set"
-                | "list" | "deque" | "queue" | "stack" | "multimap"
-                | "multiset" | "priority_queue"
+            "vector"
+                | "map"
+                | "set"
+                | "unordered_map"
+                | "unordered_set"
+                | "list"
+                | "deque"
+                | "queue"
+                | "stack"
+                | "multimap"
+                | "multiset"
+                | "priority_queue"
         ),
         Lang::Rust => {
             // Vec::new, HashMap::new, etc.
-            suffix == "new"
-                && callee.contains("::")
-                && {
-                    let type_part = callee.rsplit("::").nth(1).unwrap_or("");
-                    matches!(
-                        type_part,
-                        "Vec" | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet"
-                            | "VecDeque" | "LinkedList" | "BinaryHeap"
-                    )
-                }
+            suffix == "new" && callee.contains("::") && {
+                let type_part = callee.rsplit("::").nth(1).unwrap_or("");
+                matches!(
+                    type_part,
+                    "Vec"
+                        | "HashMap"
+                        | "HashSet"
+                        | "BTreeMap"
+                        | "BTreeSet"
+                        | "VecDeque"
+                        | "LinkedList"
+                        | "BinaryHeap"
+                )
+            }
         }
     }
 }
@@ -628,7 +642,12 @@ pub fn analyze_points_to(body: &SsaBody, _cfg: &Cfg, lang: Option<Lang>) -> Poin
                             }
                         }
                     }
-                    SsaOp::Call { callee, args, receiver, .. } => {
+                    SsaOp::Call {
+                        callee,
+                        args,
+                        receiver,
+                        ..
+                    } => {
                         // For container Store ops that return the container (Go append),
                         // propagate receiver pts to result.
                         if let Some(l) = lang {
@@ -636,9 +655,8 @@ pub fn analyze_points_to(body: &SsaBody, _cfg: &Cfg, lang: Option<Lang>) -> Poin
                                 classify_container_op(callee, l)
                             {
                                 // Find receiver pts
-                                let recv_pts = receiver
-                                    .and_then(|rv| pts.get(&rv).cloned())
-                                    .or_else(|| {
+                                let recv_pts =
+                                    receiver.and_then(|rv| pts.get(&rv).cloned()).or_else(|| {
                                         // Go append: arg 0 is the slice
                                         if l == Lang::Go {
                                             args.first()
@@ -795,21 +813,39 @@ mod tests {
     #[test]
     fn heap_store_empty_caps_noop() {
         let mut h = HeapState::empty();
-        h.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::empty(), &[origin(0)]);
+        h.store(
+            HeapObjectId(SsaValue(0)),
+            HeapSlot::Elements,
+            Cap::empty(),
+            &[origin(0)],
+        );
         assert!(h.is_empty());
     }
 
     #[test]
     fn heap_load_missing() {
         let h = HeapState::empty();
-        assert!(h.load(HeapObjectId(SsaValue(0)), HeapSlot::Elements).is_none());
+        assert!(
+            h.load(HeapObjectId(SsaValue(0)), HeapSlot::Elements)
+                .is_none()
+        );
     }
 
     #[test]
     fn heap_load_set_unions() {
         let mut h = HeapState::empty();
-        h.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
-        h.store(HeapObjectId(SsaValue(1)), HeapSlot::Elements, Cap::SQL_QUERY, &[origin(1)]);
+        h.store(
+            HeapObjectId(SsaValue(0)),
+            HeapSlot::Elements,
+            Cap::HTML_ESCAPE,
+            &[origin(0)],
+        );
+        h.store(
+            HeapObjectId(SsaValue(1)),
+            HeapSlot::Elements,
+            Cap::SQL_QUERY,
+            &[origin(1)],
+        );
 
         let mut pts = PointsToSet::empty();
         pts.insert(HeapObjectId(SsaValue(0)));
@@ -823,7 +859,12 @@ mod tests {
     #[test]
     fn heap_load_set_empty_pts() {
         let mut h = HeapState::empty();
-        h.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
+        h.store(
+            HeapObjectId(SsaValue(0)),
+            HeapSlot::Elements,
+            Cap::HTML_ESCAPE,
+            &[origin(0)],
+        );
         let pts = PointsToSet::empty();
         assert!(h.load_set(&pts, HeapSlot::Elements).is_none());
     }
@@ -837,33 +878,72 @@ mod tests {
 
         h.store_set(&pts, HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
 
-        assert_eq!(h.load(HeapObjectId(SsaValue(0)), HeapSlot::Elements).unwrap().caps, Cap::HTML_ESCAPE);
-        assert_eq!(h.load(HeapObjectId(SsaValue(1)), HeapSlot::Elements).unwrap().caps, Cap::HTML_ESCAPE);
+        assert_eq!(
+            h.load(HeapObjectId(SsaValue(0)), HeapSlot::Elements)
+                .unwrap()
+                .caps,
+            Cap::HTML_ESCAPE
+        );
+        assert_eq!(
+            h.load(HeapObjectId(SsaValue(1)), HeapSlot::Elements)
+                .unwrap()
+                .caps,
+            Cap::HTML_ESCAPE
+        );
     }
 
     #[test]
     fn heap_join() {
         let mut a = HeapState::empty();
-        a.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
+        a.store(
+            HeapObjectId(SsaValue(0)),
+            HeapSlot::Elements,
+            Cap::HTML_ESCAPE,
+            &[origin(0)],
+        );
 
         let mut b = HeapState::empty();
-        b.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::SQL_QUERY, &[origin(1)]);
-        b.store(HeapObjectId(SsaValue(1)), HeapSlot::Elements, Cap::FILE_IO, &[origin(2)]);
+        b.store(
+            HeapObjectId(SsaValue(0)),
+            HeapSlot::Elements,
+            Cap::SQL_QUERY,
+            &[origin(1)],
+        );
+        b.store(
+            HeapObjectId(SsaValue(1)),
+            HeapSlot::Elements,
+            Cap::FILE_IO,
+            &[origin(2)],
+        );
 
         let c = a.join(&b);
-        let t0 = c.load(HeapObjectId(SsaValue(0)), HeapSlot::Elements).unwrap();
+        let t0 = c
+            .load(HeapObjectId(SsaValue(0)), HeapSlot::Elements)
+            .unwrap();
         assert_eq!(t0.caps, Cap::HTML_ESCAPE | Cap::SQL_QUERY);
-        let t1 = c.load(HeapObjectId(SsaValue(1)), HeapSlot::Elements).unwrap();
+        let t1 = c
+            .load(HeapObjectId(SsaValue(1)), HeapSlot::Elements)
+            .unwrap();
         assert_eq!(t1.caps, Cap::FILE_IO);
     }
 
     #[test]
     fn heap_leq() {
         let mut a = HeapState::empty();
-        a.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
+        a.store(
+            HeapObjectId(SsaValue(0)),
+            HeapSlot::Elements,
+            Cap::HTML_ESCAPE,
+            &[origin(0)],
+        );
 
         let mut b = HeapState::empty();
-        b.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE | Cap::SQL_QUERY, &[origin(0)]);
+        b.store(
+            HeapObjectId(SsaValue(0)),
+            HeapSlot::Elements,
+            Cap::HTML_ESCAPE | Cap::SQL_QUERY,
+            &[origin(0)],
+        );
 
         assert!(a.leq(&b)); // a ⊆ b
         assert!(!b.leq(&a)); // b ⊄ a
@@ -872,7 +952,12 @@ mod tests {
     #[test]
     fn heap_leq_missing_entry() {
         let mut a = HeapState::empty();
-        a.store(HeapObjectId(SsaValue(5)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
+        a.store(
+            HeapObjectId(SsaValue(5)),
+            HeapSlot::Elements,
+            Cap::HTML_ESCAPE,
+            &[origin(0)],
+        );
         let b = HeapState::empty();
         assert!(!a.leq(&b)); // a has entry, b doesn't
         assert!(b.leq(&a)); // b empty is always ⊆
@@ -942,11 +1027,21 @@ mod tests {
 
         // Fill MAX_TRACKED_INDICES index slots
         for i in 0..MAX_TRACKED_INDICES as u64 {
-            h.store(id, HeapSlot::Index(i), Cap::HTML_ESCAPE, &[origin(i as u32)]);
+            h.store(
+                id,
+                HeapSlot::Index(i),
+                Cap::HTML_ESCAPE,
+                &[origin(i as u32)],
+            );
         }
 
         // One more should trigger collapse into Elements
-        h.store(id, HeapSlot::Index(MAX_TRACKED_INDICES as u64), Cap::SQL_QUERY, &[origin(99)]);
+        h.store(
+            id,
+            HeapSlot::Index(MAX_TRACKED_INDICES as u64),
+            Cap::SQL_QUERY,
+            &[origin(99)],
+        );
 
         // All Index entries should be collapsed into Elements.
         // There should be no Index entries left.

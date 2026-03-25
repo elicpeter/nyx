@@ -61,7 +61,12 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
             if info.defines.as_deref() == Some(u.as_str()) {
                 // If the defining node has no uses (pure constant) and is not
                 // a Source, the variable is constant.
-                if info.uses.is_empty() && !info.labels.iter().any(|l| matches!(l, DataLabel::Source(_))) {
+                if info.uses.is_empty()
+                    && !info
+                        .labels
+                        .iter()
+                        .any(|l| matches!(l, DataLabel::Source(_)))
+                {
                     return true;
                 }
             }
@@ -189,7 +194,11 @@ fn sink_arg_is_source_derived(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
         if info.enclosing_func.as_deref() != sink_func {
             continue;
         }
-        if !info.labels.iter().any(|l| matches!(l, DataLabel::Source(_))) {
+        if !info
+            .labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Source(_)))
+        {
             continue;
         }
         // Source node defines a variable that the sink reads → source-derived
@@ -258,7 +267,11 @@ impl CfgAnalysis for UnguardedSink {
         for sink in &sink_nodes {
             let sink_info = &ctx.cfg[*sink];
             let sink_caps = sink_info.labels.iter().fold(Cap::empty(), |acc, l| {
-                if let DataLabel::Sink(caps) = l { acc | *caps } else { acc }
+                if let DataLabel::Sink(caps) = l {
+                    acc | *caps
+                } else {
+                    acc
+                }
             });
             if sink_caps.is_empty() {
                 continue;
@@ -339,7 +352,8 @@ impl CfgAnalysis for UnguardedSink {
                 // taint_active=true but found nothing.
                 // Keep high-risk sinks (SHELL_ESCAPE, CODE_EXEC, SQL_QUERY, DESERIALIZE)
                 // as structural backup. Suppress low-risk sinks (FILE_IO, SSRF, etc.).
-                let high_risk = Cap::SHELL_ESCAPE | Cap::CODE_EXEC | Cap::SQL_QUERY | Cap::DESERIALIZE;
+                let high_risk =
+                    Cap::SHELL_ESCAPE | Cap::CODE_EXEC | Cap::SQL_QUERY | Cap::DESERIALIZE;
                 if (sink_caps & high_risk).is_empty() {
                     continue; // FILE_IO, SSRF, FMT_STRING etc. without taint → noise
                 }

@@ -734,13 +734,33 @@ mod tests {
 
     #[test]
     fn rank_reason_populated() {
-        let d1 = make_diag(Severity::High, "taint-unsanitised-flow (source 1:1)", "a.rs", 1, vec![], false);
-        let d2 = make_diag(Severity::Medium, "cfg-unguarded-sink", "b.rs", 2, vec![], false);
+        let d1 = make_diag(
+            Severity::High,
+            "taint-unsanitised-flow (source 1:1)",
+            "a.rs",
+            1,
+            vec![],
+            false,
+        );
+        let d2 = make_diag(
+            Severity::Medium,
+            "cfg-unguarded-sink",
+            "b.rs",
+            2,
+            vec![],
+            false,
+        );
         let mut diags = vec![d1, d2];
         rank_diags(&mut diags);
         for d in &diags {
-            assert!(d.rank_reason.is_some(), "rank_reason should be populated after rank_diags()");
-            assert!(!d.rank_reason.as_ref().unwrap().is_empty(), "rank_reason should not be empty");
+            assert!(
+                d.rank_reason.is_some(),
+                "rank_reason should be populated after rank_diags()"
+            );
+            assert!(
+                !d.rank_reason.as_ref().unwrap().is_empty(),
+                "rank_reason should not be empty"
+            );
         }
     }
 }

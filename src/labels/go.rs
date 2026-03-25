@@ -26,7 +26,11 @@ pub static RULES: &[LabelRule] = &[
     },
     // ───────── Sanitizers ──────────
     LabelRule {
-        matchers: &["html.EscapeString", "template.HTMLEscapeString", "template.HTMLEscaper"],
+        matchers: &[
+            "html.EscapeString",
+            "template.HTMLEscapeString",
+            "template.HTMLEscaper",
+        ],
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
@@ -42,7 +46,12 @@ pub static RULES: &[LabelRule] = &[
     },
     // Type conversion sanitizers
     LabelRule {
-        matchers: &["strconv.Atoi", "strconv.ParseInt", "strconv.ParseFloat", "strconv.ParseBool"],
+        matchers: &[
+            "strconv.Atoi",
+            "strconv.ParseInt",
+            "strconv.ParseFloat",
+            "strconv.ParseBool",
+        ],
         label: DataLabel::Sanitizer(Cap::all()),
         case_sensitive: false,
     },
@@ -82,15 +91,25 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["http.Get", "http.Post", "http.NewRequest", "http.NewRequestWithContext", "net.Dial", "net.DialTimeout"],
+        matchers: &[
+            "http.Get",
+            "http.Post",
+            "http.NewRequest",
+            "http.NewRequestWithContext",
+            "net.Dial",
+            "net.DialTimeout",
+        ],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
     LabelRule {
         matchers: &[
-            "md5.New", "md5.Sum",
-            "sha1.New", "sha1.Sum",
-            "des.NewCipher", "rc4.NewCipher",
+            "md5.New",
+            "md5.Sum",
+            "sha1.New",
+            "sha1.Sum",
+            "des.NewCipher",
+            "rc4.NewCipher",
         ],
         label: DataLabel::Sink(Cap::CRYPTO),
         case_sensitive: false,
@@ -155,10 +174,15 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     if ctx.has(DetectedFramework::Gin) {
         rules.push(RuntimeLabelRule {
             matchers: vec![
-                "c.Param".into(), "c.Query".into(), "c.PostForm".into(),
-                "c.DefaultQuery".into(), "c.DefaultPostForm".into(),
-                "c.GetHeader".into(), "c.Cookie".into(),
-                "c.BindJSON".into(), "c.ShouldBindJSON".into(),
+                "c.Param".into(),
+                "c.Query".into(),
+                "c.PostForm".into(),
+                "c.DefaultQuery".into(),
+                "c.DefaultPostForm".into(),
+                "c.GetHeader".into(),
+                "c.Cookie".into(),
+                "c.BindJSON".into(),
+                "c.ShouldBindJSON".into(),
             ],
             label: DataLabel::Source(Cap::all()),
             case_sensitive: false,
@@ -173,8 +197,10 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     if ctx.has(DetectedFramework::Echo) {
         rules.push(RuntimeLabelRule {
             matchers: vec![
-                "c.QueryParam".into(), "c.FormValue".into(),
-                "c.Param".into(), "c.Bind".into(),
+                "c.QueryParam".into(),
+                "c.FormValue".into(),
+                "c.Param".into(),
+                "c.Bind".into(),
             ],
             label: DataLabel::Source(Cap::all()),
             case_sensitive: false,

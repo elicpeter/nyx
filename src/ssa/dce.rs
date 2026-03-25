@@ -74,9 +74,10 @@ fn is_dead(inst: &SsaInst, use_counts: &HashMap<SsaValue, usize>, cfg: &Cfg) -> 
     }
 
     // Never remove instructions whose CFG node has Sink labels
-    if cfg.node_weight(inst.cfg_node).is_some_and(|info| {
-        info.labels.iter().any(|l| matches!(l, DataLabel::Sink(_)))
-    }) {
+    if cfg
+        .node_weight(inst.cfg_node)
+        .is_some_and(|info| info.labels.iter().any(|l| matches!(l, DataLabel::Sink(_))))
+    {
         return false;
     }
 
@@ -175,8 +176,16 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("x".into()), cfg_node: n0, block: BlockId(0) },
-                ValueDef { var_name: Some("tainted".into()), cfg_node: n1, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("x".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("tainted".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
             ],
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
@@ -222,8 +231,16 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("x".into()), cfg_node: n0, block: BlockId(0) },
-                ValueDef { var_name: Some("y".into()), cfg_node: n1, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("x".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("y".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
             ],
             cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],

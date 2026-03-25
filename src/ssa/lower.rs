@@ -1,5 +1,5 @@
 use crate::cfg::{Cfg, EdgeKind, StmtKind};
-use petgraph::algo::dominators::{simple_fast, Dominators};
+use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
 use petgraph::visit::{Bfs, EdgeRef};
@@ -79,7 +79,8 @@ fn lower_to_ssa_inner(
                 Some(name) => info.enclosing_func.as_deref() == Some(name),
             }
         };
-        reachable.iter()
+        reachable
+            .iter()
             .filter(|&&n| !in_scope(n) && !matches!(cfg[n].kind, StmtKind::Entry | StmtKind::Exit))
             .copied()
             .collect()
@@ -100,8 +101,7 @@ fn lower_to_ssa_inner(
     }
 
     // 2. Compute dominators on block-level graph
-    let (block_graph, block_graph_entry) =
-        build_block_graph(num_blocks, &block_succs, BlockId(0));
+    let (block_graph, block_graph_entry) = build_block_graph(num_blocks, &block_succs, BlockId(0));
     let doms = simple_fast(&block_graph, block_graph_entry);
 
     // 3. Compute dominance frontiers
@@ -182,7 +182,11 @@ fn collect_reachable(
     entry: NodeIndex,
     scope: Option<&str>,
     scope_all: bool,
-) -> (HashSet<NodeIndex>, Vec<(NodeIndex, NodeIndex, EdgeKind)>, Vec<(NodeIndex, NodeIndex)>) {
+) -> (
+    HashSet<NodeIndex>,
+    Vec<(NodeIndex, NodeIndex, EdgeKind)>,
+    Vec<(NodeIndex, NodeIndex)>,
+) {
     let mut reachable = HashSet::new();
     let mut edges = Vec::new();
     let mut exception_edges = Vec::new();
@@ -231,9 +235,7 @@ fn collect_reachable(
             }
 
             // Allow Entry/Exit nodes and nodes in scope
-            if !in_scope(target)
-                && !matches!(cfg[target].kind, StmtKind::Entry | StmtKind::Exit)
-            {
+            if !in_scope(target) && !matches!(cfg[target].kind, StmtKind::Entry | StmtKind::Exit) {
                 continue;
             }
 
@@ -343,7 +345,10 @@ fn form_blocks(
         let mut current = leader;
         loop {
             let succs = successors.get(&current).cloned().unwrap_or_default();
-            if succs.len() == 1 && matches!(succs[0].1, EdgeKind::Seq) && !is_leader.contains(&succs[0].0) {
+            if succs.len() == 1
+                && matches!(succs[0].1, EdgeKind::Seq)
+                && !is_leader.contains(&succs[0].0)
+            {
                 let next = succs[0].0;
                 if visited.insert(next) {
                     block.push(next);
@@ -531,7 +536,9 @@ fn collect_var_defs(
                 && cfg[node].kind == StmtKind::Seq
                 && cfg[node].uses.len() == 1
             {
-                defs.entry(cfg[node].uses[0].clone()).or_default().insert(block_idx);
+                defs.entry(cfg[node].uses[0].clone())
+                    .or_default()
+                    .insert(block_idx);
             }
         }
     }
@@ -690,12 +697,14 @@ fn rename_variables(
             // Helper: build Call args from arg_uses, falling back to info.uses
             let build_call_args = |info: &crate::cfg::NodeInfo,
                                    var_stacks: &HashMap<String, Vec<SsaValue>>|
-                -> (Vec<SmallVec<[SsaValue; 2]>>, Option<SsaValue>) {
-                let receiver = info.receiver.as_ref().and_then(|r| {
-                    var_stacks.get(r).and_then(|s| s.last().copied())
-                });
+             -> (Vec<SmallVec<[SsaValue; 2]>>, Option<SsaValue>) {
+                let receiver = info
+                    .receiver
+                    .as_ref()
+                    .and_then(|r| var_stacks.get(r).and_then(|s| s.last().copied()));
                 let args = if !info.arg_uses.is_empty() {
-                    let mut args: Vec<SmallVec<[SsaValue; 2]>> = info.arg_uses
+                    let mut args: Vec<SmallVec<[SsaValue; 2]>> = info
+                        .arg_uses
                         .iter()
                         .map(|arg_idents| {
                             arg_idents
@@ -710,7 +719,8 @@ fn rename_variables(
                     // captures the final call's args. Variables used by intermediate
                     // calls (like `url` in fetch) are in info.uses but not arg_uses.
                     // Add them as an extra group so sink detection can see them.
-                    let arg_uses_flat: HashSet<&str> = info.arg_uses
+                    let arg_uses_flat: HashSet<&str> = info
+                        .arg_uses
                         .iter()
                         .flat_map(|g| g.iter().map(|s| s.as_str()))
                         .collect();
@@ -729,9 +739,7 @@ fn rename_variables(
                     let all_uses: SmallVec<[SsaValue; 2]> = info
                         .uses
                         .iter()
-                        .filter_map(|u| {
-                            var_stacks.get(u).and_then(|s| s.last().copied())
-                        })
+                        .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
                         .collect();
                     if all_uses.is_empty() {
                         vec![]
@@ -749,9 +757,12 @@ fn rename_variables(
                 SsaOp::Nop
             } else if info.catch_param {
                 SsaOp::CatchParam
-            } else if info.labels.iter().any(|l| {
-                matches!(l, crate::labels::DataLabel::Source(_))
-            }) && info.callee.is_none() {
+            } else if info
+                .labels
+                .iter()
+                .any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
+                && info.callee.is_none()
+            {
                 // Pure source (e.g. $_GET, env var) — no callee, so no args to track.
                 // Source-labeled calls (e.g. file_get_contents) fall through to Call
                 // so argument taint and sink detection still work.
@@ -764,8 +775,12 @@ fn rename_variables(
                     args,
                     receiver,
                 }
-            } else if info.defines.is_some() && info.uses.is_empty()
-                && !info.labels.iter().any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
+            } else if info.defines.is_some()
+                && info.uses.is_empty()
+                && !info
+                    .labels
+                    .iter()
+                    .any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
             {
                 // Reassignment kill: a node that defines a variable but has no
                 // uses (operands) and is not a source is a constant/literal
@@ -804,7 +819,16 @@ fn rename_variables(
                     uses.push(const_v);
                 }
                 SsaOp::Assign(uses)
-            } else if matches!(info.kind, StmtKind::Entry | StmtKind::Exit | StmtKind::If | StmtKind::Loop | StmtKind::Break | StmtKind::Continue | StmtKind::Return) {
+            } else if matches!(
+                info.kind,
+                StmtKind::Entry
+                    | StmtKind::Exit
+                    | StmtKind::If
+                    | StmtKind::Loop
+                    | StmtKind::Break
+                    | StmtKind::Continue
+                    | StmtKind::Return
+            ) {
                 SsaOp::Nop
             } else if info.callee.is_some() {
                 let callee = info.callee.as_deref().unwrap_or("").to_string();
@@ -914,10 +938,7 @@ fn rename_variables(
                         cfg_node: node,
                         block: block_id,
                     });
-                    var_stacks
-                        .entry(extra_def.clone())
-                        .or_default()
-                        .push(ev);
+                    var_stacks.entry(extra_def.clone()).or_default().push(ev);
                     ssa_blocks[block_idx].body.push(SsaInst {
                         value: ev,
                         op: primary_op.clone(),
@@ -969,7 +990,9 @@ fn rename_variables(
             for &(src, tgt, kind) in filtered_edges {
                 if blocks_nodes[block_idx].contains(&src) {
                     let tgt_blk_opt = succs.iter().position(|&s| {
-                        blocks_nodes.get(s).is_some_and(|nodes| nodes.contains(&tgt))
+                        blocks_nodes
+                            .get(s)
+                            .is_some_and(|nodes| nodes.contains(&tgt))
                     });
                     if let Some(tgt_blk_pos) = tgt_blk_opt {
                         match kind {
@@ -986,9 +1009,8 @@ fn rename_variables(
             let condition = if cond_info.condition_text.is_some()
                 && !cond_info.condition_vars.is_empty()
             {
-                let expr = crate::constraint::lower::lower_condition_with_stacks(
-                    cond_info, var_stacks,
-                );
+                let expr =
+                    crate::constraint::lower::lower_condition_with_stacks(cond_info, var_stacks);
                 if matches!(expr, crate::constraint::lower::ConditionExpr::Unknown) {
                     None
                 } else {
@@ -1013,9 +1035,7 @@ fn rename_variables(
         for &succ in succs {
             for (var, &phi_val) in &phi_values[succ] {
                 // The version of `var` reaching from this block
-                let reaching_val = var_stacks
-                    .get(var)
-                    .and_then(|s| s.last().copied());
+                let reaching_val = var_stacks.get(var).and_then(|s| s.last().copied());
                 if let Some(rv) = reaching_val {
                     // Find the phi instruction and add this operand
                     for phi in &mut ssa_blocks[succ].phis {
@@ -1112,9 +1132,8 @@ fn rename_variables(
     //
     // Rebuild var_stacks from already-processed instructions so that catch blocks
     // can reference variables defined before the try block (e.g. `userInput`).
-    let has_orphans = (1..num_blocks).any(|bid| {
-        block_preds[bid].is_empty() && ssa_blocks[bid].body.is_empty()
-    });
+    let has_orphans =
+        (1..num_blocks).any(|bid| block_preds[bid].is_empty() && ssa_blocks[bid].body.is_empty());
     if has_orphans {
         // Rebuild var_stacks from all SSA instructions created during the main walk.
         // This gives orphan blocks access to all variable definitions.
@@ -1297,11 +1316,7 @@ mod tests {
         let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
 
         // Loop header block should have a phi for "x" (from entry and back edge)
-        let header_phis: Vec<_> = ssa
-            .blocks
-            .iter()
-            .filter(|b| !b.phis.is_empty())
-            .collect();
+        let header_phis: Vec<_> = ssa.blocks.iter().filter(|b| !b.phis.is_empty()).collect();
 
         assert!(
             !header_phis.is_empty(),
@@ -1342,7 +1357,8 @@ mod tests {
         let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
 
         // Each definition of x should produce a distinct SsaValue
-        let x_values: Vec<_> = ssa.value_defs
+        let x_values: Vec<_> = ssa
+            .value_defs
             .iter()
             .enumerate()
             .filter(|(_, vd)| vd.var_name.as_deref() == Some("x"))

@@ -186,7 +186,11 @@ struct BenchmarkResults {
 
 fn scan_corpus_file(corpus_root: &Path, relative_path: &str) -> Vec<Diag> {
     let source = corpus_root.join(relative_path);
-    assert!(source.exists(), "Corpus path not found: {}", source.display());
+    assert!(
+        source.exists(),
+        "Corpus path not found: {}",
+        source.display()
+    );
 
     let tmp = tempfile::TempDir::with_prefix("nyx_bench_").expect("tempdir");
 
@@ -368,36 +372,30 @@ fn should_run(case: &Case) -> bool {
         return false;
     }
 
-    if let Ok(lang) = std::env::var("NYX_BENCH_LANG") {
-        if case.language != lang {
+    if let Ok(lang) = std::env::var("NYX_BENCH_LANG")
+        && case.language != lang {
             return false;
         }
-    }
-    if let Ok(class) = std::env::var("NYX_BENCH_CLASS") {
-        if case.vuln_class != class {
+    if let Ok(class) = std::env::var("NYX_BENCH_CLASS")
+        && case.vuln_class != class {
             return false;
         }
-    }
-    if let Ok(id) = std::env::var("NYX_BENCH_CASE") {
-        if case.case_id != id {
+    if let Ok(id) = std::env::var("NYX_BENCH_CASE")
+        && case.case_id != id {
             return false;
         }
-    }
-    if std::env::var("NYX_BENCH_POSITIVE_ONLY").is_ok() {
-        if !case.is_vulnerable {
+    if std::env::var("NYX_BENCH_POSITIVE_ONLY").is_ok()
+        && !case.is_vulnerable {
             return false;
         }
-    }
-    if std::env::var("NYX_BENCH_NEGATIVE_ONLY").is_ok() {
-        if case.is_vulnerable {
+    if std::env::var("NYX_BENCH_NEGATIVE_ONLY").is_ok()
+        && case.is_vulnerable {
             return false;
         }
-    }
-    if let Ok(tag) = std::env::var("NYX_BENCH_TAG") {
-        if !case.tags.iter().any(|t| t == &tag) {
+    if let Ok(tag) = std::env::var("NYX_BENCH_TAG")
+        && !case.tags.iter().any(|t| t == &tag) {
             return false;
         }
-    }
 
     true
 }
@@ -428,10 +426,7 @@ fn aggregate_by_key(
 ) -> BTreeMap<String, Metrics> {
     let mut groups: BTreeMap<String, Vec<&CaseOutcome>> = BTreeMap::new();
     for o in outcomes {
-        groups
-            .entry(key_fn(o).to_string())
-            .or_default()
-            .push(o);
+        groups.entry(key_fn(o).to_string()).or_default().push(o);
     }
     groups
         .into_iter()
@@ -453,8 +448,10 @@ fn aggregate_by_key(
 // ── Printing ─────────────────────────────────────────────────────────
 
 fn print_case_table(outcomes: &[CaseOutcome]) {
-    println!("\n{:<25} {:<40} {:<6} {:<6} {:<6} {:<4} {:<4}",
-        "CASE_ID", "FILE", "FILE", "RULE", "LOC", "SEC", "OTH");
+    println!(
+        "\n{:<25} {:<40} {:<6} {:<6} {:<6} {:<4} {:<4}",
+        "CASE_ID", "FILE", "FILE", "RULE", "LOC", "SEC", "OTH"
+    );
     println!("{}", "-".repeat(100));
     for o in outcomes {
         let loc = match &o.outcome_location_level {
@@ -477,8 +474,14 @@ fn print_case_table(outcomes: &[CaseOutcome]) {
 fn print_metrics_table(label: &str, metrics: &Metrics) {
     println!(
         "  {:<20} TP={:<4} FP={:<4} FN={:<4} TN={:<4}  P={:.3} R={:.3} F1={:.3}",
-        label, metrics.tp, metrics.fp, metrics.fn_, metrics.tn,
-        metrics.precision, metrics.recall, metrics.f1
+        label,
+        metrics.tp,
+        metrics.fp,
+        metrics.fn_,
+        metrics.tn,
+        metrics.precision,
+        metrics.recall,
+        metrics.f1
     );
 }
 
@@ -530,8 +533,12 @@ fn benchmark_evaluation() {
         .collect();
 
     println!("\n=== Nyx Benchmark Evaluation ===");
-    println!("Corpus: {} total, {} to run, {} skipped",
-        gt.cases.len(), cases_to_run.len(), cases_skipped);
+    println!(
+        "Corpus: {} total, {} to run, {} skipped",
+        gt.cases.len(),
+        cases_to_run.len(),
+        cases_skipped
+    );
 
     // Run each case.
     let mut outcomes: Vec<CaseOutcome> = Vec::with_capacity(cases_to_run.len());
@@ -643,10 +650,7 @@ fn benchmark_evaluation() {
 
 // ── Confidence-threshold scoring ─────────────────────────────────────
 
-fn score_by_confidence(
-    outcomes: &[CaseOutcome],
-    cases: &[&Case],
-) -> BTreeMap<String, Metrics> {
+fn score_by_confidence(outcomes: &[CaseOutcome], cases: &[&Case]) -> BTreeMap<String, Metrics> {
     let mut result = BTreeMap::new();
     for (label, min_conf) in [
         (">=Low", Confidence::Low),
@@ -673,7 +677,10 @@ fn score_by_confidence(
     result
 }
 
-fn score_rule_level_with_diags(case: &Case, security_diags: &[&Diag]) -> (Outcome, Vec<String>, Vec<String>) {
+fn score_rule_level_with_diags(
+    case: &Case,
+    security_diags: &[&Diag],
+) -> (Outcome, Vec<String>, Vec<String>) {
     if case.is_vulnerable {
         for d in security_diags {
             if !is_security(d) {
@@ -681,7 +688,11 @@ fn score_rule_level_with_diags(case: &Case, security_diags: &[&Diag]) -> (Outcom
             }
             for forbidden in &case.forbidden_rule_ids {
                 if rule_matches(&d.id, forbidden) {
-                    let unexpected = security_diags.iter().filter(|d| is_security(d)).map(|d| d.id.clone()).collect();
+                    let unexpected = security_diags
+                        .iter()
+                        .filter(|d| is_security(d))
+                        .map(|d| d.id.clone())
+                        .collect();
                     return (Outcome::FP, vec![], unexpected);
                 }
             }
@@ -747,8 +758,5 @@ fn chrono_now() -> String {
         .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
         .output()
         .expect("date");
-    String::from_utf8(out.stdout)
-        .unwrap()
-        .trim()
-        .to_string()
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
 }

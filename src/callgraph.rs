@@ -282,7 +282,9 @@ pub fn scc_file_batches_with_metadata<'a>(
         let abs = p.to_string_lossy();
         let rel = crate::symbol::normalize_namespace(&abs, Some(&root_str));
         if let Some(&(topo_pos, recursive)) = file_topo.get(rel.as_str()) {
-            let entry = topo_groups.entry(topo_pos).or_insert_with(|| (Vec::new(), false));
+            let entry = topo_groups
+                .entry(topo_pos)
+                .or_insert_with(|| (Vec::new(), false));
             entry.0.push(p);
             entry.1 |= recursive;
         } else {
@@ -763,7 +765,9 @@ mod tests {
         let batch_of = |name: &str| {
             batches
                 .iter()
-                .position(|batch: &Vec<&PathBuf>| batch.iter().any(|p| p.to_str().unwrap().ends_with(name)))
+                .position(|batch: &Vec<&PathBuf>| {
+                    batch.iter().any(|p| p.to_str().unwrap().ends_with(name))
+                })
                 .unwrap()
         };
         assert!(batch_of("c.rs") < batch_of("b.rs"));
@@ -801,10 +805,7 @@ mod tests {
         let mid = make_summary("mid", "/proj/b.rs", "rust", 0, vec!["leaf"]);
         let caller = make_summary("caller", "/proj/a.rs", "rust", 0, vec!["mid"]);
 
-        let files: Vec<PathBuf> = vec![
-            PathBuf::from("/proj/a.rs"),
-            PathBuf::from("/proj/b.rs"),
-        ];
+        let files: Vec<PathBuf> = vec![PathBuf::from("/proj/a.rs"), PathBuf::from("/proj/b.rs")];
 
         let (batches, orphans) = build_batches(vec![leaf, mid, caller], &files, root);
 
@@ -812,12 +813,16 @@ mod tests {
         let batch_of = |name: &str| {
             batches
                 .iter()
-                .position(|batch: &Vec<&PathBuf>| batch.iter().any(|p| p.to_str().unwrap().ends_with(name)))
+                .position(|batch: &Vec<&PathBuf>| {
+                    batch.iter().any(|p| p.to_str().unwrap().ends_with(name))
+                })
                 .unwrap()
         };
         // a.rs should be in the earliest batch (min topo from leaf)
-        assert!(batch_of("a.rs") < batch_of("b.rs"),
-            "a.rs has leaf fn so should be in earlier batch than b.rs");
+        assert!(
+            batch_of("a.rs") < batch_of("b.rs"),
+            "a.rs has leaf fn so should be in earlier batch than b.rs"
+        );
     }
 
     #[test]
@@ -827,26 +832,24 @@ mod tests {
         let a = make_summary("ping", "/proj/a.rs", "rust", 0, vec!["pong"]);
         let b = make_summary("pong", "/proj/b.rs", "rust", 0, vec!["ping"]);
 
-        let files: Vec<PathBuf> = vec![
-            PathBuf::from("/proj/a.rs"),
-            PathBuf::from("/proj/b.rs"),
-        ];
+        let files: Vec<PathBuf> = vec![PathBuf::from("/proj/a.rs"), PathBuf::from("/proj/b.rs")];
 
         let (batches, orphans) = build_batches(vec![a, b], &files, root);
 
         assert!(orphans.is_empty());
         // Both files should be in the same batch (same SCC)
-        assert_eq!(batches.len(), 1, "mutual recursion → single SCC → single batch");
+        assert_eq!(
+            batches.len(),
+            1,
+            "mutual recursion → single SCC → single batch"
+        );
         assert_eq!(batches[0].len(), 2);
     }
 
     #[test]
     fn scc_file_batches_empty_graph() {
         let root = Path::new("/proj");
-        let files: Vec<PathBuf> = vec![
-            PathBuf::from("/proj/a.rs"),
-            PathBuf::from("/proj/b.rs"),
-        ];
+        let files: Vec<PathBuf> = vec![PathBuf::from("/proj/a.rs"), PathBuf::from("/proj/b.rs")];
 
         let gs = merge_summaries(vec![], None);
         let cg = build_call_graph(&gs, &[]);
@@ -878,10 +881,7 @@ mod tests {
         let a = make_summary("ping", "/proj/a.rs", "rust", 0, vec!["pong"]);
         let b = make_summary("pong", "/proj/b.rs", "rust", 0, vec!["ping"]);
 
-        let files: Vec<PathBuf> = vec![
-            PathBuf::from("/proj/a.rs"),
-            PathBuf::from("/proj/b.rs"),
-        ];
+        let files: Vec<PathBuf> = vec![PathBuf::from("/proj/a.rs"), PathBuf::from("/proj/b.rs")];
 
         let (batches, orphans) = build_metadata_batches(vec![a, b], &files, root);
 

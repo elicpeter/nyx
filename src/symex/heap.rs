@@ -187,7 +187,11 @@ impl SymbolicHeap {
                 object: key.object,
                 field: FieldSlot::Elements,
             };
-            return self.fields.get(&elem_key).cloned().unwrap_or(SymbolicValue::Unknown);
+            return self
+                .fields
+                .get(&elem_key)
+                .cloned()
+                .unwrap_or(SymbolicValue::Unknown);
         }
         self.fields
             .get(key)
@@ -248,7 +252,11 @@ impl SymbolicHeap {
         let mut h: u64 = 0;
         for key in keys {
             let val = &self.fields[key];
-            let tainted: u64 = if self.tainted_keys.contains(key) { 1 } else { 0 };
+            let tainted: u64 = if self.tainted_keys.contains(key) {
+                1
+            } else {
+                0
+            };
             let val_tag: u64 = match val {
                 SymbolicValue::Concrete(n) => (*n as u64).wrapping_mul(31),
                 SymbolicValue::ConcreteStr(s) => {
@@ -528,7 +536,11 @@ mod tests {
     fn widen_preserves_taint_clears_values() {
         let mut heap = SymbolicHeap::new();
         let key = named_key(0, "name");
-        heap.store(key.clone(), SymbolicValue::ConcreteStr("alice".to_string()), true);
+        heap.store(
+            key.clone(),
+            SymbolicValue::ConcreteStr("alice".to_string()),
+            true,
+        );
 
         heap.widen();
 
@@ -677,7 +689,11 @@ mod tests {
         assert_eq!(heap.count_indices_for(obj(0)), MAX_TRACKED_INDICES);
 
         // One more triggers collapse.
-        heap.store(index_key(0, MAX_TRACKED_INDICES as u64), SymbolicValue::Concrete(999), false);
+        heap.store(
+            index_key(0, MAX_TRACKED_INDICES as u64),
+            SymbolicValue::Concrete(999),
+            false,
+        );
 
         // No Index(*) keys remain.
         assert_eq!(heap.count_indices_for(obj(0)), 0);

@@ -233,10 +233,7 @@ impl JobManager {
             let (status, diags, error_str) = match result {
                 Ok(mut diags) => {
                     scan::post_process_diags(&mut diags, &config);
-                    log_collector.info(
-                        format!("Scan completed: {} findings", diags.len()),
-                        None,
-                    );
+                    log_collector.info(format!("Scan completed: {} findings", diags.len()), None);
                     (JobStatus::Completed, Some(Arc::new(diags)), None)
                 }
                 Err(e) => {
@@ -249,7 +246,9 @@ impl JobManager {
             let finding_count = diags.as_ref().map(|d| d.len());
 
             // Pre-serialize findings JSON outside the lock (can be large).
-            let findings_json = diags.as_ref().and_then(|f| serde_json::to_string(f.as_slice()).ok());
+            let findings_json = diags
+                .as_ref()
+                .and_then(|f| serde_json::to_string(f.as_slice()).ok());
             let timing_json = serde_json::to_string(&timing).ok();
             let langs_json = serde_json::to_string(&languages).ok();
 
@@ -298,7 +297,11 @@ impl JobManager {
                     let finished_str = finished_at.to_rfc3339();
                     let _ = idx.update_scan(
                         &jid,
-                        if finding_count.is_some() { "completed" } else { "failed" },
+                        if finding_count.is_some() {
+                            "completed"
+                        } else {
+                            "failed"
+                        },
                         Some(&finished_str),
                         Some(elapsed),
                         finding_count.map(|c| c as i64),

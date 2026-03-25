@@ -242,7 +242,13 @@ fn extract_allowlist_target(text: &str) -> Option<String> {
     let lower = trimmed.to_ascii_lowercase();
 
     // Method call pattern: something.includes(arg) / .contains(arg) / .has(arg) / .indexof(arg)
-    for method in &[".includes(", ".include?(", ".contains(", ".indexof(", ".has("] {
+    for method in &[
+        ".includes(",
+        ".include?(",
+        ".contains(",
+        ".indexof(",
+        ".has(",
+    ] {
         if let Some(pos) = lower.find(method) {
             let args_start = pos + method.len();
             let args_part = &trimmed[args_start..];
@@ -317,7 +323,8 @@ fn extract_type_check_target(text: &str) -> Option<String> {
     if let Some(pos) = lower.find("typeof ") {
         let after = &trimmed[pos + "typeof ".len()..];
         // The target is the next identifier-like word
-        let target: String = after.chars()
+        let target: String = after
+            .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_')
             .collect();
         if !target.is_empty() {
@@ -657,10 +664,7 @@ mod tests {
 
     #[test]
     fn classify_type_check_is_int() {
-        assert_eq!(
-            classify_condition("is_int($x)"),
-            PredicateKind::TypeCheck
-        );
+        assert_eq!(classify_condition("is_int($x)"), PredicateKind::TypeCheck);
     }
 
     #[test]

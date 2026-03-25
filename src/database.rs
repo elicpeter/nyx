@@ -464,7 +464,13 @@ pub mod index {
             &mut self,
             file_path: &Path,
             file_hash: &[u8],
-            summaries: &[(String, usize, String, String, crate::summary::ssa_summary::SsaFuncSummary)],
+            summaries: &[(
+                String,
+                usize,
+                String,
+                String,
+                crate::summary::ssa_summary::SsaFuncSummary,
+            )],
         ) -> NyxResult<()> {
             let tx = self.conn.transaction()?;
             let path_str = file_path.to_string_lossy();
@@ -544,7 +550,16 @@ pub mod index {
         /// `(file_path, name, lang, arity, namespace, SsaFuncSummary)`.
         pub fn load_all_ssa_summaries(
             &self,
-        ) -> NyxResult<Vec<(String, String, String, i64, String, crate::summary::ssa_summary::SsaFuncSummary)>> {
+        ) -> NyxResult<
+            Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                crate::summary::ssa_summary::SsaFuncSummary,
+            )>,
+        > {
             let mut stmt = self.c().prepare(
                 "SELECT file_path, name, lang, arity, namespace, summary
                  FROM ssa_function_summaries WHERE project = ?1",
@@ -571,7 +586,16 @@ pub mod index {
                     .filter_map(|(fp, name, lang, arity, ns, json)| {
                         serde_json::from_str::<crate::summary::ssa_summary::SsaFuncSummary>(json)
                             .ok()
-                            .map(|s| (fp.clone(), name.clone(), lang.clone(), *arity, ns.clone(), s))
+                            .map(|s| {
+                                (
+                                    fp.clone(),
+                                    name.clone(),
+                                    lang.clone(),
+                                    *arity,
+                                    ns.clone(),
+                                    s,
+                                )
+                            })
                     })
                     .collect();
                 Ok(results)
@@ -581,7 +605,14 @@ pub mod index {
                     if let Ok(s) =
                         serde_json::from_str::<crate::summary::ssa_summary::SsaFuncSummary>(json)
                     {
-                        out.push((fp.clone(), name.clone(), lang.clone(), *arity, ns.clone(), s));
+                        out.push((
+                            fp.clone(),
+                            name.clone(),
+                            lang.clone(),
+                            *arity,
+                            ns.clone(),
+                            s,
+                        ));
                     }
                 }
                 Ok(out)
@@ -763,7 +794,9 @@ pub mod index {
 
         /// Delete a scan and its associated metrics/logs (FK CASCADE).
         pub fn delete_scan(&self, id: &str) -> NyxResult<usize> {
-            let rows = self.c().execute("DELETE FROM scans WHERE id = ?1", params![id])?;
+            let rows = self
+                .c()
+                .execute("DELETE FROM scans WHERE id = ?1", params![id])?;
             Ok(rows)
         }
 
@@ -850,10 +883,7 @@ pub mod index {
                         "SELECT timestamp, level, message, file_path, detail
                          FROM scan_logs WHERE scan_id = ?1 AND level = ?2
                          ORDER BY id ASC",
-                        vec![
-                            Box::new(scan_id.to_string()),
-                            Box::new(level.to_string()),
-                        ],
+                        vec![Box::new(scan_id.to_string()), Box::new(level.to_string())],
                     )
                 } else {
                     (
@@ -871,7 +901,13 @@ pub mod index {
                 .query_map(params_refs.as_slice(), |row| {
                     let ts_str: String = row.get(0)?;
                     let level_str: String = row.get(1)?;
-                    Ok((ts_str, level_str, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?))
+                    Ok((
+                        ts_str,
+                        level_str,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
                 })?
                 .filter_map(Result::ok)
                 .filter_map(|(ts_str, level_str, message, file_path, detail)| {
@@ -1052,7 +1088,8 @@ pub mod index {
                 };
 
             let total: i64 = if let Some(state) = state_filter {
-                self.c().query_row(count_sql, params![state], |row| row.get(0))?
+                self.c()
+                    .query_row(count_sql, params![state], |row| row.get(0))?
             } else {
                 self.c().query_row(count_sql, [], |row| row.get(0))?
             };
@@ -1089,11 +1126,7 @@ pub mod index {
                          FROM triage_audit_log WHERE fingerprint = ?1
                          ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3",
                         "SELECT COUNT(*) FROM triage_audit_log WHERE fingerprint = ?1",
-                        vec![
-                            Box::new(fp.to_string()),
-                            Box::new(limit),
-                            Box::new(offset),
-                        ],
+                        vec![Box::new(fp.to_string()), Box::new(limit), Box::new(offset)],
                     )
                 } else {
                     (
@@ -1105,7 +1138,8 @@ pub mod index {
                 };
 
             let total: i64 = if let Some(fp) = fingerprint_filter {
-                self.c().query_row(count_sql, params![fp], |row| row.get(0))?
+                self.c()
+                    .query_row(count_sql, params![fp], |row| row.get(0))?
             } else {
                 self.c().query_row(count_sql, [], |row| row.get(0))?
             };
@@ -1362,13 +1396,15 @@ fn ssa_summaries_round_trip() {
         ),
     ];
 
-    idx.replace_ssa_summaries_for_file(&f, &hash, &summaries).unwrap();
+    idx.replace_ssa_summaries_for_file(&f, &hash, &summaries)
+        .unwrap();
 
     let loaded = idx.load_all_ssa_summaries().unwrap();
     assert_eq!(loaded.len(), 2);
 
     // Check first summary
-    let (_, name1, lang1, arity1, ns1, sum1) = loaded.iter()
+    let (_, name1, lang1, arity1, ns1, sum1) = loaded
+        .iter()
         .find(|(_, n, _, _, _, _)| n == "process")
         .unwrap();
     assert_eq!(name1, "process");
@@ -1379,11 +1415,15 @@ fn ssa_summaries_round_trip() {
     assert!(sum1.param_to_sink.is_empty());
 
     // Check second summary
-    let (_, name2, _, _, _, sum2) = loaded.iter()
+    let (_, name2, _, _, _, sum2) = loaded
+        .iter()
         .find(|(_, n, _, _, _, _)| n == "sanitize")
         .unwrap();
     assert_eq!(name2, "sanitize");
-    assert_eq!(sum2.param_to_return, vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))]);
+    assert_eq!(
+        sum2.param_to_return,
+        vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))]
+    );
     assert_eq!(sum2.param_to_sink, vec![(0, Cap::SQL_QUERY)]);
     assert_eq!(sum2.source_caps, Cap::ENV_VAR);
 }
@@ -1418,7 +1458,8 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             return_abstract: None,
         },
     )];
-    idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1).unwrap();
+    idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1)
+        .unwrap();
 
     // Simulate file change: different function, different hash
     let hash_v2 = index::Indexer::digest_bytes(b"v2");
@@ -1438,10 +1479,15 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             return_abstract: None,
         },
     )];
-    idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2).unwrap();
+    idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2)
+        .unwrap();
 
     let loaded = idx.load_all_ssa_summaries().unwrap();
-    assert_eq!(loaded.len(), 1, "old summary should be replaced, not duplicated");
+    assert_eq!(
+        loaded.len(),
+        1,
+        "old summary should be replaced, not duplicated"
+    );
     assert_eq!(loaded[0].1, "new_func");
 }
 
@@ -1475,7 +1521,8 @@ fn clear_drops_ssa_summaries_table() {
             return_abstract: None,
         },
     )];
-    idx.replace_ssa_summaries_for_file(&f, &hash, &sums).unwrap();
+    idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
+        .unwrap();
     assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 1);
 
     idx.clear().unwrap();

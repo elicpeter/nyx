@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use serde::{Serialize, Deserialize};
-use super::ir::*;
 use super::const_prop::ConstLattice;
+use super::ir::*;
 use crate::cfg::{BinOp, Cfg};
 use crate::symbol::Lang;
+use serde::{Deserialize, Serialize};
 
 /// Inferred type kind for an SSA value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,7 +235,7 @@ pub fn is_int_producing_callee(callee: &str) -> bool {
         | "parseLong" | "parseDouble" | "parseShort" // Java
         | "Atoi" | "ParseInt" | "ParseFloat"         // Go
         | "intval" | "floatval"                       // PHP
-        | "to_i" | "to_f"                             // Ruby
+        | "to_i" | "to_f" // Ruby
     )
 }
 
@@ -289,13 +289,23 @@ pub fn analyze_types(
                     // and comparison operators always produce integers.
                     let bin_op = cfg.node_weight(inst.cfg_node).and_then(|ni| ni.bin_op);
                     match bin_op {
-                        Some(BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
-                           | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
-                           | BinOp::LeftShift | BinOp::RightShift
-                           | BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq
-                           | BinOp::Gt | BinOp::GtEq) => {
-                            TypeFact::from_kind(TypeKind::Int)
-                        }
+                        Some(
+                            BinOp::Sub
+                            | BinOp::Mul
+                            | BinOp::Div
+                            | BinOp::Mod
+                            | BinOp::BitAnd
+                            | BinOp::BitOr
+                            | BinOp::BitXor
+                            | BinOp::LeftShift
+                            | BinOp::RightShift
+                            | BinOp::Eq
+                            | BinOp::NotEq
+                            | BinOp::Lt
+                            | BinOp::LtEq
+                            | BinOp::Gt
+                            | BinOp::GtEq,
+                        ) => TypeFact::from_kind(TypeKind::Int),
                         // Add could be string concatenation — defer to operand types
                         _ => TypeFact::unknown(),
                     }
@@ -320,7 +330,8 @@ pub fn analyze_types(
                 if let SsaOp::Phi(operands) = &inst.op {
                     let mut result: Option<TypeFact> = None;
                     for (_, val) in operands {
-                        let operand_fact = facts.get(val).cloned().unwrap_or_else(TypeFact::unknown);
+                        let operand_fact =
+                            facts.get(val).cloned().unwrap_or_else(TypeFact::unknown);
                         result = Some(match result {
                             None => operand_fact,
                             Some(acc) => acc.meet(&operand_fact),
@@ -340,7 +351,10 @@ pub fn analyze_types(
             for inst in &block.body {
                 if let SsaOp::Assign(uses) = &inst.op {
                     if uses.len() == 1 {
-                        let src_fact = facts.get(&uses[0]).cloned().unwrap_or_else(TypeFact::unknown);
+                        let src_fact = facts
+                            .get(&uses[0])
+                            .cloned()
+                            .unwrap_or_else(TypeFact::unknown);
                         let old = facts.get(&inst.value);
                         if old != Some(&src_fact) {
                             facts.insert(inst.value, src_fact);
@@ -349,8 +363,14 @@ pub fn analyze_types(
                     } else if uses.len() == 2 {
                         // Binary assignments: if both operands are Int, result is Int.
                         // This ensures `parseInt(x) * 10` is typed as Int (Int * Int = Int).
-                        let lhs = facts.get(&uses[0]).cloned().unwrap_or_else(TypeFact::unknown);
-                        let rhs = facts.get(&uses[1]).cloned().unwrap_or_else(TypeFact::unknown);
+                        let lhs = facts
+                            .get(&uses[0])
+                            .cloned()
+                            .unwrap_or_else(TypeFact::unknown);
+                        let rhs = facts
+                            .get(&uses[1])
+                            .cloned()
+                            .unwrap_or_else(TypeFact::unknown);
                         if matches!(lhs.kind, TypeKind::Int) && matches!(rhs.kind, TypeKind::Int) {
                             let new_fact = TypeFact::from_kind(TypeKind::Int);
                             if facts.get(&inst.value) != Some(&new_fact) {
@@ -404,7 +424,10 @@ static JAVA_HIERARCHY: &[(&str, &[&str])] = &[
     ("JmsTemplate", &["DatabaseConnection"]),
     // Phase 16 hardening — Spring, Servlet, I/O
     ("ResponseEntity", &["HttpResponse"]),
-    ("HttpServletRequestWrapper", &["HttpServletRequest", "ServletRequest"]),
+    (
+        "HttpServletRequestWrapper",
+        &["HttpServletRequest", "ServletRequest"],
+    ),
     ("PrintWriter", &["Writer"]),
     ("FileReader", &["Reader"]),
     ("FileWriter", &["Writer"]),
@@ -539,8 +562,8 @@ impl GoInterfaceTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petgraph::graph::NodeIndex;
     use petgraph::Graph;
+    use petgraph::graph::NodeIndex;
     use smallvec::SmallVec;
 
     #[test]
@@ -582,17 +605,25 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("x".into()), cfg_node: n0, block: BlockId(0) },
-                ValueDef { var_name: Some("y".into()), cfg_node: n1, block: BlockId(0) },
-                ValueDef { var_name: Some("z".into()), cfg_node: n2, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("x".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("y".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("z".into()),
+                    cfg_node: n2,
+                    block: BlockId(0),
+                },
             ],
-            cfg_node_map: [
-                (n0, SsaValue(0)),
-                (n1, SsaValue(1)),
-                (n2, SsaValue(2)),
-            ]
-            .into_iter()
-            .collect(),
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1)), (n2, SsaValue(2))]
+                .into_iter()
+                .collect(),
             exception_edges: vec![],
         };
 
@@ -605,8 +636,14 @@ mod tests {
         let result = analyze_types(&body, &cfg, &consts, None);
 
         assert!(result.is_int(SsaValue(0)));
-        assert_eq!(result.facts.get(&SsaValue(1)).unwrap().kind, TypeKind::String);
-        assert_eq!(result.facts.get(&SsaValue(2)).unwrap().kind, TypeKind::String); // Source
+        assert_eq!(
+            result.facts.get(&SsaValue(1)).unwrap().kind,
+            TypeKind::String
+        );
+        assert_eq!(
+            result.facts.get(&SsaValue(2)).unwrap().kind,
+            TypeKind::String
+        ); // Source
     }
 
     #[test]
@@ -634,7 +671,10 @@ mod tests {
         assert_eq!(TypeKind::HttpClient.label_prefix(), Some("HttpClient"));
         assert_eq!(TypeKind::HttpResponse.label_prefix(), Some("HttpResponse"));
         assert_eq!(TypeKind::Url.label_prefix(), Some("URL"));
-        assert_eq!(TypeKind::DatabaseConnection.label_prefix(), Some("DatabaseConnection"));
+        assert_eq!(
+            TypeKind::DatabaseConnection.label_prefix(),
+            Some("DatabaseConnection")
+        );
         assert_eq!(TypeKind::FileHandle.label_prefix(), Some("FileHandle"));
         // Primitive types have no label prefix
         assert_eq!(TypeKind::String.label_prefix(), None);
@@ -681,15 +721,18 @@ mod tests {
             }],
             entry: BlockId(0),
             value_defs: vec![
-                ValueDef { var_name: Some("url".into()), cfg_node: n0, block: BlockId(0) },
-                ValueDef { var_name: Some("client".into()), cfg_node: n1, block: BlockId(0) },
+                ValueDef {
+                    var_name: Some("url".into()),
+                    cfg_node: n0,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: Some("client".into()),
+                    cfg_node: n1,
+                    block: BlockId(0),
+                },
             ],
-            cfg_node_map: [
-                (n0, SsaValue(0)),
-                (n1, SsaValue(1)),
-            ]
-            .into_iter()
-            .collect(),
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
         };
 
@@ -810,49 +853,121 @@ mod tests {
 
     #[test]
     fn constructor_type_php() {
-        assert_eq!(constructor_type(Lang::Php, "PDO"), Some(TypeKind::DatabaseConnection));
-        assert_eq!(constructor_type(Lang::Php, "mysqli"), Some(TypeKind::DatabaseConnection));
-        assert_eq!(constructor_type(Lang::Php, "curl_init"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Php, "fopen"), Some(TypeKind::FileHandle));
-        assert_eq!(constructor_type(Lang::Php, "SplFileObject"), Some(TypeKind::FileHandle));
+        assert_eq!(
+            constructor_type(Lang::Php, "PDO"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Php, "mysqli"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Php, "curl_init"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Php, "fopen"),
+            Some(TypeKind::FileHandle)
+        );
+        assert_eq!(
+            constructor_type(Lang::Php, "SplFileObject"),
+            Some(TypeKind::FileHandle)
+        );
         assert_eq!(constructor_type(Lang::Php, "array_map"), None);
     }
 
     #[test]
     fn constructor_type_c() {
-        assert_eq!(constructor_type(Lang::C, "fopen"), Some(TypeKind::FileHandle));
-        assert_eq!(constructor_type(Lang::C, "curl_easy_init"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::C, "mysql_real_connect"), Some(TypeKind::DatabaseConnection));
-        assert_eq!(constructor_type(Lang::C, "PQconnectdb"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(
+            constructor_type(Lang::C, "fopen"),
+            Some(TypeKind::FileHandle)
+        );
+        assert_eq!(
+            constructor_type(Lang::C, "curl_easy_init"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::C, "mysql_real_connect"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::C, "PQconnectdb"),
+            Some(TypeKind::DatabaseConnection)
+        );
         assert_eq!(constructor_type(Lang::C, "printf"), None);
     }
 
     #[test]
     fn constructor_type_cpp() {
-        assert_eq!(constructor_type(Lang::Cpp, "fopen"), Some(TypeKind::FileHandle));
-        assert_eq!(constructor_type(Lang::Cpp, "curl_easy_init"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Cpp, "ifstream"), Some(TypeKind::FileHandle));
-        assert_eq!(constructor_type(Lang::Cpp, "ofstream"), Some(TypeKind::FileHandle));
-        assert_eq!(constructor_type(Lang::Cpp, "fstream"), Some(TypeKind::FileHandle));
+        assert_eq!(
+            constructor_type(Lang::Cpp, "fopen"),
+            Some(TypeKind::FileHandle)
+        );
+        assert_eq!(
+            constructor_type(Lang::Cpp, "curl_easy_init"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Cpp, "ifstream"),
+            Some(TypeKind::FileHandle)
+        );
+        assert_eq!(
+            constructor_type(Lang::Cpp, "ofstream"),
+            Some(TypeKind::FileHandle)
+        );
+        assert_eq!(
+            constructor_type(Lang::Cpp, "fstream"),
+            Some(TypeKind::FileHandle)
+        );
         assert_eq!(constructor_type(Lang::Cpp, "printf"), None);
     }
 
     #[test]
     fn constructor_type_ruby() {
         // HttpClient
-        assert_eq!(constructor_type(Lang::Ruby, "Net::HTTP.new"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Ruby, "Net::HTTP.get"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Ruby, "HTTParty.get"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Ruby, "HTTParty.post"), Some(TypeKind::HttpClient));
+        assert_eq!(
+            constructor_type(Lang::Ruby, "Net::HTTP.new"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "Net::HTTP.get"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "HTTParty.get"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "HTTParty.post"),
+            Some(TypeKind::HttpClient)
+        );
         // Url
-        assert_eq!(constructor_type(Lang::Ruby, "URI.parse"), Some(TypeKind::Url));
+        assert_eq!(
+            constructor_type(Lang::Ruby, "URI.parse"),
+            Some(TypeKind::Url)
+        );
         // DatabaseConnection
-        assert_eq!(constructor_type(Lang::Ruby, "PG.connect"), Some(TypeKind::DatabaseConnection));
-        assert_eq!(constructor_type(Lang::Ruby, "Sequel.connect"), Some(TypeKind::DatabaseConnection));
-        assert_eq!(constructor_type(Lang::Ruby, "Mysql2::Client.new"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(
+            constructor_type(Lang::Ruby, "PG.connect"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "Sequel.connect"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "Mysql2::Client.new"),
+            Some(TypeKind::DatabaseConnection)
+        );
         // FileHandle
-        assert_eq!(constructor_type(Lang::Ruby, "File.open"), Some(TypeKind::FileHandle));
-        assert_eq!(constructor_type(Lang::Ruby, "File.new"), Some(TypeKind::FileHandle));
+        assert_eq!(
+            constructor_type(Lang::Ruby, "File.open"),
+            Some(TypeKind::FileHandle)
+        );
+        assert_eq!(
+            constructor_type(Lang::Ruby, "File.new"),
+            Some(TypeKind::FileHandle)
+        );
         // Negative
         assert_eq!(constructor_type(Lang::Ruby, "puts"), None);
         assert_eq!(constructor_type(Lang::Ruby, "Array.new"), None);
@@ -860,16 +975,43 @@ mod tests {
 
     #[test]
     fn constructor_type_rust_exact() {
-        assert_eq!(constructor_type(Lang::Rust, "reqwest::Client::new"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Rust, "reqwest::get"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Rust, "File::open"), Some(TypeKind::FileHandle));
-        assert_eq!(constructor_type(Lang::Rust, "File::create"), Some(TypeKind::FileHandle));
-        assert_eq!(constructor_type(Lang::Rust, "std::fs::File::open"), Some(TypeKind::FileHandle));
-        assert_eq!(constructor_type(Lang::Rust, "Url::parse"), Some(TypeKind::Url));
+        assert_eq!(
+            constructor_type(Lang::Rust, "reqwest::Client::new"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Rust, "reqwest::get"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Rust, "File::open"),
+            Some(TypeKind::FileHandle)
+        );
+        assert_eq!(
+            constructor_type(Lang::Rust, "File::create"),
+            Some(TypeKind::FileHandle)
+        );
+        assert_eq!(
+            constructor_type(Lang::Rust, "std::fs::File::open"),
+            Some(TypeKind::FileHandle)
+        );
+        assert_eq!(
+            constructor_type(Lang::Rust, "Url::parse"),
+            Some(TypeKind::Url)
+        );
         // Namespace-qualified database connections
-        assert_eq!(constructor_type(Lang::Rust, "rusqlite::Connection::open"), Some(TypeKind::DatabaseConnection));
-        assert_eq!(constructor_type(Lang::Rust, "diesel::PgConnection::establish"), Some(TypeKind::DatabaseConnection));
-        assert_eq!(constructor_type(Lang::Rust, "diesel::SqliteConnection::establish"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(
+            constructor_type(Lang::Rust, "rusqlite::Connection::open"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Rust, "diesel::PgConnection::establish"),
+            Some(TypeKind::DatabaseConnection)
+        );
+        assert_eq!(
+            constructor_type(Lang::Rust, "diesel::SqliteConnection::establish"),
+            Some(TypeKind::DatabaseConnection)
+        );
         // Bare Connection::open is still too broad
         assert_eq!(constructor_type(Lang::Rust, "Connection::open"), None);
         assert_eq!(constructor_type(Lang::Rust, "println!"), None);
@@ -877,10 +1019,22 @@ mod tests {
 
     #[test]
     fn constructor_type_java_expanded() {
-        assert_eq!(constructor_type(Lang::Java, "OkHttpClient"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Java, "WebClient"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Java, "RestTemplate"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Java, "MongoClient"), Some(TypeKind::DatabaseConnection));
+        assert_eq!(
+            constructor_type(Lang::Java, "OkHttpClient"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Java, "WebClient"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Java, "RestTemplate"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Java, "MongoClient"),
+            Some(TypeKind::DatabaseConnection)
+        );
     }
 
     #[test]
@@ -890,9 +1044,18 @@ mod tests {
 
     #[test]
     fn constructor_type_python_aiohttp() {
-        assert_eq!(constructor_type(Lang::Python, "aiohttp.ClientSession"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Python, "httpx.Client"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Python, "urllib3.PoolManager"), Some(TypeKind::HttpClient));
+        assert_eq!(
+            constructor_type(Lang::Python, "aiohttp.ClientSession"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Python, "httpx.Client"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Python, "urllib3.PoolManager"),
+            Some(TypeKind::HttpClient)
+        );
     }
 
     #[test]
@@ -900,28 +1063,70 @@ mod tests {
         assert!(TypeHierarchy::is_subtype_of("OkHttpClient", "HttpClient"));
         assert!(TypeHierarchy::is_subtype_of("WebClient", "HttpClient"));
         assert!(TypeHierarchy::is_subtype_of("RestTemplate", "HttpClient"));
-        assert!(TypeHierarchy::is_subtype_of("MongoClient", "DatabaseConnection"));
-        assert!(TypeHierarchy::is_subtype_of("RedisTemplate", "DatabaseConnection"));
-        assert!(TypeHierarchy::is_subtype_of("JmsTemplate", "DatabaseConnection"));
-        assert_eq!(TypeHierarchy::resolve_kind("OkHttpClient"), Some(TypeKind::HttpClient));
-        assert_eq!(TypeHierarchy::resolve_kind("RestTemplate"), Some(TypeKind::HttpClient));
-        assert_eq!(TypeHierarchy::resolve_kind("MongoClient"), Some(TypeKind::DatabaseConnection));
+        assert!(TypeHierarchy::is_subtype_of(
+            "MongoClient",
+            "DatabaseConnection"
+        ));
+        assert!(TypeHierarchy::is_subtype_of(
+            "RedisTemplate",
+            "DatabaseConnection"
+        ));
+        assert!(TypeHierarchy::is_subtype_of(
+            "JmsTemplate",
+            "DatabaseConnection"
+        ));
+        assert_eq!(
+            TypeHierarchy::resolve_kind("OkHttpClient"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            TypeHierarchy::resolve_kind("RestTemplate"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            TypeHierarchy::resolve_kind("MongoClient"),
+            Some(TypeKind::DatabaseConnection)
+        );
     }
 
     #[test]
     fn go_interface_read_closer() {
-        assert!(GoInterfaceTable::satisfies(&TypeKind::FileHandle, "io.ReadCloser"));
-        assert!(GoInterfaceTable::satisfies(&TypeKind::HttpResponse, "io.ReadCloser"));
-        assert!(!GoInterfaceTable::satisfies(&TypeKind::Int, "io.ReadCloser"));
-        assert!(GoInterfaceTable::definitely_not(&TypeKind::Int, "io.ReadCloser"));
-        assert!(GoInterfaceTable::definitely_not(&TypeKind::DatabaseConnection, "io.ReadCloser"));
-        assert!(GoInterfaceTable::definitely_not(&TypeKind::HttpClient, "io.ReadCloser"));
-        assert!(!GoInterfaceTable::definitely_not(&TypeKind::FileHandle, "io.ReadCloser"));
+        assert!(GoInterfaceTable::satisfies(
+            &TypeKind::FileHandle,
+            "io.ReadCloser"
+        ));
+        assert!(GoInterfaceTable::satisfies(
+            &TypeKind::HttpResponse,
+            "io.ReadCloser"
+        ));
+        assert!(!GoInterfaceTable::satisfies(
+            &TypeKind::Int,
+            "io.ReadCloser"
+        ));
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::Int,
+            "io.ReadCloser"
+        ));
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::DatabaseConnection,
+            "io.ReadCloser"
+        ));
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::HttpClient,
+            "io.ReadCloser"
+        ));
+        assert!(!GoInterfaceTable::definitely_not(
+            &TypeKind::FileHandle,
+            "io.ReadCloser"
+        ));
     }
 
     #[test]
     fn go_http_client_definitely_not_response_writer() {
-        assert!(GoInterfaceTable::definitely_not(&TypeKind::HttpClient, "http.ResponseWriter"));
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::HttpClient,
+            "http.ResponseWriter"
+        ));
     }
 
     // ── Phase 16: Hierarchy expansion ──────────────────────────────────
@@ -929,13 +1134,19 @@ mod tests {
     #[test]
     fn java_hierarchy_resolve_response_entity() {
         // ResponseEntity → HttpResponse via hierarchy tier 3
-        assert_eq!(TypeHierarchy::resolve_kind("ResponseEntity"), Some(TypeKind::HttpResponse));
+        assert_eq!(
+            TypeHierarchy::resolve_kind("ResponseEntity"),
+            Some(TypeKind::HttpResponse)
+        );
     }
 
     #[test]
     fn java_hierarchy_resolve_print_writer() {
         // PrintWriter → Writer (hierarchy) → FileHandle (class_name_to_type_kind)
-        assert_eq!(TypeHierarchy::resolve_kind("PrintWriter"), Some(TypeKind::FileHandle));
+        assert_eq!(
+            TypeHierarchy::resolve_kind("PrintWriter"),
+            Some(TypeKind::FileHandle)
+        );
         assert!(TypeHierarchy::is_subtype_of("PrintWriter", "Writer"));
     }
 
@@ -945,8 +1156,14 @@ mod tests {
         assert!(TypeHierarchy::is_subtype_of("FileWriter", "Writer"));
         assert!(TypeHierarchy::is_subtype_of("InputStreamReader", "Reader"));
         assert!(TypeHierarchy::is_subtype_of("OutputStreamWriter", "Writer"));
-        assert!(TypeHierarchy::is_subtype_of("HttpServletRequestWrapper", "HttpServletRequest"));
-        assert!(TypeHierarchy::is_subtype_of("HttpServletRequestWrapper", "ServletRequest"));
+        assert!(TypeHierarchy::is_subtype_of(
+            "HttpServletRequestWrapper",
+            "HttpServletRequest"
+        ));
+        assert!(TypeHierarchy::is_subtype_of(
+            "HttpServletRequestWrapper",
+            "ServletRequest"
+        ));
     }
 
     // ── Phase 16: Go interface expansion ────────────────────────────────
@@ -960,36 +1177,84 @@ mod tests {
             "http.ResponseWriter"
         ));
         // Also definitely not for sql.DB interface entries
-        assert!(GoInterfaceTable::definitely_not(&TypeKind::HttpResponse, "sql.DB"));
-        assert!(GoInterfaceTable::definitely_not(&TypeKind::FileHandle, "sql.DB"));
-        assert!(GoInterfaceTable::definitely_not(&TypeKind::HttpClient, "sql.DB"));
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::HttpResponse,
+            "sql.DB"
+        ));
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::FileHandle,
+            "sql.DB"
+        ));
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::HttpClient,
+            "sql.DB"
+        ));
     }
 
     #[test]
     fn go_interface_sql_db_satisfies() {
-        assert!(GoInterfaceTable::satisfies(&TypeKind::DatabaseConnection, "sql.DB"));
-        assert!(GoInterfaceTable::satisfies(&TypeKind::DatabaseConnection, "sql.Conn"));
-        assert!(GoInterfaceTable::satisfies(&TypeKind::DatabaseConnection, "sql.Tx"));
-        assert!(!GoInterfaceTable::satisfies(&TypeKind::HttpResponse, "sql.DB"));
+        assert!(GoInterfaceTable::satisfies(
+            &TypeKind::DatabaseConnection,
+            "sql.DB"
+        ));
+        assert!(GoInterfaceTable::satisfies(
+            &TypeKind::DatabaseConnection,
+            "sql.Conn"
+        ));
+        assert!(GoInterfaceTable::satisfies(
+            &TypeKind::DatabaseConnection,
+            "sql.Tx"
+        ));
+        assert!(!GoInterfaceTable::satisfies(
+            &TypeKind::HttpResponse,
+            "sql.DB"
+        ));
         assert!(!GoInterfaceTable::satisfies(&TypeKind::Int, "sql.DB"));
     }
 
     #[test]
     fn go_interface_write_closer() {
-        assert!(GoInterfaceTable::satisfies(&TypeKind::HttpResponse, "io.WriteCloser"));
-        assert!(GoInterfaceTable::satisfies(&TypeKind::FileHandle, "io.WriteCloser"));
-        assert!(!GoInterfaceTable::satisfies(&TypeKind::Int, "io.WriteCloser"));
-        assert!(!GoInterfaceTable::satisfies(&TypeKind::DatabaseConnection, "io.WriteCloser"));
-        assert!(GoInterfaceTable::definitely_not(&TypeKind::DatabaseConnection, "io.WriteCloser"));
-        assert!(!GoInterfaceTable::definitely_not(&TypeKind::FileHandle, "io.WriteCloser"));
+        assert!(GoInterfaceTable::satisfies(
+            &TypeKind::HttpResponse,
+            "io.WriteCloser"
+        ));
+        assert!(GoInterfaceTable::satisfies(
+            &TypeKind::FileHandle,
+            "io.WriteCloser"
+        ));
+        assert!(!GoInterfaceTable::satisfies(
+            &TypeKind::Int,
+            "io.WriteCloser"
+        ));
+        assert!(!GoInterfaceTable::satisfies(
+            &TypeKind::DatabaseConnection,
+            "io.WriteCloser"
+        ));
+        assert!(GoInterfaceTable::definitely_not(
+            &TypeKind::DatabaseConnection,
+            "io.WriteCloser"
+        ));
+        assert!(!GoInterfaceTable::definitely_not(
+            &TypeKind::FileHandle,
+            "io.WriteCloser"
+        ));
     }
 
     #[test]
     fn colon_normalization_in_constructor_type() {
         // Verify :: normalization doesn't break existing Java/JS/Python/Go patterns
         assert_eq!(constructor_type(Lang::Java, "URL"), Some(TypeKind::Url));
-        assert_eq!(constructor_type(Lang::JavaScript, "URL"), Some(TypeKind::Url));
-        assert_eq!(constructor_type(Lang::Python, "requests.get"), Some(TypeKind::HttpClient));
-        assert_eq!(constructor_type(Lang::Go, "http.Get"), Some(TypeKind::HttpClient));
+        assert_eq!(
+            constructor_type(Lang::JavaScript, "URL"),
+            Some(TypeKind::Url)
+        );
+        assert_eq!(
+            constructor_type(Lang::Python, "requests.get"),
+            Some(TypeKind::HttpClient)
+        );
+        assert_eq!(
+            constructor_type(Lang::Go, "http.Get"),
+            Some(TypeKind::HttpClient)
+        );
     }
 }

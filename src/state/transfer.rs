@@ -24,19 +24,71 @@ pub enum TransferEventKind {
 /// Resource-use patterns: callees that read/write/operate on a resource handle
 /// (triggering use-after-close if the handle is closed).
 static RESOURCE_USE_PATTERNS: &[&str] = &[
-    "read", "write", "send", "recv", "fread", "fwrite", "fgets", "fputs", "fprintf", "fscanf",
-    "fflush", "fseek", "ftell", "rewind", "feof", "ferror", "fgetc", "fputc", "getc", "putc",
-    "ungetc", "query", "execute", "fetch", "sendto", "recvfrom", "ioctl", "fcntl",
+    "read",
+    "write",
+    "send",
+    "recv",
+    "fread",
+    "fwrite",
+    "fgets",
+    "fputs",
+    "fprintf",
+    "fscanf",
+    "fflush",
+    "fseek",
+    "ftell",
+    "rewind",
+    "feof",
+    "ferror",
+    "fgetc",
+    "fputc",
+    "getc",
+    "putc",
+    "ungetc",
+    "query",
+    "execute",
+    "fetch",
+    "sendto",
+    "recvfrom",
+    "ioctl",
+    "fcntl",
     // Memory access functions (for malloc/free use-after-free detection)
-    "strcpy", "strncpy", "strcat", "strncat", "memcpy", "memmove", "memset", "memcmp", "strcmp",
-    "strncmp", "strlen", "sprintf", "snprintf",
+    "strcpy",
+    "strncpy",
+    "strcat",
+    "strncat",
+    "memcpy",
+    "memmove",
+    "memset",
+    "memcmp",
+    "strcmp",
+    "strncmp",
+    "strlen",
+    "sprintf",
+    "snprintf",
     // Dot-prefixed method patterns (cross-language method calls)
-    ".read", ".write", ".send", ".recv", ".query", ".execute", ".fetch",
+    ".read",
+    ".write",
+    ".send",
+    ".recv",
+    ".query",
+    ".execute",
+    ".fetch",
     // JS/TS Sync variants (suffix doesn't match plain "read"/"write")
-    "readSync", "writeSync", "readFileSync", "writeFileSync", "appendFileSync",
-    "ftruncateSync", "fsyncSync", "fstatSync",
+    "readSync",
+    "writeSync",
+    "readFileSync",
+    "writeFileSync",
+    "appendFileSync",
+    "ftruncateSync",
+    "fsyncSync",
+    "fstatSync",
     // Stream operations
-    "pipe", "unpipe", "resume", "pause", "destroy",
+    "pipe",
+    "unpipe",
+    "resume",
+    "pause",
+    "destroy",
 ];
 
 /// Auth-call matchers for admin-level privilege.
@@ -256,8 +308,9 @@ impl DefaultTransfer<'_> {
                     .any(|m| condition_contains_auth_token(cond_inner, m))
             });
             if is_auth_cond {
-                let is_admin =
-                    ADMIN_PATTERNS.iter().any(|p| condition_contains_auth_token(cond_inner, p));
+                let is_admin = ADMIN_PATTERNS
+                    .iter()
+                    .any(|p| condition_contains_auth_token(cond_inner, p));
                 let new_level = if is_admin {
                     AuthLevel::Admin
                 } else {
@@ -390,10 +443,14 @@ fn condition_contains_auth_token(cond: &str, matcher: &str) -> bool {
             if let Some(pos) = cond[start..].find(&*matcher_lower) {
                 let abs = start + pos;
                 let end = abs + needle.len();
-                let left_ok =
-                    abs == 0 || { let c = hay[abs - 1]; !c.is_ascii_alphanumeric() && c != b'_' };
-                let right_ok = end >= hay.len()
-                    || { let c = hay[end]; !c.is_ascii_alphanumeric() && c != b'_' };
+                let left_ok = abs == 0 || {
+                    let c = hay[abs - 1];
+                    !c.is_ascii_alphanumeric() && c != b'_'
+                };
+                let right_ok = end >= hay.len() || {
+                    let c = hay[end];
+                    !c.is_ascii_alphanumeric() && c != b'_'
+                };
                 if left_ok && right_ok {
                     return true;
                 }
@@ -676,7 +733,10 @@ mod tests {
 
     #[test]
     fn callee_matches_mysql_create_connection() {
-        assert!(callee_matches("mysql.createconnection", "mysql.createConnection"));
+        assert!(callee_matches(
+            "mysql.createconnection",
+            "mysql.createConnection"
+        ));
     }
 
     #[test]
@@ -689,19 +749,31 @@ mod tests {
 
     #[test]
     fn auth_token_exact_match() {
-        assert!(condition_contains_auth_token("is_authenticated", "is_authenticated"));
+        assert!(condition_contains_auth_token(
+            "is_authenticated",
+            "is_authenticated"
+        ));
         assert!(condition_contains_auth_token("is_admin", "is_admin"));
-        assert!(condition_contains_auth_token("require_auth", "require_auth"));
+        assert!(condition_contains_auth_token(
+            "require_auth",
+            "require_auth"
+        ));
     }
 
     #[test]
     fn auth_token_dotted_access() {
-        assert!(condition_contains_auth_token("req.is_authenticated()", "is_authenticated"));
+        assert!(condition_contains_auth_token(
+            "req.is_authenticated()",
+            "is_authenticated"
+        ));
         assert!(condition_contains_auth_token(
             "user.is_authenticated == true",
             "is_authenticated"
         ));
-        assert!(condition_contains_auth_token("req.user.is_authenticated", "is_authenticated"));
+        assert!(condition_contains_auth_token(
+            "req.user.is_authenticated",
+            "is_authenticated"
+        ));
         assert!(condition_contains_auth_token("user.is_admin()", "is_admin"));
     }
 
@@ -742,24 +814,39 @@ mod tests {
 
     #[test]
     fn auth_token_dotted_matcher() {
-        assert!(condition_contains_auth_token("middleware.auth()", "middleware.auth"));
+        assert!(condition_contains_auth_token(
+            "middleware.auth()",
+            "middleware.auth"
+        ));
         assert!(condition_contains_auth_token(
             "if middleware.auth(req)",
             "middleware.auth"
         ));
         // Left boundary violation.
-        assert!(!condition_contains_auth_token("xmiddleware.auth()", "middleware.auth"));
+        assert!(!condition_contains_auth_token(
+            "xmiddleware.auth()",
+            "middleware.auth"
+        ));
         // Right boundary violation — "middleware.authz" extends past "middleware.auth".
-        assert!(!condition_contains_auth_token("middleware.authz()", "middleware.auth"));
+        assert!(!condition_contains_auth_token(
+            "middleware.authz()",
+            "middleware.auth"
+        ));
         // "middleware.auth.check" — matcher ends at '.', which is non-ident → matches.
-        assert!(condition_contains_auth_token("middleware.auth.check()", "middleware.auth"));
+        assert!(condition_contains_auth_token(
+            "middleware.auth.check()",
+            "middleware.auth"
+        ));
     }
 
     // ── Phase 13: condition_contains_auth_token for new auth patterns ──
 
     #[test]
     fn auth_token_jwt_verify() {
-        assert!(condition_contains_auth_token("jwt.verify(token)", "jwt.verify"));
+        assert!(condition_contains_auth_token(
+            "jwt.verify(token)",
+            "jwt.verify"
+        ));
         assert!(!condition_contains_auth_token(
             "jwt.verifyAsync(token)",
             "jwt.verify"

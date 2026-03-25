@@ -26,11 +26,11 @@ use crate::ssa::const_prop::ConstLattice;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue, Terminator};
 use crate::taint::Finding;
 
+use super::SymexContext;
 use super::loops::LoopInfo;
 use super::state::{PathConstraint, SymbolicState};
 use super::transfer::{self, SymexHeapCtx, SymexSummaryCtx};
 use super::value::SymbolicValue;
-use super::SymexContext;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Budget constants
@@ -182,10 +182,7 @@ fn compute_source_sink_reachable(
 /// Budget-bounded: at most [`MAX_FORKS_PER_FINDING`] forks,
 /// [`MAX_PATHS_PER_FINDING`] total paths, and [`MAX_TOTAL_STEPS`] symbolic
 /// transfer steps across all paths.
-pub(super) fn explore_finding(
-    finding: &Finding,
-    ctx: &SymexContext,
-) -> ExplorationResult {
+pub(super) fn explore_finding(finding: &Finding, ctx: &SymexContext) -> ExplorationResult {
     let ssa = ctx.ssa;
     let cfg = ctx.cfg;
     let const_values = ctx.const_values;
@@ -232,7 +229,11 @@ pub(super) fn explore_finding(
     };
 
     let reachable = compute_source_sink_reachable(
-        ssa, source_block, sink_block, &exception_succs, &exception_preds,
+        ssa,
+        source_block,
+        sink_block,
+        &exception_succs,
+        &exception_preds,
     );
     let on_path: HashSet<BlockId> = path_blocks.iter().copied().collect();
 
@@ -299,19 +300,21 @@ pub(super) fn explore_finding(
     let interproc_cache = std::cell::RefCell::new(std::collections::HashMap::new());
     let interproc_reentry = std::cell::RefCell::new(std::collections::HashMap::new());
     let interproc_stats = std::cell::Cell::new(super::interproc::InterprocStats::default());
-    let interproc_ctx = ctx.callee_bodies.map(|bodies| super::interproc::InterprocCtx {
-        callee_bodies: bodies,
-        cfg,
-        lang: ctx.lang,
-        max_depth: super::interproc::DEFAULT_MAX_DEPTH,
-        budget: &interproc_budget,
-        cache: &interproc_cache,
-        reentry_counts: &interproc_reentry,
-        max_reentry_per_func: super::interproc::DEFAULT_MAX_REENTRY_PER_FUNC,
-        scc_membership: ctx.scc_membership,
-        max_scc_reentry: super::interproc::DEFAULT_MAX_SCC_REENTRY,
-        stats: &interproc_stats,
-    });
+    let interproc_ctx = ctx
+        .callee_bodies
+        .map(|bodies| super::interproc::InterprocCtx {
+            callee_bodies: bodies,
+            cfg,
+            lang: ctx.lang,
+            max_depth: super::interproc::DEFAULT_MAX_DEPTH,
+            budget: &interproc_budget,
+            cache: &interproc_cache,
+            reentry_counts: &interproc_reentry,
+            max_reentry_per_func: super::interproc::DEFAULT_MAX_REENTRY_PER_FUNC,
+            scc_membership: ctx.scc_membership,
+            max_scc_reentry: super::interproc::DEFAULT_MAX_SCC_REENTRY,
+            stats: &interproc_stats,
+        });
     let interproc_ctx_ref = interproc_ctx.as_ref();
 
     // Phase 23: Create SMT context for cross-variable constraint solving.
@@ -425,9 +428,7 @@ fn run_path(
             *count
         };
 
-        if loop_info.loop_heads.contains(&block_id)
-            && visit_count > super::loops::MAX_LOOP_UNROLL
-        {
+        if loop_info.loop_heads.contains(&block_id) && visit_count > super::loops::MAX_LOOP_UNROLL {
             // Widen symbolic precision but PRESERVE taint
             state.sym_state.widen_at_loop_head(block_id, ssa);
 
@@ -448,9 +449,9 @@ fn run_path(
             {
                 let body = loop_info.loop_bodies.get(&block_id);
                 let candidates = [*true_blk, *false_blk];
-                let exit = candidates.iter().find(|blk| {
-                    on_path.contains(blk) && body.map_or(true, |b| !b.contains(blk))
-                });
+                let exit = candidates
+                    .iter()
+                    .find(|blk| on_path.contains(blk) && body.map_or(true, |b| !b.contains(blk)));
                 if let Some(&exit_blk) = exit {
                     state.predecessor = Some(block_id);
                     state.current_block = exit_blk;
@@ -552,8 +553,16 @@ fn run_path(
                     (true, false) => {
                         // Only true branch reaches sink
                         if let Some(outcome) = apply_branch_constraint(
-                            state, cfg, ssa, const_values, block_id, *cond, condition, true,
-                            #[cfg(feature = "smt")] smt_ctx,
+                            state,
+                            cfg,
+                            ssa,
+                            const_values,
+                            block_id,
+                            *cond,
+                            condition,
+                            true,
+                            #[cfg(feature = "smt")]
+                            smt_ctx,
                         ) {
                             return Some(outcome);
                         }
@@ -563,8 +572,16 @@ fn run_path(
                     (false, true) => {
                         // Only false branch reaches sink
                         if let Some(outcome) = apply_branch_constraint(
-                            state, cfg, ssa, const_values, block_id, *cond, condition, false,
-                            #[cfg(feature = "smt")] smt_ctx,
+                            state,
+                            cfg,
+                            ssa,
+                            const_values,
+                            block_id,
+                            *cond,
+                            condition,
+                            false,
+                            #[cfg(feature = "smt")]
+                            smt_ctx,
                         ) {
                             return Some(outcome);
                         }
@@ -591,7 +608,8 @@ fn run_path(
                                 *false_blk,
                                 work_queue,
                                 outcomes,
-                                #[cfg(feature = "smt")] smt_ctx,
+                                #[cfg(feature = "smt")]
+                                smt_ctx,
                             );
                         } else {
                             // Budget exhausted — follow original path
@@ -617,7 +635,8 @@ fn run_path(
                                 *cond,
                                 condition,
                                 preferred_polarity,
-                                #[cfg(feature = "smt")] smt_ctx,
+                                #[cfg(feature = "smt")]
+                                smt_ctx,
                             ) {
                                 return Some(outcome);
                             }
@@ -696,9 +715,7 @@ fn apply_branch_constraint(
     // accumulated constraints have cross-variable shape.
     #[cfg(feature = "smt")]
     if let Some(smt) = smt_ctx {
-        if super::smt::should_escalate(state.sym_state.path_constraints())
-            && smt.has_budget()
-        {
+        if super::smt::should_escalate(state.sym_state.path_constraints()) && smt.has_budget() {
             if let super::smt::SmtResult::Unsat = smt.check_path_feasibility(
                 state.sym_state.path_constraints(),
                 &state.sym_state,
@@ -843,9 +860,7 @@ fn smt_check_infeasible(
     state: &ExplorationState,
 ) -> bool {
     if let Some(smt) = smt_ctx {
-        if super::smt::should_escalate(state.sym_state.path_constraints())
-            && smt.has_budget()
-        {
+        if super::smt::should_escalate(state.sym_state.path_constraints()) && smt.has_budget() {
             return matches!(
                 smt.check_path_feasibility(
                     state.sym_state.path_constraints(),
@@ -942,11 +957,7 @@ impl ExplorationResult {
             .iter()
             .filter(|p| p.verdict == Verdict::Confirmed)
             .find_map(|p| p.witness.clone())
-            .or_else(|| {
-                self.paths_completed
-                    .iter()
-                    .find_map(|p| p.witness.clone())
-            });
+            .or_else(|| self.paths_completed.iter().find_map(|p| p.witness.clone()));
 
         // Collect unique interprocedural call chains
         let mut interproc_call_chains: Vec<Vec<String>> = Vec::new();
@@ -969,11 +980,8 @@ impl ExplorationResult {
         }
 
         // Enrich witness with interprocedural context
-        let enriched_witness = append_interproc_context(
-            witness,
-            &interproc_call_chains,
-            &cutoff_notes,
-        );
+        let enriched_witness =
+            append_interproc_context(witness, &interproc_call_chains, &cutoff_notes);
 
         SymbolicVerdict {
             verdict,
@@ -1321,13 +1329,8 @@ mod tests {
                 },
             ],
             entry: b0,
-            value_defs: vec![
-                make_value_def(b0, n0),
-                make_value_def(b1, n1),
-            ],
-            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))]
-                .into_iter()
-                .collect(),
+            value_defs: vec![make_value_def(b0, n0), make_value_def(b1, n1)],
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1))].into_iter().collect(),
             exception_edges: vec![],
         };
 
@@ -1610,13 +1613,9 @@ mod tests {
                 },
                 make_value_def(b3, n3),
             ],
-            cfg_node_map: [
-                (n0, SsaValue(0)),
-                (n1, SsaValue(1)),
-                (n3, SsaValue(3)),
-            ]
-            .into_iter()
-            .collect(),
+            cfg_node_map: [(n0, SsaValue(0)), (n1, SsaValue(1)), (n3, SsaValue(3))]
+                .into_iter()
+                .collect(),
             exception_edges: vec![],
         };
 
@@ -1728,7 +1727,10 @@ mod tests {
 
         let reachable = compute_source_sink_reachable(&ssa, b0, b3, &exc_succs, &exc_preds);
         assert!(reachable.contains(&b0), "source should be reachable");
-        assert!(reachable.contains(&b2), "catch block should be reachable via exception edge");
+        assert!(
+            reachable.contains(&b2),
+            "catch block should be reachable via exception edge"
+        );
         assert!(reachable.contains(&b3), "sink should be reachable");
         assert!(!reachable.contains(&b1), "B1 is NOT on any path to B3");
     }
@@ -1934,7 +1936,10 @@ mod tests {
         );
         // At least one path should be Confirmed
         assert!(
-            result.paths_completed.iter().any(|p| p.verdict == Verdict::Confirmed),
+            result
+                .paths_completed
+                .iter()
+                .any(|p| p.verdict == Verdict::Confirmed),
             "Expected at least one Confirmed path via exception fork"
         );
     }

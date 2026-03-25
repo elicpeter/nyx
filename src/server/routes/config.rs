@@ -77,14 +77,8 @@ async fn add_rule(
     State(state): State<AppState>,
     Json(rule): Json<RuleView>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let rule_kind: RuleKind = rule
-        .kind
-        .parse()
-        .map_err(|e: String| bad_request(&e))?;
-    let cap_name: CapName = rule
-        .cap
-        .parse()
-        .map_err(|e: String| bad_request(&e))?;
+    let rule_kind: RuleKind = rule.kind.parse().map_err(|e: String| bad_request(&e))?;
+    let cap_name: CapName = rule.cap.parse().map_err(|e: String| bad_request(&e))?;
 
     if let Err(e) = config_cmd::add_rule(
         &state.config_dir,
@@ -128,14 +122,8 @@ async fn remove_rule(
     State(state): State<AppState>,
     Json(rule): Json<RuleView>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let rule_kind: RuleKind = rule
-        .kind
-        .parse()
-        .map_err(|e: String| bad_request(&e))?;
-    let cap_name: CapName = rule
-        .cap
-        .parse()
-        .map_err(|e: String| bad_request(&e))?;
+    let rule_kind: RuleKind = rule.kind.parse().map_err(|e: String| bad_request(&e))?;
+    let cap_name: CapName = rule.cap.parse().map_err(|e: String| bad_request(&e))?;
 
     let removed = {
         let mut config = state.config.write().unwrap();
@@ -313,11 +301,7 @@ fn add_by_kind(
     Ok(())
 }
 
-fn remove_by_kind(
-    state: &AppState,
-    entry: LabelEntryView,
-    target_kind: RuleKind,
-) -> bool {
+fn remove_by_kind(state: &AppState, entry: LabelEntryView, target_kind: RuleKind) -> bool {
     if entry.is_builtin {
         return false; // cannot remove built-in rules
     }
@@ -359,7 +343,10 @@ async fn add_source(
     Json(entry): Json<LabelEntryView>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     add_by_kind(&state, entry, RuleKind::Source).map_err(|e| bad_request(&e))?;
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "status": "ok" }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "status": "ok" })),
+    ))
 }
 
 async fn remove_source(
@@ -379,7 +366,10 @@ async fn add_sink(
     Json(entry): Json<LabelEntryView>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     add_by_kind(&state, entry, RuleKind::Sink).map_err(|e| bad_request(&e))?;
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "status": "ok" }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "status": "ok" })),
+    ))
 }
 
 async fn remove_sink(
@@ -399,7 +389,10 @@ async fn add_sanitizer(
     Json(entry): Json<LabelEntryView>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     add_by_kind(&state, entry, RuleKind::Sanitizer).map_err(|e| bad_request(&e))?;
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "status": "ok" }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "status": "ok" })),
+    ))
 }
 
 async fn remove_sanitizer(
@@ -413,7 +406,11 @@ async fn remove_sanitizer(
 // ── Profiles ─────────────────────────────────────────────────────────────────
 
 const BUILTIN_PROFILE_NAMES: &[&str] = &[
-    "quick", "full", "ci", "taint_only", "conservative_large_repo",
+    "quick",
+    "full",
+    "ci",
+    "taint_only",
+    "conservative_large_repo",
 ];
 
 async fn list_profiles(State(state): State<AppState>) -> Json<Vec<ProfileView>> {
@@ -454,10 +451,9 @@ async fn save_profile(
         .as_str()
         .ok_or_else(|| bad_request("missing name"))?
         .to_string();
-    let settings: ScanProfile = serde_json::from_value(
-        body.get("settings").cloned().unwrap_or_default(),
-    )
-    .map_err(|e| bad_request(&e.to_string()))?;
+    let settings: ScanProfile =
+        serde_json::from_value(body.get("settings").cloned().unwrap_or_default())
+            .map_err(|e| bad_request(&e.to_string()))?;
 
     {
         let mut config = state.config.write().unwrap();
@@ -468,7 +464,10 @@ async fn save_profile(
     }
 
     let _ = state.event_tx.send(ServerEvent::ConfigChanged);
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "status": "ok", "name": name }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "status": "ok", "name": name })),
+    ))
 }
 
 async fn delete_profile(
@@ -535,7 +534,9 @@ async fn set_triage_sync(
     }
 
     let _ = state.event_tx.send(ServerEvent::ConfigChanged);
-    Ok(Json(serde_json::json!({ "status": "ok", "triage_sync": enabled })))
+    Ok(Json(
+        serde_json::json!({ "status": "ok", "triage_sync": enabled }),
+    ))
 }
 
 fn bad_request(msg: &str) -> (StatusCode, Json<serde_json::Value>) {

@@ -192,7 +192,15 @@ pub fn handle_command(
         } => {
             #[cfg(feature = "serve")]
             {
-                serve::handle(&path, port, host.as_deref(), no_browser, config_dir, database_dir, config)?;
+                serve::handle(
+                    &path,
+                    port,
+                    host.as_deref(),
+                    no_browser,
+                    config_dir,
+                    database_dir,
+                    config,
+                )?;
             }
             #[cfg(not(feature = "serve"))]
             {

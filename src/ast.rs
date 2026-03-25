@@ -1,9 +1,11 @@
-use crate::cfg::{build_cfg, export_summaries, Cfg, FuncSummaries};
+use crate::cfg::{Cfg, FuncSummaries, build_cfg, export_summaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
 use crate::evidence::{Evidence, FlowStep, SpanEvidence, StateEvidence};
-use crate::labels::{build_lang_rules, severity_for_source_kind, Cap, DataLabel, LangAnalysisRules};
+use crate::labels::{
+    Cap, DataLabel, LangAnalysisRules, build_lang_rules, severity_for_source_kind,
+};
 use crate::patterns::{FindingCategory, Severity};
 use crate::state;
 use crate::summary::ssa_summary::SsaFuncSummary;
@@ -489,8 +491,7 @@ impl<'a> ParsedFile<'a> {
         let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
         let interner = SymbolInterner::from_cfg(&self.cfg_graph);
         let scan_root_str = scan_root.map(|p| p.to_string_lossy());
-        let namespace =
-            normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
+        let namespace = normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
 
         let map = crate::taint::extract_intra_file_ssa_summaries(
             &self.cfg_graph,
@@ -539,8 +540,7 @@ impl<'a> ParsedFile<'a> {
         tracing::debug!("Running taint analysis on: {}", self.source.path.display());
         tracing::debug!("Func summaries: {:?}", self.local_summaries);
         let scan_root_str = scan_root.map(|p| p.to_string_lossy());
-        let namespace =
-            normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
+        let namespace = normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
         let extra = if self.lang_rules.extra_labels.is_empty() {
             None
         } else {
@@ -738,7 +738,12 @@ pub fn build_cfg_for_file(
     };
     let lang = Lang::from_slug(source.lang_slug).unwrap_or(Lang::C);
     let parsed = ParsedFile::from_source(source, cfg);
-    Ok(Some((parsed.cfg_graph, parsed.entry, parsed.local_summaries, lang)))
+    Ok(Some((
+        parsed.cfg_graph,
+        parsed.entry,
+        parsed.local_summaries,
+        lang,
+    )))
 }
 
 /// Extract both `FuncSummary` and `SsaFuncSummary` from pre-read bytes.
@@ -842,10 +847,7 @@ fn find_arg_list(call: tree_sitter::Node) -> Option<tree_sitter::Node> {
             // Python/JS/TS/Java/Go/C/C++/Rust: argument_list / arguments
             // PHP: arguments
             // Ruby: argument_list
-            if kind == "argument_list"
-                || kind == "arguments"
-                || kind == "actual_parameters"
-            {
+            if kind == "argument_list" || kind == "arguments" || kind == "actual_parameters" {
                 return Some(child);
             }
         }
@@ -858,16 +860,21 @@ fn is_literal_node(node: tree_sitter::Node, bytes: &[u8]) -> bool {
     let kind = node.kind();
     match kind {
         // String literals (most languages)
-        "string" | "string_literal" | "interpreted_string_literal"
-        | "raw_string_literal" | "string_content" | "string_fragment" => true,
+        "string"
+        | "string_literal"
+        | "interpreted_string_literal"
+        | "raw_string_literal"
+        | "string_content"
+        | "string_fragment" => true,
 
         // Numeric literals
-        "integer" | "integer_literal" | "int_literal"
-        | "float" | "float_literal" | "number" => true,
+        "integer" | "integer_literal" | "int_literal" | "float" | "float_literal" | "number" => {
+            true
+        }
 
         // Boolean / null / nil / none
-        "true" | "false" | "null" | "nil" | "none" | "null_literal"
-        | "boolean" | "boolean_literal" => true,
+        "true" | "false" | "null" | "nil" | "none" | "null_literal" | "boolean"
+        | "boolean_literal" => true,
 
         // PHP encapsed_string: safe only if it has no variable interpolation
         "encapsed_string" => {
@@ -879,20 +886,26 @@ fn is_literal_node(node: tree_sitter::Node, bytes: &[u8]) -> bool {
         // Go uses `argument` too.  Unwrap and check the inner value.
         "argument" => {
             node.named_child_count() == 1
-                && node.named_child(0).map_or(false, |c| is_literal_node(c, bytes))
+                && node
+                    .named_child(0)
+                    .map_or(false, |c| is_literal_node(c, bytes))
         }
 
         // Unary minus on a number literal: `-42`
         "unary_expression" | "unary_op" => {
             node.named_child_count() == 1
-                && node.named_child(0).map_or(false, |c| is_literal_node(c, bytes))
+                && node
+                    .named_child(0)
+                    .map_or(false, |c| is_literal_node(c, bytes))
         }
 
         // String concatenation of literals: `"a" + "b"` or `"a" . "b"`
         "binary_expression" | "concatenated_string" => {
             node.named_child_count() >= 2
-                && (0..node.named_child_count() as u32)
-                    .all(|i| node.named_child(i).map_or(false, |c| is_literal_node(c, bytes)))
+                && (0..node.named_child_count() as u32).all(|i| {
+                    node.named_child(i)
+                        .map_or(false, |c| is_literal_node(c, bytes))
+                })
         }
 
         _ => false,
@@ -904,7 +917,10 @@ fn has_interpolation(node: tree_sitter::Node) -> bool {
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             let kind = child.kind();
-            if kind == "variable_name" || kind == "simple_variable" || kind.contains("interpolation") {
+            if kind == "variable_name"
+                || kind == "simple_variable"
+                || kind.contains("interpolation")
+            {
                 return true;
             }
         }
@@ -1050,15 +1066,14 @@ pub fn run_rules_on_bytes(
         out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
         if cfg.scanner.mode == AnalysisMode::Full {
             // Layer B: suppress AST findings where taint confirmed safety
-            let suppression = TaintSuppressionCtx::build(
-                &parsed.cfg_graph,
-                &parsed.source.tree,
-                &out,
-            );
+            let suppression =
+                TaintSuppressionCtx::build(&parsed.cfg_graph, &parsed.source.tree, &out);
             let ast_findings = parsed.source.run_ast_queries(cfg);
-            out.extend(ast_findings.into_iter().filter(|d| {
-                !suppression.should_suppress(&d.id, d.line)
-            }));
+            out.extend(
+                ast_findings
+                    .into_iter()
+                    .filter(|d| !suppression.should_suppress(&d.id, d.line)),
+            );
         }
         parsed.source.finalize_diags(&mut out, cfg);
     } else {
@@ -1138,14 +1153,13 @@ pub fn analyse_file_fused(
         let ast_findings = parsed.source.run_ast_queries(cfg);
         // Layer B only applies when taint had the opportunity to evaluate
         if needs_cfg && cfg.scanner.mode == AnalysisMode::Full {
-            let suppression = TaintSuppressionCtx::build(
-                &parsed.cfg_graph,
-                &parsed.source.tree,
-                &out,
+            let suppression =
+                TaintSuppressionCtx::build(&parsed.cfg_graph, &parsed.source.tree, &out);
+            out.extend(
+                ast_findings
+                    .into_iter()
+                    .filter(|d| !suppression.should_suppress(&d.id, d.line)),
             );
-            out.extend(ast_findings.into_iter().filter(|d| {
-                !suppression.should_suppress(&d.id, d.line)
-            }));
         } else {
             out.extend(ast_findings);
         }

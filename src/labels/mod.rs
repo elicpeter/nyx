@@ -150,9 +150,15 @@ pub fn output_param_source_positions(lang: &str, callee: &str) -> Option<&'stati
         "cpp" => cpp::OUTPUT_PARAM_SOURCES,
         _ => return None,
     };
-    let normalized = callee.rsplit("::").next().unwrap_or(callee)
-                           .rsplit('.').next().unwrap_or(callee);
-    registry.iter()
+    let normalized = callee
+        .rsplit("::")
+        .next()
+        .unwrap_or(callee)
+        .rsplit('.')
+        .next()
+        .unwrap_or(callee);
+    registry
+        .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case(normalized))
         .map(|(_, positions)| *positions)
 }
@@ -164,9 +170,15 @@ pub fn arg_propagation(lang: &str, callee: &str) -> Option<&'static ArgPropagati
         "cpp" => cpp::ARG_PROPAGATIONS,
         _ => return None,
     };
-    let normalized = callee.rsplit("::").next().unwrap_or(callee)
-                           .rsplit('.').next().unwrap_or(callee);
-    registry.iter()
+    let normalized = callee
+        .rsplit("::")
+        .next()
+        .unwrap_or(callee)
+        .rsplit('.')
+        .next()
+        .unwrap_or(callee);
+    registry
+        .iter()
         .find(|p| p.callee.eq_ignore_ascii_case(normalized))
 }
 
@@ -802,7 +814,16 @@ fn normalize_chained_call(text: &str) -> String {
 
 /// All canonical language slugs (no aliases).
 const CANONICAL_LANGS: &[&str] = &[
-    "javascript", "typescript", "python", "go", "java", "c", "cpp", "php", "ruby", "rust",
+    "javascript",
+    "typescript",
+    "python",
+    "go",
+    "java",
+    "c",
+    "cpp",
+    "php",
+    "ruby",
+    "rust",
 ];
 
 /// Map alias slugs to canonical language name.
@@ -1073,13 +1094,18 @@ mod tests {
     }
 
     /// No-op keyword arg extractor for tests (JS/TS have no keyword gates).
-    fn no_kw(_: &str) -> Option<String> { None }
+    fn no_kw(_: &str) -> Option<String> {
+        None
+    }
 
     #[test]
     fn gated_sink_dangerous_exact() {
-        let result = classify_gated_sink("javascript", "setAttribute", |_| {
-            Some("href".to_string())
-        }, no_kw);
+        let result = classify_gated_sink(
+            "javascript",
+            "setAttribute",
+            |_| Some("href".to_string()),
+            no_kw,
+        );
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
@@ -1088,9 +1114,12 @@ mod tests {
 
     #[test]
     fn gated_sink_dangerous_prefix() {
-        let result = classify_gated_sink("javascript", "setAttribute", |_| {
-            Some("onclick".to_string())
-        }, no_kw);
+        let result = classify_gated_sink(
+            "javascript",
+            "setAttribute",
+            |_| Some("onclick".to_string()),
+            no_kw,
+        );
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
@@ -1099,9 +1128,12 @@ mod tests {
 
     #[test]
     fn gated_sink_safe_suppressed() {
-        let result = classify_gated_sink("javascript", "setAttribute", |_| {
-            Some("class".to_string())
-        }, no_kw);
+        let result = classify_gated_sink(
+            "javascript",
+            "setAttribute",
+            |_| Some("class".to_string()),
+            no_kw,
+        );
         assert_eq!(result, None);
     }
 
@@ -1116,50 +1148,70 @@ mod tests {
 
     #[test]
     fn gated_sink_no_match() {
-        let result = classify_gated_sink("rust", "setAttribute", |_| {
-            Some("href".to_string())
-        }, no_kw);
+        let result =
+            classify_gated_sink("rust", "setAttribute", |_| Some("href".to_string()), no_kw);
         assert_eq!(result, None);
     }
 
     #[test]
     fn gated_sink_returns_payload_args() {
         // setAttribute: payload is arg 1
-        let result = classify_gated_sink("javascript", "setAttribute", |_| {
-            Some("href".to_string())
-        }, no_kw);
+        let result = classify_gated_sink(
+            "javascript",
+            "setAttribute",
+            |_| Some("href".to_string()),
+            no_kw,
+        );
         let (_, payload_args) = result.unwrap();
         assert_eq!(payload_args, &[1]);
 
         // parseFromString: payload is arg 0
-        let result = classify_gated_sink("javascript", "parseFromString", |idx| {
-            if idx == 1 {
-                Some("text/html".to_string())
-            } else {
-                None
-            }
-        }, no_kw);
+        let result = classify_gated_sink(
+            "javascript",
+            "parseFromString",
+            |idx| {
+                if idx == 1 {
+                    Some("text/html".to_string())
+                } else {
+                    None
+                }
+            },
+            no_kw,
+        );
         let (_, payload_args) = result.unwrap();
         assert_eq!(payload_args, &[0]);
     }
 
     #[test]
     fn gated_sink_parse_from_string_safe_mime() {
-        let result = classify_gated_sink("javascript", "parseFromString", |idx| {
-            if idx == 1 {
-                Some("text/xml".to_string())
-            } else {
-                None
-            }
-        }, no_kw);
+        let result = classify_gated_sink(
+            "javascript",
+            "parseFromString",
+            |idx| {
+                if idx == 1 {
+                    Some("text/xml".to_string())
+                } else {
+                    None
+                }
+            },
+            no_kw,
+        );
         assert_eq!(result, None);
     }
 
     #[test]
     fn gated_sink_python_popen_shell_true() {
-        let result = classify_gated_sink("python", "Popen",
+        let result = classify_gated_sink(
+            "python",
+            "Popen",
             |_| None,
-            |kw| if kw == "shell" { Some("True".to_string()) } else { None },
+            |kw| {
+                if kw == "shell" {
+                    Some("True".to_string())
+                } else {
+                    None
+                }
+            },
         );
         assert_eq!(
             result,
@@ -1169,19 +1221,24 @@ mod tests {
 
     #[test]
     fn gated_sink_python_popen_shell_false() {
-        let result = classify_gated_sink("python", "Popen",
+        let result = classify_gated_sink(
+            "python",
+            "Popen",
             |_| None,
-            |kw| if kw == "shell" { Some("False".to_string()) } else { None },
+            |kw| {
+                if kw == "shell" {
+                    Some("False".to_string())
+                } else {
+                    None
+                }
+            },
         );
         assert_eq!(result, None);
     }
 
     #[test]
     fn gated_sink_python_popen_no_shell_conservative() {
-        let result = classify_gated_sink("python", "Popen",
-            |_| None,
-            |_| None,
-        );
+        let result = classify_gated_sink("python", "Popen", |_| None, |_| None);
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))

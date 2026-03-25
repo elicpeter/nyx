@@ -66,5 +66,7 @@ fn emit_placeholder_and_warn(dist_dir: &Path) {
     .ok();
     std::fs::write(dist_dir.join("app.js"), "// frontend not built\n").ok();
     std::fs::write(dist_dir.join("style.css"), "/* frontend not built */\n").ok();
-    println!("cargo:warning=Node.js/npm not available — wrote placeholder frontend assets. Run 'cd frontend && npm install && npm run build' for the real UI.");
+    println!(
+        "cargo:warning=Node.js/npm not available — wrote placeholder frontend assets. Run 'cd frontend && npm install && npm run build' for the real UI."
+    );
 }

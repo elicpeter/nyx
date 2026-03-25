@@ -2,6 +2,7 @@ pub(crate) use crate::ast::{
     analyse_file_fused, extract_all_summaries_from_bytes, extract_summaries_from_bytes,
     run_rules_on_bytes, run_rules_on_file,
 };
+use crate::callgraph::{CallGraph, FileBatch};
 use crate::cli::{IndexMode, OutputFormat};
 use crate::database::index::{Indexer, IssueRow};
 use crate::errors::NyxResult;
@@ -13,7 +14,6 @@ use crate::utils::config::Config;
 use crate::utils::project::get_project_info;
 use crate::walk::spawn_file_walker;
 use console::style;
-use crate::callgraph::{CallGraph, FileBatch};
 use dashmap::DashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use r2d2::Pool;
@@ -275,7 +275,10 @@ pub(crate) fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
 /// Build the call graph from global summaries and run SCC/topo analysis.
 fn build_and_analyse_call_graph(
     global_summaries: &GlobalSummaries,
-) -> (crate::callgraph::CallGraph, crate::callgraph::CallGraphAnalysis) {
+) -> (
+    crate::callgraph::CallGraph,
+    crate::callgraph::CallGraphAnalysis,
+) {
     let _span = tracing::info_span!("build_call_graph").entered();
     let call_graph = crate::callgraph::build_call_graph(global_summaries, &[]);
     let cg_analysis = crate::callgraph::analyse(&call_graph);
@@ -363,9 +366,17 @@ fn run_topo_batches(
                                 (path.to_path_buf(), r.diags, r.summaries, r.ssa_summaries)
                             }
                             Err(e) => {
-                                tracing::warn!("pass 2 (SCC iter {}): {}: {e}", iter, path.display());
+                                tracing::warn!(
+                                    "pass 2 (SCC iter {}): {}: {e}",
+                                    iter,
+                                    path.display()
+                                );
                                 if let Some(l) = logs {
-                                    l.warn(format!("Pass 2 (SCC iter {iter}) analysis failed: {e}"), Some(path.display().to_string()), None);
+                                    l.warn(
+                                        format!("Pass 2 (SCC iter {iter}) analysis failed: {e}"),
+                                        Some(path.display().to_string()),
+                                        None,
+                                    );
                                 }
                                 (path.to_path_buf(), vec![], vec![], vec![])
                             }
@@ -443,7 +454,11 @@ fn run_topo_batches(
                         Err(e) => {
                             tracing::warn!("pass 2: {}: {e}", path.display());
                             if let Some(l) = logs {
-                                l.warn(format!("Pass 2 analysis failed: {e}"), Some(path.display().to_string()), None);
+                                l.warn(
+                                    format!("Pass 2 analysis failed: {e}"),
+                                    Some(path.display().to_string()),
+                                    None,
+                                );
                             }
                             vec![]
                         }
@@ -473,7 +488,11 @@ fn run_topo_batches(
                     Err(e) => {
                         tracing::warn!("pass 2: {}: {e}", path.display());
                         if let Some(l) = logs {
-                            l.warn(format!("Pass 2 analysis failed: {e}"), Some(path.display().to_string()), None);
+                            l.warn(
+                                format!("Pass 2 analysis failed: {e}"),
+                                Some(path.display().to_string()),
+                                None,
+                            );
                         }
                         vec![]
                     }
@@ -594,7 +613,11 @@ pub(crate) fn scan_filesystem_with_observer(
                     Err(e) => {
                         tracing::warn!("analysis: {}: {e}", path.display());
                         if let Some(l) = logs {
-                            l.warn(format!("Analysis failed: {e}"), Some(path.display().to_string()), None);
+                            l.warn(
+                                format!("Analysis failed: {e}"),
+                                Some(path.display().to_string()),
+                                None,
+                            );
                         }
                         vec![]
                     }
@@ -638,7 +661,10 @@ pub(crate) fn scan_filesystem_with_observer(
     }
     if let Some(l) = logs {
         l.info(
-            format!("Starting pass 1: extracting summaries from {} files", all_paths.len()),
+            format!(
+                "Starting pass 1: extracting summaries from {} files",
+                all_paths.len()
+            ),
             None,
         );
     }
@@ -697,7 +723,11 @@ pub(crate) fn scan_filesystem_with_observer(
                         Err(e) => {
                             tracing::warn!("pass 1: {}: {e}", path.display());
                             if let Some(l) = logs {
-                                l.warn(format!("Pass 1 analysis failed: {e}"), Some(path.display().to_string()), None);
+                                l.warn(
+                                    format!("Pass 1 analysis failed: {e}"),
+                                    Some(path.display().to_string()),
+                                    None,
+                                );
                             }
                         }
                     }
@@ -744,8 +774,14 @@ pub(crate) fn scan_filesystem_with_observer(
         p.record_call_graph_ms(cg_start.elapsed().as_millis() as u64);
     }
     if let Some(m) = metrics {
-        m.call_edges.store(call_graph.graph.edge_count() as u64, std::sync::atomic::Ordering::Relaxed);
-        m.functions_analyzed.store(call_graph.graph.node_count() as u64, std::sync::atomic::Ordering::Relaxed);
+        m.call_edges.store(
+            call_graph.graph.edge_count() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        m.functions_analyzed.store(
+            call_graph.graph.node_count() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         m.unresolved_calls.store(
             (call_graph.unresolved_not_found.len() + call_graph.unresolved_ambiguous.len()) as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -770,7 +806,10 @@ pub(crate) fn scan_filesystem_with_observer(
     }
     if let Some(l) = logs {
         l.info(
-            format!("Starting pass 2: taint analysis on {} files", all_paths.len()),
+            format!(
+                "Starting pass 2: taint analysis on {} files",
+                all_paths.len()
+            ),
             None,
         );
     }
@@ -796,7 +835,11 @@ pub(crate) fn scan_filesystem_with_observer(
         );
         if let Some(l) = logs {
             l.info(
-                format!("Topo-ordered file batches: {} batches, {} orphan files", batches.len(), orphans.len()),
+                format!(
+                    "Topo-ordered file batches: {} batches, {} orphan files",
+                    batches.len(),
+                    orphans.len()
+                ),
                 None,
             );
         }
@@ -891,24 +934,32 @@ pub fn scan_with_index_parallel(
                     let hash = Indexer::digest_bytes(&bytes);
                     let needs_scan = idx.should_scan_with_hash(path, &hash).unwrap_or(true);
                     if needs_scan {
-                        match extract_all_summaries_from_bytes(&bytes, path, cfg, Some(scan_root_ref)) {
+                        match extract_all_summaries_from_bytes(
+                            &bytes,
+                            path,
+                            cfg,
+                            Some(scan_root_ref),
+                        ) {
                             Ok((func_sums, ssa_sums)) => {
                                 idx.replace_summaries_for_file(path, &hash, &func_sums).ok();
                                 // Persist SSA summaries with full FuncKey metadata
                                 if !ssa_sums.is_empty() {
-                                    let lang_slug = func_sums.first()
+                                    let lang_slug = func_sums
+                                        .first()
                                         .map(|s| s.lang.clone())
                                         .unwrap_or_default();
                                     let namespace = crate::symbol::normalize_namespace(
                                         &path.to_string_lossy(),
                                         Some(&scan_root_ref.to_string_lossy()),
                                     );
-                                    let ssa_rows: Vec<_> = ssa_sums.into_iter()
+                                    let ssa_rows: Vec<_> = ssa_sums
+                                        .into_iter()
                                         .map(|(name, arity, sum)| {
                                             (name, arity, lang_slug.clone(), namespace.clone(), sum)
                                         })
                                         .collect();
-                                    idx.replace_ssa_summaries_for_file(path, &hash, &ssa_rows).ok();
+                                    idx.replace_ssa_summaries_for_file(path, &hash, &ssa_rows)
+                                        .ok();
                                 }
                             }
                             Err(e) => {
@@ -937,10 +988,13 @@ pub fn scan_with_index_parallel(
         // Load and insert SSA summaries
         let ssa_rows = idx.load_all_ssa_summaries()?;
         if !ssa_rows.is_empty() {
-            tracing::info!(ssa_summaries = ssa_rows.len(), "loaded SSA summaries from DB");
+            tracing::info!(
+                ssa_summaries = ssa_rows.len(),
+                "loaded SSA summaries from DB"
+            );
             for (file_path, name, lang_str, arity, namespace, ssa_sum) in ssa_rows {
-                let lang = crate::symbol::Lang::from_slug(&lang_str)
-                    .unwrap_or(crate::symbol::Lang::Rust);
+                let lang =
+                    crate::symbol::Lang::from_slug(&lang_str).unwrap_or(crate::symbol::Lang::Rust);
                 // Use persisted namespace; fall back to normalized file_path
                 let ns = if namespace.is_empty() {
                     crate::symbol::normalize_namespace(&file_path, Some(&root_str))
@@ -951,7 +1005,11 @@ pub fn scan_with_index_parallel(
                     lang,
                     namespace: ns,
                     name,
-                    arity: if arity >= 0 { Some(arity as usize) } else { None },
+                    arity: if arity >= 0 {
+                        Some(arity as usize)
+                    } else {
+                        None
+                    },
                 };
                 gs.insert_ssa(key, ssa_sum);
             }
@@ -985,12 +1043,11 @@ pub fn scan_with_index_parallel(
 
                 let mut diags = if needs_scan {
                     let d = match &bytes_opt {
-                        Some(bytes) => {
-                            run_rules_on_bytes(bytes, &path, cfg, None, Some(scan_root))
-                                .unwrap_or_default()
-                        }
-                        None => run_rules_on_file(&path, cfg, None, Some(scan_root))
+                        Some(bytes) => run_rules_on_bytes(bytes, &path, cfg, None, Some(scan_root))
                             .unwrap_or_default(),
+                        None => {
+                            run_rules_on_file(&path, cfg, None, Some(scan_root)).unwrap_or_default()
+                        }
                     };
 
                     let file_id = match &hash {
@@ -1420,8 +1477,9 @@ fn scan_with_index_parallel_uses_existing_index_without_rescanning() {
         1
     );
 
-    let diags = scan_with_index_parallel(&project_name, Arc::clone(&pool), &cfg, false, &project_dir)
-        .expect("scan should succeed");
+    let diags =
+        scan_with_index_parallel(&project_name, Arc::clone(&pool), &cfg, false, &project_dir)
+            .expect("scan should succeed");
 
     assert!(diags.is_empty());
 }

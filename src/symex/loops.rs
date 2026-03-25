@@ -6,9 +6,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use petgraph::algo::dominators::{simple_fast, Dominators};
-use petgraph::graph::NodeIndex;
 use petgraph::Graph;
+use petgraph::algo::dominators::{Dominators, simple_fast};
+use petgraph::graph::NodeIndex;
 
 use crate::ssa::ir::{BlockId, SsaBody, SsaOp, SsaValue, Terminator};
 
@@ -139,11 +139,7 @@ fn build_block_graph(ssa: &SsaBody) -> (Graph<BlockId, ()>, Vec<NodeIndex>, Node
 /// Check if `dominator` dominates `target` in the dominator tree.
 ///
 /// Mirrors the pattern in `src/cfg_analysis/dominators.rs:dominates`.
-fn dominates_block(
-    doms: &Dominators<NodeIndex>,
-    dominator: NodeIndex,
-    target: NodeIndex,
-) -> bool {
+fn dominates_block(doms: &Dominators<NodeIndex>, dominator: NodeIndex, target: NodeIndex) -> bool {
     if dominator == target {
         return true;
     }

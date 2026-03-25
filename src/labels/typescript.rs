@@ -96,7 +96,17 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["fetch", "axios", "axios.get", "axios.post", "axios.request", "got", "undici.request", "http.request", "https.request"],
+        matchers: &[
+            "fetch",
+            "axios",
+            "axios.get",
+            "axios.post",
+            "axios.request",
+            "got",
+            "undici.request",
+            "http.request",
+            "https.request",
+        ],
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
@@ -132,7 +142,12 @@ pub static RULES: &[LabelRule] = &[
     },
     // DOM XSS sinks
     LabelRule {
-        matchers: &["document.write", "document.writeln", "outerHTML", "insertAdjacentHTML"],
+        matchers: &[
+            "document.write",
+            "document.writeln",
+            "outerHTML",
+            "insertAdjacentHTML",
+        ],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },

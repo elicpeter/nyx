@@ -1,9 +1,9 @@
 #[allow(dead_code)] // IR types — fields used by Display impl, tests, and Phase 2+
 pub mod alias;
-pub mod display;
 pub mod const_prop;
 pub mod copy_prop;
 pub mod dce;
+pub mod display;
 pub mod heap;
 #[allow(dead_code)]
 pub mod ir;

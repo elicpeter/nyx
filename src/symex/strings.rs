@@ -23,7 +23,10 @@ pub enum StringMethod {
     Trim,
     ToLower,
     ToUpper,
-    Replace { pattern: String, replacement: String },
+    Replace {
+        pattern: String,
+        replacement: String,
+    },
     Substr,
     StrLen,
 }
@@ -210,11 +213,7 @@ fn classify_js(method: &str, args: &[SymbolicValue]) -> Option<StringMethodInfo>
     }
 }
 
-fn classify_python(
-    method: &str,
-    callee: &str,
-    args: &[SymbolicValue],
-) -> Option<StringMethodInfo> {
+fn classify_python(method: &str, callee: &str, args: &[SymbolicValue]) -> Option<StringMethodInfo> {
     use StringMethod::*;
     use StringOperandSource::*;
 
@@ -333,11 +332,7 @@ fn classify_java(method: &str, args: &[SymbolicValue]) -> Option<StringMethodInf
     }
 }
 
-fn classify_go(
-    method: &str,
-    callee: &str,
-    args: &[SymbolicValue],
-) -> Option<StringMethodInfo> {
+fn classify_go(method: &str, callee: &str, args: &[SymbolicValue]) -> Option<StringMethodInfo> {
     use StringMethod::*;
     use StringOperandSource::*;
 
@@ -382,11 +377,7 @@ fn classify_go(
     }
 }
 
-fn classify_php(
-    method: &str,
-    callee: &str,
-    args: &[SymbolicValue],
-) -> Option<StringMethodInfo> {
+fn classify_php(method: &str, callee: &str, args: &[SymbolicValue]) -> Option<StringMethodInfo> {
     use StringMethod::*;
     use StringOperandSource::*;
 
@@ -502,10 +493,7 @@ fn classify_c(method: &str) -> Option<StringMethodInfo> {
 ///
 /// Initial scope: JS/TS, Python, PHP. Other languages deferred until
 /// the abstraction is validated.
-pub fn classify_transform_method(
-    callee: &str,
-    lang: Lang,
-) -> Option<TransformMethodInfo> {
+pub fn classify_transform_method(callee: &str, lang: Lang) -> Option<TransformMethodInfo> {
     match lang {
         Lang::JavaScript | Lang::TypeScript => classify_transform_js(callee),
         Lang::Python => classify_transform_python(callee),
@@ -720,8 +708,7 @@ fn sql_escape_witness(input: &str) -> String {
 
 /// Base64 encoding (witness-quality, standard alphabet + padding).
 fn base64_encode_witness(input: &str) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let bytes = input.as_bytes();
     let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
@@ -817,10 +804,7 @@ fn hex_val(b: u8) -> Option<u8> {
 ///
 /// `offset` is the index of the pattern arg (replacement is offset+1).
 /// Returns `None` if either is not `ConcreteStr`.
-fn extract_replace_args(
-    args: &[SymbolicValue],
-    offset: usize,
-) -> Option<(String, String)> {
+fn extract_replace_args(args: &[SymbolicValue], offset: usize) -> Option<(String, String)> {
     let pat = args.get(offset)?.as_concrete_str()?;
     let rep = args.get(offset + 1)?.as_concrete_str()?;
     Some((pat.to_owned(), rep.to_owned()))
@@ -840,19 +824,15 @@ fn has_concrete_index(args: &[SymbolicValue], offset: usize) -> bool {
 /// Evaluate a string operation on a concrete receiver string.
 ///
 /// Returns the folded result, or `None` if the receiver is not concrete.
-pub fn evaluate_string_op_concrete(
-    method: &StringMethod,
-    receiver: &str,
-) -> Option<SymbolicValue> {
+pub fn evaluate_string_op_concrete(method: &StringMethod, receiver: &str) -> Option<SymbolicValue> {
     match method {
         StringMethod::Trim => Some(SymbolicValue::ConcreteStr(receiver.trim().to_owned())),
-        StringMethod::ToLower => {
-            Some(SymbolicValue::ConcreteStr(receiver.to_lowercase()))
-        }
-        StringMethod::ToUpper => {
-            Some(SymbolicValue::ConcreteStr(receiver.to_uppercase()))
-        }
-        StringMethod::Replace { pattern, replacement } => Some(SymbolicValue::ConcreteStr(
+        StringMethod::ToLower => Some(SymbolicValue::ConcreteStr(receiver.to_lowercase())),
+        StringMethod::ToUpper => Some(SymbolicValue::ConcreteStr(receiver.to_uppercase())),
+        StringMethod::Replace {
+            pattern,
+            replacement,
+        } => Some(SymbolicValue::ConcreteStr(
             receiver.replace(pattern.as_str(), replacement.as_str()),
         )),
         StringMethod::StrLen => Some(SymbolicValue::Concrete(receiver.len() as i64)),
@@ -883,7 +863,10 @@ pub fn detect_replace_sanitizer(
     let mut caps = Cap::empty();
 
     // XSS: HTML entity escaping patterns
-    if pattern == "<" || pattern == ">" || pattern == "\"" || pattern == "'"
+    if pattern == "<"
+        || pattern == ">"
+        || pattern == "\""
+        || pattern == "'"
         || pattern.contains("<script")
         || pattern.contains("<img")
         || pattern.contains("<svg")
@@ -897,9 +880,7 @@ pub fn detect_replace_sanitizer(
     }
 
     // CMDi: shell metachar escaping patterns
-    if pattern == "$" || pattern == "`" || pattern == "|" || pattern == ";"
-        || pattern == "&"
-    {
+    if pattern == "$" || pattern == "`" || pattern == "|" || pattern == ";" || pattern == "&" {
         caps |= Cap::SHELL_ESCAPE;
     }
 
@@ -967,12 +948,15 @@ mod tests {
     fn test_classify_js_replace_concrete() {
         let args = vec![
             SymbolicValue::Symbol(crate::ssa::ir::SsaValue(0)), // receiver
-            SymbolicValue::ConcreteStr("<".into()),              // pattern
-            SymbolicValue::ConcreteStr("&lt;".into()),           // replacement
+            SymbolicValue::ConcreteStr("<".into()),             // pattern
+            SymbolicValue::ConcreteStr("&lt;".into()),          // replacement
         ];
         let info = classify_string_method("s.replace", &args, Lang::JavaScript).unwrap();
         match &info.method {
-            StringMethod::Replace { pattern, replacement } => {
+            StringMethod::Replace {
+                pattern,
+                replacement,
+            } => {
                 assert_eq!(pattern, "<");
                 assert_eq!(replacement, "&lt;");
             }
@@ -985,7 +969,7 @@ mod tests {
         let args = vec![
             SymbolicValue::Symbol(crate::ssa::ir::SsaValue(0)), // receiver
             SymbolicValue::Symbol(crate::ssa::ir::SsaValue(1)), // dynamic pattern
-            SymbolicValue::ConcreteStr("".into()),               // replacement
+            SymbolicValue::ConcreteStr("".into()),              // replacement
         ];
         assert!(classify_string_method("s.replace", &args, Lang::JavaScript).is_none());
     }
@@ -994,7 +978,7 @@ mod tests {
     fn test_classify_js_substring_concrete_index() {
         let args = vec![
             SymbolicValue::Symbol(crate::ssa::ir::SsaValue(0)), // receiver
-            SymbolicValue::Concrete(0),                          // start
+            SymbolicValue::Concrete(0),                         // start
         ];
         let info = classify_string_method("s.substring", &args, Lang::JavaScript).unwrap();
         assert_eq!(info.method, StringMethod::Substr);
@@ -1153,32 +1137,28 @@ mod tests {
 
     #[test]
     fn test_detect_xss_sanitizer() {
-        let info =
-            detect_replace_sanitizer("<", "&lt;", "s.replaceAll", Lang::JavaScript).unwrap();
+        let info = detect_replace_sanitizer("<", "&lt;", "s.replaceAll", Lang::JavaScript).unwrap();
         assert!(info.sanitized_caps.contains(Cap::HTML_ESCAPE));
         assert!(info.is_global);
     }
 
     #[test]
     fn test_detect_xss_non_global() {
-        let info =
-            detect_replace_sanitizer("<", "&lt;", "s.replace", Lang::JavaScript).unwrap();
+        let info = detect_replace_sanitizer("<", "&lt;", "s.replace", Lang::JavaScript).unwrap();
         assert!(info.sanitized_caps.contains(Cap::HTML_ESCAPE));
         assert!(!info.is_global);
     }
 
     #[test]
     fn test_detect_sqli_sanitizer() {
-        let info =
-            detect_replace_sanitizer("'", "''", "s.replace", Lang::Python).unwrap();
+        let info = detect_replace_sanitizer("'", "''", "s.replace", Lang::Python).unwrap();
         assert!(info.sanitized_caps.contains(Cap::SQL_QUERY));
         assert!(info.is_global); // Python replace is global
     }
 
     #[test]
     fn test_detect_cmdi_sanitizer() {
-        let info =
-            detect_replace_sanitizer("|", "", "s.replace", Lang::Python).unwrap();
+        let info = detect_replace_sanitizer("|", "", "s.replace", Lang::Python).unwrap();
         assert!(info.sanitized_caps.contains(Cap::SHELL_ESCAPE));
     }
 
@@ -1326,7 +1306,8 @@ mod tests {
 
     #[test]
     fn test_encode_concrete_html_escape() {
-        let result = encode_concrete_for_witness(TransformKind::HtmlEscape, "<script>alert('xss')</script>");
+        let result =
+            encode_concrete_for_witness(TransformKind::HtmlEscape, "<script>alert('xss')</script>");
         assert_eq!(
             result.unwrap(),
             "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"

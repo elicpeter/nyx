@@ -8,4 +8,4 @@ pub mod routes;
 pub mod scan_log;
 pub mod triage_sync;
 
-pub use app::{build_router, AppState};
+pub use app::{AppState, build_router};

@@ -288,11 +288,7 @@ pub fn finding_from_diag(index: usize, d: &Diag) -> FindingView {
 }
 
 /// Convert a Diag to a FindingView with code context loaded from disk.
-pub fn finding_from_diag_with_context(
-    index: usize,
-    d: &Diag,
-    scan_root: &Path,
-) -> FindingView {
+pub fn finding_from_diag_with_context(index: usize, d: &Diag, scan_root: &Path) -> FindingView {
     let mut view = finding_from_diag(index, d);
     view.code_context = load_code_context(&d.path, d.line, scan_root);
     view

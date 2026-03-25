@@ -154,10 +154,7 @@ impl SymbolicState {
     /// Maps `ConstLattice::Int(i)` to `Concrete(i)` and
     /// `ConstLattice::Str(s)` to `ConcreteStr(s)`. Other lattice values
     /// (Bool, Null, Top, Varying) are left as `Unknown` (not stored).
-    pub fn seed_from_const_values(
-        &mut self,
-        const_values: &HashMap<SsaValue, ConstLattice>,
-    ) {
+    pub fn seed_from_const_values(&mut self, const_values: &HashMap<SsaValue, ConstLattice>) {
         for (&v, cl) in const_values {
             match cl {
                 ConstLattice::Int(i) => {
@@ -200,11 +197,7 @@ impl SymbolicState {
     /// Looks up the sink's SSA value via `cfg_node_map`, retrieves its
     /// symbolic expression, and formats it. Returns `None` if the value
     /// is `Unknown` (no useful witness).
-    pub fn get_sink_witness(
-        &self,
-        finding: &Finding,
-        ssa: &SsaBody,
-    ) -> Option<String> {
+    pub fn get_sink_witness(&self, finding: &Finding, ssa: &SsaBody) -> Option<String> {
         let ssa_val = ssa.cfg_node_map.get(&finding.sink)?;
         let sym = self.get(*ssa_val);
         if matches!(sym, SymbolicValue::Unknown) {
@@ -319,7 +312,10 @@ mod tests {
     #[test]
     fn get_sink_witness_for_concrete() {
         let mut state = SymbolicState::new();
-        state.set(SsaValue(5), SymbolicValue::ConcreteStr("SELECT * FROM t".into()));
+        state.set(
+            SsaValue(5),
+            SymbolicValue::ConcreteStr("SELECT * FROM t".into()),
+        );
 
         let node = petgraph::graph::NodeIndex::new(10);
         let finding = Finding {

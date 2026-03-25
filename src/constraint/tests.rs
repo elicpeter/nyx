@@ -622,7 +622,10 @@ fn refine_comparison_eq_string_then_different_string() {
         rhs: Operand::Const(ConstValue::Str("dangerous".into())),
     };
     env = refine_env(&env, &c2, true);
-    assert!(env.is_unsat(), "Eq('safe') ∧ Eq('dangerous') should be unsat");
+    assert!(
+        env.is_unsat(),
+        "Eq('safe') ∧ Eq('dangerous') should be unsat"
+    );
 }
 
 #[test]

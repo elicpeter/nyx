@@ -410,7 +410,10 @@ fn ssa_summary_serde_round_trip_identity() {
 #[test]
 fn ssa_summary_serde_round_trip_strip_bits() {
     let summary = SsaFuncSummary {
-        param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE | Cap::URL_ENCODE))],
+        param_to_return: vec![(
+            0,
+            TaintTransform::StripBits(Cap::HTML_ESCAPE | Cap::URL_ENCODE),
+        )],
         param_to_sink: vec![(1, Cap::SQL_QUERY)],
         source_caps: Cap::empty(),
         param_to_sink_param: vec![],
@@ -559,16 +562,19 @@ fn global_summaries_is_empty_considers_ssa() {
         name: "f".into(),
         arity: Some(1),
     };
-    gs.insert_ssa(key, SsaFuncSummary {
-        param_to_return: vec![(0, TaintTransform::Identity)],
-        param_to_sink: vec![],
-        source_caps: Cap::empty(),
-        param_to_sink_param: vec![],
-        param_container_to_return: vec![],
-        param_to_container_store: vec![],
-        return_type: None,
-        return_abstract: None,
-    });
+    gs.insert_ssa(
+        key,
+        SsaFuncSummary {
+            param_to_return: vec![(0, TaintTransform::Identity)],
+            param_to_sink: vec![],
+            source_caps: Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+        },
+    );
 
     assert!(!gs.is_empty());
 }
@@ -579,10 +585,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         param_to_return: vec![(0, TaintTransform::Identity)],
         param_to_sink: vec![(0, Cap::SQL_QUERY)],
         source_caps: Cap::empty(),
-        param_to_sink_param: vec![
-            (0, 0, Cap::SQL_QUERY),
-            (1, 0, Cap::CODE_EXEC),
-        ],
+        param_to_sink_param: vec![(0, 0, Cap::SQL_QUERY), (1, 0, Cap::CODE_EXEC)],
         param_container_to_return: vec![],
         param_to_container_store: vec![],
         return_type: None,
@@ -653,7 +656,10 @@ fn ssa_summary_serde_round_trip_return_abstract() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: Some(AbstractValue {
-            interval: IntervalFact { lo: Some(-2_147_483_648), hi: Some(2_147_483_647) },
+            interval: IntervalFact {
+                lo: Some(-2_147_483_648),
+                hi: Some(2_147_483_647),
+            },
             string: StringFact::top(),
             bits: BitFact::top(),
         }),

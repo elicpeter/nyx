@@ -11,7 +11,7 @@ use crate::cfg::Cfg;
 use crate::ssa::const_prop::ConstLattice;
 use crate::ssa::heap::PointsToResult;
 use crate::ssa::ir::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue};
-use crate::ssa::pointsto::{classify_container_op, ContainerOp};
+use crate::ssa::pointsto::{ContainerOp, classify_container_op};
 use crate::ssa::type_facts::TypeFactResult;
 use crate::summary::ssa_summary::TaintTransform;
 use crate::summary::{CalleeResolution, GlobalSummaries};
@@ -19,10 +19,12 @@ use crate::symbol::Lang;
 
 use super::heap::{self, FieldAccessRecord, FieldSlot, HeapKey};
 use super::state::SymbolicState;
-use super::strings::{classify_string_method, classify_transform_method, StringOperandSource, TransformKind};
+use super::strings::{
+    StringOperandSource, TransformKind, classify_string_method, classify_transform_method,
+};
 use super::value::{
-    mk_binop, mk_call, mk_decode, mk_encode, mk_phi, mk_replace, mk_strlen, mk_substr,
-    mk_to_lower, mk_to_upper, mk_trim, Op, SymbolicValue,
+    Op, SymbolicValue, mk_binop, mk_call, mk_decode, mk_encode, mk_phi, mk_replace, mk_strlen,
+    mk_substr, mk_to_lower, mk_to_upper, mk_trim,
 };
 
 /// Context for cross-file symbolic summary modeling during transfer.
@@ -172,7 +174,11 @@ pub fn transfer_inst(
             try_heap_field_store(state, inst, ssa, heap_ctx);
         }
 
-        SsaOp::Call { callee, args, receiver } => {
+        SsaOp::Call {
+            callee,
+            args,
+            receiver,
+        } => {
             // Collect symbolic values for arguments
             let mut arg_syms: Vec<SymbolicValue> = Vec::new();
             let mut all_operands: Vec<_> = Vec::new();
@@ -201,15 +207,21 @@ pub fn transfer_inst(
 
                     if let Some(obj_id) = recv_obj {
                         match container_op {
-                            ContainerOp::Store { ref value_args, index_arg } => {
+                            ContainerOp::Store {
+                                ref value_args,
+                                index_arg,
+                            } => {
                                 let field = index_arg
                                     .and_then(|pos| {
-                                        args.get(pos)
-                                            .and_then(|slot| slot.first())
-                                            .map(|&v| heap::resolve_index_slot(v, hctx.const_values))
+                                        args.get(pos).and_then(|slot| slot.first()).map(|&v| {
+                                            heap::resolve_index_slot(v, hctx.const_values)
+                                        })
                                     })
                                     .unwrap_or(FieldSlot::Elements);
-                                let key = HeapKey { object: obj_id, field };
+                                let key = HeapKey {
+                                    object: obj_id,
+                                    field,
+                                };
 
                                 let val_sym = value_args
                                     .first()
@@ -229,12 +241,15 @@ pub fn transfer_inst(
                             ContainerOp::Load { index_arg } => {
                                 let field = index_arg
                                     .and_then(|pos| {
-                                        args.get(pos)
-                                            .and_then(|slot| slot.first())
-                                            .map(|&v| heap::resolve_index_slot(v, hctx.const_values))
+                                        args.get(pos).and_then(|slot| slot.first()).map(|&v| {
+                                            heap::resolve_index_slot(v, hctx.const_values)
+                                        })
                                     })
                                     .unwrap_or(FieldSlot::Elements);
-                                let key = HeapKey { object: obj_id, field };
+                                let key = HeapKey {
+                                    object: obj_id,
+                                    field,
+                                };
 
                                 let loaded = state.heap().load(&key);
                                 if !matches!(loaded, SymbolicValue::Unknown) {
@@ -276,7 +291,8 @@ pub fn transfer_inst(
             // Phase 24A: Interprocedural symbolic execution.
             // Execute callee body when available — full state propagation.
             if let Some(ictx) = interproc_ctx {
-                let mut callee_args: Vec<(crate::ssa::ir::SsaValue, SymbolicValue, bool)> = Vec::new();
+                let mut callee_args: Vec<(crate::ssa::ir::SsaValue, SymbolicValue, bool)> =
+                    Vec::new();
                 for (i, op) in all_operands.iter().enumerate() {
                     callee_args.push((
                         *op,
@@ -299,10 +315,8 @@ pub fn transfer_inst(
                             outcome.exit_states.len(),
                             !outcome.cutoff_reasons.is_empty(),
                         );
-                        let merged = super::interproc::merge_exit_states(
-                            &outcome.exit_states,
-                            policy,
-                        );
+                        let merged =
+                            super::interproc::merge_exit_states(&outcome.exit_states, policy);
                         state.set(inst.value, merged.return_value);
                         if merged.return_tainted {
                             state.mark_tainted(inst.value);
@@ -323,7 +337,13 @@ pub fn transfer_inst(
             // Try cross-file summary modeling before falling back to mk_call
             if let Some(ctx) = summary_ctx {
                 if let Some(result) = resolve_callee_symbolically(
-                    ctx, callee, &arg_syms, &all_operands, state, inst.value, *receiver,
+                    ctx,
+                    callee,
+                    &arg_syms,
+                    &all_operands,
+                    state,
+                    inst.value,
+                    *receiver,
                 ) {
                     state.set(inst.value, result.value);
                     if result.tainted {
@@ -512,7 +532,16 @@ pub fn transfer_inst_with_predecessor(
             state.propagate_taint(inst.value, &operand_vals);
         }
         _ => {
-            transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx, interproc_ctx, lang);
+            transfer_inst(
+                state,
+                inst,
+                cfg,
+                ssa,
+                summary_ctx,
+                heap_ctx,
+                interproc_ctx,
+                lang,
+            );
         }
     }
 }
@@ -534,11 +563,28 @@ pub fn transfer_block_with_predecessor(
 ) {
     for inst in &block.phis {
         transfer_inst_with_predecessor(
-            state, inst, cfg, ssa, predecessor, summary_ctx, heap_ctx, interproc_ctx, lang,
+            state,
+            inst,
+            cfg,
+            ssa,
+            predecessor,
+            summary_ctx,
+            heap_ctx,
+            interproc_ctx,
+            lang,
         );
     }
     for inst in &block.body {
-        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx, interproc_ctx, lang);
+        transfer_inst(
+            state,
+            inst,
+            cfg,
+            ssa,
+            summary_ctx,
+            heap_ctx,
+            interproc_ctx,
+            lang,
+        );
     }
 }
 
@@ -554,10 +600,28 @@ pub fn transfer_block(
     lang: Option<Lang>,
 ) {
     for inst in &block.phis {
-        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx, interproc_ctx, lang);
+        transfer_inst(
+            state,
+            inst,
+            cfg,
+            ssa,
+            summary_ctx,
+            heap_ctx,
+            interproc_ctx,
+            lang,
+        );
     }
     for inst in &block.body {
-        transfer_inst(state, inst, cfg, ssa, summary_ctx, heap_ctx, interproc_ctx, lang);
+        transfer_inst(
+            state,
+            inst,
+            cfg,
+            ssa,
+            summary_ctx,
+            heap_ctx,
+            interproc_ctx,
+            lang,
+        );
     }
 }
 
@@ -594,7 +658,10 @@ fn try_string_method(
                 // Receiver was prepended — it IS the string operand
                 (state.get(*recv), *recv)
             } else if let Some(&first_op) = all_operands.first() {
-                (arg_syms.first().cloned().unwrap_or(SymbolicValue::Unknown), first_op)
+                (
+                    arg_syms.first().cloned().unwrap_or(SymbolicValue::Unknown),
+                    first_op,
+                )
             } else {
                 return None;
             }
@@ -606,9 +673,10 @@ fn try_string_method(
         super::strings::StringMethod::Trim => mk_trim(string_sym),
         super::strings::StringMethod::ToLower => mk_to_lower(string_sym),
         super::strings::StringMethod::ToUpper => mk_to_upper(string_sym),
-        super::strings::StringMethod::Replace { pattern, replacement } => {
-            mk_replace(string_sym, pattern, replacement)
-        }
+        super::strings::StringMethod::Replace {
+            pattern,
+            replacement,
+        } => mk_replace(string_sym, pattern, replacement),
         super::strings::StringMethod::Substr => {
             // Extract start and end indices from args
             let arg_offset = match info.operand_source {
@@ -617,7 +685,10 @@ fn try_string_method(
                     if receiver.is_some() { 1 } else { 1 } // args[0] = string, args[1] = start
                 }
             };
-            let start = arg_syms.get(arg_offset).cloned().unwrap_or(SymbolicValue::Concrete(0));
+            let start = arg_syms
+                .get(arg_offset)
+                .cloned()
+                .unwrap_or(SymbolicValue::Concrete(0));
             let end = arg_syms.get(arg_offset + 1).cloned();
             mk_substr(string_sym, start, end)
         }
@@ -668,9 +739,7 @@ fn try_transform_method(
 
     // Build structured Encode or Decode node via smart constructors
     let value = match info.kind {
-        TransformKind::Base64Decode | TransformKind::UrlDecode => {
-            mk_decode(info.kind, operand_sym)
-        }
+        TransformKind::Base64Decode | TransformKind::UrlDecode => mk_decode(info.kind, operand_sym),
         _ => mk_encode(info.kind, operand_sym),
     };
 
@@ -796,40 +865,27 @@ fn resolve_callee_symbolically(
 
         // Attempt 1: Exact lookup under type-qualified name.
         // Arity=None to avoid receiver-in-operands vs formal-param mismatch.
-        let resolution = ctx.global_summaries.resolve_callee_key(
-            &qualified,
-            ctx.lang,
-            ctx.namespace,
-            None,
-        );
+        let resolution =
+            ctx.global_summaries
+                .resolve_callee_key(&qualified, ctx.lang, ctx.namespace, None);
         if let CalleeResolution::Resolved(key) = resolution
             && let Some(summary) = ctx.global_summaries.get_ssa(&key)
         {
-            return model_from_summary(
-                summary, arg_syms, all_operands, state, result_value,
-            );
+            return model_from_summary(summary, arg_syms, all_operands, state, result_value);
         }
 
         // Attempt 2: Disambiguate among ambiguous bare-name candidates.
         // Only select when a candidate's FuncKey.name EXACTLY equals the
         // qualified name — no substring matching, never guess.
-        let bare_resolution = ctx.global_summaries.resolve_callee_key(
-            method,
-            ctx.lang,
-            ctx.namespace,
-            None,
-        );
+        let bare_resolution =
+            ctx.global_summaries
+                .resolve_callee_key(method, ctx.lang, ctx.namespace, None);
         if let CalleeResolution::Ambiguous(candidates) = bare_resolution {
-            let exact_match: Vec<_> = candidates
-                .iter()
-                .filter(|k| k.name == qualified)
-                .collect();
+            let exact_match: Vec<_> = candidates.iter().filter(|k| k.name == qualified).collect();
             if exact_match.len() == 1
                 && let Some(summary) = ctx.global_summaries.get_ssa(exact_match[0])
             {
-                return model_from_summary(
-                    summary, arg_syms, all_operands, state, result_value,
-                );
+                return model_from_summary(summary, arg_syms, all_operands, state, result_value);
             }
             // >1 or 0 exact matches: do NOT guess, fall through
         }
@@ -864,7 +920,7 @@ mod tests {
     use crate::cfg::{BinOp, Cfg, NodeInfo, StmtKind};
     use crate::ssa::ir::{BlockId, SsaBlock, SsaInst, SsaValue, Terminator};
     use petgraph::graph::NodeIndex;
-    use smallvec::{smallvec, SmallVec};
+    use smallvec::{SmallVec, smallvec};
 
     /// Create a minimal Cfg with a single node that has the given bin_op.
     fn cfg_with_node(bin_op: Option<BinOp>) -> (Cfg, NodeIndex) {
@@ -1025,11 +1081,7 @@ mod tests {
         state.mark_tainted(SsaValue(0));
         state.set(SsaValue(1), SymbolicValue::Concrete(2));
 
-        let inst = make_inst(
-            2,
-            SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]),
-            node,
-        );
+        let inst = make_inst(2, SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]), node);
         transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None, None);
 
         let expected = SymbolicValue::BinOp(
@@ -1050,11 +1102,7 @@ mod tests {
         state.set(SsaValue(0), SymbolicValue::Symbol(SsaValue(0)));
         state.set(SsaValue(1), SymbolicValue::Concrete(2));
 
-        let inst = make_inst(
-            2,
-            SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]),
-            node,
-        );
+        let inst = make_inst(2, SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]), node);
         transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None, None);
 
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Unknown);
@@ -1080,10 +1128,8 @@ mod tests {
         );
         transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None, None);
 
-        let expected = SymbolicValue::Call(
-            "parseInt".into(),
-            vec![SymbolicValue::Symbol(SsaValue(0))],
-        );
+        let expected =
+            SymbolicValue::Call("parseInt".into(), vec![SymbolicValue::Symbol(SsaValue(0))]);
         assert_eq!(state.get(SsaValue(1)), expected);
         assert!(state.is_tainted(SsaValue(1)));
     }
@@ -1110,7 +1156,10 @@ mod tests {
 
         let expected = SymbolicValue::Call(
             "send".into(),
-            vec![SymbolicValue::Symbol(SsaValue(0)), SymbolicValue::Concrete(42)],
+            vec![
+                SymbolicValue::Symbol(SsaValue(0)),
+                SymbolicValue::Concrete(42),
+            ],
         );
         assert_eq!(state.get(SsaValue(2)), expected);
     }
@@ -1127,7 +1176,10 @@ mod tests {
 
         let inst = make_inst(
             2,
-            SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+            SsaOp::Phi(smallvec![
+                (BlockId(0), SsaValue(0)),
+                (BlockId(1), SsaValue(1))
+            ]),
             node,
         );
         transfer_inst(&mut state, &inst, &cfg, &ssa, None, None, None, None);
@@ -1273,7 +1325,10 @@ mod tests {
             id: BlockId(0),
             phis: vec![make_inst(
                 2,
-                SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+                SsaOp::Phi(smallvec![
+                    (BlockId(0), SsaValue(0)),
+                    (BlockId(1), SsaValue(1))
+                ]),
                 node,
             )],
             body: vec![make_inst(3, SsaOp::Const(Some("10".into())), node)],
@@ -1302,12 +1357,25 @@ mod tests {
 
         let inst = make_inst(
             2,
-            SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+            SsaOp::Phi(smallvec![
+                (BlockId(0), SsaValue(0)),
+                (BlockId(1), SsaValue(1))
+            ]),
             node,
         );
 
         // With predecessor B1, should resolve to SsaValue(1) → Concrete(20)
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None, None, None, None);
+        transfer_inst_with_predecessor(
+            &mut state,
+            &inst,
+            &cfg,
+            &ssa,
+            Some(BlockId(1)),
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Concrete(20));
     }
 
@@ -1324,12 +1392,25 @@ mod tests {
 
         let inst = make_inst(
             2,
-            SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+            SsaOp::Phi(smallvec![
+                (BlockId(0), SsaValue(0)),
+                (BlockId(1), SsaValue(1))
+            ]),
             node,
         );
 
         // With predecessor B0 (untainted), result should NOT be tainted
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(0)), None, None, None, None);
+        transfer_inst_with_predecessor(
+            &mut state,
+            &inst,
+            &cfg,
+            &ssa,
+            Some(BlockId(0)),
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(!state.is_tainted(SsaValue(2)));
     }
 
@@ -1345,12 +1426,25 @@ mod tests {
 
         let inst = make_inst(
             2,
-            SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+            SsaOp::Phi(smallvec![
+                (BlockId(0), SsaValue(0)),
+                (BlockId(1), SsaValue(1))
+            ]),
             node,
         );
 
         // With predecessor B1 (tainted), result SHOULD be tainted
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(1)), None, None, None, None);
+        transfer_inst_with_predecessor(
+            &mut state,
+            &inst,
+            &cfg,
+            &ssa,
+            Some(BlockId(1)),
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(state.is_tainted(SsaValue(2)));
     }
 
@@ -1365,7 +1459,10 @@ mod tests {
 
         let inst = make_inst(
             2,
-            SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
+            SsaOp::Phi(smallvec![
+                (BlockId(0), SsaValue(0)),
+                (BlockId(1), SsaValue(1))
+            ]),
             node,
         );
 
@@ -1386,18 +1483,28 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let inst = make_inst(0, SsaOp::Const(Some("42".into())), node);
-        transfer_inst_with_predecessor(&mut state, &inst, &cfg, &ssa, Some(BlockId(5)), None, None, None, None);
+        transfer_inst_with_predecessor(
+            &mut state,
+            &inst,
+            &cfg,
+            &ssa,
+            Some(BlockId(5)),
+            None,
+            None,
+            None,
+            None,
+        );
         assert_eq!(state.get(SsaValue(0)), SymbolicValue::Concrete(42));
     }
 
     // ─── Cross-file summary resolution tests ─────────────────────────
 
     use crate::labels::Cap;
+    use crate::ssa::type_facts::TypeKind;
+    use crate::summary::FuncSummary;
     use crate::summary::GlobalSummaries;
     use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
     use crate::symbol::{FuncKey, Lang};
-    use crate::ssa::type_facts::TypeKind;
-    use crate::summary::FuncSummary;
 
     fn make_summary_ctx(gs: &GlobalSummaries) -> SymexSummaryCtx<'_> {
         SymexSummaryCtx {
@@ -1454,16 +1561,21 @@ mod tests {
 
         // Build GlobalSummaries with exactly one Identity(param 0)
         let mut gs = GlobalSummaries::new();
-        insert_summary(&mut gs, "passthrough", 1, SsaFuncSummary {
-            param_to_return: vec![(0, TaintTransform::Identity)],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_summary(
+            &mut gs,
+            "passthrough",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::Identity)],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
         let ctx = make_summary_ctx(&gs);
 
         let inst = make_inst(
@@ -1494,19 +1606,21 @@ mod tests {
 
         // Two Identity entries — should fall back to mk_call, NOT pick one
         let mut gs = GlobalSummaries::new();
-        insert_summary(&mut gs, "ambig", 2, SsaFuncSummary {
-            param_to_return: vec![
-                (0, TaintTransform::Identity),
-                (1, TaintTransform::Identity),
-            ],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_summary(
+            &mut gs,
+            "ambig",
+            2,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::Identity), (1, TaintTransform::Identity)],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
         let ctx = make_summary_ctx(&gs);
 
         let inst = make_inst(
@@ -1537,16 +1651,21 @@ mod tests {
         state.mark_tainted(SsaValue(0));
 
         let mut gs = GlobalSummaries::new();
-        insert_summary(&mut gs, "sanitize", 1, SsaFuncSummary {
-            param_to_return: vec![(0, TaintTransform::StripBits(Cap::SQL_QUERY))],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_summary(
+            &mut gs,
+            "sanitize",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::StripBits(Cap::SQL_QUERY))],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
         let ctx = make_summary_ctx(&gs);
 
         let inst = make_inst(
@@ -1572,16 +1691,21 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let mut gs = GlobalSummaries::new();
-        insert_summary(&mut gs, "enrich", 1, SsaFuncSummary {
-            param_to_return: vec![(0, TaintTransform::AddBits(Cap::ENV_VAR))],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_summary(
+            &mut gs,
+            "enrich",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::AddBits(Cap::ENV_VAR))],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
         let ctx = make_summary_ctx(&gs);
 
         let inst = make_inst(
@@ -1607,16 +1731,21 @@ mod tests {
         let mut state = SymbolicState::new();
 
         let mut gs = GlobalSummaries::new();
-        insert_summary(&mut gs, "readEnv", 0, SsaFuncSummary {
-            param_to_return: vec![],
-            param_to_sink: vec![],
-            source_caps: Cap::ENV_VAR,
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_summary(
+            &mut gs,
+            "readEnv",
+            0,
+            SsaFuncSummary {
+                param_to_return: vec![],
+                param_to_sink: vec![],
+                source_caps: Cap::ENV_VAR,
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
         let ctx = make_summary_ctx(&gs);
 
         let inst = make_inst(
@@ -1700,7 +1829,15 @@ mod tests {
     fn make_type_facts(entries: Vec<(SsaValue, TypeKind)>) -> TypeFactResult {
         let facts = entries
             .into_iter()
-            .map(|(v, kind)| (v, TypeFact { kind, nullable: false }))
+            .map(|(v, kind)| {
+                (
+                    v,
+                    TypeFact {
+                        kind,
+                        nullable: false,
+                    },
+                )
+            })
             .collect::<HashMap<_, _>>();
         TypeFactResult { facts }
     }
@@ -1753,16 +1890,22 @@ mod tests {
         state.set(SsaValue(1), SymbolicValue::Symbol(SsaValue(1)));
 
         let mut gs = GlobalSummaries::new();
-        insert_java_summary(&mut gs, "HttpClient.send", "HttpClient.java", 1, SsaFuncSummary {
-            param_to_return: vec![(0, TaintTransform::Identity)],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_java_summary(
+            &mut gs,
+            "HttpClient.send",
+            "HttpClient.java",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::Identity)],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
 
         let tf = make_type_facts(vec![(SsaValue(1), TypeKind::HttpClient)]);
         let ctx = SymexSummaryCtx {
@@ -1782,7 +1925,16 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+        transfer_inst(
+            &mut state,
+            &inst,
+            &cfg,
+            &ssa,
+            Some(&ctx),
+            None,
+            None,
+            Some(Lang::Java),
+        );
 
         // Identity(0) maps to arg_syms[0] which is the receiver (prepended).
         // So return value should be the receiver's symbolic value.
@@ -1802,16 +1954,22 @@ mod tests {
 
         // Register summary under bare name "passthrough" (Java, arity 1)
         let mut gs = GlobalSummaries::new();
-        insert_java_summary(&mut gs, "passthrough", "helper.java", 1, SsaFuncSummary {
-            param_to_return: vec![(0, TaintTransform::Identity)],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_java_summary(
+            &mut gs,
+            "passthrough",
+            "helper.java",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::Identity)],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
 
         // Empty type facts — no receiver type info
         let tf = make_type_facts(vec![]);
@@ -1831,7 +1989,16 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+        transfer_inst(
+            &mut state,
+            &inst,
+            &cfg,
+            &ssa,
+            Some(&ctx),
+            None,
+            None,
+            Some(Lang::Java),
+        );
 
         // Bare-name resolution: Identity(0) → pass through arg
         assert_eq!(state.get(SsaValue(1)), SymbolicValue::Symbol(SsaValue(0)));
@@ -1852,38 +2019,56 @@ mod tests {
 
         let mut gs = GlobalSummaries::new();
         // First "send" — generic, in ns A (Identity: passes through)
-        insert_java_summary(&mut gs, "send", "SocketClient.java", 1, SsaFuncSummary {
-            param_to_return: vec![(0, TaintTransform::Identity)],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_java_summary(
+            &mut gs,
+            "send",
+            "SocketClient.java",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::Identity)],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
         // Second "send" — in ns B, also with same arity → ambiguous bare-name
-        insert_java_summary(&mut gs, "send", "WebSocketClient.java", 1, SsaFuncSummary {
-            param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_java_summary(
+            &mut gs,
+            "send",
+            "WebSocketClient.java",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
         // Also register the type-qualified name so Attempt 1 can find it
-        insert_java_summary(&mut gs, "HttpClient.send", "HttpClient.java", 1, SsaFuncSummary {
-            param_to_return: vec![],
-            param_to_sink: vec![],
-            source_caps: Cap::ENV_VAR, // Source — distinct signal
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_java_summary(
+            &mut gs,
+            "HttpClient.send",
+            "HttpClient.java",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![],
+                param_to_sink: vec![],
+                source_caps: Cap::ENV_VAR, // Source — distinct signal
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
 
         let tf = make_type_facts(vec![(SsaValue(1), TypeKind::HttpClient)]);
         let ctx = SymexSummaryCtx {
@@ -1903,7 +2088,16 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+        transfer_inst(
+            &mut state,
+            &inst,
+            &cfg,
+            &ssa,
+            Some(&ctx),
+            None,
+            None,
+            Some(Lang::Java),
+        );
 
         // Should resolve to "HttpClient.send" summary (source_caps=ENV_VAR → tainted Symbol)
         assert_eq!(state.get(SsaValue(2)), SymbolicValue::Symbol(SsaValue(2)));
@@ -1958,7 +2152,16 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+        transfer_inst(
+            &mut state,
+            &inst,
+            &cfg,
+            &ssa,
+            Some(&ctx),
+            None,
+            None,
+            Some(Lang::Java),
+        );
 
         // "HttpClient.send" not found, bare "send" not found → opaque mk_call fallback
         match state.get(SsaValue(2)) {
@@ -1980,26 +2183,38 @@ mod tests {
 
         let mut gs = GlobalSummaries::new();
         // Two "send" summaries — different namespaces → ambiguous
-        insert_java_summary(&mut gs, "send", "ModuleA.java", 1, SsaFuncSummary {
-            param_to_return: vec![(0, TaintTransform::Identity)],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
-        insert_java_summary(&mut gs, "send", "ModuleB.java", 1, SsaFuncSummary {
-            param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
-            param_to_sink: vec![],
-            source_caps: Cap::empty(),
-            param_to_sink_param: vec![],
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-        });
+        insert_java_summary(
+            &mut gs,
+            "send",
+            "ModuleA.java",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::Identity)],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
+        insert_java_summary(
+            &mut gs,
+            "send",
+            "ModuleB.java",
+            1,
+            SsaFuncSummary {
+                param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
+                param_to_sink: vec![],
+                source_caps: Cap::empty(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+            },
+        );
         // No "HttpClient.send" summary registered — disambiguation has 0 exact matches
 
         let tf = make_type_facts(vec![(SsaValue(1), TypeKind::HttpClient)]);
@@ -2019,7 +2234,16 @@ mod tests {
             },
             node,
         );
-        transfer_inst(&mut state, &inst, &cfg, &ssa, Some(&ctx), None, None, Some(Lang::Java));
+        transfer_inst(
+            &mut state,
+            &inst,
+            &cfg,
+            &ssa,
+            Some(&ctx),
+            None,
+            None,
+            Some(Lang::Java),
+        );
 
         // Neither qualified lookup nor disambiguation found a match.
         // Bare-name path returns Ambiguous → falls through to mk_call.

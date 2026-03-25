@@ -99,22 +99,14 @@ impl StringFact {
         let prefix = match (&self.prefix, &other.prefix) {
             (Some(a), Some(b)) => {
                 let lcp = longest_common_prefix(a, b);
-                if lcp.is_empty() {
-                    None
-                } else {
-                    Some(lcp)
-                }
+                if lcp.is_empty() { None } else { Some(lcp) }
             }
             _ => None,
         };
         let suffix = match (&self.suffix, &other.suffix) {
             (Some(a), Some(b)) => {
                 let lcs = longest_common_suffix(a, b);
-                if lcs.is_empty() {
-                    None
-                } else {
-                    Some(lcs)
-                }
+                if lcs.is_empty() { None } else { Some(lcs) }
             }
             _ => None,
         };

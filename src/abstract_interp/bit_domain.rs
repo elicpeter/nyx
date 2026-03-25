@@ -110,10 +110,8 @@ impl BitFact {
             return Self::bottom();
         }
         Self {
-            known_zero: (self.known_zero & other.known_zero)
-                | (self.known_one & other.known_one),
-            known_one: (self.known_one & other.known_zero)
-                | (self.known_zero & other.known_one),
+            known_zero: (self.known_zero & other.known_zero) | (self.known_one & other.known_one),
+            known_one: (self.known_one & other.known_zero) | (self.known_zero & other.known_one),
         }
     }
 
@@ -154,11 +152,7 @@ impl BitFact {
         match (shift.lo, shift.hi) {
             (Some(lo), Some(hi)) if lo == hi && lo >= 0 && lo <= 63 => {
                 let k = lo as u32;
-                let high_mask = if k == 0 {
-                    0u64
-                } else {
-                    u64::MAX << (64 - k)
-                };
+                let high_mask = if k == 0 { 0u64 } else { u64::MAX << (64 - k) };
 
                 if self.is_non_negative() {
                     // Non-negative: arithmetic right shift fills with 0
@@ -233,8 +227,7 @@ impl Lattice for BitFact {
         }
         // self ⊑ other: self is more precise (has more known bits)
         // Every known bit in other must also be known in self
-        (other.known_zero & !self.known_zero) == 0
-            && (other.known_one & !self.known_one) == 0
+        (other.known_zero & !self.known_zero) == 0 && (other.known_one & !self.known_one) == 0
     }
 }
 
@@ -475,7 +468,10 @@ mod tests {
     #[test]
     fn left_shift_range_is_top() {
         let a = BitFact::from_const(0x0F);
-        let shift = IntervalFact { lo: Some(1), hi: Some(3) };
+        let shift = IntervalFact {
+            lo: Some(1),
+            hi: Some(3),
+        };
         let result = a.left_shift(&shift);
         assert!(result.is_top());
     }

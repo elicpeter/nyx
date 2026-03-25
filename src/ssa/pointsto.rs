@@ -28,9 +28,7 @@ pub enum ContainerOp {
     ///
     /// `index_arg`: same semantics as `Store::index_arg` — when present and
     /// provably constant, loads from `HeapSlot::Index(n)`.
-    Load {
-        index_arg: Option<usize>,
-    },
+    Load { index_arg: Option<usize> },
 }
 
 /// Convenience: store with a single value argument, no index tracking.
@@ -38,7 +36,10 @@ pub enum ContainerOp {
 fn store(pos: usize) -> Option<ContainerOp> {
     let mut v = SmallVec::new();
     v.push(pos);
-    Some(ContainerOp::Store { value_args: v, index_arg: None })
+    Some(ContainerOp::Store {
+        value_args: v,
+        index_arg: None,
+    })
 }
 
 /// Convenience: store with index tracking.  `val_pos` is the value arg,
@@ -47,7 +48,10 @@ fn store(pos: usize) -> Option<ContainerOp> {
 fn store_indexed(val_pos: usize, idx_pos: usize) -> Option<ContainerOp> {
     let mut v = SmallVec::new();
     v.push(val_pos);
-    Some(ContainerOp::Store { value_args: v, index_arg: Some(idx_pos) })
+    Some(ContainerOp::Store {
+        value_args: v,
+        index_arg: Some(idx_pos),
+    })
 }
 
 /// Convenience: store with two value arguments, no index tracking.
@@ -56,7 +60,10 @@ fn store2(a: usize, b: usize) -> Option<ContainerOp> {
     let mut v = SmallVec::new();
     v.push(a);
     v.push(b);
-    Some(ContainerOp::Store { value_args: v, index_arg: None })
+    Some(ContainerOp::Store {
+        value_args: v,
+        index_arg: None,
+    })
 }
 
 /// Convenience: load without index tracking.
@@ -68,7 +75,9 @@ fn load() -> Option<ContainerOp> {
 /// Convenience: load with index tracking.  `idx_pos` is the index/key arg.
 #[inline]
 fn load_indexed(idx_pos: usize) -> Option<ContainerOp> {
-    Some(ContainerOp::Load { index_arg: Some(idx_pos) })
+    Some(ContainerOp::Load {
+        index_arg: Some(idx_pos),
+    })
 }
 
 // ── Classification ──────────────────────────────────────────────────────
@@ -105,7 +114,7 @@ fn classify_js(method: &str) -> Option<ContainerOp> {
         "push" | "unshift" => store(0),
         // Map/Set store: map.set(key, value) — key at 0, value at 1
         "set" => store_indexed(1, 0),
-        "add" => store(0),  // set.add(value)
+        "add" => store(0), // set.add(value)
         // Array/Map load
         "pop" | "shift" => load(),
         "join" | "flat" | "concat" | "slice" | "toString" => load(),
@@ -120,7 +129,7 @@ fn classify_python(method: &str) -> Option<ContainerOp> {
     match method {
         // List store
         "append" | "extend" => store(0),
-        "insert" => store_indexed(1, 0),  // list.insert(index, value) — index at 0, value at 1
+        "insert" => store_indexed(1, 0), // list.insert(index, value) — index at 0, value at 1
         // Set store
         "add" => store(0),
         // Dict store
@@ -128,7 +137,7 @@ fn classify_python(method: &str) -> Option<ContainerOp> {
         "setdefault" => store2(0, 1), // dict.setdefault(key, default)
         // List/Dict load
         "pop" => load(),
-        "get" => load_indexed(0),  // dict.get(key) / list index — key/index at 0
+        "get" => load_indexed(0), // dict.get(key) / list index — key/index at 0
         "items" | "values" | "keys" => load(),
         "join" => load(),
         _ => None,
@@ -260,8 +269,10 @@ mod tests {
     #[test]
     fn store_value_args_correct() {
         // JS set → value at arg 1, index at arg 0
-        if let Some(ContainerOp::Store { value_args, index_arg }) =
-            classify_container_op("map.set", Lang::JavaScript)
+        if let Some(ContainerOp::Store {
+            value_args,
+            index_arg,
+        }) = classify_container_op("map.set", Lang::JavaScript)
         {
             assert_eq!(value_args.as_slice(), &[1]);
             assert_eq!(index_arg, Some(0));
@@ -269,8 +280,10 @@ mod tests {
             panic!("expected Store");
         }
         // JS push → value at arg 0, no index
-        if let Some(ContainerOp::Store { value_args, index_arg }) =
-            classify_container_op("arr.push", Lang::JavaScript)
+        if let Some(ContainerOp::Store {
+            value_args,
+            index_arg,
+        }) = classify_container_op("arr.push", Lang::JavaScript)
         {
             assert_eq!(value_args.as_slice(), &[0]);
             assert_eq!(index_arg, None);

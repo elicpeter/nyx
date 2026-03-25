@@ -121,6 +121,14 @@ pub static OUTPUT_PARAM_SOURCES: &[(&str, &[usize])] = &[
 
 /// Arg-to-arg taint propagation for known C functions.
 pub static ARG_PROPAGATIONS: &[super::ArgPropagation] = &[
-    super::ArgPropagation { callee: "inet_pton", from_args: &[1], to_args: &[2] },
-    super::ArgPropagation { callee: "inet_aton", from_args: &[0], to_args: &[1] },
+    super::ArgPropagation {
+        callee: "inet_pton",
+        from_args: &[1],
+        to_args: &[2],
+    },
+    super::ArgPropagation {
+        callee: "inet_aton",
+        from_args: &[0],
+        to_args: &[1],
+    },
 ];

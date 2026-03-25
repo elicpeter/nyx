@@ -150,8 +150,14 @@ fn state_analysis_disabled_via_flag() {
 fn state_and_auth_on_by_default() {
     // Both state analysis and auth analysis are on by default.
     let cfg = Config::default();
-    assert!(cfg.scanner.enable_state_analysis, "state analysis should be on by default");
-    assert!(cfg.scanner.enable_auth_analysis, "auth analysis should be on by default");
+    assert!(
+        cfg.scanner.enable_state_analysis,
+        "state analysis should be on by default"
+    );
+    assert!(
+        cfg.scanner.enable_auth_analysis,
+        "auth analysis should be on by default"
+    );
 }
 
 #[test]
@@ -173,7 +179,11 @@ fn auth_analysis_disabled_suppresses_auth_findings() {
     // But resource findings should still appear
     let resource: Vec<_> = diags
         .iter()
-        .filter(|d| d.id.starts_with("state-resource") || d.id.starts_with("state-use") || d.id.starts_with("state-double"))
+        .filter(|d| {
+            d.id.starts_with("state-resource")
+                || d.id.starts_with("state-use")
+                || d.id.starts_with("state-double")
+        })
         .collect();
     assert!(
         !resource.is_empty(),
@@ -428,11 +438,16 @@ fn java_twr_no_false_leak() {
     assert!(
         twr_leaks.is_empty(),
         "Expected zero resource-leak findings in TWR function (lines 1-8), got: {:?}",
-        twr_leaks.iter().map(|d| (&d.id, d.line)).collect::<Vec<_>>()
+        twr_leaks
+            .iter()
+            .map(|d| (&d.id, d.line))
+            .collect::<Vec<_>>()
     );
     // unsafeManual (lines 10-13) is a genuine leak — verify it's detected
     assert!(
-        findings.iter().any(|d| d.id == "state-resource-leak" && d.line > 8),
+        findings
+            .iter()
+            .any(|d| d.id == "state-resource-leak" && d.line > 8),
         "Expected state-resource-leak for unsafeManual"
     );
 }
@@ -796,7 +811,10 @@ fn resource_returned_from_factory() {
 #[test]
 fn returned_on_one_path_leaked_on_another() {
     // Resource returned on one branch, leaked on another — still a finding.
-    assert_has("returned_on_one_path_leaked_on_another.c", "state-resource-leak-possible");
+    assert_has(
+        "returned_on_one_path_leaked_on_another.c",
+        "state-resource-leak-possible",
+    );
 }
 
 #[test]
@@ -808,7 +826,10 @@ fn returned_on_all_success_paths() {
 #[test]
 fn return_null_after_open_without_close() {
     // Opens resource then returns NULL — definite leak.
-    assert_has("return_null_after_open_without_close.c", "state-resource-leak");
+    assert_has(
+        "return_null_after_open_without_close.c",
+        "state-resource-leak",
+    );
 }
 
 #[test]

@@ -139,7 +139,11 @@ pub fn extract_findings(
                 continue;
             }
             let var_name = interner.resolve(sym);
-            let scope = if is_func_exit { info.enclosing_func.as_deref() } else { None };
+            let scope = if is_func_exit {
+                info.enclosing_func.as_deref()
+            } else {
+                None
+            };
             let acquire_node = find_acquire_node(cfg, sym, interner, scope);
 
             // At the file-level Exit, skip variables whose acquire site is
@@ -183,14 +187,22 @@ pub fn extract_findings(
                 let mut returned_open = 0u32;
                 let mut non_returned_open = 0u32;
                 for pred in cfg.neighbors_directed(idx, petgraph::Direction::Incoming) {
-                    let Some(ps) = result.states.get(&pred) else { continue };
-                    let pred_has_open = ps.resource.vars.get(&sym)
+                    let Some(ps) = result.states.get(&pred) else {
+                        continue;
+                    };
+                    let pred_has_open = ps
+                        .resource
+                        .vars
+                        .get(&sym)
                         .map_or(false, |lc| lc.contains(ResourceLifecycle::OPEN));
-                    if !pred_has_open { continue; }
+                    if !pred_has_open {
+                        continue;
+                    }
                     let returns_var = cfg[pred].kind == StmtKind::Return
-                        && cfg[pred].uses.iter().any(|u| {
-                            interner.get_scoped(scope, u) == Some(sym)
-                        });
+                        && cfg[pred]
+                            .uses
+                            .iter()
+                            .any(|u| interner.get_scoped(scope, u) == Some(sym));
                     if returns_var {
                         returned_open += 1;
                     } else {
@@ -206,9 +218,7 @@ pub fn extract_findings(
                         rule_id: "state-resource-leak-possible".into(),
                         severity: Severity::Low,
                         span: acquire_span.unwrap_or(info.span),
-                        message: format!(
-                            "resource `{var_name}` may not be closed on all paths"
-                        ),
+                        message: format!("resource `{var_name}` may not be closed on all paths"),
                         machine: "resource",
                         subject: Some(var_name.to_string()),
                         from_state: "open",
@@ -252,13 +262,14 @@ pub fn extract_findings(
     // ── 3. Auth-required sinks ───────────────────────────────────────────
     // Only run auth analysis when explicitly enabled (higher FP rate).
     // Check if any function is a web entrypoint
-    let has_web_entrypoint = enable_auth && cfg.node_references().any(|(_, info)| {
-        if let Some(ref func_name) = info.enclosing_func {
-            is_web_entrypoint_simple(func_name, lang, func_summaries, cfg)
-        } else {
-            false
-        }
-    });
+    let has_web_entrypoint = enable_auth
+        && cfg.node_references().any(|(_, info)| {
+            if let Some(ref func_name) = info.enclosing_func {
+                is_web_entrypoint_simple(func_name, lang, func_summaries, cfg)
+            } else {
+                false
+            }
+        });
 
     if has_web_entrypoint {
         for (idx, info) in cfg.node_references() {
@@ -315,9 +326,7 @@ fn find_acquire_node(
     }
     // Fallback: first global match (for file-level Exit or top-level code).
     for (idx, info) in cfg.node_references() {
-        if info.kind == StmtKind::Call
-            && info.defines.as_deref() == Some(var_name)
-        {
+        if info.kind == StmtKind::Call && info.defines.as_deref() == Some(var_name) {
             return Some(idx);
         }
     }
@@ -378,8 +387,7 @@ fn is_web_entrypoint_simple(
 
     // Only handle_* and route_* are strong enough to skip param confirmation.
     // api_*, serve_*, process_* require web parameter evidence.
-    let strong_name = name_lower.starts_with("handle_")
-        || name_lower.starts_with("route_");
+    let strong_name = name_lower.starts_with("handle_") || name_lower.starts_with("route_");
 
     has_web_params || strong_name
 }
