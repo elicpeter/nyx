@@ -373,29 +373,31 @@ fn should_run(case: &Case) -> bool {
     }
 
     if let Ok(lang) = std::env::var("NYX_BENCH_LANG")
-        && case.language != lang {
-            return false;
-        }
+        && case.language != lang
+    {
+        return false;
+    }
     if let Ok(class) = std::env::var("NYX_BENCH_CLASS")
-        && case.vuln_class != class {
-            return false;
-        }
+        && case.vuln_class != class
+    {
+        return false;
+    }
     if let Ok(id) = std::env::var("NYX_BENCH_CASE")
-        && case.case_id != id {
-            return false;
-        }
-    if std::env::var("NYX_BENCH_POSITIVE_ONLY").is_ok()
-        && !case.is_vulnerable {
-            return false;
-        }
-    if std::env::var("NYX_BENCH_NEGATIVE_ONLY").is_ok()
-        && case.is_vulnerable {
-            return false;
-        }
+        && case.case_id != id
+    {
+        return false;
+    }
+    if std::env::var("NYX_BENCH_POSITIVE_ONLY").is_ok() && !case.is_vulnerable {
+        return false;
+    }
+    if std::env::var("NYX_BENCH_NEGATIVE_ONLY").is_ok() && case.is_vulnerable {
+        return false;
+    }
     if let Ok(tag) = std::env::var("NYX_BENCH_TAG")
-        && !case.tags.iter().any(|t| t == &tag) {
-            return false;
-        }
+        && !case.tags.iter().any(|t| t == &tag)
+    {
+        return false;
+    }
 
     true
 }

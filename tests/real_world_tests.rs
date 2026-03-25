@@ -277,9 +277,10 @@ fn match_expectations(
                     }
                     // Phase 28: Include symbolic witness in evidence search
                     if let Some(ref sym) = ev.symbolic
-                        && let Some(ref w) = sym.witness {
-                            parts.push(w.clone());
-                        }
+                        && let Some(ref w) = sym.witness
+                    {
+                        parts.push(w.clone());
+                    }
                     parts.join(" ")
                 } else {
                     String::new()
