@@ -223,26 +223,41 @@ impl DefaultTransfer<'_> {
     }
 
     fn apply_if(&self, info: &NodeInfo, edge: Option<EdgeKind>, state: &mut ProductState) {
-        // On the True edge of an If node whose condition is an auth check,
-        // refine auth level.
-        let is_true_edge = matches!(edge, Some(EdgeKind::True));
-        if !is_true_edge {
+        // Determine the "positive edge" — the edge where the underlying
+        // (de-negated) condition evaluates to true.
+        //
+        // For `if (is_authenticated(req))`:  positive = True edge
+        // For `if (!allowed[cmd])`:          positive = False edge
+        //   (because `!X` being false means `X` is true)
+        let is_positive_edge = if info.condition_negated {
+            matches!(edge, Some(EdgeKind::False))
+        } else {
+            matches!(edge, Some(EdgeKind::True))
+        };
+        if !is_positive_edge {
             return;
         }
 
         if let Some(ref cond) = info.condition_text {
             let cond_lower = cond.to_ascii_lowercase();
+            // Strip leading negation operator for pattern matching —
+            // the edge selection above already encodes the semantics.
+            let cond_inner = if info.condition_negated {
+                cond_lower.trim_start_matches('!').trim_start()
+            } else {
+                cond_lower.as_str()
+            };
 
             // Auth-related condition
             let auth_rules = rules::auth_rules(self.lang);
             let is_auth_cond = auth_rules.iter().any(|rule| {
                 rule.matchers
                     .iter()
-                    .any(|m| condition_contains_auth_token(&cond_lower, m))
+                    .any(|m| condition_contains_auth_token(cond_inner, m))
             });
-            if is_auth_cond && !info.condition_negated {
+            if is_auth_cond {
                 let is_admin =
-                    ADMIN_PATTERNS.iter().any(|p| condition_contains_auth_token(&cond_lower, p));
+                    ADMIN_PATTERNS.iter().any(|p| condition_contains_auth_token(cond_inner, p));
                 let new_level = if is_admin {
                     AuthLevel::Admin
                 } else {
@@ -253,8 +268,17 @@ impl DefaultTransfer<'_> {
                 }
             }
 
+            // Go-specific: map boolean lookup is an allowlist/authorization guard.
+            // In Go, `map[string]bool` lookups like `allowed[cmd]` return false
+            // for missing keys, making `if allowed[cmd]` a standard allowlist pattern.
+            if self.lang == Lang::Go && is_go_map_boolean_guard(cond_inner) {
+                if AuthLevel::Authed > state.auth.auth_level {
+                    state.auth.auth_level = AuthLevel::Authed;
+                }
+            }
+
             // Validation-related condition
-            if is_guard_like(&cond_lower) && !info.condition_negated {
+            if is_guard_like(cond_inner) {
                 for var in &info.condition_vars {
                     if let Some(sym) = self.get_sym(info, var) {
                         state.auth.validated.insert(sym);
@@ -303,6 +327,37 @@ fn callee_matches(callee: &str, pattern: &str) -> bool {
 fn is_guard_like(callee: &str) -> bool {
     static GUARD_PREFIXES: &[&str] = &["validate", "sanitize", "check_", "verify_", "assert_"];
     GUARD_PREFIXES.iter().any(|p| callee.starts_with(p))
+}
+
+/// Detect Go `map[string]bool` allowlist lookups used as boolean guards.
+///
+/// Matches when the entire condition is an index expression of the form
+/// `identifier[identifier]` (e.g., `allowed[cmd]`, `whitelist[key]`).
+/// In Go, indexing a `map[string]bool` returns `false` for missing keys,
+/// making `if allowed[cmd]` a standard allowlist/authorization pattern.
+///
+/// Narrow by design: does NOT match complex expressions (`arr[i] > 0`),
+/// dotted receivers (`obj.map[key]`), or nested indexing.
+fn is_go_map_boolean_guard(cond: &str) -> bool {
+    let cond = cond.trim();
+    let Some(bracket_start) = cond.find('[') else {
+        return false;
+    };
+    if !cond.ends_with(']') {
+        return false;
+    }
+    let before = &cond[..bracket_start];
+    let inside = &cond[bracket_start + 1..cond.len() - 1];
+    // Before bracket: plain identifier (no dots, no operators)
+    // Inside bracket: identifier, possibly dotted (r.URL.Query().Get("cmd"))
+    !before.is_empty()
+        && before
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && !inside.is_empty()
+        && inside
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
 }
 
 /// Check if condition text contains an auth/admin matcher at a word boundary.

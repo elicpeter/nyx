@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-25T00:01:02Z",
+  "timestamp": "2026-03-25T00:50:39Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,7 +9,7 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:863ab11b9fede5cccd04de277b6a362f9a1d30d2375d734757e485e7c1e9d378",
+  "ground_truth_hash": "sha256:b451c90b076c864997451658d67d464f2a3d56cdb6e473e6c29ee9e60776b2f9",
   "corpus_size": 214,
   "cases_run": 213,
   "cases_skipped": 1,
@@ -946,17 +946,13 @@
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
-      "all_finding_ids": [
-        "state-unauthed-access"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -980,17 +976,13 @@
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
-      "all_finding_ids": [
-        "state-unauthed-access"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -999,17 +991,13 @@
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
-      "all_finding_ids": [
-        "state-unauthed-access"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1048,17 +1036,13 @@
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
-      "all_finding_ids": [
-        "state-unauthed-access"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1082,17 +1066,13 @@
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
-      "all_finding_ids": [
-        "state-unauthed-access"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -4023,21 +4003,21 @@
   ],
   "aggregate_file_level": {
     "tp": 120,
-    "fp": 23,
+    "fp": 18,
     "fn_": 1,
-    "tn": 69,
-    "precision": 0.8391608391608392,
+    "tn": 74,
+    "precision": 0.8695652173913043,
     "recall": 0.9917355371900827,
-    "f1": 0.9090909090909092
+    "f1": 0.9266409266409266
   },
   "aggregate_rule_level": {
     "tp": 116,
-    "fp": 23,
+    "fp": 18,
     "fn_": 5,
-    "tn": 69,
-    "precision": 0.8345323741007195,
+    "tn": 74,
+    "precision": 0.8656716417910447,
     "recall": 0.9586776859504132,
-    "f1": 0.8923076923076924
+    "f1": 0.9098039215686274
   },
   "by_language": {
     "c": {
@@ -4060,12 +4040,12 @@
     },
     "go": {
       "tp": 16,
-      "fp": 5,
+      "fp": 0,
       "fn_": 0,
-      "tn": 7,
-      "precision": 0.7619047619047619,
+      "tn": 12,
+      "precision": 1.0,
       "recall": 1.0,
-      "f1": 0.8648648648648648
+      "f1": 1.0
     },
     "java": {
       "tp": 12,
@@ -4179,9 +4159,9 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 23,
+      "fp": 18,
       "fn_": 0,
-      "tn": 69,
+      "tn": 74,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -4217,30 +4197,30 @@
   "by_confidence": {
     ">=High": {
       "tp": 82,
-      "fp": 46,
+      "fp": 42,
       "fn_": 39,
-      "tn": 46,
-      "precision": 0.640625,
+      "tn": 50,
+      "precision": 0.6612903225806451,
       "recall": 0.6776859504132231,
-      "f1": 0.6586345381526104
+      "f1": 0.6693877551020408
     },
     ">=Low": {
       "tp": 83,
-      "fp": 51,
+      "fp": 47,
       "fn_": 38,
-      "tn": 41,
-      "precision": 0.6194029850746269,
+      "tn": 45,
+      "precision": 0.6384615384615384,
       "recall": 0.6859504132231405,
-      "f1": 0.6509803921568628
+      "f1": 0.6613545816733067
     },
     ">=Medium": {
       "tp": 83,
-      "fp": 51,
+      "fp": 47,
       "fn_": 38,
-      "tn": 41,
-      "precision": 0.6194029850746269,
+      "tn": 45,
+      "precision": 0.6384615384615384,
       "recall": 0.6859504132231405,
-      "f1": 0.6509803921568628
+      "f1": 0.6613545816733067
     }
   }
 }

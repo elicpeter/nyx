@@ -2326,7 +2326,7 @@
         "interprocedural"
       ],
       "disabled": false,
-      "notes": "filepath.Clean sanitizer applied via helper function before os.ReadFile()"
+      "notes": "filepath.Clean sanitizer applied via helper function before os.ReadFile(); auth guard present"
     },
     {
       "case_id": "go-safe-004",
@@ -2400,7 +2400,7 @@
         "filepath-clean"
       ],
       "disabled": false,
-      "notes": "filepath.Clean sanitizer applied inline before os.ReadFile()"
+      "notes": "filepath.Clean sanitizer applied inline before os.ReadFile(); auth guard present"
     },
     {
       "case_id": "go-safe-007",
