@@ -165,6 +165,7 @@ async fn get_abstract_interp(
     Ok(Json(AbstractInterpView::from_taint_states(
         &block_states,
         &ssa,
+        &opt,
     )))
 }
 
@@ -174,11 +175,24 @@ async fn get_summaries(
     State(state): State<AppState>,
     Query(q): Query<SummaryQuery>,
 ) -> Result<Json<Vec<FuncSummaryView>>, StatusCode> {
-    let global = load_global_summaries(&state).ok_or(StatusCode::NOT_FOUND)?;
+    // Try DB first; fall back to on-demand single-file analysis
+    let global = match load_global_summaries(&state) {
+        Some(g) if !g.is_empty() => g,
+        _ => {
+            if let Some(ref file) = q.file {
+                let path = validate_and_resolve(&state.scan_root, file)?;
+                let config =
+                    state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                debug::analyse_file_summaries(&path, &config)?
+            } else {
+                return Ok(Json(vec![]));
+            }
+        }
+    };
 
     let views: Vec<FuncSummaryView> = global
         .iter()
-        .filter(|(key, _)| {
+        .filter(|(key, summary)| {
             let name_matches = q
                 .function
                 .as_ref()
@@ -187,7 +201,7 @@ async fn get_summaries(
             let file_matches = q
                 .file
                 .as_ref()
-                .map(|f| key.namespace.contains(f.as_str()))
+                .map(|f| summary.file_path.contains(f.as_str()))
                 .unwrap_or(true);
             name_matches && file_matches
         })
@@ -206,7 +220,18 @@ async fn get_call_graph(
     State(state): State<AppState>,
     Query(q): Query<CallGraphQuery>,
 ) -> Result<Json<CallGraphView>, StatusCode> {
-    let global = load_global_summaries(&state).ok_or(StatusCode::NOT_FOUND)?;
+    let scope = q.scope.as_deref().unwrap_or("project");
+
+    let global = if scope == "file" {
+        // On-demand: parse the specified file and extract summaries
+        let file = q.file.as_deref().ok_or(StatusCode::BAD_REQUEST)?;
+        let path = validate_and_resolve(&state.scan_root, file)?;
+        let config = state.config.read().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        debug::analyse_file_summaries(&path, &config)?
+    } else {
+        // Project scope: try DB, fall back to empty graph
+        load_global_summaries(&state).unwrap_or_default()
+    };
 
     let cg = crate::callgraph::build_call_graph(&global, &[]);
     let analysis = crate::callgraph::analyse(&cg);

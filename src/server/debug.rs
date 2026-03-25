@@ -526,14 +526,32 @@ pub struct AbstractBlockView {
 }
 
 #[derive(Debug, Serialize)]
+pub struct TypeFactView {
+    pub ssa_value: u32,
+    pub var_name: Option<String>,
+    pub type_kind: String,
+    pub nullable: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConstValueViewEntry {
+    pub ssa_value: u32,
+    pub var_name: Option<String>,
+    pub value: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AbstractInterpView {
     pub blocks: Vec<AbstractBlockView>,
+    pub type_facts: Vec<TypeFactView>,
+    pub const_values: Vec<ConstValueViewEntry>,
 }
 
 impl AbstractInterpView {
     pub fn from_taint_states(
         block_states: &[Option<SsaTaintState>],
         ssa: &SsaBody,
+        opt: &OptimizeResult,
     ) -> Self {
         let blocks: Vec<AbstractBlockView> = block_states
             .iter()
@@ -541,7 +559,6 @@ impl AbstractInterpView {
             .filter_map(|(i, state_opt)| {
                 let state = state_opt.as_ref()?;
                 let abs_state = state.abstract_state.as_ref()?;
-                // Only include blocks with non-empty abstract state
                 let values: Vec<AbstractValueView> = (0..ssa.num_values() as u32)
                     .filter_map(|v| {
                         let av = abs_state.get(SsaValue(v));
@@ -575,7 +592,60 @@ impl AbstractInterpView {
             })
             .collect();
 
-        AbstractInterpView { blocks }
+        // Type facts from optimization pass
+        let mut type_facts: Vec<TypeFactView> = opt
+            .type_facts
+            .facts
+            .iter()
+            .filter(|(_, tf)| !matches!(tf.kind, crate::ssa::type_facts::TypeKind::Unknown))
+            .map(|(sv, tf)| TypeFactView {
+                ssa_value: sv.0,
+                var_name: ssa
+                    .value_defs
+                    .get(sv.0 as usize)
+                    .and_then(|d| d.var_name.clone()),
+                type_kind: format!("{:?}", tf.kind),
+                nullable: tf.nullable,
+            })
+            .collect();
+        type_facts.sort_by_key(|v| v.ssa_value);
+
+        // Const values from constant propagation
+        let mut const_values: Vec<ConstValueViewEntry> = opt
+            .const_values
+            .iter()
+            .filter(|(_, cl)| {
+                !matches!(
+                    cl,
+                    crate::ssa::const_prop::ConstLattice::Top
+                        | crate::ssa::const_prop::ConstLattice::Varying
+                )
+            })
+            .map(|(sv, cl)| {
+                let value = match cl {
+                    crate::ssa::const_prop::ConstLattice::Str(s) => format!("\"{}\"", s),
+                    crate::ssa::const_prop::ConstLattice::Int(n) => format!("{}", n),
+                    crate::ssa::const_prop::ConstLattice::Bool(b) => format!("{}", b),
+                    crate::ssa::const_prop::ConstLattice::Null => "null".into(),
+                    _ => unreachable!(),
+                };
+                ConstValueViewEntry {
+                    ssa_value: sv.0,
+                    var_name: ssa
+                        .value_defs
+                        .get(sv.0 as usize)
+                        .and_then(|d| d.var_name.clone()),
+                    value,
+                }
+            })
+            .collect();
+        const_values.sort_by_key(|v| v.ssa_value);
+
+        AbstractInterpView {
+            blocks,
+            type_facts,
+            const_values,
+        }
     }
 }
 
@@ -966,6 +1036,37 @@ pub fn analyse_function_symex(
     }
 
     state
+}
+
+/// Extract `GlobalSummaries` from a single file on-demand (no DB required).
+pub fn analyse_file_summaries(
+    file_path: &Path,
+    config: &Config,
+) -> Result<GlobalSummaries, StatusCode> {
+    let bytes = std::fs::read(file_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (func_summaries, ssa_rows) =
+        crate::ast::extract_all_summaries_from_bytes(&bytes, file_path, config, None)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut global = crate::summary::merge_summaries(func_summaries, None);
+
+    // Match SSA summaries to existing keys by name + arity.
+    // Collect keys first to avoid borrow conflict.
+    let key_matches: Vec<_> = ssa_rows
+        .into_iter()
+        .filter_map(|(name, arity, ssa_summary)| {
+            let key = global
+                .iter()
+                .find(|(k, _)| k.name == name && k.arity == Some(arity))
+                .map(|(k, _)| k.clone())?;
+            Some((key, ssa_summary))
+        })
+        .collect();
+    for (key, ssa_summary) in key_matches {
+        global.insert_ssa(key, ssa_summary);
+    }
+
+    Ok(global)
 }
 
 /// Format a `ConditionExpr` as a human-readable string.

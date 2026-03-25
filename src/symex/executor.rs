@@ -408,10 +408,11 @@ fn run_path(
         let block = match ssa.blocks.get(block_id.0 as usize) {
             Some(b) => b,
             None => {
+                let witness = try_extract_witness(state, finding, ssa, cfg);
                 return Some(PathOutcome {
                     verdict: Verdict::Inconclusive,
                     constraints_checked: state.constraints_checked,
-                    witness: None,
+                    witness,
                 });
             }
         };
@@ -537,11 +538,14 @@ fn run_path(
 
                 match (true_reachable, false_reachable) {
                     (false, false) => {
-                        // Dead end — neither successor reaches sink
+                        // Dead end — neither successor reaches sink.
+                        // Still try to extract a witness: the path may have
+                        // already walked past the sink node.
+                        let witness = try_extract_witness(state, finding, ssa, cfg);
                         return Some(PathOutcome {
                             verdict: Verdict::Inconclusive,
                             constraints_checked: state.constraints_checked,
-                            witness: None,
+                            witness,
                         });
                     }
                     (true, false) => {
@@ -624,11 +628,13 @@ fn run_path(
             }
             Terminator::Goto(target) => {
                 if !reachable.contains(target) {
-                    // Successor not on any source-to-sink path
+                    // Successor not on any source-to-sink path.
+                    // Still try to extract a witness from accumulated state.
+                    let witness = try_extract_witness(state, finding, ssa, cfg);
                     return Some(PathOutcome {
                         verdict: Verdict::Inconclusive,
                         constraints_checked: state.constraints_checked,
-                        witness: None,
+                        witness,
                     });
                 }
                 state.predecessor = Some(block_id);
@@ -863,8 +869,7 @@ fn record_outcome(
     ssa: &SsaBody,
     cfg: &Cfg,
 ) -> PathOutcome {
-    let witness = super::witness::extract_witness(&state.sym_state, finding, ssa, cfg)
-        .or_else(|| state.sym_state.get_sink_witness(finding, ssa));
+    let witness = try_extract_witness(state, finding, ssa, cfg);
     // All constraints passed (or none on path) → feasible
     let verdict = Verdict::Confirmed;
     PathOutcome {
@@ -872,6 +877,22 @@ fn record_outcome(
         constraints_checked: state.constraints_checked,
         witness,
     }
+}
+
+/// Best-effort witness extraction from the current symbolic state.
+///
+/// Used by both `record_outcome` (Confirmed paths) and inconclusive exits
+/// where the path has already walked past the sink node and built up
+/// symbolic expressions. Returns `None` if the sink's expression is
+/// `Unknown` or not useful.
+fn try_extract_witness(
+    state: &ExplorationState,
+    finding: &Finding,
+    ssa: &SsaBody,
+    cfg: &Cfg,
+) -> Option<String> {
+    super::witness::extract_witness(&state.sym_state, finding, ssa, cfg)
+        .or_else(|| state.sym_state.get_sink_witness(finding, ssa))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -496,8 +496,23 @@ export interface AbstractBlockView {
   values: AbstractValueView[];
 }
 
+export interface TypeFactView {
+  ssa_value: number;
+  var_name?: string;
+  type_kind: string;
+  nullable: boolean;
+}
+
+export interface ConstValueViewEntry {
+  ssa_value: number;
+  var_name?: string;
+  value: string;
+}
+
 export interface AbstractInterpView {
   blocks: AbstractBlockView[];
+  type_facts: TypeFactView[];
+  const_values: ConstValueViewEntry[];
 }
 
 // Symbolic Execution
