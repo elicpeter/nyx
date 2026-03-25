@@ -191,8 +191,7 @@ pub struct ScannerConfig {
 
     /// Enable auth-state analysis within the state engine.  When false,
     /// only resource lifecycle findings (leak, use-after-close, double-close)
-    /// are produced.  Default: false (auth analysis is opt-in due to higher
-    /// false-positive rate on allowlist/map-check patterns).
+    /// are produced.  Default: true.
     pub enable_auth_analysis: bool,
 }
 impl Default for ScannerConfig {
@@ -228,7 +227,7 @@ impl Default for ScannerConfig {
             scan_hidden_files: false,
             include_nonprod: false,
             enable_state_analysis: true,
-            enable_auth_analysis: false,
+            enable_auth_analysis: true,
         }
     }
 }
