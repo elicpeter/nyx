@@ -188,10 +188,8 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
                         if let SsaOp::Phi(operands) = &phi.op
                             && operands.iter().any(|(_, v)| *v == val)
                         {
-                            let old =
-                                values.get(&phi.value).cloned().unwrap_or(ConstLattice::Top);
-                            let new_val =
-                                eval_phi(operands, &values, &executable_edges, block_id);
+                            let old = values.get(&phi.value).cloned().unwrap_or(ConstLattice::Top);
+                            let new_val = eval_phi(operands, &values, &executable_edges, block_id);
                             if new_val != old {
                                 values.insert(phi.value, new_val);
                                 ssa_worklist.push_back(phi.value);
