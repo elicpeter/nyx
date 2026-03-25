@@ -52,10 +52,11 @@ async fn start_scan(
     let config = state.config.read().unwrap().clone();
     let event_tx = state.event_tx.clone();
     let db_pool = state.db_pool.clone();
+    let database_dir = state.database_dir.clone();
 
     match state
         .job_manager
-        .start_scan(scan_root, config, event_tx, db_pool)
+        .start_scan(scan_root, config, event_tx, db_pool, database_dir)
     {
         Ok(job_id) => Ok((
             StatusCode::ACCEPTED,

@@ -1,4 +1,5 @@
 use crate::server::jobs::JobManager;
+use crate::server::progress::TimingBreakdown;
 use crate::server::routes;
 use crate::utils::config::Config;
 use axum::Router;
@@ -28,8 +29,12 @@ pub enum ServerEvent {
         files_discovered: u64,
         files_parsed: u64,
         files_analyzed: u64,
+        files_skipped: u64,
+        batches_total: u64,
+        batches_completed: u64,
         current_file: String,
         elapsed_ms: u64,
+        timing: TimingBreakdown,
     },
     ConfigChanged,
 }

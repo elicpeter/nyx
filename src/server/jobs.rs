@@ -4,6 +4,7 @@ use crate::server::app::ServerEvent;
 use crate::server::progress::{ScanMetrics, ScanProgress, TimingBreakdown};
 use crate::server::scan_log::ScanLogCollector;
 use crate::utils::config::Config;
+use crate::utils::project::get_project_info;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use std::collections::HashMap;
@@ -92,9 +93,10 @@ impl JobManager {
     pub fn start_scan(
         self: &Arc<Self>,
         scan_root: PathBuf,
-        config: Config,
+        mut config: Config,
         event_tx: broadcast::Sender<ServerEvent>,
         db_pool: Option<Arc<Pool<SqliteConnectionManager>>>,
+        database_dir: PathBuf,
     ) -> Result<String, &'static str> {
         let mut active = self.active_job_id.lock().unwrap();
         if active.is_some() {
@@ -148,6 +150,10 @@ impl JobManager {
 
         *active = Some(job_id.clone());
 
+        if config.framework_ctx.is_none() {
+            config.framework_ctx = Some(crate::utils::detect_frameworks(&scan_root));
+        }
+
         let _ = event_tx.send(ServerEvent::ScanStarted {
             job_id: job_id.clone(),
         });
@@ -189,8 +195,12 @@ impl JobManager {
                     files_discovered: snap.files_discovered,
                     files_parsed: snap.files_parsed,
                     files_analyzed: snap.files_analyzed,
+                    files_skipped: snap.files_skipped,
+                    batches_total: snap.batches_total,
+                    batches_completed: snap.batches_completed,
                     current_file: snap.current_file,
                     elapsed_ms: snap.elapsed_ms,
+                    timing: snap.timing,
                 });
                 if is_complete {
                     break;
@@ -205,18 +215,34 @@ impl JobManager {
         let jid = job_id.clone();
         std::thread::spawn(move || {
             let start = Instant::now();
-            log_collector.info("Scan started", None);
+            log_collector.info("Indexed scan started (rebuild enabled)", None);
 
-            let result = manager.scan_pool.install(|| {
-                scan::scan_filesystem_with_observer(
-                    &scan_root,
-                    &config,
-                    false,
-                    Some(&progress),
-                    Some(&metrics),
-                    Some(&log_collector),
-                )
-            });
+            let result = manager
+                .scan_pool
+                .install(|| -> crate::errors::NyxResult<Vec<Diag>> {
+                    let (project_name, db_path) = get_project_info(&scan_root, &database_dir)?;
+                    crate::commands::index::build_index_with_observer(
+                        &project_name,
+                        &scan_root,
+                        &db_path,
+                        &config,
+                        false,
+                        Some(&progress),
+                        Some(&metrics),
+                        Some(&log_collector),
+                    )?;
+                    let pool = Indexer::init(&db_path)?;
+                    scan::scan_with_index_parallel_observer(
+                        &project_name,
+                        pool,
+                        &config,
+                        false,
+                        &scan_root,
+                        Some(&progress),
+                        Some(&metrics),
+                        Some(&log_collector),
+                    )
+                });
             let elapsed = start.elapsed().as_secs_f64();
 
             // Collect snapshots and do expensive work (post-processing,
@@ -226,13 +252,13 @@ impl JobManager {
             let logs = log_collector.drain();
             let languages: Vec<String> = progress_snap.languages.keys().cloned().collect();
             let files_scanned = progress_snap.files_discovered;
+            let files_skipped = progress_snap.files_skipped;
             let timing = progress_snap.timing.clone();
             let finished_at = chrono::Utc::now();
 
             // Prepare the final state outside the lock.
             let (status, diags, error_str) = match result {
-                Ok(mut diags) => {
-                    scan::post_process_diags(&mut diags, &config);
+                Ok(diags) => {
                     log_collector.info(format!("Scan completed: {} findings", diags.len()), None);
                     (JobStatus::Completed, Some(Arc::new(diags)), None)
                 }
@@ -310,6 +336,7 @@ impl JobManager {
                     timing_json.as_deref(),
                     error_str.as_deref(),
                     Some(files_scanned as i64),
+                    Some(files_skipped as i64),
                     langs_json.as_deref(),
                 );
                 let _ = idx.insert_scan_metrics(&jid, &metrics_snap);
@@ -389,9 +416,45 @@ impl JobManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn test_config() -> Config {
         Config::default()
+    }
+
+    fn wait_for_job(manager: &Arc<JobManager>, job_id: &str) -> ScanJob {
+        for _ in 0..200 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if let Some(job) = manager.get_job(job_id)
+                && job.status != JobStatus::Running
+            {
+                return job;
+            }
+        }
+        panic!("job {job_id} did not finish in time");
+    }
+
+    fn wait_for_scan_metrics(
+        idx: &Indexer,
+        job_id: &str,
+    ) -> crate::server::progress::ScanMetricsSnapshot {
+        for _ in 0..100 {
+            if let Some(metrics) = idx.get_scan_metrics(job_id).unwrap() {
+                return metrics;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("scan metrics for {job_id} were not persisted in time");
+    }
+
+    fn wait_for_scan_record(idx: &Indexer, job_id: &str) -> ScanRecord {
+        for _ in 0..100 {
+            if let Some(record) = idx.get_scan(job_id).unwrap() {
+                return record;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("scan record for {job_id} was not persisted in time");
     }
 
     #[test]
@@ -401,12 +464,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let id = manager
-            .start_scan(dir.path().to_path_buf(), test_config(), tx.clone(), None)
+            .start_scan(
+                dir.path().to_path_buf(),
+                test_config(),
+                tx.clone(),
+                None,
+                dir.path().to_path_buf(),
+            )
             .unwrap();
         assert!(!id.is_empty());
 
         // Second scan should fail while first is running.
-        let result = manager.start_scan(dir.path().to_path_buf(), test_config(), tx, None);
+        let result = manager.start_scan(
+            dir.path().to_path_buf(),
+            test_config(),
+            tx,
+            None,
+            dir.path().to_path_buf(),
+        );
         assert!(result.is_err());
     }
 
@@ -418,7 +493,13 @@ mod tests {
 
         // Start scan and wait for it to finish.
         let id1 = manager
-            .start_scan(dir.path().to_path_buf(), test_config(), tx.clone(), None)
+            .start_scan(
+                dir.path().to_path_buf(),
+                test_config(),
+                tx.clone(),
+                None,
+                dir.path().to_path_buf(),
+            )
             .unwrap();
 
         // Wait for scan to complete (it's scanning an empty dir so should be fast).
@@ -432,7 +513,13 @@ mod tests {
         }
 
         let id2 = manager
-            .start_scan(dir.path().to_path_buf(), test_config(), tx.clone(), None)
+            .start_scan(
+                dir.path().to_path_buf(),
+                test_config(),
+                tx.clone(),
+                None,
+                dir.path().to_path_buf(),
+            )
             .unwrap();
 
         for _ in 0..100 {
@@ -446,7 +533,13 @@ mod tests {
 
         // Third scan should evict the oldest.
         let _id3 = manager
-            .start_scan(dir.path().to_path_buf(), test_config(), tx, None)
+            .start_scan(
+                dir.path().to_path_buf(),
+                test_config(),
+                tx,
+                None,
+                dir.path().to_path_buf(),
+            )
             .unwrap();
 
         for _ in 0..100 {
@@ -458,5 +551,84 @@ mod tests {
 
         // First job should be evicted.
         assert!(manager.get_job(&id1).is_none());
+    }
+
+    #[test]
+    fn start_scan_uses_indexed_rebuild_and_persists_scan_artifacts() {
+        let manager = Arc::new(JobManager::new(4, 8 * 1024 * 1024));
+        let (tx, _rx) = broadcast::channel(16);
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("proj");
+        fs::create_dir(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("app.js"),
+            r#"function cleanHtml(input) {
+    return DOMPurify.sanitize(input);
+}
+
+function handleRequest(req, res) {
+    const safe = cleanHtml(req.query.name);
+    res.send(safe);
+}
+
+handleRequest({ query: { name: '<b>x</b>' } }, { send() {} });
+"#,
+        )
+        .unwrap();
+
+        let (_, db_path) =
+            crate::utils::project::get_project_info(&project_dir, dir.path()).unwrap();
+        let pool = Indexer::init(&db_path).unwrap();
+
+        let id = manager
+            .start_scan(
+                project_dir.clone(),
+                test_config(),
+                tx,
+                Some(Arc::clone(&pool)),
+                dir.path().to_path_buf(),
+            )
+            .unwrap();
+
+        let job = wait_for_job(&manager, &id);
+        assert_eq!(job.status, JobStatus::Completed);
+
+        let idx = Indexer::from_pool("proj", &pool).unwrap();
+        assert!(
+            !idx.load_all_summaries().unwrap().is_empty(),
+            "server scan should persist coarse summaries"
+        );
+        assert!(
+            !idx.load_all_ssa_summaries().unwrap().is_empty(),
+            "server scan should persist SSA summaries"
+        );
+
+        let scans_idx = Indexer::from_pool("_scans", &pool).unwrap();
+        let metrics = wait_for_scan_metrics(&scans_idx, &id);
+        assert!(
+            metrics.summaries_reused >= 1,
+            "rebuild-index server scan should reuse persisted summaries in indexed pass 1"
+        );
+
+        let mut logs = Vec::new();
+        for _ in 0..100 {
+            logs = scans_idx.get_scan_logs(&id, None).unwrap();
+            if !logs.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(
+            logs.iter()
+                .any(|entry| entry.message.contains("Indexed scan started")),
+            "server scan should persist indexed-path logs"
+        );
+
+        let record = wait_for_scan_record(&scans_idx, &id);
+        assert_eq!(record.files_scanned, Some(1));
+        assert!(
+            record.files_skipped.unwrap_or_default() >= 1,
+            "scan record should capture indexed summary reuse"
+        );
     }
 }

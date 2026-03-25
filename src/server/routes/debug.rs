@@ -10,6 +10,8 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
@@ -140,7 +142,7 @@ async fn get_taint(
     // Try to load global summaries from DB for cross-file context
     let global = load_global_summaries(&state);
 
-    let (events, block_states) = debug::analyse_function_taint(
+    let (events, _entry_states, exit_states) = debug::analyse_function_taint(
         &ssa,
         &analysis.cfg,
         analysis.lang,
@@ -149,9 +151,11 @@ async fn get_taint(
         &opt,
     );
 
+    // Show post-block state so single-block source→sink flows are visible in
+    // the debug UI instead of appearing empty at block entry.
     Ok(Json(TaintAnalysisView::from_results(
         &events,
-        &block_states,
+        &exit_states,
         &ssa,
     )))
 }
@@ -172,7 +176,7 @@ async fn get_abstract_interp(
 
     let global = load_global_summaries(&state);
 
-    let (_events, block_states) = debug::analyse_function_taint(
+    let (_events, block_states, _exit_states) = debug::analyse_function_taint(
         &ssa,
         &analysis.cfg,
         analysis.lang,
@@ -286,22 +290,120 @@ async fn get_symex(
 /// Load global summaries from DB if available.
 fn load_global_summaries(state: &AppState) -> Option<crate::summary::GlobalSummaries> {
     let pool = state.db_pool.as_ref()?;
-    let indexer = crate::database::index::Indexer::from_pool("", pool).ok()?;
+    load_global_summaries_from_pool(&state.scan_root, pool)
+}
 
+fn load_global_summaries_from_pool(
+    scan_root: &Path,
+    pool: &Pool<SqliteConnectionManager>,
+) -> Option<crate::summary::GlobalSummaries> {
+    let project = scan_root.file_name()?.to_str()?;
+    let root_str = scan_root.to_string_lossy();
+    let indexer = crate::database::index::Indexer::from_pool(project, pool).ok()?;
     let func_summaries = indexer.load_all_summaries().ok()?;
     let ssa_rows = indexer.load_all_ssa_summaries().ok()?;
 
-    let mut global = crate::summary::merge_summaries(func_summaries, None);
+    let mut global = crate::summary::merge_summaries(func_summaries, Some(&root_str));
     for (_file_path, name, lang_str, arity, namespace, summary) in ssa_rows {
-        let lang = crate::symbol::Lang::from_slug(&lang_str).unwrap_or(crate::symbol::Lang::C);
+        let lang = crate::symbol::Lang::from_slug(&lang_str).unwrap_or(crate::symbol::Lang::Rust);
         let key = crate::symbol::FuncKey {
             lang,
-            namespace,
+            namespace: if namespace.is_empty() {
+                crate::symbol::normalize_namespace(&_file_path, Some(&root_str))
+            } else {
+                namespace
+            },
             name,
-            arity: Some(arity as usize),
+            arity: if arity >= 0 {
+                Some(arity as usize)
+            } else {
+                None
+            },
         };
         global.insert_ssa(key, summary);
     }
 
     Some(global)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::index::Indexer;
+    use crate::labels::Cap;
+    use crate::summary::FuncSummary;
+    use crate::summary::ssa_summary::SsaFuncSummary;
+    use crate::symbol::{FuncKey, Lang};
+
+    #[test]
+    fn load_global_summaries_uses_scan_root_project_and_normalized_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan_root = dir.path().join("Example Project");
+        std::fs::create_dir_all(scan_root.join("src")).unwrap();
+        let file_path = scan_root.join("src/lib.rs");
+        std::fs::write(&file_path, "fn helper() {}").unwrap();
+
+        let db_path = dir.path().join("example_project.sqlite");
+        let pool = Indexer::init(&db_path).unwrap();
+        let mut indexer = Indexer::from_pool("Example Project", &pool).unwrap();
+
+        indexer
+            .replace_summaries_for_file(
+                &file_path,
+                b"hash",
+                &[FuncSummary {
+                    name: "helper".into(),
+                    file_path: file_path.to_string_lossy().into_owned(),
+                    lang: "rust".into(),
+                    param_count: 0,
+                    param_names: vec![],
+                    source_caps: 0,
+                    sanitizer_caps: 0,
+                    sink_caps: 0,
+                    propagating_params: vec![],
+                    propagates_taint: false,
+                    tainted_sink_params: vec![],
+                    callees: vec![],
+                }],
+            )
+            .unwrap();
+        indexer
+            .replace_ssa_summaries_for_file(
+                &file_path,
+                b"hash",
+                &[(
+                    "helper".into(),
+                    0,
+                    "rust".into(),
+                    "src/lib.rs".into(),
+                    SsaFuncSummary {
+                        param_to_return: vec![],
+                        param_to_sink: vec![],
+                        source_caps: Cap::ENV_VAR,
+                        param_to_sink_param: vec![],
+                        param_container_to_return: vec![],
+                        param_to_container_store: vec![],
+                        return_type: None,
+                        return_abstract: None,
+                    },
+                )],
+            )
+            .unwrap();
+
+        let global = load_global_summaries_from_pool(&scan_root, &pool)
+            .expect("debug loader should recover project summaries");
+
+        let key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/lib.rs".into(),
+            name: "helper".into(),
+            arity: Some(0),
+        };
+
+        assert!(global.get(&key).is_some());
+        assert!(
+            global.get_ssa(&key).is_some(),
+            "SSA summaries should line up with the normalized function keys"
+        );
+    }
 }

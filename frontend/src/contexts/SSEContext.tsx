@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import type { TimingBreakdown } from '../api/types';
 
 export interface ScanProgress {
   job_id: string;
@@ -15,8 +16,12 @@ export interface ScanProgress {
   files_discovered: number;
   files_parsed: number;
   files_analyzed: number;
+  files_skipped: number;
+  batches_total: number;
+  batches_completed: number;
   current_file: string;
   elapsed_ms: number;
+  timing: TimingBreakdown;
 }
 
 interface SSEState {

@@ -1,15 +1,14 @@
 #![allow(clippy::collapsible_if, clippy::type_complexity)]
 
 pub(crate) use crate::ast::{
-    analyse_file_fused, extract_all_summaries_from_bytes, extract_summaries_from_bytes,
-    run_rules_on_bytes, run_rules_on_file,
+    analyse_file_fused, extract_all_summaries_from_bytes, run_rules_on_bytes, run_rules_on_file,
 };
 use crate::callgraph::{CallGraph, FileBatch};
 use crate::cli::{IndexMode, OutputFormat};
 use crate::database::index::{Indexer, IssueRow};
 use crate::errors::NyxResult;
 use crate::patterns::{FindingCategory, Severity, SeverityFilter};
-use crate::server::progress::{ScanMetrics, ScanProgress};
+use crate::server::progress::{ScanMetrics, ScanProgress, ScanStage};
 use crate::server::scan_log::ScanLogCollector;
 use crate::summary::{self, GlobalSummaries};
 use crate::utils::config::Config;
@@ -21,8 +20,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 fn make_progress_bar(len: u64, msg: &str, show: bool) -> ProgressBar {
     if !show {
@@ -38,6 +38,27 @@ fn make_progress_bar(len: u64, msg: &str, show: bool) -> ProgressBar {
     );
     pb.set_message(msg.to_string());
     pb
+}
+
+fn record_persist_error(errors: &Arc<Mutex<Vec<String>>>, message: String) {
+    errors.lock().expect("persist error mutex").push(message);
+}
+
+fn fail_if_persist_errors(stage: &str, errors: Arc<Mutex<Vec<String>>>) -> NyxResult<()> {
+    let errors = errors.lock().expect("persist error mutex");
+    if errors.is_empty() {
+        return Ok(());
+    }
+
+    let mut details = errors.iter().take(3).cloned().collect::<Vec<_>>();
+    if errors.len() > 3 {
+        details.push(format!("... and {} more", errors.len() - 3));
+    }
+
+    Err(crate::errors::NyxError::Msg(format!(
+        "{stage} failed to persist scan state: {}",
+        details.join("; ")
+    )))
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -327,6 +348,7 @@ fn run_topo_batches(
     cfg: &Config,
     scan_root: Option<&Path>,
     pb: &ProgressBar,
+    progress: Option<&Arc<ScanProgress>>,
     logs: Option<&Arc<ScanLogCollector>>,
 ) -> Vec<Diag> {
     let root_str = scan_root.map(|r| r.to_string_lossy());
@@ -355,6 +377,9 @@ fn run_topo_batches(
                     .files
                     .par_iter()
                     .map(|path| {
+                        if let Some(p) = progress {
+                            p.set_current_file(&path.to_string_lossy());
+                        }
                         let bytes = std::fs::read(path).unwrap_or_default();
                         match analyse_file_fused(
                             &bytes,
@@ -444,6 +469,10 @@ fn run_topo_batches(
             }
             // Count progress for these files once.
             pb.inc(batch.files.len() as u64);
+            if let Some(p) = progress {
+                p.inc_analyzed(batch.files.len() as u64);
+                p.inc_batches_completed(1);
+            }
             result.extend(iteration_diags);
         } else {
             // Non-recursive batch: single pass.
@@ -451,6 +480,9 @@ fn run_topo_batches(
                 .files
                 .par_iter()
                 .flat_map_iter(|path| {
+                    if let Some(p) = progress {
+                        p.set_current_file(&path.to_string_lossy());
+                    }
                     let d = match run_rules_on_file(path, cfg, Some(global_summaries), scan_root) {
                         Ok(d) => d,
                         Err(e) => {
@@ -466,6 +498,9 @@ fn run_topo_batches(
                         }
                     };
                     pb.inc(1);
+                    if let Some(p) = progress {
+                        p.inc_analyzed(1);
+                    }
                     d
                 })
                 .collect();
@@ -476,6 +511,9 @@ fn run_topo_batches(
                 recursive = false,
                 "non-recursive batch complete"
             );
+            if let Some(p) = progress {
+                p.inc_batches_completed(1);
+            }
             result.extend(batch_diags);
         }
     }
@@ -485,6 +523,9 @@ fn run_topo_batches(
         let orphan_diags: Vec<Diag> = orphans
             .par_iter()
             .flat_map_iter(|path| {
+                if let Some(p) = progress {
+                    p.set_current_file(&path.to_string_lossy());
+                }
                 let d = match run_rules_on_file(path, cfg, Some(global_summaries), scan_root) {
                     Ok(d) => d,
                     Err(e) => {
@@ -500,9 +541,15 @@ fn run_topo_batches(
                     }
                 };
                 pb.inc(1);
+                if let Some(p) = progress {
+                    p.inc_analyzed(1);
+                }
                 d
             })
             .collect();
+        if let Some(p) = progress {
+            p.inc_batches_completed(1);
+        }
         result.extend(orphan_diags);
     }
 
@@ -553,7 +600,7 @@ pub(crate) fn scan_filesystem_with_observer(
     };
 
     if let Some(p) = progress {
-        p.set_stage(1); // discovering
+        p.set_stage(ScanStage::Discovering);
     }
 
     // ── Collect file list ────────────────────────────────────────────────
@@ -593,7 +640,7 @@ pub(crate) fn scan_filesystem_with_observer(
     if !needs_taint {
         // ── AST-only: single fused pass (no cross-file context needed) ──
         if let Some(p) = progress {
-            p.set_stage(2); // parsing
+            p.set_stage(ScanStage::Indexing);
         }
         if let Some(l) = logs {
             l.info("Starting AST-only analysis (no taint)", None);
@@ -636,7 +683,7 @@ pub(crate) fn scan_filesystem_with_observer(
         pb.finish_and_clear();
 
         if let Some(p) = progress {
-            p.set_stage(4); // complete
+            p.set_stage(ScanStage::Complete);
         }
         post_process_diags(&mut diags, cfg);
         return Ok(diags);
@@ -659,7 +706,7 @@ pub(crate) fn scan_filesystem_with_observer(
     // then the per-thread maps are merged in a binary reduce tree.
     // This eliminates the serial merge_summaries bottleneck.
     if let Some(p) = progress {
-        p.set_stage(2); // parsing
+        p.set_stage(ScanStage::Indexing);
     }
     if let Some(l) = logs {
         l.info(
@@ -804,7 +851,7 @@ pub(crate) fn scan_filesystem_with_observer(
 
     // ── Pass 2: re-run with cross-file global summaries ──────────────────
     if let Some(p) = progress {
-        p.set_stage(3); // analyzing
+        p.set_stage(ScanStage::Analyzing);
     }
     if let Some(l) = logs {
         l.info(
@@ -847,7 +894,20 @@ pub(crate) fn scan_filesystem_with_observer(
         }
 
         let mut gs = global_summaries;
-        let result = run_topo_batches(&batches, &orphans, &mut gs, cfg, Some(root), &pb, logs);
+        let total_batches = batches.len() as u64 + u64::from(!orphans.is_empty());
+        if let Some(p) = progress {
+            p.set_batches_total(total_batches);
+        }
+        let result = run_topo_batches(
+            &batches,
+            &orphans,
+            &mut gs,
+            cfg,
+            Some(root),
+            &pb,
+            progress,
+            logs,
+        );
 
         pb.finish_and_clear();
         result
@@ -868,10 +928,13 @@ pub(crate) fn scan_filesystem_with_observer(
     }
 
     let pp_start = std::time::Instant::now();
+    if let Some(p) = progress {
+        p.set_stage(ScanStage::PostProcessing);
+    }
     post_process_diags(&mut diags, cfg);
     if let Some(p) = progress {
         p.record_post_process_ms(pp_start.elapsed().as_millis() as u64);
-        p.set_stage(4); // complete
+        p.set_stage(ScanStage::Complete);
     }
     if let Some(l) = logs {
         l.info(
@@ -909,27 +972,122 @@ pub fn scan_with_index_parallel(
     show_progress: bool,
     scan_root: &Path,
 ) -> NyxResult<Vec<Diag>> {
-    let files = {
+    scan_with_index_parallel_observer(
+        project,
+        pool,
+        cfg,
+        show_progress,
+        scan_root,
+        None,
+        None,
+        None,
+    )
+}
+
+pub fn scan_with_index_parallel_observer(
+    project: &str,
+    pool: Arc<Pool<SqliteConnectionManager>>,
+    cfg: &Config,
+    show_progress: bool,
+    scan_root: &Path,
+    progress: Option<&Arc<ScanProgress>>,
+    metrics: Option<&Arc<ScanMetrics>>,
+    logs: Option<&Arc<ScanLogCollector>>,
+) -> NyxResult<Vec<Diag>> {
+    if let Some(p) = progress {
+        p.set_stage(ScanStage::Discovering);
+    }
+    let walk_start = std::time::Instant::now();
+    let indexed_files = {
         let idx = Indexer::from_pool(project, &pool)?;
         idx.get_files(project)?
     };
+    let (rx, handle) = spawn_file_walker(scan_root, cfg);
+    let files: Vec<PathBuf> = rx.into_iter().flatten().collect();
+    if let Err(err) = handle.join() {
+        tracing::error!("walker thread panicked: {:#?}", err);
+        if let Some(l) = logs {
+            l.error(
+                "Walker thread panicked during indexed scan",
+                None,
+                Some(format!("{err:#?}")),
+            );
+        }
+    }
+    if let Some(p) = progress {
+        p.record_walk_ms(walk_start.elapsed().as_millis() as u64);
+        p.set_files_discovered(files.len() as u64);
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!(
+                "Indexed scan discovered {} files in {}ms",
+                files.len(),
+                walk_start.elapsed().as_millis()
+            ),
+            None,
+        );
+    }
+
+    let current_files: HashSet<PathBuf> = files.iter().cloned().collect();
+    let removed_files: Vec<PathBuf> = indexed_files
+        .into_iter()
+        .filter(|path| !current_files.contains(path))
+        .collect();
+    if !removed_files.is_empty() {
+        let mut idx = Indexer::from_pool(project, &pool)?;
+        for path in &removed_files {
+            idx.remove_file_and_related(path)?;
+        }
+        tracing::info!(
+            removed = removed_files.len(),
+            "pruned deleted files from indexed scan state"
+        );
+        if let Some(l) = logs {
+            l.info(
+                format!(
+                    "Pruned {} deleted files from indexed state",
+                    removed_files.len()
+                ),
+                None,
+            );
+        }
+    }
 
     let needs_taint = cfg.scanner.mode == crate::utils::config::AnalysisMode::Full
         || cfg.scanner.mode == crate::utils::config::AnalysisMode::Taint;
 
     // ── Pass 1: ensure summaries are up‑to‑date ──────────────────────────
     if needs_taint {
+        if let Some(p) = progress {
+            p.set_stage(ScanStage::Indexing);
+        }
+        if let Some(l) = logs {
+            l.info(
+                format!("Refreshing persisted summaries for {} files", files.len()),
+                None,
+            );
+        }
         let _span = tracing::info_span!("pass1_indexed", files = files.len()).entered();
         let pb = make_progress_bar(
             files.len() as u64,
             "Pass 1: Extracting summaries",
             show_progress,
         );
+        let pass1_start = std::time::Instant::now();
+        let persist_errors = Arc::new(Mutex::new(Vec::new()));
+        let skipped_files = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
-        let scan_root_ref = scan_root;
+        let scan_root_ref = scan_root.to_path_buf();
+        let persist_errors_ref = Arc::clone(&persist_errors);
+        let skipped_files_ref = Arc::clone(&skipped_files);
+        let progress_ref = progress.cloned();
         files.par_iter().for_each_init(
             || Indexer::from_pool(project, &pool).expect("db pool"),
             |idx, path| {
+                if let Some(p) = &progress_ref {
+                    p.set_current_file(&path.to_string_lossy());
+                }
                 // Read once, hash once — use the hash for the change check
                 // to avoid a second file read inside should_scan.
                 if let Ok(bytes) = std::fs::read(path) {
@@ -940,10 +1098,23 @@ pub fn scan_with_index_parallel(
                             &bytes,
                             path,
                             cfg,
-                            Some(scan_root_ref),
+                            Some(&scan_root_ref),
                         ) {
                             Ok((func_sums, ssa_sums)) => {
-                                idx.replace_summaries_for_file(path, &hash, &func_sums).ok();
+                                if let Some(p) = &progress_ref {
+                                    p.inc_parsed(1);
+                                    if let Some(lang) = func_sums.first().map(|s| s.lang.as_str()) {
+                                        p.record_language(lang);
+                                    }
+                                }
+                                if let Err(e) =
+                                    idx.replace_summaries_for_file(path, &hash, &func_sums)
+                                {
+                                    record_persist_error(
+                                        &persist_errors_ref,
+                                        format!("function summaries {}: {e}", path.display()),
+                                    );
+                                }
                                 // Persist SSA summaries with full FuncKey metadata
                                 if !ssa_sums.is_empty() {
                                     let lang_slug = func_sums
@@ -960,13 +1131,24 @@ pub fn scan_with_index_parallel(
                                             (name, arity, lang_slug.clone(), namespace.clone(), sum)
                                         })
                                         .collect();
-                                    idx.replace_ssa_summaries_for_file(path, &hash, &ssa_rows)
-                                        .ok();
+                                    if let Err(e) =
+                                        idx.replace_ssa_summaries_for_file(path, &hash, &ssa_rows)
+                                    {
+                                        record_persist_error(
+                                            &persist_errors_ref,
+                                            format!("SSA summaries {}: {e}", path.display()),
+                                        );
+                                    }
                                 }
                             }
                             Err(e) => {
                                 tracing::warn!("pass 1: {}: {e}", path.display());
                             }
+                        }
+                    } else {
+                        skipped_files_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if let Some(p) = &progress_ref {
+                            p.inc_skipped(1);
                         }
                     }
                 } else {
@@ -976,11 +1158,34 @@ pub fn scan_with_index_parallel(
             },
         );
         pb.finish_and_clear();
+        let skipped = skipped_files.load(std::sync::atomic::Ordering::Relaxed);
+        if let Some(p) = progress {
+            p.set_files_skipped(skipped);
+            p.record_pass1_ms(pass1_start.elapsed().as_millis() as u64);
+        }
+        if let Some(m) = metrics {
+            m.summaries_reused
+                .store(skipped, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some(l) = logs {
+            l.info(
+                format!(
+                    "Indexed pass 1 complete: {} refreshed, {} reused",
+                    files.len().saturating_sub(skipped as usize),
+                    skipped
+                ),
+                None,
+            );
+        }
+        fail_if_persist_errors("Pass 1", persist_errors)?;
     }
 
     // ── Load global summaries ────────────────────────────────────────────
     let root_str = scan_root.to_string_lossy();
     let global_summaries: Option<GlobalSummaries> = if needs_taint {
+        if let Some(p) = progress {
+            p.set_stage(ScanStage::LoadingSummaries);
+        }
         let _span = tracing::info_span!("load_summaries_db").entered();
         let idx = Indexer::from_pool(project, &pool)?;
         let all = idx.load_all_summaries()?;
@@ -989,6 +1194,7 @@ pub fn scan_with_index_parallel(
 
         // Load and insert SSA summaries
         let ssa_rows = idx.load_all_ssa_summaries()?;
+        let ssa_count = ssa_rows.len();
         if !ssa_rows.is_empty() {
             tracing::info!(
                 ssa_summaries = ssa_rows.len(),
@@ -1016,6 +1222,16 @@ pub fn scan_with_index_parallel(
                 gs.insert_ssa(key, ssa_sum);
             }
         }
+        if let Some(l) = logs {
+            l.info(
+                format!(
+                    "Loaded {} coarse summaries and {} SSA summaries from DB",
+                    gs.snapshot_caps().len(),
+                    ssa_count
+                ),
+                None,
+            );
+        }
 
         Some(gs)
     } else {
@@ -1024,6 +1240,13 @@ pub fn scan_with_index_parallel(
 
     if !needs_taint {
         // ── AST-only: existing parallel scan with caching ────────────────
+        if let Some(p) = progress {
+            p.set_stage(ScanStage::Analyzing);
+        }
+        if let Some(l) = logs {
+            l.info("Starting AST-only indexed analysis", None);
+        }
+        let pass2_start = std::time::Instant::now();
         let _span = tracing::info_span!("pass2_indexed_ast_only").entered();
         let pb2 = make_progress_bar(
             files.len() as u64,
@@ -1031,10 +1254,18 @@ pub fn scan_with_index_parallel(
             show_progress,
         );
         let diag_map: DashMap<String, Vec<Diag>> = DashMap::new();
+        let persist_errors = Arc::new(Mutex::new(Vec::new()));
+        let skipped_files = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
+        let persist_errors_ref = Arc::clone(&persist_errors);
+        let skipped_files_ref = Arc::clone(&skipped_files);
+        let progress_ref = progress.cloned();
         files.into_par_iter().for_each_init(
             || Indexer::from_pool(project, &pool).expect("db pool"),
             |idx, path| {
+                if let Some(p) = &progress_ref {
+                    p.set_current_file(&path.to_string_lossy());
+                }
                 let bytes_opt = std::fs::read(&path).ok();
                 let hash = bytes_opt.as_ref().map(|b| Indexer::digest_bytes(b));
 
@@ -1044,6 +1275,10 @@ pub fn scan_with_index_parallel(
                 };
 
                 let mut diags = if needs_scan {
+                    if let Some(p) = &progress_ref {
+                        p.inc_parsed(1);
+                        p.inc_analyzed(1);
+                    }
                     let d = match &bytes_opt {
                         Some(bytes) => run_rules_on_bytes(bytes, &path, cfg, None, Some(scan_root))
                             .unwrap_or_default(),
@@ -1053,21 +1288,39 @@ pub fn scan_with_index_parallel(
                     };
 
                     let file_id = match &hash {
-                        Some(h) => idx.upsert_file_with_hash(&path, h).unwrap_or_default(),
-                        None => idx.upsert_file(&path).unwrap_or_default(),
+                        Some(h) => idx.upsert_file_with_hash(&path, h),
+                        None => idx.upsert_file(&path),
                     };
-                    idx.replace_issues(
-                        file_id,
-                        d.iter().map(|d| IssueRow {
-                            rule_id: &d.id,
-                            severity: d.severity.as_db_str(),
-                            line: d.line as i64,
-                            col: d.col as i64,
-                        }),
-                    )
-                    .ok();
+                    match file_id {
+                        Ok(file_id) => {
+                            if let Err(e) = idx.replace_issues(
+                                file_id,
+                                d.iter().map(|d| IssueRow {
+                                    rule_id: &d.id,
+                                    severity: d.severity.as_db_str(),
+                                    line: d.line as i64,
+                                    col: d.col as i64,
+                                }),
+                            ) {
+                                record_persist_error(
+                                    &persist_errors_ref,
+                                    format!("issues {}: {e}", path.display()),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            record_persist_error(
+                                &persist_errors_ref,
+                                format!("file row {}: {e}", path.display()),
+                            );
+                        }
+                    }
                     d
                 } else {
+                    skipped_files_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(p) = &progress_ref {
+                        p.inc_skipped(1);
+                    }
                     idx.get_issues_from_file(&path).unwrap_or_default()
                 };
 
@@ -1084,16 +1337,76 @@ pub fn scan_with_index_parallel(
             },
         );
         pb2.finish_and_clear();
+        let skipped = skipped_files.load(std::sync::atomic::Ordering::Relaxed);
+        if let Some(p) = progress {
+            p.set_files_skipped(skipped);
+            p.record_pass2_ms(pass2_start.elapsed().as_millis() as u64);
+            p.set_stage(ScanStage::PostProcessing);
+        }
+        if let Some(m) = metrics {
+            m.summaries_reused
+                .store(skipped, std::sync::atomic::Ordering::Relaxed);
+        }
+        fail_if_persist_errors("AST-only pass 2", persist_errors)?;
 
         let mut diags: Vec<Diag> = diag_map.into_iter().flat_map(|(_, v)| v).collect();
+        let post_process_start = std::time::Instant::now();
         post_process_diags(&mut diags, cfg);
+        if let Some(p) = progress {
+            p.record_post_process_ms(post_process_start.elapsed().as_millis() as u64);
+            p.set_stage(ScanStage::Complete);
+        }
+        if let Some(l) = logs {
+            l.info(
+                format!(
+                    "AST-only indexed scan complete in {}ms: {} findings, {} reused files",
+                    pass2_start.elapsed().as_millis(),
+                    diags.len(),
+                    skipped
+                ),
+                None,
+            );
+        }
         return Ok(diags);
     }
 
     // ── Taint mode: build call graph + topo-ordered pass 2 ────────────
     let mut global_summaries = global_summaries.unwrap();
+    if let Some(p) = progress {
+        p.set_stage(ScanStage::BuildingCallGraph);
+    }
+    let cg_start = std::time::Instant::now();
     let (call_graph, cg_analysis) = build_and_analyse_call_graph(&global_summaries);
     log_unresolved_callees(&call_graph);
+    if let Some(p) = progress {
+        p.record_call_graph_ms(cg_start.elapsed().as_millis() as u64);
+    }
+    if let Some(m) = metrics {
+        m.call_edges.store(
+            call_graph.graph.edge_count() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        m.functions_analyzed.store(
+            call_graph.graph.node_count() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        m.unresolved_calls.store(
+            (call_graph.unresolved_not_found.len() + call_graph.unresolved_ambiguous.len()) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!(
+                "Call graph built in {}ms: {} nodes, {} edges, {} unresolved",
+                cg_start.elapsed().as_millis(),
+                call_graph.graph.node_count(),
+                call_graph.graph.edge_count(),
+                call_graph.unresolved_not_found.len() + call_graph.unresolved_ambiguous.len(),
+            ),
+            None,
+        );
+    }
 
     let (batches, orphans) = crate::callgraph::scc_file_batches_with_metadata(
         &call_graph,
@@ -1106,8 +1419,23 @@ pub fn scan_with_index_parallel(
         orphan_files = orphans.len(),
         "topo-ordered file batches computed (indexed)"
     );
+    if let Some(l) = logs {
+        l.info(
+            format!(
+                "Topo-ordered indexed analysis plan: {} batches, {} orphan files",
+                batches.len(),
+                orphans.len()
+            ),
+            None,
+        );
+    }
 
     let _span = tracing::info_span!("pass2_indexed").entered();
+    if let Some(p) = progress {
+        p.set_stage(ScanStage::Analyzing);
+        p.set_batches_total(batches.len() as u64 + u64::from(!orphans.is_empty()));
+    }
+    let pass2_start = std::time::Instant::now();
     let pb2 = make_progress_bar(
         files.len() as u64,
         "Pass 2: Running analysis",
@@ -1121,21 +1449,45 @@ pub fn scan_with_index_parallel(
         cfg,
         Some(scan_root),
         &pb2,
-        None,
+        progress,
+        logs,
     );
     pb2.finish_and_clear();
+    if let Some(p) = progress {
+        p.record_pass2_ms(pass2_start.elapsed().as_millis() as u64);
+        p.set_stage(ScanStage::PostProcessing);
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!(
+                "Indexed pass 2 complete in {}ms: {} raw findings",
+                pass2_start.elapsed().as_millis(),
+                topo_diags.len()
+            ),
+            None,
+        );
+    }
 
     // Persist issues to DB after topo analysis, grouped by file.
     {
-        use std::collections::HashMap;
         let mut by_file: HashMap<&str, Vec<&Diag>> = HashMap::new();
         for d in &topo_diags {
             by_file.entry(&d.path).or_default().push(d);
         }
         let mut idx = Indexer::from_pool(project, &pool)?;
-        for (path_str, file_diags) in &by_file {
-            let path = PathBuf::from(path_str);
-            let file_id = idx.upsert_file(&path).unwrap_or_default();
+        for path in &files {
+            if !path.exists() {
+                idx.remove_file_and_related(path)?;
+                continue;
+            }
+
+            let file_id = idx.upsert_file(path)?;
+            let empty: [&Diag; 0] = [];
+            let file_diags = by_file
+                .get(path.to_string_lossy().as_ref())
+                .map(Vec::as_slice)
+                .unwrap_or(&empty);
+
             idx.replace_issues(
                 file_id,
                 file_diags.iter().map(|d| IssueRow {
@@ -1144,9 +1496,14 @@ pub fn scan_with_index_parallel(
                     line: d.line as i64,
                     col: d.col as i64,
                 }),
-            )
-            .ok();
+            )?;
         }
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!("Persisted findings for {} files", files.len()),
+            None,
+        );
     }
 
     let mut diags = topo_diags;
@@ -1156,7 +1513,22 @@ pub fn scan_with_index_parallel(
         diags.retain(|d| d.id.starts_with("taint") || d.id.starts_with("cfg-"));
     }
 
+    let post_process_start = std::time::Instant::now();
     post_process_diags(&mut diags, cfg);
+    if let Some(p) = progress {
+        p.record_post_process_ms(post_process_start.elapsed().as_millis() as u64);
+        p.set_stage(ScanStage::Complete);
+    }
+    if let Some(l) = logs {
+        l.info(
+            format!(
+                "Indexed scan complete in {}ms: {} final findings",
+                pass2_start.elapsed().as_millis(),
+                diags.len()
+            ),
+            None,
+        );
+    }
 
     Ok(diags)
 }
@@ -1484,6 +1856,98 @@ fn scan_with_index_parallel_uses_existing_index_without_rescanning() {
             .expect("scan should succeed");
 
     assert!(diags.is_empty());
+}
+
+#[test]
+fn scan_with_index_parallel_discovers_new_files_after_index_build() {
+    let mut cfg = Config::default();
+    cfg.performance.worker_threads = Some(1);
+    cfg.performance.channel_multiplier = 1;
+    cfg.performance.batch_size = 2;
+
+    let td = tempfile::tempdir().unwrap();
+    let project_dir = td.path().join("proj");
+    std::fs::create_dir(&project_dir).unwrap();
+    std::fs::write(project_dir.join("foo.txt"), "abc").unwrap();
+
+    let (project_name, db_path) = get_project_info(&project_dir, td.path()).unwrap();
+    crate::commands::index::build_index(&project_name, &project_dir, &db_path, &cfg, false)
+        .unwrap();
+
+    std::fs::write(project_dir.join("bar.txt"), "xyz").unwrap();
+
+    let pool = Indexer::init(&db_path).unwrap();
+    scan_with_index_parallel(&project_name, Arc::clone(&pool), &cfg, false, &project_dir)
+        .expect("scan should succeed");
+
+    let files = Indexer::from_pool(&project_name, &pool)
+        .unwrap()
+        .get_files(&project_name)
+        .unwrap();
+    assert_eq!(
+        files.len(),
+        2,
+        "new files should be discovered without rebuild"
+    );
+}
+
+#[test]
+fn scan_with_index_parallel_clears_stale_issues_when_file_becomes_clean() {
+    let mut cfg = Config::default();
+    cfg.performance.worker_threads = Some(1);
+    cfg.performance.channel_multiplier = 1;
+    cfg.performance.batch_size = 2;
+
+    let td = tempfile::tempdir().unwrap();
+    let project_dir = td.path().join("proj");
+    std::fs::create_dir(&project_dir).unwrap();
+    let app = project_dir.join("app.js");
+    std::fs::write(
+        &app,
+        r#"
+function run() {
+  const cmd = process.env.CMD;
+  eval(cmd);
+}
+"#,
+    )
+    .unwrap();
+
+    let (project_name, db_path) = get_project_info(&project_dir, td.path()).unwrap();
+    crate::commands::index::build_index(&project_name, &project_dir, &db_path, &cfg, false)
+        .unwrap();
+
+    let pool = Indexer::init(&db_path).unwrap();
+    let idx = Indexer::from_pool(&project_name, &pool).unwrap();
+    assert!(
+        !idx.get_issues_from_file(&app).unwrap().is_empty(),
+        "the initial indexed build should persist at least one issue"
+    );
+
+    std::fs::write(
+        &app,
+        r#"
+function run() {
+  const cmd = "safe";
+  console.log(cmd);
+}
+"#,
+    )
+    .unwrap();
+
+    let diags =
+        scan_with_index_parallel(&project_name, Arc::clone(&pool), &cfg, false, &project_dir)
+            .expect("scan should succeed");
+    assert!(
+        diags.is_empty(),
+        "the cleaned file should no longer report findings"
+    );
+
+    let idx = Indexer::from_pool(&project_name, &pool).unwrap();
+    assert!(
+        idx.get_issues_from_file(&app).unwrap().is_empty(),
+        "DB issues should be cleared when a file becomes clean"
+    );
 }
 
 #[test]

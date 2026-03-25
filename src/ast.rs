@@ -1109,6 +1109,7 @@ pub struct FusedResult {
     pub diags: Vec<Diag>,
     /// SSA-derived per-parameter summaries: (func_name, param_count, summary).
     pub ssa_summaries: Vec<(String, usize, SsaFuncSummary)>,
+    pub cfg_nodes: usize,
 }
 
 /// Parse the file once, build the CFG once, and produce both function
@@ -1133,10 +1134,12 @@ pub fn analyse_file_fused(
             summaries: vec![],
             diags: vec![],
             ssa_summaries: vec![],
+            cfg_nodes: 0,
         });
     };
 
     let parsed = ParsedFile::from_source(source, cfg);
+    let cfg_nodes = parsed.cfg_graph.node_count();
     let summaries = parsed.export_summaries();
 
     let mut out = Vec::new();
@@ -1172,6 +1175,7 @@ pub fn analyse_file_fused(
         summaries,
         diags: out,
         ssa_summaries,
+        cfg_nodes,
     })
 }
 

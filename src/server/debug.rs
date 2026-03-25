@@ -944,7 +944,11 @@ pub fn analyse_function_taint(
     summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
     opt: &OptimizeResult,
-) -> (Vec<SsaTaintEvent>, Vec<Option<SsaTaintState>>) {
+) -> (
+    Vec<SsaTaintEvent>,
+    Vec<Option<SsaTaintState>>,
+    Vec<Option<SsaTaintState>>,
+) {
     let interner = SymbolInterner::default();
     let empty_interop = vec![];
 
@@ -969,7 +973,7 @@ pub fn analyse_function_taint(
         dynamic_pts: None,
     };
 
-    crate::taint::ssa_transfer::run_ssa_taint_full(ssa, cfg, &transfer)
+    crate::taint::ssa_transfer::run_ssa_taint_full_with_exits(ssa, cfg, &transfer)
 }
 
 /// Run symbolic execution on a function's SSA body and return the final state.
@@ -1102,5 +1106,60 @@ fn format_operand(op: &Operand) -> String {
             ConstValue::Null => "null".to_string(),
         },
         Operand::Unknown => "?".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::config::Config;
+
+    #[test]
+    fn taint_debug_uses_exit_states_for_single_block_flows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.js");
+        std::fs::write(
+            &path,
+            r#"
+function demo() {
+  const cmd = process.env.CRON_JOB_CMD;
+  eval(cmd);
+}
+"#,
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let analysis = analyse_file(&path, &config).expect("file should analyse");
+        let (ssa, opt) =
+            analyse_function_ssa(&analysis, "demo").expect("function should lower to SSA");
+        let (events, _entry_states, exit_states) = analyse_function_taint(
+            &ssa,
+            &analysis.cfg,
+            analysis.lang,
+            &analysis.summaries,
+            None,
+            &opt,
+        );
+
+        assert!(
+            !events.is_empty(),
+            "expected the test fixture to produce at least one taint event"
+        );
+        assert!(
+            exit_states
+                .iter()
+                .flatten()
+                .any(|state| !state.values.is_empty()),
+            "exit-state debug view should show tainted SSA values even for single-block functions"
+        );
+
+        let view = TaintAnalysisView::from_results(&events, &exit_states, &ssa);
+        assert!(
+            view.block_states
+                .iter()
+                .any(|state| !state.values.is_empty()),
+            "serialized debug taint view should expose the populated exit states"
+        );
     }
 }

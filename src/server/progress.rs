@@ -4,14 +4,45 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering::Relaxed};
 use std::time::Instant;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ScanStage {
+    Queued = 0,
+    Discovering = 1,
+    Indexing = 2,
+    LoadingSummaries = 3,
+    BuildingCallGraph = 4,
+    Analyzing = 5,
+    PostProcessing = 6,
+    Complete = 7,
+}
+
+impl ScanStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Discovering => "discovering",
+            Self::Indexing => "indexing",
+            Self::LoadingSummaries => "loading_summaries",
+            Self::BuildingCallGraph => "building_call_graph",
+            Self::Analyzing => "analyzing",
+            Self::PostProcessing => "post_processing",
+            Self::Complete => "complete",
+        }
+    }
+}
+
 /// Lock-free progress reporting from rayon workers during a scan.
 #[derive(Debug)]
 pub struct ScanProgress {
-    /// 0=queued, 1=discovering, 2=parsing, 3=analyzing, 4=complete
+    /// See [`ScanStage`].
     stage: AtomicU8,
     files_discovered: AtomicU64,
     files_parsed: AtomicU64,
     files_analyzed: AtomicU64,
+    files_skipped: AtomicU64,
+    batches_total: AtomicU64,
+    batches_completed: AtomicU64,
     current_file: Mutex<String>,
     started_at: Instant,
     walk_ms: AtomicU64,
@@ -31,10 +62,13 @@ impl Default for ScanProgress {
 impl ScanProgress {
     pub fn new() -> Self {
         Self {
-            stage: AtomicU8::new(0),
+            stage: AtomicU8::new(ScanStage::Queued as u8),
             files_discovered: AtomicU64::new(0),
             files_parsed: AtomicU64::new(0),
             files_analyzed: AtomicU64::new(0),
+            files_skipped: AtomicU64::new(0),
+            batches_total: AtomicU64::new(0),
+            batches_completed: AtomicU64::new(0),
             current_file: Mutex::new(String::new()),
             started_at: Instant::now(),
             walk_ms: AtomicU64::new(0),
@@ -46,8 +80,8 @@ impl ScanProgress {
         }
     }
 
-    pub fn set_stage(&self, stage: u8) {
-        self.stage.store(stage, Relaxed);
+    pub fn set_stage(&self, stage: ScanStage) {
+        self.stage.store(stage as u8, Relaxed);
     }
 
     pub fn set_files_discovered(&self, count: u64) {
@@ -62,6 +96,22 @@ impl ScanProgress {
         self.files_analyzed.fetch_add(n, Relaxed);
     }
 
+    pub fn set_files_skipped(&self, count: u64) {
+        self.files_skipped.store(count, Relaxed);
+    }
+
+    pub fn inc_skipped(&self, n: u64) {
+        self.files_skipped.fetch_add(n, Relaxed);
+    }
+
+    pub fn set_batches_total(&self, count: u64) {
+        self.batches_total.store(count, Relaxed);
+    }
+
+    pub fn inc_batches_completed(&self, n: u64) {
+        self.batches_completed.fetch_add(n, Relaxed);
+    }
+
     pub fn set_current_file(&self, path: &str) {
         if let Ok(mut f) = self.current_file.try_lock() {
             f.clear();
@@ -74,23 +124,23 @@ impl ScanProgress {
     }
 
     pub fn record_walk_ms(&self, ms: u64) {
-        self.walk_ms.store(ms, Relaxed);
+        self.walk_ms.fetch_add(ms, Relaxed);
     }
 
     pub fn record_pass1_ms(&self, ms: u64) {
-        self.pass1_ms.store(ms, Relaxed);
+        self.pass1_ms.fetch_add(ms, Relaxed);
     }
 
     pub fn record_call_graph_ms(&self, ms: u64) {
-        self.call_graph_ms.store(ms, Relaxed);
+        self.call_graph_ms.fetch_add(ms, Relaxed);
     }
 
     pub fn record_pass2_ms(&self, ms: u64) {
-        self.pass2_ms.store(ms, Relaxed);
+        self.pass2_ms.fetch_add(ms, Relaxed);
     }
 
     pub fn record_post_process_ms(&self, ms: u64) {
-        self.post_process_ms.store(ms, Relaxed);
+        self.post_process_ms.fetch_add(ms, Relaxed);
     }
 
     pub fn record_language(&self, lang: &str) {
@@ -100,13 +150,15 @@ impl ScanProgress {
     }
 
     pub fn snapshot(&self) -> ScanProgressSnapshot {
-        let stage_num = self.stage.load(Relaxed);
-        let stage = match stage_num {
-            0 => "queued",
-            1 => "discovering",
-            2 => "parsing",
-            3 => "analyzing",
-            4 => "complete",
+        let stage = match self.stage.load(Relaxed) {
+            x if x == ScanStage::Queued as u8 => ScanStage::Queued.as_str(),
+            x if x == ScanStage::Discovering as u8 => ScanStage::Discovering.as_str(),
+            x if x == ScanStage::Indexing as u8 => ScanStage::Indexing.as_str(),
+            x if x == ScanStage::LoadingSummaries as u8 => ScanStage::LoadingSummaries.as_str(),
+            x if x == ScanStage::BuildingCallGraph as u8 => ScanStage::BuildingCallGraph.as_str(),
+            x if x == ScanStage::Analyzing as u8 => ScanStage::Analyzing.as_str(),
+            x if x == ScanStage::PostProcessing as u8 => ScanStage::PostProcessing.as_str(),
+            x if x == ScanStage::Complete as u8 => ScanStage::Complete.as_str(),
             _ => "unknown",
         }
         .to_string();
@@ -128,6 +180,9 @@ impl ScanProgress {
             files_discovered: self.files_discovered.load(Relaxed),
             files_parsed: self.files_parsed.load(Relaxed),
             files_analyzed: self.files_analyzed.load(Relaxed),
+            files_skipped: self.files_skipped.load(Relaxed),
+            batches_total: self.batches_total.load(Relaxed),
+            batches_completed: self.batches_completed.load(Relaxed),
             current_file,
             elapsed_ms: self.elapsed_ms(),
             timing: TimingBreakdown {
@@ -149,6 +204,9 @@ pub struct ScanProgressSnapshot {
     pub files_discovered: u64,
     pub files_parsed: u64,
     pub files_analyzed: u64,
+    pub files_skipped: u64,
+    pub batches_total: u64,
+    pub batches_completed: u64,
     pub current_file: String,
     pub elapsed_ms: u64,
     pub timing: TimingBreakdown,

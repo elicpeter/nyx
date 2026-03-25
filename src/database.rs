@@ -648,6 +648,40 @@ pub mod index {
             Ok(rows)
         }
 
+        /// Remove a file and all derived persisted state for this project.
+        ///
+        /// This deletes the file row, issues, and all persisted summary rows so
+        /// incremental scans can prune deleted files from the index cleanly.
+        pub fn remove_file_and_related(&mut self, path: &Path) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = path.to_string_lossy();
+
+            let file_id: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM files WHERE project = ?1 AND path = ?2",
+                    params![self.project, path_str.as_ref()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+
+            if let Some(file_id) = file_id {
+                tx.execute("DELETE FROM issues WHERE file_id = ?1", params![file_id])?;
+                tx.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
+            }
+
+            tx.execute(
+                "DELETE FROM function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+            tx.execute(
+                "DELETE FROM ssa_function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+
+            tx.commit()?;
+            Ok(())
+        }
+
         /// gets files from the database
         pub fn get_files(&self, project: &str) -> NyxResult<Vec<PathBuf>> {
             let mut stmt = self.c().prepare(
@@ -706,12 +740,13 @@ pub mod index {
             timing_json: Option<&str>,
             error: Option<&str>,
             files_scanned: Option<i64>,
+            files_skipped: Option<i64>,
             languages: Option<&str>,
         ) -> NyxResult<()> {
             self.c().execute(
                 "UPDATE scans SET status = ?2, finished_at = ?3, duration_secs = ?4,
                  finding_count = ?5, findings_json = ?6, timing_json = ?7, error = ?8,
-                 files_scanned = ?9, languages = ?10
+                 files_scanned = ?9, files_skipped = ?10, languages = ?11
                  WHERE id = ?1",
                 params![
                     id,
@@ -723,6 +758,7 @@ pub mod index {
                     timing_json,
                     error,
                     files_scanned,
+                    files_skipped,
                     languages,
                 ],
             )?;
@@ -1223,16 +1259,10 @@ pub mod index {
                 r#"
         PRAGMA foreign_keys = OFF;
 
-        DROP TABLE IF EXISTS scan_logs;
-        DROP TABLE IF EXISTS scan_metrics;
-        DROP TABLE IF EXISTS scans;
         DROP TABLE IF EXISTS issues;
         DROP TABLE IF EXISTS files;
         DROP TABLE IF EXISTS function_summaries;
         DROP TABLE IF EXISTS ssa_function_summaries;
-        DROP TABLE IF EXISTS triage_states;
-        DROP TABLE IF EXISTS triage_audit_log;
-        DROP TABLE IF EXISTS triage_suppression_rules;
 
         PRAGMA foreign_keys = ON;
         VACUUM;
@@ -1347,6 +1377,41 @@ fn clear_and_vacuum_reset_tables() {
     idx.clear().unwrap();
     idx.vacuum().unwrap();
     assert!(idx.get_files("proj").unwrap().is_empty());
+}
+
+#[test]
+fn clear_preserves_scan_history_tables() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let idx = index::Indexer::from_pool("_scans", &pool).unwrap();
+    idx.insert_scan(&index::ScanRecord {
+        id: "scan-1".to_string(),
+        status: "completed".to_string(),
+        scan_root: td.path().display().to_string(),
+        started_at: Some("2026-03-25T12:00:00Z".to_string()),
+        finished_at: Some("2026-03-25T12:00:01Z".to_string()),
+        duration_secs: Some(1.0),
+        engine_version: Some("test".to_string()),
+        languages: None,
+        files_scanned: Some(1),
+        files_skipped: Some(0),
+        finding_count: Some(0),
+        findings_json: Some("[]".to_string()),
+        timing_json: None,
+        error: None,
+    })
+    .unwrap();
+
+    let proj_idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    proj_idx.clear().unwrap();
+
+    let loaded = idx
+        .get_scan("scan-1")
+        .unwrap()
+        .expect("scan history should survive index clears");
+    assert_eq!(loaded.status, "completed");
 }
 
 #[test]

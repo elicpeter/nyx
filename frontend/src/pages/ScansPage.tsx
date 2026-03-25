@@ -28,22 +28,33 @@ function ScanProgress({
 }: {
   data: NonNullable<ReturnType<typeof useSSE>['scanProgress']>;
 }) {
-  const stages = ['discovering', 'parsing', 'analyzing', 'complete'] as const;
+  const stages = [
+    'discovering',
+    'indexing',
+    'loading_summaries',
+    'building_call_graph',
+    'analyzing',
+    'post_processing',
+    'complete',
+  ] as const;
   const stageLabels: Record<string, string> = {
     discovering: 'Discovering',
-    parsing: 'Parsing',
+    indexing: 'Indexing',
+    loading_summaries: 'Loading Summaries',
+    building_call_graph: 'Call Graph',
     analyzing: 'Analyzing',
+    post_processing: 'Post-Process',
     complete: 'Complete',
   };
   const currentIdx = stages.indexOf(data.stage as (typeof stages)[number]);
 
   const total = data.files_discovered || 1;
   const processed =
-    data.stage === 'parsing'
+    data.stage === 'indexing'
       ? data.files_parsed
-      : data.stage === 'analyzing'
+      : data.stage === 'analyzing' || data.stage === 'post_processing'
         ? data.files_analyzed
-        : data.stage === 'complete'
+      : data.stage === 'complete'
           ? total
           : 0;
   const pct = Math.min(100, (processed / total) * 100);
@@ -81,6 +92,26 @@ function ScanProgress({
           {processed} / {data.files_discovered || 0} files
         </span>
         <span>{pct.toFixed(0)}%</span>
+      </div>
+      <div className="progress-stats">
+        <span>{data.files_parsed || 0} indexed</span>
+        <span>{data.files_skipped || 0} reused</span>
+        <span>{data.files_analyzed || 0} analyzed</span>
+      </div>
+      {data.batches_total > 0 && (
+        <div className="progress-stats">
+          <span>
+            Batch {Math.min(data.batches_completed, data.batches_total)} /{' '}
+            {data.batches_total}
+          </span>
+          <span>{stageLabels[data.stage] || data.stage}</span>
+        </div>
+      )}
+      <div className="progress-stats">
+        <span>Walk {data.timing.walk_ms}ms</span>
+        <span>Index {data.timing.pass1_ms}ms</span>
+        <span>Graph {data.timing.call_graph_ms}ms</span>
+        <span>Analyze {data.timing.pass2_ms}ms</span>
       </div>
       {data.current_file && (
         <div className="progress-current-file">

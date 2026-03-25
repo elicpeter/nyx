@@ -407,12 +407,42 @@ pub struct SsaTaintTransfer<'a> {
 /// Maps (successor_block_idx, predecessor_block_idx) → predecessor's exit state.
 type PredStates = HashMap<(usize, usize), SsaTaintState>;
 
+struct SsaTaintRunResult {
+    events: Vec<SsaTaintEvent>,
+    block_states: Vec<Option<SsaTaintState>>,
+    block_exit_states: Vec<Option<SsaTaintState>>,
+}
+
 /// Run SSA-based taint analysis, returning events AND converged block states.
 pub fn run_ssa_taint_full(
     ssa: &SsaBody,
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
 ) -> (Vec<SsaTaintEvent>, Vec<Option<SsaTaintState>>) {
+    let result = run_ssa_taint_internal(ssa, cfg, transfer);
+    (result.events, result.block_states)
+}
+
+/// Run SSA-based taint analysis, returning events plus converged entry and
+/// exit states for each block. Intended for debug/introspection views.
+pub fn run_ssa_taint_full_with_exits(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    transfer: &SsaTaintTransfer,
+) -> (
+    Vec<SsaTaintEvent>,
+    Vec<Option<SsaTaintState>>,
+    Vec<Option<SsaTaintState>>,
+) {
+    let result = run_ssa_taint_internal(ssa, cfg, transfer);
+    (result.events, result.block_states, result.block_exit_states)
+}
+
+fn run_ssa_taint_internal(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    transfer: &SsaTaintTransfer,
+) -> SsaTaintRunResult {
     let num_blocks = ssa.blocks.len();
 
     // Detect induction variables before analysis
@@ -421,6 +451,7 @@ pub fn run_ssa_taint_full(
 
     // Per-block entry states
     let mut block_states: Vec<Option<SsaTaintState>> = vec![None; num_blocks];
+    let mut block_exit_states: Vec<Option<SsaTaintState>> = vec![None; num_blocks];
     block_states[ssa.entry.0 as usize] = Some(SsaTaintState::initial());
 
     // Phase 15: Seed entry block's PathEnv from optimization results
@@ -519,6 +550,7 @@ pub fn run_ssa_taint_full(
             &induction_vars,
             Some(&pred_states),
         );
+        block_exit_states[bid] = Some(exit_state.clone());
 
         // Build per-successor states (branch-aware for Branch terminators)
         let succ_states = compute_succ_states(block, cfg, ssa, transfer, &exit_state);
@@ -615,7 +647,11 @@ pub fn run_ssa_taint_full(
         );
     }
 
-    (events, block_states)
+    SsaTaintRunResult {
+        events,
+        block_states,
+        block_exit_states,
+    }
 }
 
 /// Convenience wrapper: returns only events (existing signature).
