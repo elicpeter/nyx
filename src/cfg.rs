@@ -1276,7 +1276,7 @@ fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>, 
                             let mut paths = Vec::new();
                             collect_idents_with_paths(val_node, code, &mut idents, &mut paths);
                             uses.extend(paths);
-                    uses.extend(idents);
+                            uses.extend(idents);
                         }
                     }
                 }
@@ -1999,13 +1999,18 @@ fn push_node<'a>(
             // Prepend receiver as arg_uses[0]
             arg_uses.insert(0, vec![recv_text.clone()]);
             Some(recv_text)
-        } else {
+        } else if recv_node.is_some() {
             // Complex receiver (e.g. chained call: name.replace(...).replace(...))
             // Use root_receiver_text to find the root identifier so taint can
             // flow through the chain.
             root_receiver_text(cn, lang, code).inspect(|recv_text| {
                 arg_uses.insert(0, vec![recv_text.clone()]);
             })
+        } else {
+            // No explicit receiver (e.g. Java `buildQuery(filter)` — implicit
+            // `this` call). Don't prepend anything to arg_uses so that
+            // arg positions align with the callee's formal parameter indices.
+            None
         }
     } else {
         None

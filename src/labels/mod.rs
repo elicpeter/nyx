@@ -134,6 +134,42 @@ static DEFAULT_PARAM_CONFIG: ParamConfig = ParamConfig {
     ident_fields: &["name", "pattern"],
 };
 
+/// Describes taint propagation from input arguments to output arguments
+/// for known C/C++ functions (e.g., inet_pton copies network address from arg 1 to arg 2).
+pub struct ArgPropagation {
+    pub callee: &'static str,
+    pub from_args: &'static [usize],
+    pub to_args: &'static [usize],
+}
+
+/// Look up output-parameter positions for Source-labeled C/C++ functions.
+/// Returns argument indices that receive taint alongside the return value.
+pub fn output_param_source_positions(lang: &str, callee: &str) -> Option<&'static [usize]> {
+    let registry: &[(&str, &[usize])] = match lang {
+        "c" => c::OUTPUT_PARAM_SOURCES,
+        "cpp" => cpp::OUTPUT_PARAM_SOURCES,
+        _ => return None,
+    };
+    let normalized = callee.rsplit("::").next().unwrap_or(callee)
+                           .rsplit('.').next().unwrap_or(callee);
+    registry.iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(normalized))
+        .map(|(_, positions)| *positions)
+}
+
+/// Look up arg-to-arg propagation rules for known C/C++ functions.
+pub fn arg_propagation(lang: &str, callee: &str) -> Option<&'static ArgPropagation> {
+    let registry: &[ArgPropagation] = match lang {
+        "c" => c::ARG_PROPAGATIONS,
+        "cpp" => cpp::ARG_PROPAGATIONS,
+        _ => return None,
+    };
+    let normalized = callee.rsplit("::").next().unwrap_or(callee)
+                           .rsplit('.').next().unwrap_or(callee);
+    registry.iter()
+        .find(|p| p.callee.eq_ignore_ascii_case(normalized))
+}
+
 static REGISTRY: Lazy<HashMap<&'static str, &'static [LabelRule]>> = Lazy::new(|| {
     let mut m = HashMap::new();
     m.insert("rust", rust::RULES);

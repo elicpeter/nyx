@@ -109,3 +109,18 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["declarator", "name"],
 };
+
+/// Benchmark-driven output-parameter source positions for known C APIs.
+/// Maps callee name → argument positions that receive Source taint.
+pub static OUTPUT_PARAM_SOURCES: &[(&str, &[usize])] = &[
+    ("fgets", &[0]),    // fgets(buf, size, stream) — buf receives input
+    ("gets", &[0]),     // gets(buf) — buf receives input
+    ("recv", &[1]),     // recv(fd, buf, len, flags)
+    ("recvfrom", &[1]), // recvfrom(fd, buf, len, flags, ...)
+];
+
+/// Arg-to-arg taint propagation for known C functions.
+pub static ARG_PROPAGATIONS: &[super::ArgPropagation] = &[
+    super::ArgPropagation { callee: "inet_pton", from_args: &[1], to_args: &[2] },
+    super::ArgPropagation { callee: "inet_aton", from_args: &[0], to_args: &[1] },
+];

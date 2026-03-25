@@ -1440,6 +1440,27 @@ fn transfer_inst(
                 }
             }
 
+            // Output-parameter source tainting (C/C++): for known APIs that
+            // write to a buffer argument (fgets, getline, recv, etc.), taint
+            // the argument SSA values at the registered output positions.
+            if !return_bits.is_empty() {
+                if let Some(positions) = crate::labels::output_param_source_positions(
+                    transfer.lang.as_str(), callee,
+                ) {
+                    for &pos in positions {
+                        if let Some(arg_group) = args.get(pos) {
+                            for &arg_v in arg_group {
+                                state.set(arg_v, VarTaint {
+                                    caps: return_bits,
+                                    origins: return_origins.clone(),
+                                    uses_summary: false,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check for sanitizer labels
             let mut sanitizer_bits = Cap::empty();
             for lbl in &info.labels {
@@ -1667,6 +1688,46 @@ fn transfer_inst(
                     if try_curl_url_propagation(inst, info, args, state) {
                         return;
                     }
+
+                    // Arg-to-arg propagation for known C/C++ functions (e.g.,
+                    // inet_pton). When an input arg is tainted, propagate to
+                    // all SSA values in the output arg positions.
+                    if let Some(prop) = crate::labels::arg_propagation(
+                        transfer.lang.as_str(), callee,
+                    ) {
+                        let mut input_caps = Cap::empty();
+                        let mut input_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+                        for &from_pos in prop.from_args {
+                            if let Some(arg_group) = args.get(from_pos) {
+                                for &v in arg_group {
+                                    if let Some(taint) = state.get(v) {
+                                        input_caps |= taint.caps;
+                                        for orig in &taint.origins {
+                                            if input_origins.len() < MAX_ORIGINS
+                                                && !input_origins.iter().any(|o| o.node == orig.node)
+                                            {
+                                                input_origins.push(*orig);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !input_caps.is_empty() {
+                            for &to_pos in prop.to_args {
+                                if let Some(arg_group) = args.get(to_pos) {
+                                    for &arg_v in arg_group {
+                                        state.set(arg_v, VarTaint {
+                                            caps: input_caps,
+                                            origins: input_origins.clone(),
+                                            uses_summary: false,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // No labels and no summary — default propagation (gen/kill)
                     let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
                     if return_bits.is_empty() {

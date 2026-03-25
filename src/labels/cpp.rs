@@ -116,3 +116,19 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
     self_param_kinds: &[],
     ident_fields: &["declarator", "name"],
 };
+
+/// Benchmark-driven output-parameter source positions for known C++ APIs.
+pub static OUTPUT_PARAM_SOURCES: &[(&str, &[usize])] = &[
+    ("getline", &[1]),      // std::getline(stream, str) — str receives input
+    ("std::getline", &[1]),
+    ("fgets", &[0]),
+    ("gets", &[0]),
+    ("recv", &[1]),
+    ("recvfrom", &[1]),
+];
+
+/// Arg-to-arg taint propagation for known C++ functions.
+pub static ARG_PROPAGATIONS: &[super::ArgPropagation] = &[
+    super::ArgPropagation { callee: "inet_pton", from_args: &[1], to_args: &[2] },
+    super::ArgPropagation { callee: "inet_aton", from_args: &[0], to_args: &[1] },
+];
