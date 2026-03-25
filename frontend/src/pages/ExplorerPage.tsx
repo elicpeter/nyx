@@ -582,10 +582,9 @@ function renderAnalysisContent({
 }) {
   if (!selectedFile) {
     return (
-      <AnalysisEmptyState
-        title={`Open a file to inspect ${currentViewLabel}`}
-        message={`Switch to Code, choose a file, then return to ${currentViewLabel}.`}
-        onBrowseFiles={onBrowseFiles}
+      <EmptyState
+        icon={<ExplorerIcon size={48} />}
+        message="Select a file from the tree to view its contents."
       />
     );
   }

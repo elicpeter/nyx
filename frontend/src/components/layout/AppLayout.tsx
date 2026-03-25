@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { HeaderBar } from './HeaderBar';
 import { NewScanModal } from '../../modals/NewScanModal';
@@ -15,7 +15,6 @@ import { ConfigPage } from '../../pages/ConfigPage';
 import { StubPage } from '../../pages/StubPage';
 import { ExplorerPage } from '../../pages/ExplorerPage';
 import { DebugLayout } from '../../pages/debug/DebugLayout';
-import { DebugLandingPage } from '../../pages/debug/DebugLandingPage';
 import { CallGraphPage } from '../../pages/debug/CallGraphPage';
 import { SummaryExplorerPage } from '../../pages/debug/SummaryExplorerPage';
 
@@ -48,7 +47,10 @@ export function AppLayout() {
             <Route path="/config" element={<ConfigPage />} />
             <Route path="/explorer" element={<ExplorerPage />} />
             <Route path="/debug" element={<DebugLayout />}>
-              <Route index element={<DebugLandingPage />} />
+              <Route
+                index
+                element={<Navigate to="/debug/call-graph" replace />}
+              />
               <Route path="call-graph" element={<CallGraphPage />} />
               <Route path="summaries" element={<SummaryExplorerPage />} />
             </Route>
