@@ -3627,7 +3627,7 @@ fn ssa_summary_identity_propagation() {
         fn passthrough(x: String) -> String {
             x
         }"#;
-    let (cfg, entry, summaries) = parse_lang(
+    let (cfg, _entry, summaries) = parse_lang(
         src,
         "rust",
         tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
@@ -3674,7 +3674,7 @@ fn ssa_summary_sanitizer_strips_bits() {
         fn sanitize_input(x: String) -> String {
             html_escape::encode_safe(&x)
         }"#;
-    let (cfg, entry, summaries) = parse_lang(
+    let (cfg, _entry, summaries) = parse_lang(
         src,
         "rust",
         tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
@@ -3716,7 +3716,7 @@ fn ssa_summary_source_adds_bits() {
         fn read_config() -> String {
             env::var("CONFIG").unwrap()
         }"#;
-    let (cfg, entry, summaries) = parse_lang(
+    let (cfg, _entry, summaries) = parse_lang(
         src,
         "rust",
         tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
@@ -3754,7 +3754,7 @@ fn ssa_summary_param_to_sink() {
         fn run_cmd(cmd: String) {
             Command::new("sh").arg(cmd).status().unwrap();
         }"#;
-    let (cfg, entry, summaries) = parse_lang(
+    let (cfg, _entry, summaries) = parse_lang(
         src,
         "rust",
         tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),

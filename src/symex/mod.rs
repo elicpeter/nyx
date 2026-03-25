@@ -194,8 +194,6 @@ fn linear_witness(
     ctx: &SymexContext,
     path_blocks: &[BlockId],
 ) -> Option<String> {
-    use crate::ssa::ir::SsaValue;
-
     let mut sym_state = SymbolicState::new();
 
     // Seed constants from const_prop

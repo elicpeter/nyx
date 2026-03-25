@@ -28,8 +28,6 @@ pub struct LoopInfo {
     pub loop_bodies: HashMap<BlockId, HashSet<BlockId>>,
     /// SSA values that are simple induction variables (loop counters).
     pub induction_vars: HashSet<SsaValue>,
-    /// Petgraph node indices for each BlockId (indexed by block index).
-    block_nodes: Vec<NodeIndex>,
     /// Dominator tree (retained for exit successor queries).
     #[allow(dead_code)]
     doms: Dominators<NodeIndex>,
@@ -70,7 +68,6 @@ pub fn analyse_loops(ssa: &SsaBody) -> LoopInfo {
         loop_heads,
         loop_bodies,
         induction_vars,
-        block_nodes,
         doms,
     }
 }
@@ -333,7 +330,7 @@ mod tests {
         }
     }
 
-    fn make_inst(val: u32, op: SsaOp, block: BlockId) -> SsaInst {
+    fn make_inst(val: u32, op: SsaOp, _block: BlockId) -> SsaInst {
         SsaInst {
             value: SsaValue(val),
             op,

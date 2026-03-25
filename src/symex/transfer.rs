@@ -362,7 +362,7 @@ pub fn transfer_inst(
 fn try_heap_field_store(
     state: &mut SymbolicState,
     inst: &SsaInst,
-    ssa: &SsaBody,
+    _ssa: &SsaBody,
     heap_ctx: Option<&SymexHeapCtx>,
 ) {
     let hctx = match heap_ctx {
@@ -405,12 +405,8 @@ fn try_heap_load_record(
     state: &mut SymbolicState,
     inst: &SsaInst,
     ssa: &SsaBody,
-    heap_ctx: Option<&SymexHeapCtx>,
+    _heap_ctx: Option<&SymexHeapCtx>,
 ) {
-    let hctx = match heap_ctx {
-        Some(hctx) => hctx,
-        None => return,
-    };
     // The uses[0] var_name has the dotted path.
     let uses = match &inst.op {
         SsaOp::Assign(u) => u,
@@ -439,7 +435,7 @@ fn try_heap_load_record(
 fn try_heap_alias_load(
     state: &mut SymbolicState,
     inst: &SsaInst,
-    ssa: &SsaBody,
+    _ssa: &SsaBody,
     heap_ctx: Option<&SymexHeapCtx>,
 ) -> bool {
     let hctx = match heap_ctx {
@@ -866,7 +862,7 @@ fn resolve_callee_symbolically(
 mod tests {
     use super::*;
     use crate::cfg::{BinOp, Cfg, NodeInfo, StmtKind};
-    use crate::ssa::ir::{BlockId, SsaInst, SsaValue, Terminator, SsaBlock, ValueDef};
+    use crate::ssa::ir::{BlockId, SsaBlock, SsaInst, SsaValue, Terminator};
     use petgraph::graph::NodeIndex;
     use smallvec::{smallvec, SmallVec};
 
@@ -1401,11 +1397,9 @@ mod tests {
     use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
     use crate::symbol::{FuncKey, Lang};
     use crate::ssa::type_facts::TypeKind;
-    use crate::abstract_interp::AbstractValue;
-
     use crate::summary::FuncSummary;
 
-    fn make_summary_ctx(gs: &GlobalSummaries) -> SymexSummaryCtx {
+    fn make_summary_ctx(gs: &GlobalSummaries) -> SymexSummaryCtx<'_> {
         SymexSummaryCtx {
             global_summaries: gs,
             lang: Lang::JavaScript,

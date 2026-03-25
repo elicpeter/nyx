@@ -1429,7 +1429,7 @@ fn extract_condition_raw<'a>(
 /// encode the correct branch semantics. Setting `condition_negated=true` here
 /// would cause a double-negation in `compute_succ_states`, applying validation
 /// to the wrong branch.
-fn detect_negation<'a>(cond: Node<'a>, if_ast: Node<'a>, _lang: &str) -> (Node<'a>, bool) {
+fn detect_negation<'a>(cond: Node<'a>, _if_ast: Node<'a>, _lang: &str) -> (Node<'a>, bool) {
     // Unwrap parenthesized_expression — JS/Java/PHP wrap if-conditions in parens.
     // This lets us detect negation inside: `if (!expr)` → cond is `(!expr)`.
     let cond = if cond.kind() == "parenthesized_expression" {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]
-    pub(crate) command: Commands,
+    pub command: Commands,
 }
 
 impl Commands {

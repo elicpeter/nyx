@@ -4,7 +4,7 @@ use crate::evidence::Confidence;
 use crate::server::app::AppState;
 use crate::server::models::{
     by_language_from_findings, compute_fingerprint, summarize_findings, top_directories_from_findings,
-    top_n_from_map, Insight, NoisyRule, OverviewCount, OverviewResponse, ScanSummary, TrendPoint,
+    top_n_from_map, Insight, NoisyRule, OverviewResponse, ScanSummary, TrendPoint,
 };
 use axum::extract::State;
 use axum::routing::get;

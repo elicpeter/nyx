@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 // ── Fixture discovery (reused pattern from real_world_tests) ───────────────
 
 struct Fixture {
-    lang: String,
     name: String,
     source_path: PathBuf,
 }
@@ -48,7 +47,6 @@ fn discover_fixtures() -> Vec<Fixture> {
                 let stem = fname.trim_end_matches(".expect.json");
                 if let Some(source_path) = find_source_file(&dir, stem) {
                     fixtures.push(Fixture {
-                        lang: lang.to_string(),
                         name: format!("{lang}/{category}/{stem}"),
                         source_path,
                     });

@@ -350,7 +350,7 @@ pub struct SsaTaintTransfer<'a> {
     pub callee_bodies: Option<&'a HashMap<String, CalleeSsaBody>>,
     /// Cache for context-sensitive inline results. Uses `RefCell` for interior
     /// mutability (safe: k=1 depth limit prevents re-entrancy during borrow).
-    pub inline_cache: Option<&'a RefCell<InlineCache>>,
+    pub(crate) inline_cache: Option<&'a RefCell<InlineCache>>,
     /// Base-variable alias groups for alias-aware sanitization propagation.
     /// When present, sanitization of `alias.field` also sanitizes `base.field`
     /// for all must-aliased base names.
@@ -1301,7 +1301,7 @@ fn extract_inline_return_taint(
     transfer: &SsaTaintTransfer,
     block_states: &[Option<SsaTaintState>],
     induction_vars: &HashSet<SsaValue>,
-    call_site_node: NodeIndex,
+    _call_site_node: NodeIndex,
 ) -> Option<VarTaint> {
     // Collect all param SSA values to separate from derived values
     let param_values: HashSet<SsaValue> = ssa.blocks.iter()

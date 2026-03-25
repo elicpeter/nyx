@@ -42,7 +42,7 @@ use super::value::{mk_phi, SymbolicValue};
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Default max call depth (caller → callee → callee's callee → ...).
-const DEFAULT_MAX_DEPTH: usize = 3;
+pub(crate) const DEFAULT_MAX_DEPTH: usize = 3;
 
 /// Max callee blocks before declining to execute.
 const MAX_CALLEE_BLOCKS: usize = 200;
@@ -72,10 +72,10 @@ const DEFAULT_MAX_RETAINED_PATH_STATES: usize = 16;
 const MAX_FORKS_PER_CALLEE: usize = 2;
 
 /// Default max re-entries per individual function (direct recursion).
-const DEFAULT_MAX_REENTRY_PER_FUNC: usize = 2;
+pub(crate) const DEFAULT_MAX_REENTRY_PER_FUNC: usize = 2;
 
 /// Default max combined re-entries for functions in the same SCC (mutual recursion).
-const DEFAULT_MAX_SCC_REENTRY: usize = 3;
+pub(crate) const DEFAULT_MAX_SCC_REENTRY: usize = 3;
 
 /// Max cache entries before eviction (simple clear).
 const MAX_CACHE_ENTRIES: usize = 64;
@@ -803,7 +803,7 @@ pub fn execute_callee(
 
                     if can_fork && true_valid && false_valid {
                         // Fork: push false branch to work queue, continue with true
-                        let mut false_state = path.sym_state.clone();
+                        let false_state = path.sym_state.clone();
                         // Note: both branches share the visit history
                         let false_path = CalleePathState {
                             sym_state: false_state,

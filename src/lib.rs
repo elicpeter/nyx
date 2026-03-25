@@ -45,7 +45,7 @@ pub mod callgraph;
 pub mod cfg;
 pub mod cfg_analysis;
 pub mod constraint;
-pub(crate) mod cli;
+pub mod cli;
 pub mod commands;
 pub mod database;
 pub mod errors;

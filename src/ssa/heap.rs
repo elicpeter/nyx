@@ -554,7 +554,7 @@ pub fn is_container_constructor(callee: &str, lang: Lang) -> bool {
 /// and phi nodes, and returns a result that the taint engine can query.
 ///
 /// Runs as a pre-pass in optimize_ssa(), after type_facts.
-pub fn analyze_points_to(body: &SsaBody, cfg: &Cfg, lang: Option<Lang>) -> PointsToResult {
+pub fn analyze_points_to(body: &SsaBody, _cfg: &Cfg, lang: Option<Lang>) -> PointsToResult {
     let mut pts: HashMap<SsaValue, PointsToSet> = HashMap::new();
 
     // Pass 1: identify allocation sites and seed points-to sets

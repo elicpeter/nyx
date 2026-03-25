@@ -218,7 +218,6 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
                 None
             }
         }
-        _ => None,
     }
 }
 

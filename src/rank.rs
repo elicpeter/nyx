@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn confidence_high_boosts_score() {
-        let mut d_none = make_diag(
+        let d_none = make_diag(
             Severity::High,
             "taint-unsanitised-flow (source 1:1)",
             "x.rs",
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn confidence_low_demotes_score() {
-        let mut d_none = make_diag(
+        let d_none = make_diag(
             Severity::High,
             "taint-unsanitised-flow (source 1:1)",
             "x.rs",

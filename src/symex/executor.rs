@@ -303,13 +303,13 @@ pub(super) fn explore_finding(
         callee_bodies: bodies,
         cfg,
         lang: ctx.lang,
-        max_depth: 3,
+        max_depth: super::interproc::DEFAULT_MAX_DEPTH,
         budget: &interproc_budget,
         cache: &interproc_cache,
         reentry_counts: &interproc_reentry,
-        max_reentry_per_func: 2,
+        max_reentry_per_func: super::interproc::DEFAULT_MAX_REENTRY_PER_FUNC,
         scc_membership: ctx.scc_membership,
-        max_scc_reentry: 3,
+        max_scc_reentry: super::interproc::DEFAULT_MAX_SCC_REENTRY,
         stats: &interproc_stats,
     });
     let interproc_ctx_ref = interproc_ctx.as_ref();
