@@ -3,10 +3,22 @@ accepted = [
     "MIT",
     "MIT-0",
     "Unicode-3.0",
+    "Unicode-DFS-2016",
+
     "BSD-2-Clause",
-    "Unlicense",
+    "BSD-3-Clause",
+
+    "ISC",
+
     "Zlib",
+    "bzip2-1.0.6",
+
     "CC0-1.0",
+    "Unlicense",
+
     "MPL-2.0",
-    "GPL-3.0"
+
+    "GPL-3.0",
+
+    "CDLA-Permissive-2.0"
 ]
