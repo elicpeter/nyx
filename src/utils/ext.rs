@@ -67,7 +67,14 @@ fn lowercase_ext_all_supported_extensions() {
 #[test]
 fn lowercase_ext_unsupported_extensions_return_none() {
     use std::path::Path;
-    let unsupported = ["style.css", "index.html", "data.json", "README.md", "lock.lock", "image.png"];
+    let unsupported = [
+        "style.css",
+        "index.html",
+        "data.json",
+        "README.md",
+        "lock.lock",
+        "image.png",
+    ];
     for file in unsupported {
         assert_eq!(lowercase_ext(Path::new(file)), None, "file: {file}");
     }
@@ -94,6 +101,9 @@ fn lowercase_ext_uses_final_extension_only() {
 fn lowercase_ext_works_with_directory_prefixes() {
     use std::path::Path;
     assert_eq!(lowercase_ext(Path::new("src/main.rs")), Some("rs"));
-    assert_eq!(lowercase_ext(Path::new("/absolute/path/to/app.py")), Some("py"));
+    assert_eq!(
+        lowercase_ext(Path::new("/absolute/path/to/app.py")),
+        Some("py")
+    );
     assert_eq!(lowercase_ext(Path::new("a/b/c/d.js")), Some("js"));
 }

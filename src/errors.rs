@@ -136,8 +136,7 @@ fn string_owned_into_msg() {
 
 #[test]
 fn box_dyn_error_into_msg() {
-    let boxed: Box<dyn std::error::Error> =
-        Box::new(std::io::Error::other("inner error"));
+    let boxed: Box<dyn std::error::Error> = Box::new(std::io::Error::other("inner error"));
     let nyx: NyxError = boxed.into();
     // The From<Box<dyn std::error::Error>> impl wraps as Msg
     assert!(matches!(nyx, NyxError::Msg(_)));
@@ -155,7 +154,10 @@ fn config_error_display_includes_section_field_and_message() {
     let s = err.to_string();
     assert!(s.contains("server"), "should mention section: {s}");
     assert!(s.contains("port"), "should mention field: {s}");
-    assert!(s.contains("must be non-zero"), "should mention message: {s}");
+    assert!(
+        s.contains("must be non-zero"),
+        "should mention message: {s}"
+    );
 }
 
 #[test]

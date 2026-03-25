@@ -233,7 +233,11 @@ fn detect_frameworks_gemfile_sinatra() {
 fn detect_frameworks_python_flask_from_requirements() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-    fs::write(root.join("requirements.txt"), "Flask==2.3.0\nrequests>=2.28\n").unwrap();
+    fs::write(
+        root.join("requirements.txt"),
+        "Flask==2.3.0\nrequests>=2.28\n",
+    )
+    .unwrap();
     let ctx = detect_frameworks(root);
     assert!(ctx.has(DetectedFramework::Flask));
     assert!(!ctx.has(DetectedFramework::Django));
