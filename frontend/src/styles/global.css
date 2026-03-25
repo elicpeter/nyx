@@ -3026,12 +3026,18 @@ tr.selected td {
 /* Split layout (graph + sidebar) */
 .debug-split {
   display: grid;
-  grid-template-columns: 1fr 300px;
   gap: var(--space-3);
   height: 100%;
   min-height: 500px;
 }
+.debug-split-full {
+  grid-template-columns: minmax(0, 1fr);
+}
+.debug-split-with-sidebar {
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
 .debug-split-main {
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);

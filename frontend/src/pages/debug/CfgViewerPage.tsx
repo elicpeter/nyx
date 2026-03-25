@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { useDebugCfg } from '../../api/queries/debug';
 import { GraphRenderer } from '../../components/debug/GraphRenderer';
@@ -12,6 +12,10 @@ export function CfgViewerPage() {
   const { file, fn_name } = useOutletContext<{ file: string | null; fn_name: string | null }>();
   const { data, isLoading, error } = useDebugCfg(file, fn_name);
   const [selectedNode, setSelectedNode] = useState<number | null>(null);
+
+  useEffect(() => {
+    setSelectedNode(null);
+  }, [file, fn_name]);
 
   if (!file || !fn_name) {
     return <div className="empty-state">Select a file and function to view the CFG.</div>;
@@ -38,14 +42,17 @@ export function CfgViewerPage() {
   }));
 
   const selectedInfo = data.nodes.find((n) => n.id === selectedNode);
+  const handleNodeClick = (nodeId: number) => {
+    setSelectedNode((current) => (current === nodeId ? null : nodeId));
+  };
 
   return (
-    <div className="debug-split">
+    <div className={`debug-split ${selectedInfo ? 'debug-split-with-sidebar' : 'debug-split-full'}`}>
       <div className="debug-split-main">
         <GraphRenderer
           nodes={graphNodes}
           edges={graphEdges}
-          onNodeClick={setSelectedNode}
+          onNodeClick={handleNodeClick}
           selectedNode={selectedNode}
           mode="cfg"
         />
