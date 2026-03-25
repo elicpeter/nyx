@@ -11,5 +11,8 @@ public class SafeUserLookup extends HttpServlet {
         ps.setString(1, id);
         ResultSet rs = ps.executeQuery();
         response.getWriter().println(rs.getString("name"));
+        rs.close();
+        ps.close();
+        conn.close();
     }
 }

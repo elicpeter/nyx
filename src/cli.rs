@@ -135,6 +135,10 @@ pub enum Commands {
         #[arg(long)]
         fail_on: Option<String>,
 
+        /// Disable state-model analysis (resource lifecycle, auth state)
+        #[arg(long)]
+        no_state: bool,
+
         /// Disable attack-surface ranking (findings are sorted by exploitability by default)
         #[arg(long)]
         no_rank: bool,

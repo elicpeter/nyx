@@ -11,5 +11,7 @@ public class SafeTypeCheck extends HttpServlet {
         Connection conn = DriverManager.getConnection("jdbc:sqlite:app.db");
         Statement stmt = conn.createStatement();
         stmt.executeQuery("SELECT * FROM users WHERE id = " + input);
+        stmt.close();
+        conn.close();
     }
 }

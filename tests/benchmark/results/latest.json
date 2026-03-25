@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-24T23:36:48Z",
+  "timestamp": "2026-03-25T00:01:02Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,7 +9,7 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:b801d424dc4ee4e3fdd928df8b5b8ddf2daf2dd4489484ad8e52183645b5079e",
+  "ground_truth_hash": "sha256:863ab11b9fede5cccd04de277b6a362f9a1d30d2375d734757e485e7c1e9d378",
   "corpus_size": 214,
   "cases_run": 213,
   "cases_skipped": 1,
@@ -766,11 +766,10 @@
       "outcome_location_level": "TP",
       "matched_rule_ids": [
         "go.cmdi.exec_command",
+        "state-unauthed-access",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "go.cmdi.exec_command",
         "state-unauthed-access",
@@ -790,11 +789,10 @@
       "outcome_location_level": "TP",
       "matched_rule_ids": [
         "go.cmdi.exec_command",
+        "state-unauthed-access",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "go.cmdi.exec_command",
         "state-unauthed-access",
@@ -835,11 +833,10 @@
       "outcome_location_level": "TP",
       "matched_rule_ids": [
         "go.cmdi.exec_command",
+        "state-unauthed-access",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "go.cmdi.exec_command",
         "state-unauthed-access",
@@ -911,11 +908,10 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-unauthed-access",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-unauthed-access",
         "taint-unsanitised-flow (source 9:2)"
@@ -933,11 +929,10 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-unauthed-access",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [
-        "state-unauthed-access"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-unauthed-access",
         "taint-unsanitised-flow (source 9:2)"
@@ -1072,17 +1067,13 @@
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-resource-leak"
-      ],
-      "all_finding_ids": [
-        "state-resource-leak"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1129,12 +1120,11 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [
-        "state-resource-leak"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-resource-leak",
         "go.sqli.query_concat",
@@ -1153,11 +1143,10 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 10:2)"
       ],
-      "unexpected_rule_ids": [
-        "state-resource-leak"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-resource-leak",
         "taint-unsanitised-flow (source 10:2)"
@@ -1175,12 +1164,11 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [
-        "state-resource-leak"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-resource-leak",
         "go.sqli.query_concat",
@@ -1452,12 +1440,12 @@
       "vuln_class": "path_traversal",
       "is_vulnerable": true,
       "outcome_file_level": "TP",
-      "outcome_rule_level": "FN",
-      "outcome_location_level": "FN",
-      "matched_rule_ids": [],
-      "unexpected_rule_ids": [
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
         "state-resource-leak"
       ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-resource-leak"
       ],
@@ -1470,19 +1458,13 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-resource-leak",
-        "cfg-resource-leak"
-      ],
-      "all_finding_ids": [
-        "state-resource-leak",
-        "cfg-resource-leak"
-      ],
-      "security_finding_count": 2,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1570,19 +1552,13 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-resource-leak",
-        "cfg-resource-leak"
-      ],
-      "all_finding_ids": [
-        "state-resource-leak",
-        "cfg-resource-leak"
-      ],
-      "security_finding_count": 2,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1606,21 +1582,13 @@
       "language": "java",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-resource-leak",
-        "state-resource-leak",
-        "state-resource-leak"
-      ],
-      "all_finding_ids": [
-        "state-resource-leak",
-        "state-resource-leak",
-        "state-resource-leak"
-      ],
-      "security_finding_count": 3,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -1633,11 +1601,11 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "java.sqli.execute_concat",
         "taint-unsanitised-flow (source 6:9)"
       ],
       "unexpected_rule_ids": [
-        "state-resource-leak",
         "cfg-resource-leak"
       ],
       "all_finding_ids": [
@@ -1659,10 +1627,10 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 6:9)"
       ],
       "unexpected_rule_ids": [
-        "state-resource-leak",
         "cfg-resource-leak"
       ],
       "all_finding_ids": [
@@ -1683,13 +1651,13 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
+        "state-resource-leak",
         "taint-unsanitised-flow (source 7:9)",
         "taint-unsanitised-flow (source 7:9)"
       ],
       "unexpected_rule_ids": [
-        "state-resource-leak",
         "java.sqli.execute_concat",
-        "state-resource-leak",
         "java.xss.getwriter_print"
       ],
       "all_finding_ids": [
@@ -1713,11 +1681,10 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 7:9)"
       ],
-      "unexpected_rule_ids": [
-        "state-resource-leak"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-resource-leak",
         "taint-unsanitised-flow (source 7:9)"
@@ -2560,17 +2527,13 @@
       "language": "php",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-resource-leak"
-      ],
-      "all_finding_ids": [
-        "state-resource-leak"
-      ],
-      "security_finding_count": 1,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -2613,11 +2576,10 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 2:1)"
       ],
-      "unexpected_rule_ids": [
-        "state-resource-leak"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-resource-leak",
         "taint-unsanitised-flow (source 2:1)"
@@ -2635,11 +2597,10 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 2:1)"
       ],
-      "unexpected_rule_ids": [
-        "state-resource-leak"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "state-resource-leak",
         "taint-unsanitised-flow (source 2:1)"
@@ -2841,11 +2802,11 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 5:5)"
       ],
       "unexpected_rule_ids": [
-        "py.cmdi.subprocess_shell",
-        "state-resource-leak"
+        "py.cmdi.subprocess_shell"
       ],
       "all_finding_ids": [
         "py.cmdi.subprocess_shell",
@@ -3086,19 +3047,13 @@
       "language": "python",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "state-resource-leak",
-        "cfg-resource-leak"
-      ],
-      "all_finding_ids": [
-        "state-resource-leak",
-        "cfg-resource-leak"
-      ],
-      "security_finding_count": 2,
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
       "non_security_finding_count": 0
     },
     {
@@ -3141,10 +3096,10 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "taint-unsanitised-flow (source 5:5)"
       ],
       "unexpected_rule_ids": [
-        "state-resource-leak",
         "cfg-resource-leak",
         "py.sqli.execute_format"
       ],
@@ -3167,11 +3122,11 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "state-resource-leak",
         "py.sqli.execute_format",
         "taint-unsanitised-flow (source 5:5)"
       ],
       "unexpected_rule_ids": [
-        "state-resource-leak",
         "cfg-resource-leak"
       ],
       "all_finding_ids": [
@@ -4068,21 +4023,21 @@
   ],
   "aggregate_file_level": {
     "tp": 120,
-    "fp": 29,
+    "fp": 23,
     "fn_": 1,
-    "tn": 63,
-    "precision": 0.8053691275167785,
+    "tn": 69,
+    "precision": 0.8391608391608392,
     "recall": 0.9917355371900827,
-    "f1": 0.8888888888888888
+    "f1": 0.9090909090909092
   },
   "aggregate_rule_level": {
-    "tp": 115,
-    "fp": 29,
-    "fn_": 6,
-    "tn": 63,
-    "precision": 0.7986111111111112,
-    "recall": 0.9504132231404959,
-    "f1": 0.8679245283018868
+    "tp": 116,
+    "fp": 23,
+    "fn_": 5,
+    "tn": 69,
+    "precision": 0.8345323741007195,
+    "recall": 0.9586776859504132,
+    "f1": 0.8923076923076924
   },
   "by_language": {
     "c": {
@@ -4105,21 +4060,21 @@
     },
     "go": {
       "tp": 16,
-      "fp": 6,
+      "fp": 5,
       "fn_": 0,
-      "tn": 6,
-      "precision": 0.7272727272727273,
+      "tn": 7,
+      "precision": 0.7619047619047619,
       "recall": 1.0,
-      "f1": 0.8421052631578948
+      "f1": 0.8648648648648648
     },
     "java": {
-      "tp": 11,
-      "fp": 4,
-      "fn_": 2,
-      "tn": 6,
-      "precision": 0.7333333333333333,
-      "recall": 0.8461538461538461,
-      "f1": 0.7857142857142856
+      "tp": 12,
+      "fp": 1,
+      "fn_": 1,
+      "tn": 9,
+      "precision": 0.9230769230769231,
+      "recall": 0.9230769230769231,
+      "f1": 0.9230769230769231
     },
     "javascript": {
       "tp": 15,
@@ -4132,21 +4087,21 @@
     },
     "php": {
       "tp": 13,
-      "fp": 3,
+      "fp": 2,
       "fn_": 0,
-      "tn": 8,
-      "precision": 0.8125,
+      "tn": 9,
+      "precision": 0.8666666666666667,
       "recall": 1.0,
-      "f1": 0.896551724137931
+      "f1": 0.9285714285714286
     },
     "python": {
       "tp": 17,
-      "fp": 1,
+      "fp": 0,
       "fn_": 0,
-      "tn": 11,
-      "precision": 0.9444444444444444,
+      "tn": 12,
+      "precision": 1.0,
       "recall": 1.0,
-      "f1": 0.9714285714285714
+      "f1": 1.0
     },
     "ruby": {
       "tp": 12,
@@ -4214,19 +4169,19 @@
       "f1": 1.0
     },
     "path_traversal": {
-      "tp": 15,
+      "tp": 16,
       "fp": 0,
-      "fn_": 1,
+      "fn_": 0,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9375,
-      "f1": 0.967741935483871
+      "recall": 1.0,
+      "f1": 1.0
     },
     "safe": {
       "tp": 0,
-      "fp": 29,
+      "fp": 23,
       "fn_": 0,
-      "tn": 63,
+      "tn": 69,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -4271,21 +4226,21 @@
     },
     ">=Low": {
       "tp": 83,
-      "fp": 53,
+      "fp": 51,
       "fn_": 38,
-      "tn": 39,
-      "precision": 0.6102941176470589,
+      "tn": 41,
+      "precision": 0.6194029850746269,
       "recall": 0.6859504132231405,
-      "f1": 0.6459143968871596
+      "f1": 0.6509803921568628
     },
     ">=Medium": {
       "tp": 83,
-      "fp": 53,
+      "fp": 51,
       "fn_": 38,
-      "tn": 39,
-      "precision": 0.6102941176470589,
+      "tn": 41,
+      "precision": 0.6194029850746269,
       "recall": 0.6859504132231405,
-      "f1": 0.6459143968871596
+      "f1": 0.6509803921568628
     }
   }
 }

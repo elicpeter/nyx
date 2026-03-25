@@ -113,6 +113,12 @@ pub enum SymbolicValue {
     Trim(Box<SymbolicValue>),
     /// String length (returns integer): `strlen(str)`.
     StrLen(Box<SymbolicValue>),
+    // ── Phase 28: Encoding/decoding transforms ───────────────────────────
+    /// Protective or representation transform applied to inner value.
+    /// Preserves taint unconditionally — does NOT sanitize in symex.
+    Encode(super::strings::TransformKind, Box<SymbolicValue>),
+    /// Decoding/reverse transform applied to inner value.
+    Decode(super::strings::TransformKind, Box<SymbolicValue>),
     /// No information (top).
     Unknown,
 }
@@ -141,7 +147,9 @@ impl SymbolicValue {
             | SymbolicValue::ToUpper(s)
             | SymbolicValue::Trim(s)
             | SymbolicValue::StrLen(s)
-            | SymbolicValue::Replace(s, _, _) => 1 + s.depth(),
+            | SymbolicValue::Replace(s, _, _)
+            | SymbolicValue::Encode(_, s)
+            | SymbolicValue::Decode(_, s) => 1 + s.depth(),
             SymbolicValue::Substr(s, start, end) => {
                 let max_child = s
                     .depth()
@@ -415,6 +423,38 @@ pub fn mk_strlen(s: SymbolicValue) -> SymbolicValue {
     SymbolicValue::StrLen(Box::new(s))
 }
 
+// ── Phase 28: Encoding/decoding smart constructors ───────────────────────────
+
+/// Build an `Encode` expression with concrete folding and depth bounding.
+///
+/// When `s` is a `ConcreteStr`, applies the encoding via witness-quality
+/// helpers and returns a folded `ConcreteStr`. Otherwise returns a
+/// structured `Encode` node.
+pub fn mk_encode(kind: super::strings::TransformKind, s: SymbolicValue) -> SymbolicValue {
+    if let Some(cs) = s.as_concrete_str() {
+        if let Some(encoded) = super::strings::encode_concrete_for_witness(kind, cs) {
+            return SymbolicValue::ConcreteStr(encoded);
+        }
+    }
+    if 1 + s.depth() > MAX_EXPR_DEPTH {
+        return SymbolicValue::Unknown;
+    }
+    SymbolicValue::Encode(kind, Box::new(s))
+}
+
+/// Build a `Decode` expression with concrete folding and depth bounding.
+pub fn mk_decode(kind: super::strings::TransformKind, s: SymbolicValue) -> SymbolicValue {
+    if let Some(cs) = s.as_concrete_str() {
+        if let Some(decoded) = super::strings::decode_concrete_for_witness(kind, cs) {
+            return SymbolicValue::ConcreteStr(decoded);
+        }
+    }
+    if 1 + s.depth() > MAX_EXPR_DEPTH {
+        return SymbolicValue::Unknown;
+    }
+    SymbolicValue::Decode(kind, Box::new(s))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Display — human-readable witness strings
 // ─────────────────────────────────────────────────────────────────────────────
@@ -480,6 +520,12 @@ fn display_inner(val: &SymbolicValue) -> String {
             None => format!("{}.substr({})", display_inner(s), display_inner(start)),
         },
         SymbolicValue::StrLen(s) => format!("strlen({})", display_inner(s)),
+        SymbolicValue::Encode(kind, s) => {
+            format!("{}({})", kind.display_name(), display_inner(s))
+        }
+        SymbolicValue::Decode(kind, s) => {
+            format!("decode_{}({})", kind.display_name(), display_inner(s))
+        }
         SymbolicValue::Unknown => "?".to_string(),
     }
 }
@@ -1078,5 +1124,81 @@ mod tests {
             Some(SymbolicValue::Concrete(5)),
         );
         assert_eq!(format!("{}", v), "sym(v6).substr(0, 5)");
+    }
+
+    // ── Phase 28: Encode/Decode ──────────────────────────────────────────
+
+    #[test]
+    fn mk_encode_concrete_folding() {
+        use super::super::strings::TransformKind;
+        let v = mk_encode(
+            TransformKind::HtmlEscape,
+            SymbolicValue::ConcreteStr("<b>".into()),
+        );
+        assert_eq!(v, SymbolicValue::ConcreteStr("&lt;b&gt;".into()));
+    }
+
+    #[test]
+    fn mk_encode_symbolic_preserves_structure() {
+        use super::super::strings::TransformKind;
+        let v = mk_encode(TransformKind::UrlEncode, SymbolicValue::Symbol(SsaValue(7)));
+        match v {
+            SymbolicValue::Encode(kind, inner) => {
+                assert_eq!(kind, TransformKind::UrlEncode);
+                assert_eq!(*inner, SymbolicValue::Symbol(SsaValue(7)));
+            }
+            other => panic!("expected Encode, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn mk_encode_depth_bounding() {
+        use super::super::strings::TransformKind;
+        // Build a deeply nested expression
+        let mut v = SymbolicValue::Symbol(SsaValue(0));
+        for _ in 0..MAX_EXPR_DEPTH {
+            v = SymbolicValue::Encode(TransformKind::HtmlEscape, Box::new(v));
+        }
+        // One more should hit the depth bound
+        let result = mk_encode(TransformKind::HtmlEscape, v);
+        assert_eq!(result, SymbolicValue::Unknown);
+    }
+
+    #[test]
+    fn mk_decode_concrete_folding() {
+        use super::super::strings::TransformKind;
+        let v = mk_decode(
+            TransformKind::Base64Decode,
+            SymbolicValue::ConcreteStr("aGVsbG8=".into()),
+        );
+        assert_eq!(v, SymbolicValue::ConcreteStr("hello".into()));
+    }
+
+    #[test]
+    fn mk_decode_url_concrete() {
+        use super::super::strings::TransformKind;
+        let v = mk_decode(
+            TransformKind::UrlDecode,
+            SymbolicValue::ConcreteStr("hello%20world".into()),
+        );
+        assert_eq!(v, SymbolicValue::ConcreteStr("hello world".into()));
+    }
+
+    #[test]
+    fn encode_display_format() {
+        use super::super::strings::TransformKind;
+        let v = mk_encode(TransformKind::HtmlEscape, SymbolicValue::Symbol(SsaValue(0)));
+        assert_eq!(format!("{}", v), "htmlEscape(sym(v0))");
+
+        let v = mk_decode(TransformKind::Base64Decode, SymbolicValue::Symbol(SsaValue(1)));
+        assert_eq!(format!("{}", v), "decode_base64Decode(sym(v1))");
+    }
+
+    #[test]
+    fn encode_depth() {
+        use super::super::strings::TransformKind;
+        let inner = SymbolicValue::Symbol(SsaValue(0));
+        let v = mk_encode(TransformKind::UrlEncode, inner);
+        assert_eq!(v.depth(), 1);
     }
 }

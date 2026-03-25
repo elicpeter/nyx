@@ -27,6 +27,7 @@ pub fn run_state_analysis(
     _source_bytes: &[u8],
     func_summaries: &FuncSummaries,
     _global_summaries: Option<&GlobalSummaries>,
+    enable_auth: bool,
 ) -> Vec<StateFinding> {
     let _span = tracing::debug_span!("run_state_analysis").entered();
 
@@ -64,5 +65,5 @@ pub fn run_state_analysis(
     let result = engine::run_forward(cfg, entry, &transfer, initial);
 
     // 4. Extract findings
-    facts::extract_findings(&result, cfg, &interner, lang, func_summaries)
+    facts::extract_findings(&result, cfg, &interner, lang, func_summaries, enable_auth)
 }

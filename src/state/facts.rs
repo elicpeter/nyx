@@ -37,6 +37,7 @@ pub fn extract_findings(
     interner: &SymbolInterner,
     lang: Lang,
     func_summaries: &crate::cfg::FuncSummaries,
+    enable_auth: bool,
 ) -> Vec<StateFinding> {
     let mut findings = Vec::new();
 
@@ -249,8 +250,9 @@ pub fn extract_findings(
     }
 
     // ── 3. Auth-required sinks ───────────────────────────────────────────
+    // Only run auth analysis when explicitly enabled (higher FP rate).
     // Check if any function is a web entrypoint
-    let has_web_entrypoint = cfg.node_references().any(|(_, info)| {
+    let has_web_entrypoint = enable_auth && cfg.node_references().any(|(_, info)| {
         if let Some(ref func_name) = info.enclosing_func {
             is_web_entrypoint_simple(func_name, lang, func_summaries, cfg)
         } else {
@@ -449,7 +451,7 @@ mod tests {
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
-        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new());
+        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new(), false);
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "state-resource-leak");
@@ -487,7 +489,7 @@ mod tests {
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
-        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new());
+        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new(), false);
 
         assert!(findings.is_empty());
     }

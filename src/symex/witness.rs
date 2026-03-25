@@ -90,9 +90,14 @@ pub fn extract_witness(
         let payload = witness_payload(cap);
         let substituted = substitute_tainted(&sym, &tainted, payload);
         let concrete = evaluate_concrete(&substituted);
+        // Phase 28: Heuristic mismatch note when a protective transform
+        // doesn't match the sink's vulnerability class.
+        let mismatch_suffix = detect_transform_mismatch(&sym, cap)
+            .map(|note| format!(" {}", note))
+            .unwrap_or_default();
         Some(format!(
-            "input '{}' = \"{}\" flows to {}(\"{}\"){}",
-            source_var, payload, sink_callee, concrete, field_suffix
+            "input '{}' = \"{}\" flows to {}(\"{}\"){}{}",
+            source_var, payload, sink_callee, concrete, field_suffix, mismatch_suffix
         ))
     } else {
         // Not string-renderable: generic witness
@@ -158,6 +163,8 @@ fn is_string_renderable(expr: &SymbolicValue) -> bool {
         | SymbolicValue::ToUpper(s)
         | SymbolicValue::Replace(s, _, _) => is_string_renderable(s),
         SymbolicValue::Substr(s, _, _) => is_string_renderable(s),
+        // Phase 28: Encoding/decoding transforms produce strings
+        SymbolicValue::Encode(_, s) | SymbolicValue::Decode(_, s) => is_string_renderable(s),
         // StrLen returns integer — not string-renderable
         SymbolicValue::StrLen(_) => false,
         // Arithmetic, opaque calls, phis, integers, unknown — not string-renderable
@@ -206,7 +213,10 @@ fn collect_tainted_inner(
         | SymbolicValue::ToUpper(s)
         | SymbolicValue::Trim(s)
         | SymbolicValue::StrLen(s)
-        | SymbolicValue::Replace(s, _, _) => {
+        | SymbolicValue::Replace(s, _, _)
+        // Phase 28: Encoding/decoding transforms
+        | SymbolicValue::Encode(_, s)
+        | SymbolicValue::Decode(_, s) => {
             collect_tainted_inner(s, state, out);
         }
         SymbolicValue::Substr(s, start, end) => {
@@ -285,6 +295,15 @@ fn substitute_tainted(
             end.as_ref()
                 .map(|e| Box::new(substitute_tainted(e, tainted, payload))),
         ),
+        // Phase 28: Encoding/decoding transforms — preserve structure
+        SymbolicValue::Encode(kind, s) => SymbolicValue::Encode(
+            *kind,
+            Box::new(substitute_tainted(s, tainted, payload)),
+        ),
+        SymbolicValue::Decode(kind, s) => SymbolicValue::Decode(
+            *kind,
+            Box::new(substitute_tainted(s, tainted, payload)),
+        ),
         // Leaf nodes that are not tainted symbols — return unchanged
         other => other.clone(),
     }
@@ -335,8 +354,84 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
                 format!("{}", expr)
             }
         }
+        // Phase 28: Encoding/decoding — apply transform to recursively evaluated inner
+        SymbolicValue::Encode(kind, s) => {
+            let inner = evaluate_concrete(s);
+            super::strings::encode_concrete_for_witness(*kind, &inner)
+                .unwrap_or_else(|| format!("{}", expr))
+        }
+        SymbolicValue::Decode(kind, s) => {
+            let inner = evaluate_concrete(s);
+            super::strings::decode_concrete_for_witness(*kind, &inner)
+                .unwrap_or_else(|| format!("{}", expr))
+        }
         // For non-foldable expressions, use Display
         other => format!("{}", other),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Phase 28: Transform–sink mismatch detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Heuristic check: does a protective transform in the expression match
+/// the sink's vulnerability class?
+///
+/// Returns a human-readable note if a transform's `verified_cap()` is
+/// non-empty AND does NOT intersect the sink's cap — indicating the
+/// transform does not match the sink's neutralization class.
+///
+/// This is a **heuristic witness annotation**, not a proof. Representation
+/// transforms (base64, URL decode) and unverified transforms (SqlEscape)
+/// never trigger mismatch notes.
+fn detect_transform_mismatch(expr: &SymbolicValue, sink_cap: Cap) -> Option<String> {
+    if sink_cap.is_empty() {
+        return None;
+    }
+    match expr {
+        SymbolicValue::Encode(kind, inner) => {
+            let neutralizes = kind.verified_cap();
+            if !neutralizes.is_empty() && !sink_cap.intersects(neutralizes) {
+                Some(format!(
+                    "[transform note: {} does not match sink neutralization class ({})]",
+                    kind.display_name(),
+                    cap_description(sink_cap),
+                ))
+            } else {
+                // Correct transform or non-protective — recurse
+                detect_transform_mismatch(inner, sink_cap)
+            }
+        }
+        SymbolicValue::Concat(l, r) => detect_transform_mismatch(l, sink_cap)
+            .or_else(|| detect_transform_mismatch(r, sink_cap)),
+        SymbolicValue::Trim(s)
+        | SymbolicValue::ToLower(s)
+        | SymbolicValue::ToUpper(s)
+        | SymbolicValue::Replace(s, _, _)
+        | SymbolicValue::Decode(_, s) => detect_transform_mismatch(s, sink_cap),
+        SymbolicValue::Substr(s, _, _) => detect_transform_mismatch(s, sink_cap),
+        _ => None,
+    }
+}
+
+/// Human-readable description of the primary cap in a sink's cap set.
+fn cap_description(cap: Cap) -> &'static str {
+    if cap.intersects(Cap::SQL_QUERY) {
+        "sql_escape"
+    } else if cap.intersects(Cap::HTML_ESCAPE) {
+        "html_escape"
+    } else if cap.intersects(Cap::SHELL_ESCAPE) {
+        "shell_escape"
+    } else if cap.intersects(Cap::URL_ENCODE) {
+        "url_encode"
+    } else if cap.intersects(Cap::FILE_IO) {
+        "path_sanitization"
+    } else if cap.intersects(Cap::SSRF) {
+        "url_validation"
+    } else if cap.intersects(Cap::CODE_EXEC) {
+        "code_execution_sanitization"
+    } else {
+        "appropriate sanitization"
     }
 }
 
@@ -776,5 +871,157 @@ mod tests {
         let expr = SymbolicValue::ToLower(Box::new(SymbolicValue::Symbol(tainted_val)));
         let tainted = collect_tainted_symbols(&expr, &state);
         assert!(tainted.contains(&tainted_val));
+    }
+
+    // ── Phase 28: Encoding/decoding witness tests ────────────────────────
+
+    #[test]
+    fn test_encoding_is_string_renderable() {
+        use super::super::strings::TransformKind;
+        let v = SymbolicValue::Encode(
+            TransformKind::HtmlEscape,
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+        );
+        assert!(is_string_renderable(&v));
+
+        let v = SymbolicValue::Decode(
+            TransformKind::UrlDecode,
+            Box::new(SymbolicValue::Symbol(SsaValue(1))),
+        );
+        assert!(is_string_renderable(&v));
+    }
+
+    #[test]
+    fn test_substitute_tainted_through_encode() {
+        use super::super::strings::TransformKind;
+        let tainted_val = SsaValue(10);
+        let mut tainted = HashSet::new();
+        tainted.insert(tainted_val);
+
+        let expr = SymbolicValue::Encode(
+            TransformKind::HtmlEscape,
+            Box::new(SymbolicValue::Symbol(tainted_val)),
+        );
+        let result = substitute_tainted(&expr, &tainted, "<script>");
+        // Should preserve Encode structure wrapping the substituted payload
+        match &result {
+            SymbolicValue::Encode(kind, inner) => {
+                assert_eq!(*kind, TransformKind::HtmlEscape);
+                assert_eq!(**inner, SymbolicValue::ConcreteStr("<script>".into()));
+            }
+            other => panic!("expected Encode, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_evaluate_concrete_encode() {
+        use super::super::strings::TransformKind;
+        let v = SymbolicValue::Encode(
+            TransformKind::HtmlEscape,
+            Box::new(SymbolicValue::ConcreteStr("<b>hi</b>".into())),
+        );
+        assert_eq!(evaluate_concrete(&v), "&lt;b&gt;hi&lt;/b&gt;");
+    }
+
+    #[test]
+    fn test_evaluate_concrete_decode() {
+        use super::super::strings::TransformKind;
+        let v = SymbolicValue::Decode(
+            TransformKind::UrlDecode,
+            Box::new(SymbolicValue::ConcreteStr("hello%20world".into())),
+        );
+        assert_eq!(evaluate_concrete(&v), "hello world");
+    }
+
+    #[test]
+    fn test_collect_tainted_through_encode() {
+        use super::super::strings::TransformKind;
+        let tainted_val = SsaValue(20);
+        let mut state = SymbolicState::new();
+        state.mark_tainted(tainted_val);
+
+        let expr = SymbolicValue::Encode(
+            TransformKind::UrlEncode,
+            Box::new(SymbolicValue::Symbol(tainted_val)),
+        );
+        let tainted = collect_tainted_symbols(&expr, &state);
+        assert!(tainted.contains(&tainted_val));
+    }
+
+    #[test]
+    fn test_detect_mismatch_url_at_sql_sink() {
+        use super::super::strings::TransformKind;
+        let expr = SymbolicValue::Encode(
+            TransformKind::UrlEncode,
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+        );
+        let result = detect_transform_mismatch(&expr, Cap::SQL_QUERY);
+        assert!(result.is_some());
+        let note = result.unwrap();
+        assert!(note.contains("urlEncode"));
+        assert!(note.contains("does not match sink neutralization class"));
+        assert!(note.contains("sql_escape"));
+    }
+
+    #[test]
+    fn test_no_mismatch_when_encoding_matches_sink() {
+        use super::super::strings::TransformKind;
+        let expr = SymbolicValue::Encode(
+            TransformKind::HtmlEscape,
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+        );
+        // HTML escape at HTML_ESCAPE sink — correct match
+        assert!(detect_transform_mismatch(&expr, Cap::HTML_ESCAPE).is_none());
+    }
+
+    #[test]
+    fn test_no_mismatch_for_representation_transform() {
+        use super::super::strings::TransformKind;
+        let expr = SymbolicValue::Encode(
+            TransformKind::Base64Encode,
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+        );
+        // Base64 is a representation transform with empty verified_cap
+        // → never triggers mismatch, regardless of sink cap
+        assert!(detect_transform_mismatch(&expr, Cap::SQL_QUERY).is_none());
+    }
+
+    #[test]
+    fn test_no_mismatch_for_sql_escape() {
+        use super::super::strings::TransformKind;
+        let expr = SymbolicValue::Encode(
+            TransformKind::SqlEscape,
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+        );
+        // SqlEscape has empty verified_cap → no mismatch reasoning
+        assert!(detect_transform_mismatch(&expr, Cap::SQL_QUERY).is_none());
+    }
+
+    #[test]
+    fn test_mismatch_through_concat() {
+        use super::super::strings::TransformKind;
+        let encoded = SymbolicValue::Encode(
+            TransformKind::ShellEscape,
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+        );
+        let expr = SymbolicValue::Concat(
+            Box::new(SymbolicValue::ConcreteStr("prefix".into())),
+            Box::new(encoded),
+        );
+        // ShellEscape at SQL sink — mismatch
+        let result = detect_transform_mismatch(&expr, Cap::SQL_QUERY);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("shellEscape"));
+    }
+
+    #[test]
+    fn test_no_mismatch_empty_sink_cap() {
+        use super::super::strings::TransformKind;
+        let expr = SymbolicValue::Encode(
+            TransformKind::UrlEncode,
+            Box::new(SymbolicValue::Symbol(SsaValue(0))),
+        );
+        // Empty sink cap → no mismatch possible
+        assert!(detect_transform_mismatch(&expr, Cap::empty()).is_none());
     }
 }

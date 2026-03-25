@@ -30,6 +30,7 @@ pub fn handle_command(
             keep_nonprod_severity,
             quiet,
             fail_on,
+            no_state,
             no_rank,
             show_suppressed,
             show_all,
@@ -109,6 +110,10 @@ pub fn handle_command(
 
             if quiet {
                 config.output.quiet = true;
+            }
+
+            if no_state {
+                config.scanner.enable_state_analysis = false;
             }
 
             if no_rank {

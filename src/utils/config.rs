@@ -186,8 +186,14 @@ pub struct ScannerConfig {
     pub include_nonprod: bool,
 
     /// Enable the state-model dataflow engine for resource lifecycle and
-    /// auth-state analysis.  Default: false (opt-in).
+    /// auth-state analysis.  Default: true.
     pub enable_state_analysis: bool,
+
+    /// Enable auth-state analysis within the state engine.  When false,
+    /// only resource lifecycle findings (leak, use-after-close, double-close)
+    /// are produced.  Default: false (auth analysis is opt-in due to higher
+    /// false-positive rate on allowlist/map-check patterns).
+    pub enable_auth_analysis: bool,
 }
 impl Default for ScannerConfig {
     fn default() -> Self {
@@ -221,7 +227,8 @@ impl Default for ScannerConfig {
             follow_symlinks: false,
             scan_hidden_files: false,
             include_nonprod: false,
-            enable_state_analysis: false,
+            enable_state_analysis: true,
+            enable_auth_analysis: false,
         }
     }
 }
@@ -513,6 +520,7 @@ pub struct ScanProfile {
     pub max_file_size_mb: Option<u64>,
     pub include_nonprod: Option<bool>,
     pub enable_state_analysis: Option<bool>,
+    pub enable_auth_analysis: Option<bool>,
     pub default_format: Option<OutputFormat>,
     pub quiet: Option<bool>,
     pub attack_surface_ranking: Option<bool>,
@@ -536,6 +544,7 @@ fn builtin_profile(name: &str) -> Option<ScanProfile> {
             mode: Some(AnalysisMode::Full),
             min_severity: Some(Severity::Low),
             enable_state_analysis: Some(true),
+            enable_auth_analysis: Some(true),
             ..Default::default()
         },
         "ci" => ScanProfile {
@@ -657,6 +666,9 @@ impl Config {
         }
         if let Some(v) = profile.enable_state_analysis {
             self.scanner.enable_state_analysis = v;
+        }
+        if let Some(v) = profile.enable_auth_analysis {
+            self.scanner.enable_auth_analysis = v;
         }
         if let Some(v) = profile.default_format {
             self.output.default_format = v;
@@ -808,6 +820,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.scanner.scan_hidden_files = user.scanner.scan_hidden_files;
     default.scanner.include_nonprod = user.scanner.include_nonprod;
     default.scanner.enable_state_analysis = user.scanner.enable_state_analysis;
+    default.scanner.enable_auth_analysis = user.scanner.enable_auth_analysis;
 
     // Merge exclusion lists (default ⊔ user), then sort & dedupe
     default

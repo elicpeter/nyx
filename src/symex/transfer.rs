@@ -19,10 +19,10 @@ use crate::symbol::Lang;
 
 use super::heap::{self, FieldAccessRecord, FieldSlot, HeapKey};
 use super::state::SymbolicState;
-use super::strings::{classify_string_method, StringOperandSource};
+use super::strings::{classify_string_method, classify_transform_method, StringOperandSource, TransformKind};
 use super::value::{
-    mk_binop, mk_call, mk_phi, mk_replace, mk_strlen, mk_substr, mk_to_lower, mk_to_upper,
-    mk_trim, Op, SymbolicValue,
+    mk_binop, mk_call, mk_decode, mk_encode, mk_phi, mk_replace, mk_strlen, mk_substr,
+    mk_to_lower, mk_to_upper, mk_trim, Op, SymbolicValue,
 };
 
 /// Context for cross-file symbolic summary modeling during transfer.
@@ -236,6 +236,17 @@ pub fn transfer_inst(
             // Phase 22: String method recognition
             if let Some(result) =
                 try_string_method(state, callee, receiver, &arg_syms, &all_operands, lang)
+            {
+                state.set(inst.value, result.value);
+                if result.tainted {
+                    state.mark_tainted(inst.value);
+                }
+                return;
+            }
+
+            // Phase 28: Encoding/decoding transform recognition
+            if let Some(result) =
+                try_transform_method(state, callee, receiver, &arg_syms, &all_operands, lang)
             {
                 state.set(inst.value, result.value);
                 if result.tainted {
@@ -601,6 +612,56 @@ fn try_string_method(
 
     // Taint: string operations preserve taint from the string operand
     let tainted = state.is_tainted(string_ssa);
+
+    Some(SymbolicCallResult { value, tainted })
+}
+
+/// Phase 28: Recognize encoding/decoding transforms and build structured
+/// `Encode`/`Decode` nodes instead of opaque `Call`.
+///
+/// Taint is always propagated from the operand — encoding preserves taint
+/// unconditionally. This function does NOT sanitize.
+fn try_transform_method(
+    state: &SymbolicState,
+    callee: &str,
+    receiver: &Option<SsaValue>,
+    arg_syms: &[SymbolicValue],
+    all_operands: &[SsaValue],
+    lang: Option<Lang>,
+) -> Option<SymbolicCallResult> {
+    let lang = lang?;
+    let info = classify_transform_method(callee, lang)?;
+
+    // Extract the operand the same way as try_string_method
+    let (operand_sym, operand_ssa) = match info.operand_source {
+        StringOperandSource::Receiver => {
+            let recv = (*receiver)?;
+            (state.get(recv), recv)
+        }
+        StringOperandSource::FirstArg => {
+            if let Some(recv) = receiver {
+                (state.get(*recv), *recv)
+            } else if let Some(&first_op) = all_operands.first() {
+                (
+                    arg_syms.first().cloned().unwrap_or(SymbolicValue::Unknown),
+                    first_op,
+                )
+            } else {
+                return None;
+            }
+        }
+    };
+
+    // Build structured Encode or Decode node via smart constructors
+    let value = match info.kind {
+        TransformKind::Base64Decode | TransformKind::UrlDecode => {
+            mk_decode(info.kind, operand_sym)
+        }
+        _ => mk_encode(info.kind, operand_sym),
+    };
+
+    // Encoding preserves taint unconditionally
+    let tainted = state.is_tainted(operand_ssa);
 
     Some(SymbolicCallResult { value, tainted })
 }

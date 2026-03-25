@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useExplorerTree, useExplorerSymbols, useExplorerFindings } from '../api/queries/explorer';
+import { useState, useCallback } from 'react';
+import { useExplorerSymbols, useExplorerFindings } from '../api/queries/explorer';
 import { useFinding } from '../api/queries/findings';
 import { FileTree } from '../components/data-display/FileTree';
 import { CodeViewer } from '../components/data-display/CodeViewer';
 import { LoadingState } from '../components/ui/LoadingState';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ExplorerIcon } from '../components/icons/Icons';
+import { useFileTree } from '../hooks/useFileTree';
 import type { TreeEntry, FlowStep, FindingView } from '../api/types';
 
 type ExplorerMode = 'tree' | 'symbols' | 'hotspots';
@@ -27,55 +28,28 @@ const FLOW_KIND_LABELS: Record<string, string> = {
 };
 
 export function ExplorerPage() {
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
-  const [loadedChildren, setLoadedChildren] = useState<Map<string, TreeEntry[]>>(new Map());
   const [explorerMode, setExplorerMode] = useState<ExplorerMode>('tree');
   const [highlightLine, setHighlightLine] = useState<number | undefined>();
-  const [expandQueue, setExpandQueue] = useState<string | null>(null);
   const [selectedFindingIndex, setSelectedFindingIndex] = useState<number | null>(null);
 
-  const { data: rootEntries, isLoading: treeLoading } = useExplorerTree();
-  const { data: childEntries } = useExplorerTree(expandQueue || undefined);
-  const { data: symbols } = useExplorerSymbols(selectedPath);
-  const { data: findings } = useExplorerFindings(selectedPath);
-  const { data: fullFinding } = useFinding(selectedFindingIndex ?? '');
-
-  // When child entries arrive for an expanded directory, store them
-  useEffect(() => {
-    if (expandQueue && childEntries) {
-      setLoadedChildren((prev) => {
-        const next = new Map(prev);
-        next.set(expandQueue, childEntries);
-        return next;
-      });
-      setExpandQueue(null);
-    }
-  }, [expandQueue, childEntries]);
-
-  const handleToggleExpand = useCallback(
-    (path: string) => {
-      setExpandedPaths((prev) => {
-        const next = new Set(prev);
-        if (next.has(path)) {
-          next.delete(path);
-        } else {
-          next.add(path);
-          if (!loadedChildren.has(path)) {
-            setExpandQueue(path);
-          }
-        }
-        return next;
-      });
-    },
-    [loadedChildren],
-  );
-
-  const handleSelectFile = useCallback((path: string) => {
-    setSelectedPath(path);
+  const handleFileSelect = useCallback((path: string) => {
     setHighlightLine(undefined);
     setSelectedFindingIndex(null);
   }, []);
+
+  const {
+    rootEntries,
+    isLoading: treeLoading,
+    expandedPaths,
+    loadedChildren,
+    selectedPath,
+    handleToggleExpand,
+    handleSelectFile,
+  } = useFileTree(null, handleFileSelect);
+
+  const { data: symbols } = useExplorerSymbols(selectedPath);
+  const { data: findings } = useExplorerFindings(selectedPath);
+  const { data: fullFinding } = useFinding(selectedFindingIndex ?? '');
 
   const handleSelectFinding = useCallback((index: number, line: number) => {
     setSelectedFindingIndex(index);

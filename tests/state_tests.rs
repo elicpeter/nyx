@@ -15,6 +15,7 @@ fn state_fixture_dir() -> PathBuf {
 fn state_config() -> Config {
     let mut cfg = common::test_config(AnalysisMode::Full);
     cfg.scanner.enable_state_analysis = true;
+    cfg.scanner.enable_auth_analysis = true;
     cfg
 }
 
@@ -129,7 +130,7 @@ fn clean_usage_no_state_findings() {
 }
 
 #[test]
-fn state_analysis_off_by_default() {
+fn state_analysis_disabled_via_flag() {
     let mut cfg = common::test_config(AnalysisMode::Full);
     cfg.scanner.enable_state_analysis = false;
     let diags =
@@ -142,6 +143,39 @@ fn state_analysis_off_by_default() {
         state.is_empty(),
         "State findings should not appear when enable_state_analysis is false.\n  Got: {:?}",
         state.iter().map(|d| &d.id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn auth_analysis_off_by_default() {
+    // State analysis is on by default but auth analysis is not.
+    // Use Config::default() to test actual production defaults (not test_config
+    // which enables both for thorough testing).
+    let mut cfg = Config::default();
+    cfg.scanner.read_vcsignore = false;
+    cfg.scanner.require_git_to_read_vcsignore = false;
+    cfg.performance.worker_threads = Some(1);
+    assert!(cfg.scanner.enable_state_analysis, "state analysis should be on by default");
+    assert!(!cfg.scanner.enable_auth_analysis, "auth analysis should be off by default");
+    let diags =
+        nyx_scanner::scan_no_index(&state_fixture_dir(), &cfg).expect("scan should succeed");
+    let auth: Vec<_> = diags
+        .iter()
+        .filter(|d| d.id == "state-unauthed-access")
+        .collect();
+    assert!(
+        auth.is_empty(),
+        "Auth findings should not appear when enable_auth_analysis is false.\n  Got: {:?}",
+        auth.iter().map(|d| &d.id).collect::<Vec<_>>()
+    );
+    // But resource findings should still appear
+    let resource: Vec<_> = diags
+        .iter()
+        .filter(|d| d.id.starts_with("state-resource") || d.id.starts_with("state-use") || d.id.starts_with("state-double"))
+        .collect();
+    assert!(
+        !resource.is_empty(),
+        "Resource lifecycle findings should still appear when state analysis is on"
     );
 }
 

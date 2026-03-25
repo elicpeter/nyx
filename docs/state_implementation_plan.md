@@ -1061,3 +1061,22 @@ improvements.
 | Auth test count | 0 | ≥7 | ≥12 | ≥12 |
 | Known FP categories | 6 | 4 | ≤1 | ≤1 |
 | Benchmark overhead | unmeasured | measured | measured | <10% |
+
+---
+
+## Phase 7 — Audit Results & Implementation (completed)
+
+### Decision: GO WITH SAFETY VALVES
+
+**Audit summary:**
+- 29 state findings across benchmark corpus; all marked "unexpected" because ground truth predates state analysis
+- 23 NOISE-TPs: technically correct resource leaks in short demo snippets (benchmark corpus gap)
+- 5 real FPs: Go `state-unauthed-access` on safe files with allowlist/map-check patterns
+- 1 borderline FP: Python `Popen` + `communicate()` not recognized as cleanup
+
+**Implementation (GO WITH SAFETY VALVES):**
+1. `enable_state_analysis` default flipped to `true` — resource lifecycle analysis (leak, use-after-close, double-close) runs by default
+2. `enable_auth_analysis` added as separate config (default `false`) — auth analysis stays opt-in due to FP rate on allowlist/guard patterns
+3. `--no-state` CLI flag added to disable state analysis entirely
+4. `"full"` profile enables both state + auth analysis
+5. All tests pass: 1098 lib + 100 state + 20 integration + 26 SSA equiv + 7 perf + 4 taint termination

@@ -8,4 +8,7 @@ def get_user():
     conn = sqlite3.connect('app.db')
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE id = " + str(user_id))
-    return cursor.fetchone()
+    result = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return result

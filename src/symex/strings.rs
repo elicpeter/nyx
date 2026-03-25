@@ -1,8 +1,12 @@
-//! String method recognition, concrete evaluation, and sanitizer detection
-//! for Phase 22: Symbolic String Theory.
+//! String method recognition, concrete evaluation, sanitizer detection,
+//! and encoding/decoding transform classification.
 //!
-//! Maps callee names to semantic string operations across languages, enabling
-//! structured symbolic modeling instead of opaque `Call` nodes.
+//! Phase 22: Symbolic String Theory — maps callee names to semantic string
+//! operations across languages.
+//!
+//! Phase 28: Symbolic Encoding and Decoding Models — recognizes encoding
+//! transforms (HTML escape, URL encode, etc.) for witness enrichment and
+//! heuristic mismatch diagnostics. Does NOT affect taint semantics.
 
 use crate::labels::Cap;
 use crate::symbol::Lang;
@@ -47,6 +51,91 @@ pub struct SanitizerInfo {
     pub sanitized_caps: Cap,
     /// Whether the replacement is global (replaces all occurrences).
     pub is_global: bool,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Phase 28: Encoding/decoding transform types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Category of encoding/decoding transform for symbolic modeling.
+///
+/// Split into two groups:
+/// - **Protective transforms** (escape-like): have a verified `Cap`
+///   correspondence in existing label rules. Used for mismatch diagnostics.
+/// - **Representation transforms** (non-protective): witness-only, never
+///   used for mismatch reasoning.
+///
+/// Symex `Encode`/`Decode` nodes preserve taint unconditionally — this enum
+/// carries no sanitization authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TransformKind {
+    // ── Protective transforms ────────────────────────────────────────────
+    /// HTML entity escaping: `&` → `&amp;`, `<` → `&lt;`, etc.
+    HtmlEscape,
+    /// Percent-encoding: non-unreserved → `%XX`.
+    UrlEncode,
+    /// Shell quoting: single-quote wrapping with internal quote escaping.
+    ShellEscape,
+    /// SQL string escaping: `'` → `''`. Witness-only — no label rule yet,
+    /// so `verified_cap()` returns `Cap::empty()`.
+    SqlEscape,
+    // ── Representation transforms (non-protective) ───────────────────────
+    /// Base64 encoding (representation, not sanitisation).
+    Base64Encode,
+    /// Base64 decoding.
+    Base64Decode,
+    /// URL percent-decoding (reverses URL encoding — anti-protective).
+    UrlDecode,
+}
+
+impl TransformKind {
+    /// Human-readable name for Display and witness output.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            TransformKind::HtmlEscape => "htmlEscape",
+            TransformKind::UrlEncode => "urlEncode",
+            TransformKind::ShellEscape => "shellEscape",
+            TransformKind::SqlEscape => "sqlEscape",
+            TransformKind::Base64Encode => "base64Encode",
+            TransformKind::Base64Decode => "base64Decode",
+            TransformKind::UrlDecode => "urlDecode",
+        }
+    }
+
+    /// The `Cap` this transform is verified to neutralize, based on existing
+    /// taint label rules.
+    ///
+    /// Returns `Cap::empty()` for representation transforms AND for
+    /// `SqlEscape` (no verified label rule). Only transforms with a
+    /// confirmed sanitizer rule in the label tables return non-empty caps:
+    /// - `HtmlEscape` → `Cap::HTML_ESCAPE` (he.encode, html.escape, htmlspecialchars)
+    /// - `UrlEncode` → `Cap::URL_ENCODE` (encodeURIComponent, urllib.parse.quote, urlencode)
+    /// - `ShellEscape` → `Cap::SHELL_ESCAPE` (shlex.quote, escapeshellarg, shellescape)
+    pub fn verified_cap(self) -> Cap {
+        match self {
+            TransformKind::HtmlEscape => Cap::HTML_ESCAPE,
+            TransformKind::UrlEncode => Cap::URL_ENCODE,
+            TransformKind::ShellEscape => Cap::SHELL_ESCAPE,
+            // SqlEscape: no verified label rule — witness-only
+            TransformKind::SqlEscape => Cap::empty(),
+            // Representation transforms: not protective
+            TransformKind::Base64Encode
+            | TransformKind::Base64Decode
+            | TransformKind::UrlDecode => Cap::empty(),
+        }
+    }
+
+    /// Returns `true` for escape-like transforms with non-empty `verified_cap()`.
+    pub fn is_protective(self) -> bool {
+        !self.verified_cap().is_empty()
+    }
+}
+
+/// Result of classifying a callee as an encoding/decoding transform.
+#[derive(Clone, Debug)]
+pub struct TransformMethodInfo {
+    pub kind: TransformKind,
+    pub operand_source: StringOperandSource,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -397,6 +486,325 @@ fn classify_c(method: &str) -> Option<StringMethodInfo> {
             method: StrLen,
             operand_source: FirstArg,
         }),
+        _ => None,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Phase 28: Encoding/decoding transform classification
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Classify a callee as a recognized encoding/decoding transform.
+///
+/// Returns `None` for unrecognized methods. Rich sanitizers (DOMPurify,
+/// bleach, markupsafe, etc.) are intentionally NOT classified here — they
+/// are complex library-level sanitizers, not simple character-level escapes.
+///
+/// Initial scope: JS/TS, Python, PHP. Other languages deferred until
+/// the abstraction is validated.
+pub fn classify_transform_method(
+    callee: &str,
+    lang: Lang,
+) -> Option<TransformMethodInfo> {
+    match lang {
+        Lang::JavaScript | Lang::TypeScript => classify_transform_js(callee),
+        Lang::Python => classify_transform_python(callee),
+        Lang::Php => classify_transform_php(callee),
+        _ => None,
+    }
+}
+
+fn classify_transform_js(callee: &str) -> Option<TransformMethodInfo> {
+    use StringOperandSource::*;
+    use TransformKind::*;
+
+    let method = callee.rsplit('.').next().unwrap_or(callee);
+    match method {
+        // URL encoding/decoding
+        "encodeURIComponent" | "encodeURI" => Some(TransformMethodInfo {
+            kind: UrlEncode,
+            operand_source: FirstArg,
+        }),
+        "decodeURIComponent" | "decodeURI" => Some(TransformMethodInfo {
+            kind: UrlDecode,
+            operand_source: FirstArg,
+        }),
+        // Base64
+        "btoa" => Some(TransformMethodInfo {
+            kind: Base64Encode,
+            operand_source: FirstArg,
+        }),
+        "atob" => Some(TransformMethodInfo {
+            kind: Base64Decode,
+            operand_source: FirstArg,
+        }),
+        // HTML entity encoding via he library (NOT DOMPurify/sanitizeHtml)
+        "encode" | "escape" if callee.starts_with("he.") => Some(TransformMethodInfo {
+            kind: HtmlEscape,
+            operand_source: FirstArg,
+        }),
+        _ => None,
+    }
+}
+
+fn classify_transform_python(callee: &str) -> Option<TransformMethodInfo> {
+    use StringOperandSource::*;
+    use TransformKind::*;
+
+    match callee {
+        // HTML escaping (NOT bleach.clean, markupsafe.escape, django.utils.html.escape)
+        "html.escape" | "cgi.escape" => Some(TransformMethodInfo {
+            kind: HtmlEscape,
+            operand_source: FirstArg,
+        }),
+        // URL encoding/decoding
+        "urllib.parse.quote" | "urllib.parse.quote_plus" => Some(TransformMethodInfo {
+            kind: UrlEncode,
+            operand_source: FirstArg,
+        }),
+        "urllib.parse.unquote" => Some(TransformMethodInfo {
+            kind: UrlDecode,
+            operand_source: FirstArg,
+        }),
+        // Shell escaping
+        "shlex.quote" => Some(TransformMethodInfo {
+            kind: ShellEscape,
+            operand_source: FirstArg,
+        }),
+        // Base64
+        "base64.b64encode" => Some(TransformMethodInfo {
+            kind: Base64Encode,
+            operand_source: FirstArg,
+        }),
+        "base64.b64decode" => Some(TransformMethodInfo {
+            kind: Base64Decode,
+            operand_source: FirstArg,
+        }),
+        _ => None,
+    }
+}
+
+fn classify_transform_php(callee: &str) -> Option<TransformMethodInfo> {
+    use StringOperandSource::*;
+    use TransformKind::*;
+
+    match callee {
+        // HTML escaping
+        "htmlspecialchars" | "htmlentities" => Some(TransformMethodInfo {
+            kind: HtmlEscape,
+            operand_source: FirstArg,
+        }),
+        // URL encoding/decoding
+        "urlencode" | "rawurlencode" => Some(TransformMethodInfo {
+            kind: UrlEncode,
+            operand_source: FirstArg,
+        }),
+        "urldecode" | "rawurldecode" => Some(TransformMethodInfo {
+            kind: UrlDecode,
+            operand_source: FirstArg,
+        }),
+        // Base64
+        "base64_encode" => Some(TransformMethodInfo {
+            kind: Base64Encode,
+            operand_source: FirstArg,
+        }),
+        "base64_decode" => Some(TransformMethodInfo {
+            kind: Base64Decode,
+            operand_source: FirstArg,
+        }),
+        // Shell escaping
+        "escapeshellarg" | "escapeshellcmd" => Some(TransformMethodInfo {
+            kind: ShellEscape,
+            operand_source: FirstArg,
+        }),
+        // SQL escaping (witness-only — no verified label rule)
+        "addslashes" => Some(TransformMethodInfo {
+            kind: SqlEscape,
+            operand_source: FirstArg,
+        }),
+        _ => None,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Phase 28: Concrete encoding/decoding for witness rendering
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Apply encoding for witness rendering.
+///
+/// **NOT a spec-complete codec.** These are witness-quality helpers only —
+/// not suitable for security decisions, not reusable outside witness display.
+pub fn encode_concrete_for_witness(kind: TransformKind, input: &str) -> Option<String> {
+    match kind {
+        TransformKind::HtmlEscape => Some(html_escape_witness(input)),
+        TransformKind::UrlEncode => url_encode_witness(input),
+        TransformKind::ShellEscape => Some(shell_escape_witness(input)),
+        TransformKind::SqlEscape => Some(sql_escape_witness(input)),
+        TransformKind::Base64Encode => Some(base64_encode_witness(input)),
+        // Decoding ops handled by decode_concrete_for_witness
+        TransformKind::Base64Decode | TransformKind::UrlDecode => None,
+    }
+}
+
+/// Apply decoding for witness rendering.
+///
+/// **NOT a spec-complete codec.** Witness-quality only.
+pub fn decode_concrete_for_witness(kind: TransformKind, input: &str) -> Option<String> {
+    match kind {
+        TransformKind::Base64Decode => base64_decode_witness(input),
+        TransformKind::UrlDecode => url_decode_witness(input),
+        // Encoding ops handled by encode_concrete_for_witness
+        _ => None,
+    }
+}
+
+/// HTML entity escaping (witness-quality).
+fn html_escape_witness(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + input.len() / 4);
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// URL percent-encoding (witness-quality, ASCII only).
+///
+/// Encodes all characters except unreserved set `[A-Za-z0-9-_.~]`.
+/// Returns `None` for non-ASCII input (conservative).
+fn url_encode_witness(input: &str) -> Option<String> {
+    if !input.is_ascii() {
+        return None;
+    }
+    let mut out = String::with_capacity(input.len() * 3);
+    for &b in input.as_bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(HEX_UPPER[(b >> 4) as usize] as char);
+            out.push(HEX_UPPER[(b & 0x0f) as usize] as char);
+        }
+    }
+    Some(out)
+}
+
+const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
+/// Shell single-quote escaping (witness-quality, POSIX model).
+fn shell_escape_witness(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 4);
+    out.push('\'');
+    for ch in input.chars() {
+        if ch == '\'' {
+            // Close quote, add escaped single quote, reopen
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// SQL single-quote doubling (witness-quality).
+fn sql_escape_witness(input: &str) -> String {
+    input.replace('\'', "''")
+}
+
+/// Base64 encoding (witness-quality, standard alphabet + padding).
+fn base64_encode_witness(input: &str) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        out.push(ALPHABET[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 0x3f) as usize] as char);
+
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(triple & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// Base64 decoding (witness-quality). Returns `None` for invalid input.
+fn base64_decode_witness(input: &str) -> Option<String> {
+    let input = input.trim_end_matches('=');
+    let mut bytes = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buf: u32 = 0;
+    let mut bits: u32 = 0;
+
+    for ch in input.chars() {
+        let val = match ch {
+            'A'..='Z' => ch as u32 - b'A' as u32,
+            'a'..='z' => ch as u32 - b'a' as u32 + 26,
+            '0'..='9' => ch as u32 - b'0' as u32 + 52,
+            '+' => 62,
+            '/' => 63,
+            _ => return None,
+        };
+        buf = (buf << 6) | val;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            bytes.push((buf >> bits) as u8);
+            buf &= (1 << bits) - 1;
+        }
+    }
+
+    String::from_utf8(bytes).ok()
+}
+
+/// URL percent-decoding (witness-quality).
+fn url_decode_witness(input: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(input.len());
+    let mut chars = input.bytes();
+
+    while let Some(b) = chars.next() {
+        match b {
+            b'%' => {
+                let h = chars.next()?;
+                let l = chars.next()?;
+                let hi = hex_val(h)?;
+                let lo = hex_val(l)?;
+                bytes.push((hi << 4) | lo);
+            }
+            b'+' => bytes.push(b' '),
+            other => bytes.push(other),
+        }
+    }
+
+    String::from_utf8(bytes).ok()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
     }
 }
@@ -789,5 +1197,239 @@ mod tests {
     fn test_global_replace_go() {
         assert!(is_global_replace("strings.ReplaceAll", Lang::Go));
         assert!(!is_global_replace("strings.Replace", Lang::Go));
+    }
+
+    // ── Phase 28: Transform classification ───────────────────────────────
+
+    #[test]
+    fn test_classify_transform_js_encode_uri_component() {
+        let info = classify_transform_method("encodeURIComponent", Lang::JavaScript).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+        assert_eq!(info.operand_source, StringOperandSource::FirstArg);
+    }
+
+    #[test]
+    fn test_classify_transform_js_decode_uri_component() {
+        let info = classify_transform_method("decodeURIComponent", Lang::JavaScript).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlDecode);
+    }
+
+    #[test]
+    fn test_classify_transform_js_btoa() {
+        let info = classify_transform_method("btoa", Lang::JavaScript).unwrap();
+        assert_eq!(info.kind, TransformKind::Base64Encode);
+    }
+
+    #[test]
+    fn test_classify_transform_js_atob() {
+        let info = classify_transform_method("atob", Lang::JavaScript).unwrap();
+        assert_eq!(info.kind, TransformKind::Base64Decode);
+    }
+
+    #[test]
+    fn test_classify_transform_js_he_encode() {
+        let info = classify_transform_method("he.encode", Lang::JavaScript).unwrap();
+        assert_eq!(info.kind, TransformKind::HtmlEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_js_he_escape() {
+        let info = classify_transform_method("he.escape", Lang::TypeScript).unwrap();
+        assert_eq!(info.kind, TransformKind::HtmlEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_js_rich_sanitizer_not_matched() {
+        // DOMPurify.sanitize is a rich sanitizer — NOT a simple escape
+        assert!(classify_transform_method("DOMPurify.sanitize", Lang::JavaScript).is_none());
+        assert!(classify_transform_method("sanitizeHtml", Lang::JavaScript).is_none());
+        assert!(classify_transform_method("xss", Lang::JavaScript).is_none());
+    }
+
+    #[test]
+    fn test_classify_transform_python_html_escape() {
+        let info = classify_transform_method("html.escape", Lang::Python).unwrap();
+        assert_eq!(info.kind, TransformKind::HtmlEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_python_shlex_quote() {
+        let info = classify_transform_method("shlex.quote", Lang::Python).unwrap();
+        assert_eq!(info.kind, TransformKind::ShellEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_python_urllib_quote() {
+        let info = classify_transform_method("urllib.parse.quote", Lang::Python).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+    }
+
+    #[test]
+    fn test_classify_transform_python_base64() {
+        let info = classify_transform_method("base64.b64encode", Lang::Python).unwrap();
+        assert_eq!(info.kind, TransformKind::Base64Encode);
+        let info = classify_transform_method("base64.b64decode", Lang::Python).unwrap();
+        assert_eq!(info.kind, TransformKind::Base64Decode);
+    }
+
+    #[test]
+    fn test_classify_transform_python_rich_sanitizer_not_matched() {
+        assert!(classify_transform_method("bleach.clean", Lang::Python).is_none());
+        assert!(classify_transform_method("markupsafe.escape", Lang::Python).is_none());
+    }
+
+    #[test]
+    fn test_classify_transform_php_htmlspecialchars() {
+        let info = classify_transform_method("htmlspecialchars", Lang::Php).unwrap();
+        assert_eq!(info.kind, TransformKind::HtmlEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_php_urlencode() {
+        let info = classify_transform_method("urlencode", Lang::Php).unwrap();
+        assert_eq!(info.kind, TransformKind::UrlEncode);
+    }
+
+    #[test]
+    fn test_classify_transform_php_base64_encode() {
+        let info = classify_transform_method("base64_encode", Lang::Php).unwrap();
+        assert_eq!(info.kind, TransformKind::Base64Encode);
+    }
+
+    #[test]
+    fn test_classify_transform_php_escapeshellarg() {
+        let info = classify_transform_method("escapeshellarg", Lang::Php).unwrap();
+        assert_eq!(info.kind, TransformKind::ShellEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_php_addslashes() {
+        let info = classify_transform_method("addslashes", Lang::Php).unwrap();
+        assert_eq!(info.kind, TransformKind::SqlEscape);
+    }
+
+    #[test]
+    fn test_classify_transform_unknown_returns_none() {
+        assert!(classify_transform_method("foobar", Lang::JavaScript).is_none());
+        assert!(classify_transform_method("unknown", Lang::Python).is_none());
+        assert!(classify_transform_method("blah", Lang::Php).is_none());
+    }
+
+    #[test]
+    fn test_classify_transform_unsupported_lang_returns_none() {
+        // Java/Go/Ruby not yet supported — deferred
+        assert!(classify_transform_method("URLEncoder.encode", Lang::Java).is_none());
+        assert!(classify_transform_method("url.QueryEscape", Lang::Go).is_none());
+    }
+
+    // ── Phase 28: Concrete encoding ──────────────────────────────────────
+
+    #[test]
+    fn test_encode_concrete_html_escape() {
+        let result = encode_concrete_for_witness(TransformKind::HtmlEscape, "<script>alert('xss')</script>");
+        assert_eq!(
+            result.unwrap(),
+            "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn test_encode_concrete_html_escape_ampersand() {
+        let result = encode_concrete_for_witness(TransformKind::HtmlEscape, "a & b < c");
+        assert_eq!(result.unwrap(), "a &amp; b &lt; c");
+    }
+
+    #[test]
+    fn test_encode_concrete_url_encode() {
+        let result = encode_concrete_for_witness(TransformKind::UrlEncode, "hello world");
+        assert_eq!(result.unwrap(), "hello%20world");
+    }
+
+    #[test]
+    fn test_encode_concrete_url_encode_special_chars() {
+        let result = encode_concrete_for_witness(TransformKind::UrlEncode, "a=b&c=d");
+        assert_eq!(result.unwrap(), "a%3Db%26c%3Dd");
+    }
+
+    #[test]
+    fn test_encode_concrete_shell_escape() {
+        let result = encode_concrete_for_witness(TransformKind::ShellEscape, "hello world");
+        assert_eq!(result.unwrap(), "'hello world'");
+    }
+
+    #[test]
+    fn test_encode_concrete_shell_escape_with_quotes() {
+        let result = encode_concrete_for_witness(TransformKind::ShellEscape, "it's");
+        assert_eq!(result.unwrap(), "'it'\\''s'");
+    }
+
+    #[test]
+    fn test_encode_concrete_sql_escape() {
+        let result = encode_concrete_for_witness(TransformKind::SqlEscape, "O'Brien");
+        assert_eq!(result.unwrap(), "O''Brien");
+    }
+
+    #[test]
+    fn test_encode_concrete_base64() {
+        let result = encode_concrete_for_witness(TransformKind::Base64Encode, "hello");
+        assert_eq!(result.unwrap(), "aGVsbG8=");
+    }
+
+    #[test]
+    fn test_encode_concrete_base64_roundtrip() {
+        let encoded = encode_concrete_for_witness(TransformKind::Base64Encode, "test123").unwrap();
+        let decoded = decode_concrete_for_witness(TransformKind::Base64Decode, &encoded).unwrap();
+        assert_eq!(decoded, "test123");
+    }
+
+    #[test]
+    fn test_decode_concrete_url_decode() {
+        let result = decode_concrete_for_witness(TransformKind::UrlDecode, "hello%20world");
+        assert_eq!(result.unwrap(), "hello world");
+    }
+
+    #[test]
+    fn test_decode_concrete_url_decode_plus() {
+        let result = decode_concrete_for_witness(TransformKind::UrlDecode, "hello+world");
+        assert_eq!(result.unwrap(), "hello world");
+    }
+
+    // ── Phase 28: verified_cap ───────────────────────────────────────────
+
+    #[test]
+    fn test_verified_cap_html_escape() {
+        assert_eq!(TransformKind::HtmlEscape.verified_cap(), Cap::HTML_ESCAPE);
+        assert!(TransformKind::HtmlEscape.is_protective());
+    }
+
+    #[test]
+    fn test_verified_cap_url_encode() {
+        assert_eq!(TransformKind::UrlEncode.verified_cap(), Cap::URL_ENCODE);
+        assert!(TransformKind::UrlEncode.is_protective());
+    }
+
+    #[test]
+    fn test_verified_cap_shell_escape() {
+        assert_eq!(TransformKind::ShellEscape.verified_cap(), Cap::SHELL_ESCAPE);
+        assert!(TransformKind::ShellEscape.is_protective());
+    }
+
+    #[test]
+    fn test_verified_cap_sql_escape_is_empty() {
+        // SqlEscape has no verified label rule — witness-only
+        assert_eq!(TransformKind::SqlEscape.verified_cap(), Cap::empty());
+        assert!(!TransformKind::SqlEscape.is_protective());
+    }
+
+    #[test]
+    fn test_verified_cap_base64_is_empty() {
+        assert_eq!(TransformKind::Base64Encode.verified_cap(), Cap::empty());
+        assert!(!TransformKind::Base64Encode.is_protective());
+    }
+
+    #[test]
+    fn test_verified_cap_url_decode_is_empty() {
+        assert_eq!(TransformKind::UrlDecode.verified_cap(), Cap::empty());
+        assert!(!TransformKind::UrlDecode.is_protective());
     }
 }

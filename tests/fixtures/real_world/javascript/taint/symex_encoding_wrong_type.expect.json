@@ -1,0 +1,25 @@
+{
+  "description": "SQL injection via URL-encoded input: encodeURIComponent does not protect against SQLi. Tests that the taint engine correctly preserves SQL_QUERY cap through URL encoding.",
+  "tags": [
+    "taint",
+    "sqli",
+    "encoding",
+    "phase-28"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        14,
+        19
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.q flows through encodeURIComponent into client.query — URL encoding strips URL_ENCODE cap but SQL_QUERY cap remains, so finding is produced. Mismatch note depends on symex reaching the sink with a string-renderable Encode expression."
+    }
+  ]
+}

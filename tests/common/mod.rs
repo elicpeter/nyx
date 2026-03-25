@@ -14,6 +14,7 @@ pub fn test_config(mode: AnalysisMode) -> Config {
     cfg.scanner.read_vcsignore = false;
     cfg.scanner.require_git_to_read_vcsignore = false;
     cfg.scanner.enable_state_analysis = true;
+    cfg.scanner.enable_auth_analysis = true;
     cfg.performance.worker_threads = Some(1);
     cfg.performance.batch_size = 64;
     cfg.performance.channel_multiplier = 1;

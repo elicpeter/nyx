@@ -631,6 +631,7 @@ impl<'a> ParsedFile<'a> {
                 self.source.bytes,
                 &self.local_summaries,
                 global_summaries,
+                cfg.scanner.enable_auth_analysis,
             );
             let state_lines: std::collections::HashSet<usize> = state_findings
                 .iter()

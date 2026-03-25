@@ -16,14 +16,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "analogue",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["js.code_exec.eval"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "js.code_exec.eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["concat", "eval-proxy"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "concat",
+        "eval-proxy"
+      ],
       "disabled": false,
       "notes": "eval used as proxy for SQL query; analogue tier because real SQL sink is not modeled directly"
     },
@@ -37,14 +54,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "analogue",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["js.code_exec.eval"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "js.code_exec.eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["template-literal", "eval-proxy"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "template-literal",
+        "eval-proxy"
+      ],
       "disabled": false,
       "notes": "eval used as proxy for SQL query with template literal interpolation"
     },
@@ -58,14 +92,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["js.cmdi.exec"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "js.cmdi.exec"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "child_process"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "child_process"
+      ],
       "disabled": false,
       "notes": "Direct flow from req.query.cmd to exec()"
     },
@@ -79,14 +130,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["js.cmdi.exec"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "js.cmdi.exec"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["indirect", "concat", "child_process"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "indirect",
+        "concat",
+        "child_process"
+      ],
       "disabled": false,
       "notes": "Indirect flow via string concat to exec()"
     },
@@ -100,14 +169,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["innerHTML", "reflected"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "innerHTML",
+        "reflected"
+      ],
       "disabled": false,
       "notes": "Reflected XSS via innerHTML assignment; taint-based detection (no AST pattern for innerHTML)"
     },
@@ -121,14 +205,30 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["js.xss.document_write"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "js.xss.document_write"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["document-write"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "document-write"
+      ],
       "disabled": false,
       "notes": "XSS via document.write with user-controlled content"
     },
@@ -142,14 +242,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["js.xss.location_assign"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "js.xss.location_assign"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["open-redirect", "location-href"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "open-redirect",
+        "location-href"
+      ],
       "disabled": false,
       "notes": "Open redirect via location.href assignment"
     },
@@ -163,14 +280,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["fetch", "ssrf"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "fetch",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via fetch() with user-controlled URL"
     },
@@ -184,14 +316,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["sendFile", "path-traversal"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "sendFile",
+        "path-traversal"
+      ],
       "disabled": false,
       "notes": "Path traversal via res.sendFile with user-controlled path"
     },
@@ -205,14 +352,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["js.code_exec.eval"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "js.code_exec.eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["eval", "code-injection"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "eval",
+        "code-injection"
+      ],
       "disabled": false,
       "notes": "Code injection via eval() with user-controlled expression"
     },
@@ -226,14 +390,30 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["new-function", "indirect", "code-injection"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "new-function",
+        "indirect",
+        "code-injection"
+      ],
       "disabled": false,
       "notes": "Code injection via new Function() with user-controlled template"
     },
@@ -254,7 +434,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Constant string argument to exec; no user-controlled data"
     },
@@ -275,7 +458,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "dominated-check"],
+      "tags": [
+        "allowlist",
+        "dominated-check"
+      ],
       "disabled": false,
       "notes": "User input dominated by allowlist check before reaching exec()"
     },
@@ -296,7 +482,11 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "dompurify", "interprocedural"],
+      "tags": [
+        "sanitizer",
+        "dompurify",
+        "interprocedural"
+      ],
       "disabled": false,
       "notes": "DOMPurify sanitizer applied via helper function before innerHTML"
     },
@@ -317,7 +507,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["non-security-sink", "console-log"],
+      "tags": [
+        "non-security-sink",
+        "console-log"
+      ],
       "disabled": false,
       "notes": "User input flows to console.log and length computation, not a security sink"
     },
@@ -338,7 +531,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["reassignment", "killed-taint"],
+      "tags": [
+        "reassignment",
+        "killed-taint"
+      ],
       "disabled": false,
       "notes": "Tainted variable reassigned to constant before reaching innerHTML"
     },
@@ -359,7 +555,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "dompurify"],
+      "tags": [
+        "sanitizer",
+        "dompurify"
+      ],
       "disabled": false,
       "notes": "DOMPurify.sanitize applied inline before innerHTML assignment"
     },
@@ -380,7 +579,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["type-check", "typeof-guard"],
+      "tags": [
+        "type-check",
+        "typeof-guard"
+      ],
       "disabled": false,
       "notes": "typeof check guards eval(); only numbers reach the sink"
     },
@@ -401,7 +603,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "validated"],
+      "tags": [
+        "allowlist",
+        "validated"
+      ],
       "disabled": false,
       "notes": "Allowlist validation before exec(); only permitted commands reach sink"
     },
@@ -415,14 +620,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": [],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["concat", "cursor-execute"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "concat",
+        "cursor-execute"
+      ],
       "disabled": false,
       "notes": "SQL injection via string concat in cursor.execute()"
     },
@@ -436,14 +658,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["py.sqli.execute_format"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "py.sqli.execute_format"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["format-string", "cursor-execute"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "format-string",
+        "cursor-execute"
+      ],
       "disabled": false,
       "notes": "SQL injection via % format operator in cursor.execute()"
     },
@@ -457,14 +697,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["py.cmdi.os_system"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "py.cmdi.os_system"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "os-system"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "os-system"
+      ],
       "disabled": false,
       "notes": "Direct command injection via os.system()"
     },
@@ -478,14 +735,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["py.cmdi.subprocess_shell"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "py.cmdi.subprocess_shell"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["indirect", "subprocess", "shell-true"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "indirect",
+        "subprocess",
+        "shell-true"
+      ],
       "disabled": false,
       "notes": "Command injection via subprocess.run with shell=True"
     },
@@ -499,14 +774,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["reflected", "make-response"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "reflected",
+        "make-response"
+      ],
       "disabled": false,
       "notes": "Reflected XSS via make_response with unescaped user input in HTML"
     },
@@ -520,14 +810,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["py.xss.jinja_from_string"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "py.xss.jinja_from_string"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["jinja2", "template-injection"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "jinja2",
+        "template-injection"
+      ],
       "disabled": false,
       "notes": "Server-side template injection via jinja2.Template with user-controlled string"
     },
@@ -541,14 +848,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cfg-unguarded-sink"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["requests-get", "ssrf"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "requests-get",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via requests.get() with user-controlled URL"
     },
@@ -562,14 +886,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["send-file", "path-traversal"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "send-file",
+        "path-traversal"
+      ],
       "disabled": false,
       "notes": "Path traversal via send_file() with user-controlled path"
     },
@@ -583,14 +922,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["py.deser.pickle_loads"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "py.deser.pickle_loads"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["pickle", "deserialization"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "pickle",
+        "deserialization"
+      ],
       "disabled": false,
       "notes": "Insecure deserialization via pickle.loads with user-controlled data"
     },
@@ -604,14 +960,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["py.code_exec.eval"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "py.code_exec.eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["eval", "code-injection"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "eval",
+        "code-injection"
+      ],
       "disabled": false,
       "notes": "Code injection via eval() with user-controlled expression"
     },
@@ -625,14 +998,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["py.code_exec.exec"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "py.code_exec.exec"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["exec", "code-injection"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "exec",
+        "code-injection"
+      ],
       "disabled": false,
       "notes": "Code injection via exec() with user-controlled code string"
     },
@@ -653,7 +1043,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Constant string argument to os.system; no user-controlled data"
     },
@@ -674,7 +1067,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "dominated-check"],
+      "tags": [
+        "allowlist",
+        "dominated-check"
+      ],
       "disabled": false,
       "notes": "User input dominated by allowlist membership check before os.system()"
     },
@@ -695,7 +1091,11 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "shlex-quote", "interprocedural"],
+      "tags": [
+        "sanitizer",
+        "shlex-quote",
+        "interprocedural"
+      ],
       "disabled": false,
       "notes": "shlex.quote sanitizer applied via helper function before os.system()"
     },
@@ -716,7 +1116,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["non-security-sink", "logging"],
+      "tags": [
+        "non-security-sink",
+        "logging"
+      ],
       "disabled": false,
       "notes": "User input flows to logging.info and length computation, not a security sink"
     },
@@ -737,7 +1140,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["reassignment", "killed-taint"],
+      "tags": [
+        "reassignment",
+        "killed-taint"
+      ],
       "disabled": false,
       "notes": "Tainted variable reassigned to constant before reaching os.system()"
     },
@@ -758,7 +1164,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "shlex-quote"],
+      "tags": [
+        "sanitizer",
+        "shlex-quote"
+      ],
       "disabled": false,
       "notes": "shlex.quote sanitizer applied inline before os.system()"
     },
@@ -779,7 +1188,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["type-check", "isinstance-guard"],
+      "tags": [
+        "type-check",
+        "isinstance-guard"
+      ],
       "disabled": false,
       "notes": "isinstance check guards cursor.execute(); only ints reach the sink"
     },
@@ -800,7 +1212,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "validated"],
+      "tags": [
+        "allowlist",
+        "validated"
+      ],
       "disabled": false,
       "notes": "Allowlist validation before os.system(); only permitted commands reach sink"
     },
@@ -814,14 +1229,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["java.sqli.execute_concat"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "java.sqli.execute_concat"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[9, 9]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["concat", "executeQuery"],
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "concat",
+        "executeQuery"
+      ],
       "disabled": false,
       "notes": "SQL injection via string concat in executeQuery()"
     },
@@ -835,14 +1268,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["java.sqli.execute_concat"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "java.sqli.execute_concat"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[9, 9]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["string-format", "executeQuery"],
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "string-format",
+        "executeQuery"
+      ],
       "disabled": false,
       "notes": "SQL injection via String.format in executeQuery()"
     },
@@ -856,14 +1307,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["java.cmdi.runtime_exec"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "java.cmdi.runtime_exec"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "runtime-exec"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "runtime-exec"
+      ],
       "disabled": false,
       "notes": "Direct command injection via Runtime.exec()"
     },
@@ -877,14 +1345,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["java.cmdi.runtime_exec"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "java.cmdi.runtime_exec"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["indirect", "concat", "runtime-exec"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "indirect",
+        "concat",
+        "runtime-exec"
+      ],
       "disabled": false,
       "notes": "Indirect command injection via string concat to Runtime.exec()"
     },
@@ -898,14 +1384,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["java.xss.getwriter_print"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "java.xss.getwriter_print"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["reflected", "getwriter-println"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "reflected",
+        "getwriter-println"
+      ],
       "disabled": false,
       "notes": "Reflected XSS via getWriter().println() with unescaped user input"
     },
@@ -919,14 +1422,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": [],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[7, 7]],
-      "tags": ["url-connection", "ssrf"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "url-connection",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via URL.openConnection() with user-controlled URL"
     },
@@ -940,14 +1460,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[7, 7]],
-      "tags": ["http-client", "ssrf"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "http-client",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via HttpClient.send() with user-controlled URL"
     },
@@ -961,14 +1496,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": [],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["file-input-stream", "path-traversal"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "file-input-stream",
+        "path-traversal"
+      ],
       "disabled": false,
       "notes": "Path traversal via FileInputStream with user-controlled path"
     },
@@ -982,14 +1534,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["java.deser.readobject"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "java.deser.readobject"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["object-input-stream", "deserialization"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "object-input-stream",
+        "deserialization"
+      ],
       "disabled": false,
       "notes": "Insecure deserialization via ObjectInputStream.readObject()"
     },
@@ -1003,14 +1572,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["java.deser.readobject", "java.cmdi.runtime_exec"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "java.deser.readobject",
+        "java.cmdi.runtime_exec"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 8]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["deser-to-exec", "chained"],
+      "expected_sink_lines": [
+        [
+          7,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "deser-to-exec",
+        "chained"
+      ],
       "disabled": false,
       "notes": "Deserialized object flows to Runtime.exec(); both readObject and exec patterns should match"
     },
@@ -1024,14 +1611,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["java.reflection.class_forname"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "java.reflection.class_forname"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["reflection", "class-forname"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "reflection",
+        "class-forname"
+      ],
       "disabled": false,
       "notes": "Code injection via Class.forName() with user-controlled class name"
     },
@@ -1052,7 +1656,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Constant string in executeQuery(); no user-controlled data"
     },
@@ -1073,7 +1680,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "dominated-check"],
+      "tags": [
+        "allowlist",
+        "dominated-check"
+      ],
       "disabled": false,
       "notes": "User input dominated by allowlist Set.contains() check before Runtime.exec()"
     },
@@ -1094,7 +1704,11 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "html-escape", "interprocedural"],
+      "tags": [
+        "sanitizer",
+        "html-escape",
+        "interprocedural"
+      ],
       "disabled": false,
       "notes": "HtmlUtils.htmlEscape sanitizer applied via helper method before getWriter().println()"
     },
@@ -1115,7 +1729,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["non-security-sink", "logger"],
+      "tags": [
+        "non-security-sink",
+        "logger"
+      ],
       "disabled": false,
       "notes": "User input flows to Logger.info and length computation; output is String.valueOf(len)"
     },
@@ -1136,7 +1753,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["reassignment", "killed-taint"],
+      "tags": [
+        "reassignment",
+        "killed-taint"
+      ],
       "disabled": false,
       "notes": "Tainted variable reassigned to constant 'Guest' before reaching getWriter().println()"
     },
@@ -1157,7 +1777,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "html-escape"],
+      "tags": [
+        "sanitizer",
+        "html-escape"
+      ],
       "disabled": false,
       "notes": "HtmlUtils.htmlEscape sanitizer applied inline before getWriter().println()"
     },
@@ -1178,7 +1801,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["type-check", "regex-guard"],
+      "tags": [
+        "type-check",
+        "regex-guard"
+      ],
       "disabled": false,
       "notes": "Regex matches(\"\\\\d+\") check guards executeQuery(); only numeric strings reach the sink"
     },
@@ -1199,7 +1825,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "validated"],
+      "tags": [
+        "allowlist",
+        "validated"
+      ],
       "disabled": false,
       "notes": "Allowlist validation before Runtime.exec(); only permitted commands reach sink"
     },
@@ -1213,14 +1842,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["go.sqli.query_concat"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "go.sqli.query_concat"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[11, 11]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["concat", "db-query"],
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "concat",
+        "db-query"
+      ],
       "disabled": false,
       "notes": "SQL injection via string concat in db.Query()"
     },
@@ -1234,14 +1881,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["go.sqli.query_concat"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "go.sqli.query_concat"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[12, 12]],
-      "expected_source_lines": [[10, 10]],
-      "tags": ["sprintf", "db-exec"],
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "sprintf",
+        "db-exec"
+      ],
       "disabled": false,
       "notes": "SQL injection via fmt.Sprintf in db.Exec()"
     },
@@ -1255,14 +1920,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["go.sqli.query_concat"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "go.sqli.query_concat"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[12, 12]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["concat", "db-queryrow"],
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "concat",
+        "db-queryrow"
+      ],
       "disabled": false,
       "notes": "SQL injection via string concat in db.QueryRow()"
     },
@@ -1276,14 +1959,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["go.cmdi.exec_command"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "go.cmdi.exec_command"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-unauthed-access"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["direct", "exec-command"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "direct",
+        "exec-command"
+      ],
       "disabled": false,
       "notes": "Direct command injection via exec.Command()"
     },
@@ -1297,14 +1998,34 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["go.cmdi.exec_command"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "go.cmdi.exec_command"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-unauthed-access"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[11, 11]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["indirect", "concat", "exec-command", "shell"],
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "indirect",
+        "concat",
+        "exec-command",
+        "shell"
+      ],
       "disabled": false,
       "notes": "Indirect command injection via string concat to exec.Command(\"sh\", \"-c\", cmd)"
     },
@@ -1318,14 +2039,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "language_specific",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["go.cmdi.exec_command"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "go.cmdi.exec_command"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["env-source", "exec-command", "shell"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "env-source",
+        "exec-command",
+        "shell"
+      ],
       "disabled": false,
       "notes": "Command injection via os.Getenv source flowing to exec.Command; language_specific tier because env-var source pattern is Go-specific"
     },
@@ -1339,14 +2078,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["fmt-fprintf", "response-writer"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "fmt-fprintf",
+        "response-writer"
+      ],
       "disabled": false,
       "notes": "XSS via fmt.Fprintf to ResponseWriter with unescaped user input"
     },
@@ -1360,14 +2114,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[11, 11]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["template-html", "unsafe-cast"],
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "template-html",
+        "unsafe-cast"
+      ],
       "disabled": false,
       "notes": "XSS via template.HTML() cast bypassing html/template auto-escaping"
     },
@@ -1381,14 +2150,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[9, 9]],
-      "expected_source_lines": [[8, 8]],
-      "tags": ["http-get", "ssrf"],
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "http-get",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via http.Get() with user-controlled URL"
     },
@@ -1402,14 +2186,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": [],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "state-unauthed-access"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["os-readfile", "path-traversal"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "os-readfile",
+        "path-traversal"
+      ],
       "disabled": false,
       "notes": "Path traversal via os.ReadFile() with user-controlled path"
     },
@@ -1423,14 +2224,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["fmt-fprintf", "format-string-injection"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "fmt-fprintf",
+        "format-string-injection"
+      ],
       "disabled": false,
       "notes": "Format string injection via user-controlled format arg to fmt.Fprintf()"
     },
@@ -1451,7 +2267,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Constant string arguments to exec.Command; no user-controlled data"
     },
@@ -1467,12 +2286,18 @@
       "match_mode": "file_presence",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-unauthed-access"
+      ],
       "expected_severity": null,
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "dominated-check", "map-lookup"],
+      "tags": [
+        "allowlist",
+        "dominated-check",
+        "map-lookup"
+      ],
       "disabled": false,
       "notes": "User input dominated by map allowlist check before exec.Command()"
     },
@@ -1488,12 +2313,18 @@
       "match_mode": "file_presence",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-unauthed-access"
+      ],
       "expected_severity": null,
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "filepath-clean", "interprocedural"],
+      "tags": [
+        "sanitizer",
+        "filepath-clean",
+        "interprocedural"
+      ],
       "disabled": false,
       "notes": "filepath.Clean sanitizer applied via helper function before os.ReadFile()"
     },
@@ -1514,7 +2345,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["non-security-sink", "log-printf"],
+      "tags": [
+        "non-security-sink",
+        "log-printf"
+      ],
       "disabled": false,
       "notes": "User input flows to log.Printf and length output; no security-sensitive sink"
     },
@@ -1535,7 +2369,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["reassignment", "killed-taint"],
+      "tags": [
+        "reassignment",
+        "killed-taint"
+      ],
       "disabled": false,
       "notes": "Tainted variable reassigned to constant 'Guest' before reaching fmt.Fprintf()"
     },
@@ -1551,12 +2388,17 @@
       "match_mode": "file_presence",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-unauthed-access"
+      ],
       "expected_severity": null,
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "filepath-clean"],
+      "tags": [
+        "sanitizer",
+        "filepath-clean"
+      ],
       "disabled": false,
       "notes": "filepath.Clean sanitizer applied inline before os.ReadFile()"
     },
@@ -1577,7 +2419,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["type-check", "strconv-atoi-guard"],
+      "tags": [
+        "type-check",
+        "strconv-atoi-guard"
+      ],
       "disabled": false,
       "notes": "strconv.Atoi check guards db.Query(); only valid integers reach the sink"
     },
@@ -1593,12 +2438,18 @@
       "match_mode": "file_presence",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-unauthed-access"
+      ],
       "expected_severity": null,
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "validated", "map-lookup"],
+      "tags": [
+        "allowlist",
+        "validated",
+        "map-lookup"
+      ],
       "disabled": false,
       "notes": "Allowlist map validation before exec.Command(); only permitted commands reach sink"
     },
@@ -1612,14 +2463,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["php.sqli.query_concat"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "php.sqli.query_concat"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[4, 4]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["concat", "mysqli-query"],
+      "expected_sink_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "concat",
+        "mysqli-query"
+      ],
       "disabled": false,
       "notes": "SQL injection via string concat in mysqli->query()"
     },
@@ -1633,14 +2502,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["php.sqli.query_concat"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "php.sqli.query_concat"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[4, 4]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["sprintf", "mysqli-query"],
+      "expected_sink_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "sprintf",
+        "mysqli-query"
+      ],
       "disabled": false,
       "notes": "SQL injection via sprintf in mysqli->query()"
     },
@@ -1654,14 +2541,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["php.cmdi.system"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "php.cmdi.system"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["direct", "system"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "direct",
+        "system"
+      ],
       "disabled": false,
       "notes": "Direct command injection via system()"
     },
@@ -1675,14 +2579,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["php.cmdi.system"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "php.cmdi.system"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["indirect", "shell-exec", "concat"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "indirect",
+        "shell-exec",
+        "concat"
+      ],
       "disabled": false,
       "notes": "Indirect command injection via shell_exec(); taint-based since shell_exec is not directly an AST pattern"
     },
@@ -1696,14 +2618,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["echo", "reflected"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "echo",
+        "reflected"
+      ],
       "disabled": false,
       "notes": "Reflected XSS via echo with unescaped user input in HTML"
     },
@@ -1717,14 +2654,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["file-get-contents", "ssrf"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "file-get-contents",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via file_get_contents() with user-controlled URL"
     },
@@ -1738,14 +2690,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["php.path.include_variable"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "php.path.include_variable"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["include", "path-traversal"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "include",
+        "path-traversal"
+      ],
       "disabled": false,
       "notes": "Path traversal / RFI via include() with user-controlled path"
     },
@@ -1759,14 +2728,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[4, 4]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["copy", "path-traversal"],
+      "expected_sink_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "copy",
+        "path-traversal"
+      ],
       "disabled": false,
       "notes": "Path traversal via copy() with user-controlled source path"
     },
@@ -1780,14 +2764,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["php.deser.unserialize"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "php.deser.unserialize"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["unserialize", "deserialization"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "unserialize",
+        "deserialization"
+      ],
       "disabled": false,
       "notes": "Insecure deserialization via unserialize() with user-controlled POST data"
     },
@@ -1801,14 +2802,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["php.code_exec.eval"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "php.code_exec.eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["eval", "code-injection"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "eval",
+        "code-injection"
+      ],
       "disabled": false,
       "notes": "Code injection via eval() with user-controlled code"
     },
@@ -1822,14 +2840,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["php.code_exec.assert_string"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "php.code_exec.assert_string"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["assert", "code-injection"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "assert",
+        "code-injection"
+      ],
       "disabled": false,
       "notes": "Code injection via assert() with string argument (PHP < 8.0 evaluates as code)"
     },
@@ -1850,7 +2885,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Constant string argument to system(); no user-controlled data"
     },
@@ -1871,7 +2909,11 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "dominated-check", "in-array"],
+      "tags": [
+        "allowlist",
+        "dominated-check",
+        "in-array"
+      ],
       "disabled": false,
       "notes": "User input dominated by in_array allowlist check before system()"
     },
@@ -1892,7 +2934,11 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "htmlspecialchars", "interprocedural"],
+      "tags": [
+        "sanitizer",
+        "htmlspecialchars",
+        "interprocedural"
+      ],
       "disabled": false,
       "notes": "htmlspecialchars sanitizer applied via helper function before echo"
     },
@@ -1913,7 +2959,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["non-security-sink", "error-log"],
+      "tags": [
+        "non-security-sink",
+        "error-log"
+      ],
       "disabled": false,
       "notes": "User input flows to error_log and strlen; echo outputs only the length integer"
     },
@@ -1934,7 +2983,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["reassignment", "killed-taint"],
+      "tags": [
+        "reassignment",
+        "killed-taint"
+      ],
       "disabled": false,
       "notes": "Tainted variable reassigned to constant 'Guest' before reaching echo"
     },
@@ -1955,7 +3007,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "htmlspecialchars"],
+      "tags": [
+        "sanitizer",
+        "htmlspecialchars"
+      ],
       "disabled": false,
       "notes": "htmlspecialchars sanitizer applied inline before echo"
     },
@@ -1976,7 +3031,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["type-check", "is-numeric-guard"],
+      "tags": [
+        "type-check",
+        "is-numeric-guard"
+      ],
       "disabled": false,
       "notes": "is_numeric check guards mysqli->query(); only numeric strings reach the sink"
     },
@@ -1997,7 +3055,11 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "validated", "in-array"],
+      "tags": [
+        "allowlist",
+        "validated",
+        "in-array"
+      ],
       "disabled": false,
       "notes": "Allowlist in_array validation before system(); only permitted commands reach sink"
     },
@@ -2011,14 +3073,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cfg-unguarded-sink"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["axios", "ssrf"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "axios",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via bare axios() call with user-controlled URL"
     },
@@ -2032,14 +3111,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cfg-unguarded-sink"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["httpx", "ssrf"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "httpx",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via httpx.post() with user-controlled URL"
     },
@@ -2053,14 +3149,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cfg-unguarded-sink"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[9, 9]],
-      "expected_source_lines": [[8, 8]],
-      "tags": ["http-client", "ssrf"],
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "http-client",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via http.NewRequest() with user-controlled URL"
     },
@@ -2074,14 +3187,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cfg-unguarded-sink"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["httparty", "ssrf"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "httparty",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via HTTParty.get() with user-controlled URL"
     },
@@ -2097,12 +3227,18 @@
       "match_mode": "file_presence",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["hardcoded", "ssrf", "no-source"],
+      "tags": [
+        "hardcoded",
+        "ssrf",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Hardcoded URL to axios(); no user-controlled data"
     },
@@ -2118,12 +3254,18 @@
       "match_mode": "file_presence",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["constant", "ssrf", "no-source"],
+      "tags": [
+        "constant",
+        "ssrf",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Constant URL to requests.get(); no user-controlled data"
     },
@@ -2139,12 +3281,18 @@
       "match_mode": "file_presence",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["hardcoded", "ssrf", "no-source"],
+      "tags": [
+        "hardcoded",
+        "ssrf",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Hardcoded URL to http.Get(); no user-controlled data"
     },
@@ -2160,12 +3308,18 @@
       "match_mode": "file_presence",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["hardcoded", "ssrf", "no-source"],
+      "tags": [
+        "hardcoded",
+        "ssrf",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Hardcoded URL to file_get_contents(); no user-controlled data"
     },
@@ -2186,7 +3340,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Constant string argument to system(); no user-controlled data"
     },
@@ -2207,7 +3364,11 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "dominated-check", "include"],
+      "tags": [
+        "allowlist",
+        "dominated-check",
+        "include"
+      ],
       "disabled": false,
       "notes": "Allowlist guard dominates system() call; taint should be suppressed"
     },
@@ -2228,7 +3389,11 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "shellwords-escape", "interprocedural"],
+      "tags": [
+        "sanitizer",
+        "shellwords-escape",
+        "interprocedural"
+      ],
       "disabled": false,
       "notes": "Shellwords.escape called via helper function; interprocedural sanitization"
     },
@@ -2249,7 +3414,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["non-security-sink", "logger"],
+      "tags": [
+        "non-security-sink",
+        "logger"
+      ],
       "disabled": false,
       "notes": "Logger.info is not a security-sensitive sink"
     },
@@ -2270,7 +3438,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["reassignment", "killed-taint"],
+      "tags": [
+        "reassignment",
+        "killed-taint"
+      ],
       "disabled": false,
       "notes": "Tainted variable reassigned to constant before reaching sink"
     },
@@ -2291,7 +3462,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "shellwords-escape"],
+      "tags": [
+        "sanitizer",
+        "shellwords-escape"
+      ],
       "disabled": false,
       "notes": "Shellwords.escape sanitizes user input before system() call"
     },
@@ -2312,7 +3486,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["type-check", "is-a-guard"],
+      "tags": [
+        "type-check",
+        "is-a-guard"
+      ],
       "disabled": false,
       "notes": "Type check guard (is_a? Integer) dominates SQL execution"
     },
@@ -2333,7 +3510,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["allowlist", "validated"],
+      "tags": [
+        "allowlist",
+        "validated"
+      ],
       "disabled": false,
       "notes": "Allowlist validation before system() call"
     },
@@ -2349,12 +3529,18 @@
       "match_mode": "file_presence",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["hardcoded", "ssrf", "no-source"],
+      "tags": [
+        "hardcoded",
+        "ssrf",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Hardcoded URL to HTTParty.get(); no user-controlled data"
     },
@@ -2368,14 +3554,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rb.cmdi.system_interp"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rb.cmdi.system_interp"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["system", "cmdi"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "system",
+        "cmdi"
+      ],
       "disabled": false,
       "notes": "Command injection via system() with user-controlled argument"
     },
@@ -2389,14 +3592,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["rb.cmdi.backtick"],
-      "allowed_alternative_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "rb.cmdi.backtick"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["backtick", "cmdi"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "backtick",
+        "cmdi"
+      ],
       "disabled": false,
       "notes": "Command injection via backtick interpolation with user-controlled data"
     },
@@ -2410,14 +3630,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rb.code_exec.eval"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rb.code_exec.eval"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["eval", "code-injection"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "eval",
+        "code-injection"
+      ],
       "disabled": false,
       "notes": "Code injection via eval() with user-controlled expression"
     },
@@ -2431,14 +3668,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rb.deser.marshal_load"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rb.deser.marshal_load"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["marshal", "deserialization"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "marshal",
+        "deserialization"
+      ],
       "disabled": false,
       "notes": "Insecure deserialization via Marshal.load() with user-controlled data"
     },
@@ -2452,14 +3706,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rb.deser.yaml_load"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rb.deser.yaml_load"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["yaml", "deserialization"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "yaml",
+        "deserialization"
+      ],
       "disabled": false,
       "notes": "Insecure deserialization via YAML.load() with user-controlled data"
     },
@@ -2473,14 +3744,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["send-file", "path-traversal"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "send-file",
+        "path-traversal"
+      ],
       "disabled": false,
       "notes": "Path traversal via send_file() with user-controlled path"
     },
@@ -2494,14 +3780,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["find-by-sql", "sqli"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "find-by-sql",
+        "sqli"
+      ],
       "disabled": false,
       "notes": "SQL injection via find_by_sql() with string concatenation"
     },
@@ -2515,14 +3816,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["execute", "sqli"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "execute",
+        "sqli"
+      ],
       "disabled": false,
       "notes": "SQL injection via ActiveRecord execute() with string concatenation"
     },
@@ -2536,14 +3852,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cfg-unguarded-sink"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["net-http", "ssrf"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "net-http",
+        "ssrf"
+      ],
       "disabled": false,
       "notes": "SSRF via Net::HTTP.get() with user-controlled URL"
     },
@@ -2557,14 +3890,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["html-safe", "xss"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "html-safe",
+        "xss"
+      ],
       "disabled": false,
       "notes": "XSS via html_safe on user-controlled input"
     },
@@ -2578,14 +3926,29 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[3, 3]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["raw", "xss"],
+      "expected_sink_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "raw",
+        "xss"
+      ],
       "disabled": false,
       "notes": "XSS via raw() on user-controlled input"
     },
@@ -2599,14 +3962,30 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["react", "dangerouslySetInnerHTML", "xss"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "react",
+        "dangerouslySetInnerHTML",
+        "xss"
+      ],
       "disabled": false,
       "notes": "React XSS via dangerouslySetInnerHTML with user-controlled content"
     },
@@ -2622,14 +4001,20 @@
       "match_mode": "rule_match",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": null,
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["parseInt", "type-coercion", "sanitizer"],
+      "tags": [
+        "parseInt",
+        "type-coercion",
+        "sanitizer"
+      ],
       "disabled": false,
-      "notes": "parseInt sanitizes user input — should produce no taint finding"
+      "notes": "parseInt sanitizes user input \u2014 should produce no taint finding"
     },
     {
       "case_id": "py-cmdi-popen-001",
@@ -2641,14 +4026,33 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": [],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["subprocess", "popen", "shell-true", "gated-sink"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "subprocess",
+        "popen",
+        "shell-true",
+        "gated-sink"
+      ],
       "disabled": false,
       "notes": "Command injection via subprocess.Popen with shell=True"
     },
@@ -2664,14 +4068,20 @@
       "match_mode": "rule_match",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": null,
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["int", "type-coercion", "sanitizer"],
+      "tags": [
+        "int",
+        "type-coercion",
+        "sanitizer"
+      ],
       "disabled": false,
-      "notes": "int() type coercion sanitizes user input — should produce no taint finding"
+      "notes": "int() type coercion sanitizes user input \u2014 should produce no taint finding"
     },
     {
       "case_id": "java-sqli-stmt-001",
@@ -2683,14 +4093,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": [],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "state-resource-leak"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[11, 11]],
-      "expected_source_lines": [[7, 7]],
-      "tags": ["statement", "executeQuery", "string-concat"],
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "statement",
+        "executeQuery",
+        "string-concat"
+      ],
       "disabled": false,
       "notes": "SQL injection via raw Statement.executeQuery with string concatenation"
     },
@@ -2706,14 +4134,20 @@
       "match_mode": "rule_match",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": null,
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["prepareStatement", "parameterized", "sanitizer"],
+      "tags": [
+        "prepareStatement",
+        "parameterized",
+        "sanitizer"
+      ],
       "disabled": false,
-      "notes": "prepareStatement sanitizes SQL input — should produce no SQL taint finding"
+      "notes": "prepareStatement sanitizes SQL input \u2014 should produce no SQL taint finding"
     },
     {
       "case_id": "go-safe-atoi-001",
@@ -2727,14 +4161,21 @@
       "match_mode": "rule_match",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": null,
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["strconv", "Atoi", "type-conversion", "sanitizer"],
+      "tags": [
+        "strconv",
+        "Atoi",
+        "type-conversion",
+        "sanitizer"
+      ],
       "disabled": false,
-      "notes": "strconv.Atoi sanitizes user input — should produce no taint finding"
+      "notes": "strconv.Atoi sanitizes user input \u2014 should produce no taint finding"
     },
     {
       "case_id": "go-xss-gin-001",
@@ -2746,14 +4187,30 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["gin", "xss", "formvalue"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "gin",
+        "xss",
+        "formvalue"
+      ],
       "disabled": false,
       "notes": "XSS via r.FormValue flowing to fmt.Fprintf response writer"
     },
@@ -2769,14 +4226,19 @@
       "match_mode": "rule_match",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": ["taint-unsanitised-flow"],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "expected_severity": null,
       "expected_category": null,
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["filter_input", "sanitizer"],
+      "tags": [
+        "filter_input",
+        "sanitizer"
+      ],
       "disabled": false,
-      "notes": "filter_input sanitizes user input — should produce no taint finding"
+      "notes": "filter_input sanitizes user input \u2014 should produce no taint finding"
     },
     {
       "case_id": "php-sqli-pdo-001",
@@ -2788,14 +4250,30 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[2, 2]],
-      "tags": ["pdo", "raw-query", "sqli"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          2,
+          2
+        ]
+      ],
+      "tags": [
+        "pdo",
+        "raw-query",
+        "sqli"
+      ],
       "disabled": false,
       "notes": "SQL injection via raw PDO query with string concatenation"
     },
@@ -2816,9 +4294,14 @@
       "expected_category": null,
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["strong-params", "permit", "require", "rails"],
+      "tags": [
+        "strong-params",
+        "permit",
+        "require",
+        "rails"
+      ],
       "disabled": false,
-      "notes": "Rails strong parameters (permit/require) sanitize user input — safe pattern"
+      "notes": "Rails strong parameters (permit/require) sanitize user input \u2014 safe pattern"
     },
     {
       "case_id": "ruby-sqli-raw-001",
@@ -2830,16 +4313,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
       "allowed_alternative_rule_ids": [],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[4, 6]],
-      "expected_source_lines": [[3, 3]],
-      "tags": ["connection-execute", "raw-sql", "sqli"],
+      "expected_sink_lines": [
+        [
+          4,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "tags": [
+        "connection-execute",
+        "raw-sql",
+        "sqli"
+      ],
       "disabled": true,
-      "notes": "SQL injection via ActiveRecord connection.execute — disabled: multi-line call expression not resolved by SSA lowering for Ruby class methods"
+      "notes": "SQL injection via ActiveRecord connection.execute \u2014 disabled: multi-line call expression not resolved by SSA lowering for Ruby class methods"
     },
     {
       "case_id": "py-cmdi-cross-001",
@@ -2851,16 +4350,34 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["py.cmdi.os_system"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "py.cmdi.os_system"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["cross-file", "ssa-summary", "propagation"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "cross-file",
+        "ssa-summary",
+        "propagation"
+      ],
       "disabled": false,
-      "notes": "Cross-file taint propagation: env source → wrapper function → os.system sink"
+      "notes": "Cross-file taint propagation: env source \u2192 wrapper function \u2192 os.system sink"
     },
     {
       "case_id": "py-cmdi-cross-002",
@@ -2872,16 +4389,34 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["py.cmdi.subprocess"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "py.cmdi.subprocess"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["cross-file", "ssa-summary", "source-detection"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "cross-file",
+        "ssa-summary",
+        "source-detection"
+      ],
       "disabled": false,
-      "notes": "Cross-file source detection: read_input() returns env source → subprocess.call sink"
+      "notes": "Cross-file source detection: read_input() returns env source \u2192 subprocess.call sink"
     },
     {
       "case_id": "py-cmdi-cross-003",
@@ -2893,16 +4428,34 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["py.cmdi.os_system"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "py.cmdi.os_system"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["cross-file", "ssa-summary", "wrong-sanitizer"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "cross-file",
+        "ssa-summary",
+        "wrong-sanitizer"
+      ],
       "disabled": false,
-      "notes": "Cross-file wrong-cap sanitizer: HTML sanitizer does not strip SHELL_ESCAPE caps → os.system still vulnerable"
+      "notes": "Cross-file wrong-cap sanitizer: HTML sanitizer does not strip SHELL_ESCAPE caps \u2192 os.system still vulnerable"
     },
     {
       "case_id": "js-xss-cross-001",
@@ -2914,16 +4467,34 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["js.xss.document_write"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "js.xss.document_write"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["cross-file", "ssa-summary", "propagation"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "cross-file",
+        "ssa-summary",
+        "propagation"
+      ],
       "disabled": false,
-      "notes": "Cross-file taint propagation: req.query → render wrapper → document.write XSS sink"
+      "notes": "Cross-file taint propagation: req.query \u2192 render wrapper \u2192 document.write XSS sink"
     },
     {
       "case_id": "go-cmdi-cross-001",
@@ -2935,16 +4506,35 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["go.cmdi.exec_command"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "go.cmdi.exec_command",
+        "state-unauthed-access"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["cross-file", "ssa-summary", "source-detection"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "cross-file",
+        "ssa-summary",
+        "source-detection"
+      ],
       "disabled": false,
-      "notes": "Cross-file source detection: GetUserInput returns request param → exec.Command sink"
+      "notes": "Cross-file source detection: GetUserInput returns request param \u2192 exec.Command sink"
     },
     {
       "case_id": "go-path_traversal-cross-001",
@@ -2956,16 +4546,35 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["go.path_traversal.readfile"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "go.path_traversal.readfile",
+        "state-unauthed-access"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[11, 11]],
-      "expected_source_lines": [[9, 9]],
-      "tags": ["cross-file", "ssa-summary", "wrong-sanitizer"],
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "tags": [
+        "cross-file",
+        "ssa-summary",
+        "wrong-sanitizer"
+      ],
       "disabled": false,
-      "notes": "Cross-file wrong-cap sanitizer: HTML sanitizer does not strip FILE_IO caps → os.ReadFile still vulnerable"
+      "notes": "Cross-file wrong-cap sanitizer: HTML sanitizer does not strip FILE_IO caps \u2192 os.ReadFile still vulnerable"
     },
     {
       "case_id": "c-cmdi-001",
@@ -2977,14 +4586,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.cmdi.system"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.cmdi.system"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to system()"
     },
@@ -2998,14 +4624,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.cmdi.popen"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.cmdi.popen"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to popen()"
     },
@@ -3019,14 +4662,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.cmdi.execvp"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.cmdi.execvp"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to execvp()"
     },
@@ -3040,14 +4700,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.cmdi.system"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.cmdi.system"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["stdin", "fgets"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "stdin",
+        "fgets"
+      ],
       "disabled": false,
       "notes": "Flow from fgets(stdin) to system()"
     },
@@ -3061,14 +4738,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.file_io.fopen"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.file_io.fopen"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to fopen()"
     },
@@ -3082,14 +4776,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.file_io.open"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.file_io.open"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to open()"
     },
@@ -3103,14 +4814,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.fmt_string.printf"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.fmt_string.printf"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to printf() as format string"
     },
@@ -3124,14 +4852,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.fmt_string.fprintf"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.fmt_string.fprintf"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to fprintf() as format string"
     },
@@ -3145,14 +4890,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.ssrf.curl_easy_perform"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.ssrf.curl_easy_perform"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "curl"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "curl"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to curl_easy_perform()"
     },
@@ -3166,14 +4928,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.buffer.sprintf"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.buffer.sprintf"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to unbounded sprintf()"
     },
@@ -3187,14 +4966,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.buffer.strcpy"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.buffer.strcpy"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to strcpy()"
     },
@@ -3208,14 +5004,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["c.buffer.strcat"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "c.buffer.strcat"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to strcat()"
     },
@@ -3236,9 +5049,12 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
-      "notes": "Constant string passed to system() — no taint source"
+      "notes": "Constant string passed to system() \u2014 no taint source"
     },
     {
       "case_id": "c-safe-002",
@@ -3257,7 +5073,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "snprintf"],
+      "tags": [
+        "sanitized",
+        "snprintf"
+      ],
       "disabled": false,
       "notes": "Input sanitized through snprintf bounded formatting"
     },
@@ -3278,7 +5097,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "atoi"],
+      "tags": [
+        "sanitized",
+        "atoi"
+      ],
       "disabled": false,
       "notes": "Input sanitized through atoi() type conversion"
     },
@@ -3299,7 +5121,9 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["reassigned"],
+      "tags": [
+        "reassigned"
+      ],
       "disabled": false,
       "notes": "Tainted variable reassigned to constant before use"
     },
@@ -3320,7 +5144,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "strncpy"],
+      "tags": [
+        "sanitized",
+        "strncpy"
+      ],
       "disabled": false,
       "notes": "Input sanitized through bounded strncpy"
     },
@@ -3341,7 +5168,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["validated", "path-check"],
+      "tags": [
+        "validated",
+        "path-check"
+      ],
       "disabled": false,
       "notes": "Path validated against traversal before fopen"
     },
@@ -3362,7 +5192,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "strtol"],
+      "tags": [
+        "sanitized",
+        "strtol"
+      ],
       "disabled": false,
       "notes": "Input sanitized through strtol() type conversion"
     },
@@ -3383,7 +5216,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "custom-function"],
+      "tags": [
+        "sanitized",
+        "custom-function"
+      ],
       "disabled": false,
       "notes": "Input sanitized through sanitize_input() helper"
     },
@@ -3397,14 +5233,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.cmdi.system"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.cmdi.system"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to system()"
     },
@@ -3418,14 +5271,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.cmdi.popen"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.cmdi.popen"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to popen()"
     },
@@ -3439,14 +5309,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.cmdi.system"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.cmdi.system"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[7, 7]],
-      "tags": ["stdin", "getline"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "stdin",
+        "getline"
+      ],
       "disabled": false,
       "notes": "Flow from std::getline(cin) to system()"
     },
@@ -3460,14 +5347,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.cmdi.execvp"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.cmdi.execvp"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to execvp()"
     },
@@ -3481,14 +5385,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.file_io.fopen"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.file_io.fopen"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to fopen()"
     },
@@ -3502,14 +5423,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.file_io.open"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.file_io.open"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to open()"
     },
@@ -3523,14 +5461,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.fmt_string.printf"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.fmt_string.printf"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to printf() as format string"
     },
@@ -3544,14 +5499,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.fmt_string.fprintf"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.fmt_string.fprintf"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to fprintf() as format string"
     },
@@ -3565,14 +5537,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.ssrf.curl_easy_perform"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.ssrf.curl_easy_perform"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "curl"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "curl"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to curl_easy_perform()"
     },
@@ -3586,14 +5575,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.ssrf.connect"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.ssrf.connect"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[13, 13]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["direct", "socket"],
+      "expected_sink_lines": [
+        [
+          13,
+          13
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "direct",
+        "socket"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to connect()"
     },
@@ -3607,14 +5613,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.buffer.sprintf"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.buffer.sprintf"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to unbounded sprintf()"
     },
@@ -3628,14 +5651,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["cpp.buffer.strcpy"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cpp.buffer.strcpy"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "getenv"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "getenv"
+      ],
       "disabled": false,
       "notes": "Direct flow from getenv to strcpy()"
     },
@@ -3656,9 +5696,12 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
-      "notes": "Constant string passed to system() — no taint source"
+      "notes": "Constant string passed to system() \u2014 no taint source"
     },
     {
       "case_id": "cpp-safe-002",
@@ -3677,7 +5720,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "snprintf"],
+      "tags": [
+        "sanitized",
+        "snprintf"
+      ],
       "disabled": false,
       "notes": "Input sanitized through snprintf bounded formatting"
     },
@@ -3698,7 +5744,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "stoi"],
+      "tags": [
+        "sanitized",
+        "stoi"
+      ],
       "disabled": false,
       "notes": "Input sanitized through std::stoi() type conversion"
     },
@@ -3719,7 +5768,9 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["reassigned"],
+      "tags": [
+        "reassigned"
+      ],
       "disabled": false,
       "notes": "Tainted variable reassigned to constant before use"
     },
@@ -3740,7 +5791,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "strncpy"],
+      "tags": [
+        "sanitized",
+        "strncpy"
+      ],
       "disabled": false,
       "notes": "Input sanitized through bounded strncpy"
     },
@@ -3761,7 +5815,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["validated", "path-check"],
+      "tags": [
+        "validated",
+        "path-check"
+      ],
       "disabled": false,
       "notes": "Path validated against traversal before fopen"
     },
@@ -3782,7 +5839,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "custom-function"],
+      "tags": [
+        "sanitized",
+        "custom-function"
+      ],
       "disabled": false,
       "notes": "Input sanitized through sanitize_input() helper"
     },
@@ -3803,7 +5863,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "strtol"],
+      "tags": [
+        "sanitized",
+        "strtol"
+      ],
       "disabled": false,
       "notes": "Input sanitized through strtol() type conversion (C-style)"
     },
@@ -3817,14 +5880,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.cmdi.command"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "env-var"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "env-var"
+      ],
       "disabled": false,
       "notes": "Direct flow from env::var to Command::new().arg()"
     },
@@ -3838,14 +5918,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.cmdi.command"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "env-var"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "env-var"
+      ],
       "disabled": false,
       "notes": "Direct flow from env::var to Command::new().output()"
     },
@@ -3859,14 +5956,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.cmdi.command"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 6]],
-      "expected_source_lines": [[10, 10]],
-      "tags": ["indirect", "helper-function"],
+      "expected_sink_lines": [
+        [
+          5,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "indirect",
+        "helper-function"
+      ],
       "disabled": false,
       "notes": "Taint flows through helper function to Command"
     },
@@ -3880,14 +5994,32 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.cmdi.command"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "env-var", "args"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "env-var",
+        "args"
+      ],
       "disabled": false,
       "notes": "Direct flow from env::var to Command.args()"
     },
@@ -3901,14 +6033,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.file_io.read_to_string"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.read_to_string"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "env-var"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "env-var"
+      ],
       "disabled": false,
       "notes": "Direct flow from env::var to fs::read_to_string()"
     },
@@ -3922,14 +6071,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.file_io.write"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.write"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "env-var"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "env-var"
+      ],
       "disabled": false,
       "notes": "Direct flow from env::var to fs::write()"
     },
@@ -3943,14 +6109,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.file_io.File"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.File"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "env-var"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "env-var"
+      ],
       "disabled": false,
       "notes": "Direct flow from env::var to File::open()"
     },
@@ -3964,14 +6147,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.file_io.File"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.File"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["direct", "env-var"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "direct",
+        "env-var"
+      ],
       "disabled": false,
       "notes": "Direct flow from env::var to File::create()"
     },
@@ -3985,14 +6185,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.ssrf.reqwest"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.ssrf.reqwest"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["direct", "env-var"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "direct",
+        "env-var"
+      ],
       "disabled": false,
       "notes": "Direct flow from env::var to reqwest::get()"
     },
@@ -4006,14 +6223,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["rust.ssrf.reqwest"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.ssrf.reqwest"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[4, 4]],
-      "expected_source_lines": [[8, 8]],
-      "tags": ["indirect", "helper-function"],
+      "expected_sink_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "indirect",
+        "helper-function"
+      ],
       "disabled": false,
       "notes": "Taint flows through helper function to reqwest::get()"
     },
@@ -4034,9 +6268,12 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
-      "notes": "Constant args passed to Command — no taint source"
+      "notes": "Constant args passed to Command \u2014 no taint source"
     },
     {
       "case_id": "rs-safe-002",
@@ -4055,7 +6292,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["sanitized", "shell-escape"],
+      "tags": [
+        "sanitized",
+        "shell-escape"
+      ],
       "disabled": false,
       "notes": "Input sanitized through sanitize_shell() before Command"
     },
@@ -4076,9 +6316,11 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["reassigned"],
+      "tags": [
+        "reassigned"
+      ],
       "disabled": false,
-      "notes": "Tainted variable not used — constant passed to Command"
+      "notes": "Tainted variable not used \u2014 constant passed to Command"
     },
     {
       "case_id": "rs-safe-004",
@@ -4097,7 +6339,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["validated", "path-check"],
+      "tags": [
+        "validated",
+        "path-check"
+      ],
       "disabled": false,
       "notes": "Path validated against traversal before fs::read_to_string"
     },
@@ -4118,9 +6363,12 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
-      "notes": "Hardcoded URL passed to reqwest::get — no taint source"
+      "notes": "Hardcoded URL passed to reqwest::get \u2014 no taint source"
     },
     {
       "case_id": "rs-safe-006",
@@ -4139,9 +6387,12 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["type-check", "parse"],
+      "tags": [
+        "type-check",
+        "parse"
+      ],
       "disabled": false,
-      "notes": "Input parsed to u32 before constructing path — type-safe"
+      "notes": "Input parsed to u32 before constructing path \u2014 type-safe"
     },
     {
       "case_id": "rs-safe-007",
@@ -4160,7 +6411,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["interprocedural", "sanitize-wrapper"],
+      "tags": [
+        "interprocedural",
+        "sanitize-wrapper"
+      ],
       "disabled": false,
       "notes": "Input sanitized through interprocedural sanitize_input() call chain"
     },
@@ -4181,7 +6435,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["validated", "dominated"],
+      "tags": [
+        "validated",
+        "dominated"
+      ],
       "disabled": false,
       "notes": "Input validated with allowlist check before Command"
     },
@@ -4202,7 +6459,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["interprocedural", "sanitizer-wrapper"],
+      "tags": [
+        "interprocedural",
+        "sanitizer-wrapper"
+      ],
       "disabled": false,
       "notes": "XSS safe: input sanitized through encodeURIComponent wrapper function"
     },
@@ -4223,7 +6483,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["interprocedural", "sanitizer-wrapper"],
+      "tags": [
+        "interprocedural",
+        "sanitizer-wrapper"
+      ],
       "disabled": false,
       "notes": "XSS safe: input sanitized through html.escape wrapper function"
     },
@@ -4244,7 +6507,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["interprocedural", "sanitizer-wrapper"],
+      "tags": [
+        "interprocedural",
+        "sanitizer-wrapper"
+      ],
       "disabled": false,
       "notes": "XSS safe: input sanitized through HtmlUtils.htmlEscape wrapper"
     },
@@ -4265,7 +6531,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["interprocedural", "sanitizer-wrapper"],
+      "tags": [
+        "interprocedural",
+        "sanitizer-wrapper"
+      ],
       "disabled": false,
       "notes": "XSS safe: input sanitized through html.EscapeString wrapper function"
     },
@@ -4286,7 +6555,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["interprocedural", "sanitizer-wrapper"],
+      "tags": [
+        "interprocedural",
+        "sanitizer-wrapper"
+      ],
       "disabled": false,
       "notes": "XSS safe: input sanitized through htmlspecialchars wrapper function"
     },
@@ -4307,7 +6579,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["interprocedural", "sanitizer-wrapper"],
+      "tags": [
+        "interprocedural",
+        "sanitizer-wrapper"
+      ],
       "disabled": false,
       "notes": "XSS safe: input sanitized through CGI.escapeHTML wrapper function"
     },
@@ -4321,14 +6596,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["js.cmdi.exec"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "js.cmdi.exec"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[12, 12]],
-      "expected_source_lines": [[10, 10]],
-      "tags": ["interprocedural", "taint-propagation"],
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "interprocedural",
+        "taint-propagation"
+      ],
       "disabled": false,
       "notes": "Taint flows through buildCommand() helper to exec()"
     },
@@ -4342,14 +6634,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["py.cmdi.system"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "py.cmdi.system"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[8, 8]],
-      "tags": ["interprocedural", "taint-propagation"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "interprocedural",
+        "taint-propagation"
+      ],
       "disabled": false,
       "notes": "Taint flows through build_command() helper to os.system()"
     },
@@ -4363,14 +6672,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["java.sqli.executeQuery"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "java.sqli.executeQuery"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[12, 12]],
-      "expected_source_lines": [[10, 10]],
-      "tags": ["interprocedural", "taint-propagation"],
+      "expected_sink_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "interprocedural",
+        "taint-propagation"
+      ],
       "disabled": false,
       "notes": "Taint flows through buildQuery() helper to executeQuery()"
     },
@@ -4384,14 +6710,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["go.sqli.query"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "go.sqli.query"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[16, 16]],
-      "expected_source_lines": [[14, 14]],
-      "tags": ["interprocedural", "taint-propagation"],
+      "expected_sink_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "tags": [
+        "interprocedural",
+        "taint-propagation"
+      ],
       "disabled": false,
       "notes": "Taint flows through buildQuery() helper to db.Query()"
     },
@@ -4405,14 +6748,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["php.sqli.mysqli_query"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "php.sqli.mysqli_query"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[9, 9]],
-      "expected_source_lines": [[7, 7]],
-      "tags": ["interprocedural", "taint-propagation"],
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "interprocedural",
+        "taint-propagation"
+      ],
       "disabled": false,
       "notes": "Taint flows through build_query() helper to mysqli_query()"
     },
@@ -4426,14 +6786,31 @@
       "provenance": "synthetic",
       "equivalence_tier": "exact",
       "match_mode": "rule_match",
-      "expected_rule_ids": ["taint-unsanitised-flow"],
-      "allowed_alternative_rule_ids": ["ruby.sqli.select_all"],
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "ruby.sqli.select_all"
+      ],
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[10, 10]],
-      "expected_source_lines": [[8, 8]],
-      "tags": ["interprocedural", "taint-propagation"],
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "interprocedural",
+        "taint-propagation"
+      ],
       "disabled": false,
       "notes": "Taint flows through build_query() helper to select_all()"
     },
@@ -4454,7 +6831,11 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["path-pruning", "early-return", "allowlist"],
+      "tags": [
+        "path-pruning",
+        "early-return",
+        "allowlist"
+      ],
       "disabled": false,
       "notes": "Command execution gated by allowlist check with early return"
     },
@@ -4475,7 +6856,11 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["path-pruning", "early-return", "allowlist"],
+      "tags": [
+        "path-pruning",
+        "early-return",
+        "allowlist"
+      ],
       "disabled": false,
       "notes": "Command execution gated by allowlist check with early return"
     },
@@ -4491,12 +6876,18 @@
       "match_mode": "rule_match",
       "expected_rule_ids": [],
       "allowed_alternative_rule_ids": [],
-      "forbidden_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-unauthed-access"
+      ],
       "expected_severity": null,
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["path-pruning", "early-return", "allowlist"],
+      "tags": [
+        "path-pruning",
+        "early-return",
+        "allowlist"
+      ],
       "disabled": false,
       "notes": "Command execution gated by allowlist check with early return"
     }
