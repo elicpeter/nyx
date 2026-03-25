@@ -147,16 +147,18 @@ fn state_analysis_disabled_via_flag() {
 }
 
 #[test]
-fn auth_analysis_off_by_default() {
-    // State analysis is on by default but auth analysis is not.
-    // Use Config::default() to test actual production defaults (not test_config
-    // which enables both for thorough testing).
-    let mut cfg = Config::default();
-    cfg.scanner.read_vcsignore = false;
-    cfg.scanner.require_git_to_read_vcsignore = false;
-    cfg.performance.worker_threads = Some(1);
+fn state_and_auth_on_by_default() {
+    // Both state analysis and auth analysis are on by default.
+    let cfg = Config::default();
     assert!(cfg.scanner.enable_state_analysis, "state analysis should be on by default");
-    assert!(!cfg.scanner.enable_auth_analysis, "auth analysis should be off by default");
+    assert!(cfg.scanner.enable_auth_analysis, "auth analysis should be on by default");
+}
+
+#[test]
+fn auth_analysis_disabled_suppresses_auth_findings() {
+    // When enable_auth_analysis is false, auth findings should not appear.
+    let mut cfg = common::test_config(AnalysisMode::Full);
+    cfg.scanner.enable_auth_analysis = false;
     let diags =
         nyx_scanner::scan_no_index(&state_fixture_dir(), &cfg).expect("scan should succeed");
     let auth: Vec<_> = diags
@@ -175,7 +177,7 @@ fn auth_analysis_off_by_default() {
         .collect();
     assert!(
         !resource.is_empty(),
-        "Resource lifecycle findings should still appear when state analysis is on"
+        "Resource lifecycle findings should still appear when auth is disabled"
     );
 }
 
