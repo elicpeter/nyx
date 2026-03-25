@@ -1,5 +1,8 @@
-import { useOutletContext } from 'react-router-dom';
 import { useDebugAbstractInterp } from '../../api/queries/debug';
+import { ApiError } from '../../api/client';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { LoadingState } from '../../components/ui/LoadingState';
 import type {
   AbstractBlockView,
   AbstractValueView,
@@ -7,26 +10,28 @@ import type {
   ConstValueViewEntry,
 } from '../../api/types';
 
-export function AbstractInterpPage() {
-  const { file, fn_name } = useOutletContext<{
-    file: string | null;
-    fn_name: string | null;
-  }>();
-  const { data, isLoading, error } = useDebugAbstractInterp(file, fn_name);
+interface AbstractInterpAnalysisPanelProps {
+  file: string;
+  functionName: string;
+}
 
-  if (!file || !fn_name) {
-    return (
-      <div className="empty-state">
-        Select a file and function to view abstract interpretation state.
-      </div>
-    );
+export function AbstractInterpAnalysisPanel({
+  file,
+  functionName,
+}: AbstractInterpAnalysisPanelProps) {
+  const { data, isLoading, error } = useDebugAbstractInterp(file, functionName);
+
+  if (isLoading) {
+    return <LoadingState message="Loading abstract interpretation..." />;
   }
-  if (isLoading)
-    return <div className="loading">Loading abstract interpretation...</div>;
-  if (error)
-    return (
-      <div className="error-state">Failed to load abstract interpretation.</div>
-    );
+  if (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return (
+        <EmptyState message="Abstract interpretation data is not available for the selected function." />
+      );
+    }
+    return <ErrorState message="Failed to load abstract interpretation." />;
+  }
   if (
     !data ||
     (data.blocks.length === 0 &&
@@ -34,9 +39,7 @@ export function AbstractInterpPage() {
       data.const_values.length === 0)
   ) {
     return (
-      <div className="empty-state">
-        No abstract domain facts tracked for this function.
-      </div>
+      <EmptyState message="No abstract domain facts are tracked for this function." />
     );
   }
 

@@ -5,23 +5,27 @@ interface Props {
   file: string;
   selectedFunction: string | null;
   onFunctionChange: (fn_name: string | null) => void;
+  showFilePath?: boolean;
 }
 
 export function FunctionSelector({
   file,
   selectedFunction,
   onFunctionChange,
+  showFilePath = true,
 }: Props) {
   const { data: functions, isLoading } = useDebugFunctions(file || null);
 
   return (
     <div className="function-selector">
-      <div className="function-selector-path">
-        <span className="function-selector-path-label">File:</span>
-        <code className="function-selector-path-value">
-          {file || 'No file selected'}
-        </code>
-      </div>
+      {showFilePath && (
+        <div className="function-selector-path">
+          <span className="function-selector-path-label">File:</span>
+          <code className="function-selector-path-value">
+            {file || 'No file selected'}
+          </code>
+        </div>
+      )}
       <div className="function-selector-field">
         <label>Function</label>
         <select

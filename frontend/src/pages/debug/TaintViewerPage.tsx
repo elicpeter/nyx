@@ -1,30 +1,41 @@
-import { useOutletContext } from 'react-router-dom';
 import { useDebugTaint } from '../../api/queries/debug';
+import { ApiError } from '../../api/client';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { LoadingState } from '../../components/ui/LoadingState';
 import type {
   TaintBlockStateView,
   TaintEventView,
   TaintValueView,
 } from '../../api/types';
 
-export function TaintViewerPage() {
-  const { file, fn_name } = useOutletContext<{
-    file: string | null;
-    fn_name: string | null;
-  }>();
-  const { data, isLoading, error } = useDebugTaint(file, fn_name);
+interface TaintAnalysisPanelProps {
+  file: string;
+  functionName: string;
+}
 
-  if (!file || !fn_name) {
+export function TaintAnalysisPanel({
+  file,
+  functionName,
+}: TaintAnalysisPanelProps) {
+  const { data, isLoading, error } = useDebugTaint(file, functionName);
+
+  if (isLoading) {
+    return <LoadingState message="Loading taint analysis..." />;
+  }
+  if (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return (
+        <EmptyState message="Taint analysis is not available for the selected function." />
+      );
+    }
+    return <ErrorState message="Failed to load taint analysis." />;
+  }
+  if (!data) {
     return (
-      <div className="empty-state">
-        Select a file and function to view taint analysis.
-      </div>
+      <EmptyState message="No taint analysis data is available for this function." />
     );
   }
-  if (isLoading)
-    return <div className="loading">Loading taint analysis...</div>;
-  if (error)
-    return <div className="error-state">Failed to load taint analysis.</div>;
-  if (!data) return null;
 
   return (
     <div className="taint-viewer">

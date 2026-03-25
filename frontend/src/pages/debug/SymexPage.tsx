@@ -1,27 +1,36 @@
-import { useOutletContext } from 'react-router-dom';
 import { useDebugSymex } from '../../api/queries/debug';
+import { ApiError } from '../../api/client';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { LoadingState } from '../../components/ui/LoadingState';
 
-export function SymexPage() {
-  const { file, fn_name } = useOutletContext<{
-    file: string | null;
-    fn_name: string | null;
-  }>();
-  const { data, isLoading, error } = useDebugSymex(file, fn_name);
+interface SymexAnalysisPanelProps {
+  file: string;
+  functionName: string;
+}
 
-  if (!file || !fn_name) {
+export function SymexAnalysisPanel({
+  file,
+  functionName,
+}: SymexAnalysisPanelProps) {
+  const { data, isLoading, error } = useDebugSymex(file, functionName);
+
+  if (isLoading) {
+    return <LoadingState message="Loading symbolic execution..." />;
+  }
+  if (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return (
+        <EmptyState message="Symbolic execution data is not available for the selected function." />
+      );
+    }
+    return <ErrorState message="Failed to load symbolic execution." />;
+  }
+  if (!data) {
     return (
-      <div className="empty-state">
-        Select a file and function to view symbolic execution state.
-      </div>
+      <EmptyState message="No symbolic execution data is available for this function." />
     );
   }
-  if (isLoading)
-    return <div className="loading">Loading symbolic execution...</div>;
-  if (error)
-    return (
-      <div className="error-state">Failed to load symbolic execution.</div>
-    );
-  if (!data) return null;
 
   return (
     <div className="symex-viewer">

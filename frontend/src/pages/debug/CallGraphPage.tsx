@@ -3,9 +3,8 @@ import { useDebugCallGraph } from '../../api/queries/debug';
 import { GraphRenderer } from '../../components/debug/GraphRenderer';
 
 export function CallGraphPage() {
-  const [scope, setScope] = useState<'project' | 'file'>('project');
-  const { data, isLoading, error } = useDebugCallGraph(scope);
   const [selectedNode, setSelectedNode] = useState<number | null>(null);
+  const { data, isLoading, error } = useDebugCallGraph('project');
 
   if (isLoading) return <div className="loading">Loading call graph...</div>;
   if (error)
@@ -35,16 +34,7 @@ export function CallGraphPage() {
     <div className="debug-split">
       <div className="debug-split-main">
         <div className="debug-toolbar">
-          <label>
-            Scope:
-            <select
-              value={scope}
-              onChange={(e) => setScope(e.target.value as 'project' | 'file')}
-            >
-              <option value="project">Project</option>
-              <option value="file">File</option>
-            </select>
-          </label>
+          <span className="debug-toolbar-label">Project scope</span>
           <span className="text-secondary">
             {data.nodes.length} functions, {data.edges.length} edges
             {data.sccs.length > 0 && `, ${data.sccs.length} recursive SCCs`}

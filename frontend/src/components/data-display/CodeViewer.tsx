@@ -18,6 +18,8 @@ interface CodeViewerProps {
   flowLines?: Set<number>;
   language?: string;
   className?: string;
+  initialScrollTop?: number;
+  onScrollPositionChange?: (scrollTop: number) => void;
 }
 
 export function CodeViewer({
@@ -28,6 +30,8 @@ export function CodeViewer({
   flowLines,
   language,
   className,
+  initialScrollTop,
+  onScrollPositionChange,
 }: CodeViewerProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -59,6 +63,25 @@ export function CodeViewer({
     });
     return () => cancelAnimationFrame(timer);
   }, [fileData, scrollTarget]);
+
+  useEffect(() => {
+    if (
+      !fileData ||
+      scrollTarget ||
+      initialScrollTop == null ||
+      !bodyRef.current
+    ) {
+      return;
+    }
+
+    const timer = requestAnimationFrame(() => {
+      if (bodyRef.current) {
+        bodyRef.current.scrollTop = initialScrollTop;
+      }
+    });
+
+    return () => cancelAnimationFrame(timer);
+  }, [fileData, initialScrollTop, scrollTarget]);
 
   // Build a set of finding lines for gutter markers
   const findingsByLine = new Map<number, ExplorerFinding>();
@@ -101,7 +124,13 @@ export function CodeViewer({
   if (!fileData) return null;
 
   return (
-    <div className={`code-viewer-body ${className || ''}`} ref={bodyRef}>
+    <div
+      className={`code-viewer-body ${className || ''}`}
+      ref={bodyRef}
+      onScroll={(event) =>
+        onScrollPositionChange?.(event.currentTarget.scrollTop)
+      }
+    >
       {fileData.lines.map((l) => {
         let cls = 'code-line';
         if (highlights) {

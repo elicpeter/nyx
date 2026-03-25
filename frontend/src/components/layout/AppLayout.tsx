@@ -16,13 +16,8 @@ import { StubPage } from '../../pages/StubPage';
 import { ExplorerPage } from '../../pages/ExplorerPage';
 import { DebugLayout } from '../../pages/debug/DebugLayout';
 import { DebugLandingPage } from '../../pages/debug/DebugLandingPage';
-import { CfgViewerPage } from '../../pages/debug/CfgViewerPage';
-import { SsaViewerPage } from '../../pages/debug/SsaViewerPage';
 import { CallGraphPage } from '../../pages/debug/CallGraphPage';
-import { TaintViewerPage } from '../../pages/debug/TaintViewerPage';
 import { SummaryExplorerPage } from '../../pages/debug/SummaryExplorerPage';
-import { AbstractInterpPage } from '../../pages/debug/AbstractInterpPage';
-import { SymexPage } from '../../pages/debug/SymexPage';
 
 export function AppLayout() {
   const [scanModalOpen, setScanModalOpen] = useState(false);
@@ -54,13 +49,8 @@ export function AppLayout() {
             <Route path="/explorer" element={<ExplorerPage />} />
             <Route path="/debug" element={<DebugLayout />}>
               <Route index element={<DebugLandingPage />} />
-              <Route path="cfg" element={<CfgViewerPage />} />
-              <Route path="ssa" element={<SsaViewerPage />} />
               <Route path="call-graph" element={<CallGraphPage />} />
-              <Route path="taint" element={<TaintViewerPage />} />
               <Route path="summaries" element={<SummaryExplorerPage />} />
-              <Route path="abstract-interp" element={<AbstractInterpPage />} />
-              <Route path="symex" element={<SymexPage />} />
             </Route>
             <Route path="/settings" element={<StubPage />} />
           </Routes>

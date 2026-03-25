@@ -1,33 +1,62 @@
 import { useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
 import { useDebugSummaries } from '../../api/queries/debug';
+import { ApiError } from '../../api/client';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { LoadingState } from '../../components/ui/LoadingState';
 import type { FuncSummaryView } from '../../api/types';
 
-export function SummaryExplorerPage() {
-  const { file, fn_name } = useOutletContext<{
-    file: string | null;
-    fn_name: string | null;
-  }>();
-  const { data, isLoading, error } = useDebugSummaries(file, fn_name);
+interface SummaryAnalysisPanelProps {
+  file?: string | null;
+  functionName?: string | null;
+  scope?: 'file' | 'global';
+}
+
+export function SummaryAnalysisPanel({
+  file,
+  functionName,
+  scope = 'file',
+}: SummaryAnalysisPanelProps) {
+  const { data, isLoading, error } = useDebugSummaries(
+    scope === 'global' ? null : (file ?? null),
+    scope === 'global' ? null : (functionName ?? null),
+  );
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  if (isLoading) return <div className="loading">Loading summaries...</div>;
-  if (error)
+  if (isLoading) {
+    return <LoadingState message="Loading summaries..." />;
+  }
+  if (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return (
+        <EmptyState message="Summaries are not available for the selected scope." />
+      );
+    }
     return (
-      <div className="error-state">
-        Failed to load summaries. Have you run a scan?
-      </div>
+      <ErrorState message="Failed to load summaries. Have you run a scan?" />
     );
+  }
   if (!data || data.length === 0) {
     return (
-      <div className="empty-state">No summaries found. Run a scan first.</div>
+      <EmptyState
+        message={
+          scope === 'global'
+            ? 'No global summaries found. Run a scan first.'
+            : 'No summaries found for this file.'
+        }
+      />
     );
   }
 
   return (
     <div className="summary-explorer">
       <div className="summary-header">
-        <span className="text-secondary">{data.length} functions</span>
+        <span className="text-secondary">
+          {data.length}{' '}
+          {scope === 'global'
+            ? 'functions across the project'
+            : 'functions in this file'}
+        </span>
       </div>
       <table className="summary-table">
         <thead>
@@ -60,6 +89,10 @@ export function SummaryExplorerPage() {
       </table>
     </div>
   );
+}
+
+export function SummaryExplorerPage() {
+  return <SummaryAnalysisPanel scope="global" />;
 }
 
 function SummaryRow({

@@ -1,52 +1,40 @@
 export function DebugLandingPage() {
   return (
     <div className="debug-landing">
-      <h2>Debug Views</h2>
+      <h2>Global Debug Views</h2>
       <p className="text-secondary">
-        Select a tab above and enter a file path and function name to inspect
-        engine internals.
+        Use Debug for project-wide and engine-level inspection. File-local
+        representations now live in Explorer.
       </p>
       <div className="debug-landing-grid">
         <div className="card">
           <h3>CFG</h3>
           <p>
-            Visualize control flow graphs for individual functions with
-            block-level detail and edge types.
+            File-local CFG inspection now belongs in Explorer alongside code and
+            other per-file representations.
           </p>
         </div>
         <div className="card">
           <h3>SSA</h3>
           <p>
-            Inspect SSA intermediate representation including phi nodes, value
-            numbering, and instructions.
+            File-local SSA inspection now belongs in Explorer under the selected
+            file.
           </p>
         </div>
         <div className="card">
           <h3>Call Graph</h3>
-          <p>Explore the inter-procedural call graph with SCC highlighting.</p>
-        </div>
-        <div className="card">
-          <h3>Taint</h3>
-          <p>
-            Step through taint propagation with per-block state and sink events.
-          </p>
+          <p>Explore the project-wide call graph with SCC highlighting.</p>
         </div>
         <div className="card">
           <h3>Summaries</h3>
-          <p>
-            Browse interprocedural function summaries — source/sanitizer/sink
-            caps, param flows.
-          </p>
+          <p>Inspect global summary-store data across the project.</p>
         </div>
         <div className="card">
-          <h3>Abstract Interp</h3>
+          <h3>Explorer</h3>
           <p>
-            View interval and string abstract domain facts per program point.
+            Open a file, then inspect CFG, SSA, taint, summaries, abstract
+            interpretation, and symbolic execution in one place.
           </p>
-        </div>
-        <div className="card">
-          <h3>Symex</h3>
-          <p>Inspect symbolic expression trees and path constraints.</p>
         </div>
       </div>
     </div>

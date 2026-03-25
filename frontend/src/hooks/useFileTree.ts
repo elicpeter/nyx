@@ -35,6 +35,38 @@ export function useFileTree(
     setSelectedPath((prev) => (prev !== normalized ? normalized : prev));
   }, [initialPath]);
 
+  // Auto-expand ancestor directories for deep-linked files so the selected
+  // file is visible in the tree once its parent directories load.
+  useEffect(() => {
+    if (!initialPath) {
+      return;
+    }
+
+    const ancestors = getAncestorPaths(initialPath);
+    if (ancestors.length === 0) {
+      return;
+    }
+
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const ancestor of ancestors) {
+        if (!next.has(ancestor)) {
+          next.add(ancestor);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+
+    const nextToLoad = ancestors.find(
+      (ancestor) => !loadedChildren.has(ancestor),
+    );
+    if (nextToLoad && expandQueue !== nextToLoad) {
+      setExpandQueue(nextToLoad);
+    }
+  }, [expandQueue, initialPath, loadedChildren]);
+
   // Store child entries when they arrive for an expanded directory.
   useEffect(() => {
     if (expandQueue && childEntries) {
@@ -83,4 +115,15 @@ export function useFileTree(
     handleSelectFile,
     setSelectedPath,
   };
+}
+
+function getAncestorPaths(path: string): string[] {
+  const parts = path.split('/').filter(Boolean);
+  const ancestors: string[] = [];
+
+  for (let i = 1; i < parts.length; i += 1) {
+    ancestors.push(parts.slice(0, i).join('/'));
+  }
+
+  return ancestors;
 }

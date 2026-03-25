@@ -1,24 +1,35 @@
-import { useOutletContext } from 'react-router-dom';
 import { useDebugSsa } from '../../api/queries/debug';
+import { ApiError } from '../../api/client';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { LoadingState } from '../../components/ui/LoadingState';
 import type { SsaBlockView, SsaInstView } from '../../api/types';
 
-export function SsaViewerPage() {
-  const { file, fn_name } = useOutletContext<{
-    file: string | null;
-    fn_name: string | null;
-  }>();
-  const { data, isLoading, error } = useDebugSsa(file, fn_name);
+interface SsaAnalysisPanelProps {
+  file: string;
+  functionName: string;
+}
 
-  if (!file || !fn_name) {
-    return (
-      <div className="empty-state">
-        Select a file and function to view SSA IR.
-      </div>
-    );
+export function SsaAnalysisPanel({
+  file,
+  functionName,
+}: SsaAnalysisPanelProps) {
+  const { data, isLoading, error } = useDebugSsa(file, functionName);
+
+  if (isLoading) {
+    return <LoadingState message="Loading SSA..." />;
   }
-  if (isLoading) return <div className="loading">Loading SSA...</div>;
-  if (error) return <div className="error-state">Failed to load SSA.</div>;
-  if (!data) return null;
+  if (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return (
+        <EmptyState message="SSA data is not available for the selected function." />
+      );
+    }
+    return <ErrorState message="Failed to load SSA." />;
+  }
+  if (!data) {
+    return <EmptyState message="No SSA data is available for this function." />;
+  }
 
   // Render entry block first, then the rest in order
   const entryBlock = data.blocks.find((b) => b.id === data.entry);
