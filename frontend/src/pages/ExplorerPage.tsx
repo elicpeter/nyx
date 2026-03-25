@@ -610,7 +610,6 @@ function renderAnalysisContent({
       <AnalysisEmptyState
         title="No functions found"
         message="This file does not expose any functions for function-scoped analysis."
-        onBrowseFiles={onBrowseFiles}
       />
     );
   }

@@ -3623,6 +3623,7 @@ tr.selected td {
   height: 100%;
   min-height: 400px;
   overflow: hidden;
+  background: linear-gradient(180deg, var(--bg), var(--bg-secondary));
 }
 .graph-renderer {
   flex: 1;
@@ -3636,17 +3637,56 @@ tr.selected td {
   );
   background-size: 20px 20px;
 }
+.graph-surface {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background:
+    radial-gradient(
+      circle at top left,
+      rgba(88, 86, 214, 0.08),
+      transparent 28%
+    ),
+    linear-gradient(180deg, var(--bg), var(--bg-secondary));
+}
+.graph-surface > canvas {
+  position: absolute;
+  inset: 0;
+}
+.graph-loading-overlay {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  z-index: 3;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+}
 
 /* Graph toolbar */
 .graph-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
+  justify-content: space-between;
+  flex-wrap: wrap;
   padding: var(--space-1) var(--space-2);
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: linear-gradient(180deg, var(--bg), var(--bg-secondary));
   flex-shrink: 0;
-  min-height: 32px;
+  min-height: 40px;
+}
+.graph-toolbar-group,
+.graph-toolbar-extras {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
 }
 .graph-toolbar-btn {
   display: inline-flex;
@@ -3665,6 +3705,10 @@ tr.selected td {
     background 100ms,
     color 100ms,
     border-color 100ms;
+}
+.graph-toolbar-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .graph-toolbar-btn:hover {
   background: var(--bg-secondary);
@@ -3689,6 +3733,63 @@ tr.selected td {
   height: 16px;
   background: var(--border);
   margin: 0 var(--space-1);
+}
+.graph-toolbar-field,
+.graph-toolbar-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.graph-toolbar-field span,
+.graph-toolbar-check span {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.graph-toolbar-field-compact strong {
+  min-width: 10px;
+  color: var(--text);
+  font-size: 11px;
+}
+.graph-toolbar-input,
+.graph-toolbar-select {
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+.graph-toolbar-input {
+  min-width: 150px;
+}
+.graph-toolbar-select {
+  max-width: 220px;
+}
+.graph-toolbar-range {
+  width: 72px;
+}
+.graph-toolbar-check input {
+  accent-color: var(--accent);
+}
+.graph-toolbar-status {
+  margin-left: auto;
+}
+.graph-toolbar-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
 }
 
 /* SSA viewer */

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useDebugCallGraph } from '../../api/queries/debug';
-import { GraphRenderer } from '../../components/debug/GraphRenderer';
+import { CallGraphCanvas } from '../../graph/components/CallGraphCanvas';
 
 export function CallGraphPage() {
   const [selectedNode, setSelectedNode] = useState<number | null>(null);
@@ -14,19 +14,6 @@ export function CallGraphPage() {
       </div>
     );
   if (!data) return null;
-
-  const graphNodes = data.nodes.map((n) => ({
-    id: n.id,
-    label: n.name,
-    type: 'Call',
-  }));
-
-  const graphEdges = data.edges.map((e) => ({
-    source: e.source,
-    target: e.target,
-    label: undefined,
-    type: 'Seq',
-  }));
 
   const selectedInfo = data.nodes.find((n) => n.id === selectedNode);
 
@@ -42,11 +29,10 @@ export function CallGraphPage() {
               `, ${data.unresolved_count} unresolved`}
           </span>
         </div>
-        <GraphRenderer
-          nodes={graphNodes}
-          edges={graphEdges}
-          onNodeClick={setSelectedNode}
-          selectedNode={selectedNode}
+        <CallGraphCanvas
+          data={data}
+          selectedNodeId={selectedNode}
+          onSelectNode={setSelectedNode}
         />
       </div>
       {selectedInfo && (
