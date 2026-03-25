@@ -166,3 +166,97 @@ fn walker_respects_excluded_extensions() {
     assert!(all.iter().any(|p| p.ends_with("keep.rs")));
     assert!(all.iter().all(|p| !p.ends_with("skip.txt")));
 }
+
+#[test]
+fn walker_respects_excluded_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // Files at root level
+    std::fs::write(root.join("keep.rs"), "fn main(){}").unwrap(); // nyx:ignore cfg-unguarded-sink
+    // Files in excluded subdir
+    let vendor = root.join("vendor");
+    std::fs::create_dir(&vendor).unwrap();
+    std::fs::write(vendor.join("dep.rs"), "fn dep(){}").unwrap(); // nyx:ignore cfg-unguarded-sink
+
+    let mut cfg = Config::default();
+    cfg.scanner.excluded_directories = vec!["vendor".into()];
+    cfg.performance.worker_threads = Some(1);
+    cfg.performance.channel_multiplier = 1;
+    cfg.performance.batch_size = 4;
+
+    let (rx, handle) = spawn_file_walker(root, &cfg);
+    handle.join().ok();
+    let all: Vec<_> = rx.into_iter().flatten().collect();
+
+    assert!(all.iter().any(|p| p.ends_with("keep.rs")));
+    assert!(
+        all.iter().all(|p| !p.starts_with(&vendor)),
+        "vendor dir files should be excluded: {all:?}"
+    );
+}
+
+#[test]
+fn walker_respects_excluded_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    std::fs::write(root.join("keep.rs"), "fn a(){}").unwrap(); // nyx:ignore cfg-unguarded-sink
+    std::fs::write(root.join("skip.rs"), "fn b(){}").unwrap(); // nyx:ignore cfg-unguarded-sink
+
+    let mut cfg = Config::default();
+    cfg.scanner.excluded_files = vec!["skip.rs".into()];
+    cfg.performance.worker_threads = Some(1);
+    cfg.performance.channel_multiplier = 1;
+    cfg.performance.batch_size = 4;
+
+    let (rx, handle) = spawn_file_walker(root, &cfg);
+    handle.join().ok();
+    let all: Vec<_> = rx.into_iter().flatten().collect();
+
+    assert!(all.iter().any(|p| p.ends_with("keep.rs")));
+    assert!(all.iter().all(|p| !p.ends_with("skip.rs")));
+}
+
+#[test]
+fn walker_respects_max_file_size() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // Write a small file (a few bytes) and a large file (> 1 MB limit)
+    std::fs::write(root.join("small.rs"), "fn s(){}").unwrap(); // nyx:ignore cfg-unguarded-sink
+    let big_data = vec![b'x'; 2 * 1_048_576]; // 2 MB
+    std::fs::write(root.join("big.rs"), big_data).unwrap(); // nyx:ignore cfg-unguarded-sink
+
+    let mut cfg = Config::default();
+    cfg.scanner.max_file_size_mb = Some(1); // 1 MB limit
+    cfg.performance.worker_threads = Some(1);
+    cfg.performance.channel_multiplier = 1;
+    cfg.performance.batch_size = 4;
+
+    let (rx, handle) = spawn_file_walker(root, &cfg);
+    handle.join().ok();
+    let all: Vec<_> = rx.into_iter().flatten().collect();
+
+    assert!(all.iter().any(|p| p.ends_with("small.rs")));
+    assert!(
+        all.iter().all(|p| !p.ends_with("big.rs")),
+        "file exceeding size limit should be excluded: {all:?}"
+    );
+}
+
+#[test]
+fn walker_returns_empty_on_empty_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let mut cfg = Config::default();
+    cfg.performance.worker_threads = Some(1);
+    cfg.performance.channel_multiplier = 1;
+    cfg.performance.batch_size = 4;
+
+    let (rx, handle) = spawn_file_walker(tmp.path(), &cfg);
+    handle.join().ok();
+    let all: Vec<_> = rx.into_iter().flatten().collect();
+
+    assert!(all.is_empty(), "empty directory should yield no files");
+}
