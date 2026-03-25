@@ -44,12 +44,7 @@ describe('compactGraph', () => {
       makeNode(4, 'Stmt'),
       makeNode(5, 'Exit'),
     ];
-    const edges = [
-      seqEdge(1, 2),
-      seqEdge(2, 3),
-      seqEdge(3, 4),
-      seqEdge(4, 5),
-    ];
+    const edges = [seqEdge(1, 2), seqEdge(2, 3), seqEdge(3, 4), seqEdge(4, 5)];
     const result = compactGraph(nodes, edges);
 
     // The three stmts should be collapsed into one compound node
@@ -70,12 +65,7 @@ describe('compactGraph', () => {
       makeNode(4, 'Stmt'),
       makeNode(5, 'Exit'),
     ];
-    const edges = [
-      seqEdge(1, 2),
-      seqEdge(2, 3),
-      seqEdge(3, 4),
-      seqEdge(4, 5),
-    ];
+    const edges = [seqEdge(1, 2), seqEdge(2, 3), seqEdge(3, 4), seqEdge(4, 5)];
     const result = compactGraph(nodes, edges);
 
     expect(result.expandedIds.size).toBe(1);
@@ -125,12 +115,7 @@ describe('compactGraph', () => {
       { ...makeNode(4, 'Stmt'), line: 12 },
       makeNode(5, 'Exit'),
     ];
-    const edges = [
-      seqEdge(1, 2),
-      seqEdge(2, 3),
-      seqEdge(3, 4),
-      seqEdge(4, 5),
-    ];
+    const edges = [seqEdge(1, 2), seqEdge(2, 3), seqEdge(3, 4), seqEdge(4, 5)];
     const result = compactGraph(nodes, edges);
     const compound = result.nodes.find((n) => n.type === 'Compound');
     expect(compound?.detail).toMatch(/L10/);

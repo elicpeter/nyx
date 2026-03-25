@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { getNodeStyle, getEdgeStyle } from '@/components/debug/graph/nodeStyles';
+import {
+  getNodeStyle,
+  getEdgeStyle,
+} from '@/components/debug/graph/nodeStyles';
 
 describe('getNodeStyle', () => {
   it('returns a style for Entry nodes', () => {

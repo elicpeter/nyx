@@ -42,37 +42,43 @@ describe('Pagination', () => {
 
   it('calls onPageChange(1) when First is clicked', () => {
     const onPageChange = vi.fn();
-    render(<Pagination {...defaultProps} page={3} onPageChange={onPageChange} />);
+    render(
+      <Pagination {...defaultProps} page={3} onPageChange={onPageChange} />,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'First' }));
     expect(onPageChange).toHaveBeenCalledWith(1);
   });
 
   it('calls onPageChange with previous page when Prev is clicked', () => {
     const onPageChange = vi.fn();
-    render(<Pagination {...defaultProps} page={3} onPageChange={onPageChange} />);
+    render(
+      <Pagination {...defaultProps} page={3} onPageChange={onPageChange} />,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Prev' }));
     expect(onPageChange).toHaveBeenCalledWith(2);
   });
 
   it('calls onPageChange with next page when Next is clicked', () => {
     const onPageChange = vi.fn();
-    render(<Pagination {...defaultProps} page={2} onPageChange={onPageChange} />);
+    render(
+      <Pagination {...defaultProps} page={2} onPageChange={onPageChange} />,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(onPageChange).toHaveBeenCalledWith(3);
   });
 
   it('calls onPageChange with last page when Last is clicked', () => {
     const onPageChange = vi.fn();
-    render(<Pagination {...defaultProps} page={2} onPageChange={onPageChange} />);
+    render(
+      <Pagination {...defaultProps} page={2} onPageChange={onPageChange} />,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Last' }));
     expect(onPageChange).toHaveBeenCalledWith(4);
   });
 
   it('calls onPerPageChange when per-page select changes', () => {
     const onPerPageChange = vi.fn();
-    render(
-      <Pagination {...defaultProps} onPerPageChange={onPerPageChange} />,
-    );
+    render(<Pagination {...defaultProps} onPerPageChange={onPerPageChange} />);
     fireEvent.change(screen.getByRole('combobox'), { target: { value: '25' } });
     expect(onPerPageChange).toHaveBeenCalledWith(25);
   });

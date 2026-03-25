@@ -105,21 +105,21 @@ describe('relTime', () => {
   });
 
   it('returns "X days ago" for less than 30 days', () => {
-    expect(relTime(new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString())).toBe(
-      '10 days ago',
-    );
+    expect(
+      relTime(new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString()),
+    ).toBe('10 days ago');
   });
 
   it('returns "1 month ago" for ~30 days', () => {
-    expect(relTime(new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString())).toBe(
-      '1 month ago',
-    );
+    expect(
+      relTime(new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString()),
+    ).toBe('1 month ago');
   });
 
   it('returns "X months ago" for less than 12 months', () => {
-    expect(relTime(new Date(now - 6 * 30 * 24 * 60 * 60 * 1000).toISOString())).toBe(
-      '6 months ago',
-    );
+    expect(
+      relTime(new Date(now - 6 * 30 * 24 * 60 * 60 * 1000).toISOString()),
+    ).toBe('6 months ago');
   });
 
   it('returns "1 year ago" for ~12 months', () => {
@@ -130,9 +130,7 @@ describe('relTime', () => {
 
   it('returns "X years ago" for multiple years', () => {
     expect(
-      relTime(
-        new Date(now - 2 * 12 * 30 * 24 * 60 * 60 * 1000).toISOString(),
-      ),
+      relTime(new Date(now - 2 * 12 * 30 * 24 * 60 * 60 * 1000).toISOString()),
     ).toBe('2 years ago');
   });
 });

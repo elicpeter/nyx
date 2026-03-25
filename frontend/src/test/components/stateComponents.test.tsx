@@ -16,7 +16,9 @@ describe('EmptyState', () => {
         <button>Add item</button>
       </EmptyState>,
     );
-    expect(screen.getByRole('button', { name: 'Add item' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Add item' }),
+    ).toBeInTheDocument();
   });
 
   it('renders an icon when provided', () => {

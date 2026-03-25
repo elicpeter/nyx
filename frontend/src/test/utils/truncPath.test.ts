@@ -20,14 +20,16 @@ describe('truncPath', () => {
   });
 
   it('truncates a long path with leading "..."', () => {
-    const p = '/very/long/path/that/exceeds/the/default/max/length/limit/file.ts';
+    const p =
+      '/very/long/path/that/exceeds/the/default/max/length/limit/file.ts';
     const result = truncPath(p);
     expect(result.startsWith('...')).toBe(true);
     expect(result.length).toBe(60);
   });
 
   it('keeps the tail of the path after truncation', () => {
-    const p = '/very/long/path/that/exceeds/the/default/max/length/limit/file.ts';
+    const p =
+      '/very/long/path/that/exceeds/the/default/max/length/limit/file.ts';
     const result = truncPath(p);
     expect(result.endsWith('file.ts')).toBe(true);
   });

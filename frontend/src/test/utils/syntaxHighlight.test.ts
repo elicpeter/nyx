@@ -98,7 +98,9 @@ describe('highlightSyntax', () => {
     const code = '// const x = 1;';
     const result = highlightSyntax(code, 'javascript');
     // The whole line should be a comment span, not split into keyword spans
-    expect(result).toContain('<span class="tok-comment">// const x = 1;</span>');
+    expect(result).toContain(
+      '<span class="tok-comment">// const x = 1;</span>',
+    );
     expect(result).not.toContain('tok-keyword');
   });
 
