@@ -1,0 +1,27 @@
+{
+  "description": "XSS: taint loaded from Map index 0 flows to sink — per-index precision retains the finding for the tainted slot",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "container",
+    "heap",
+    "index"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "per-index precision: m.get(0) should load taint stored at index 0"
+    }
+  ]
+}

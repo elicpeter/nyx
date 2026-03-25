@@ -201,7 +201,7 @@ pub fn transfer_inst(
                             field: FieldSlot::Elements,
                         };
                         match container_op {
-                            ContainerOp::Store { ref value_args } => {
+                            ContainerOp::Store { ref value_args, .. } => {
                                 let val_sym = value_args
                                     .first()
                                     .and_then(|&idx| args.get(idx))
@@ -217,7 +217,7 @@ pub fn transfer_inst(
                                 state.heap_mut().store(key, val_sym, any_tainted);
                                 // Fall through to normal Call for return value
                             }
-                            ContainerOp::Load => {
+                            ContainerOp::Load { .. } => {
                                 let loaded = state.heap().load(&key);
                                 if !matches!(loaded, SymbolicValue::Unknown) {
                                     state.set(inst.value, loaded);

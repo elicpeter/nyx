@@ -8,7 +8,12 @@
 //! Key design:
 //! - HeapObjectId is keyed by allocation-site SsaValue (deterministic, zero-cost)
 //! - PointsToSet is bounded to MAX_POINTSTO entries (widening on overflow)
-//! - HeapState tracks per-heap-object taint (monotone lattice)
+//! - HeapState tracks per-(heap-object, slot) taint (monotone lattice)
+//!   - HeapSlot::Index(u64) for constant-index container access (proven by const propagation)
+//!   - HeapSlot::Elements for coarse element access (push/pop, dynamic index, overflow)
+//!   - Intraprocedural: constant-index sensitivity is guaranteed when const propagation proves it
+//!   - Interprocedural: best-effort — relies on correct const_values threading (already handled)
+//!   - Unknown/unproven indices fall back to Elements (conservative)
 //! - Analysis runs as a pre-pass in optimize_ssa(), like type_facts
 
 use crate::cfg::Cfg;
@@ -25,6 +30,29 @@ pub const MAX_POINTSTO: usize = 8;
 
 /// Maximum origins tracked per heap object (matches MAX_ORIGINS in ssa_transfer).
 const MAX_HEAP_ORIGINS: usize = 4;
+
+/// Maximum distinct `Index(n)` slots tracked per heap object.
+/// When exceeded, all indexed entries for that object collapse into `Elements`.
+pub const MAX_TRACKED_INDICES: usize = 8;
+
+// ── HeapSlot ────────────────────────────────────────────────────────────
+
+/// Distinguishes constant-index container access from coarse element access.
+///
+/// `Elements` is the conservative default — all container elements merge into
+/// a single taint.  `Index(n)` provides per-index precision when the index is
+/// provably a non-negative integer constant (via the function's own const
+/// propagation pass).
+///
+/// Ordering: `Elements < Index(0) < Index(1) < …` so that sorted merge-join
+/// in `HeapState` groups all slots for the same `HeapObjectId` together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum HeapSlot {
+    /// Coarse union of all elements (push/pop, dynamic index, overflow).
+    Elements,
+    /// Constant-index slot, proven by the current function's const propagation.
+    Index(u64),
+}
 
 // ── HeapObjectId ─────────────────────────────────────────────────────────
 
@@ -153,13 +181,20 @@ impl HeapTaint {
 
 // ── HeapState ────────────────────────────────────────────────────────────
 
-/// Per-heap-object taint state: abstract contents of all tracked containers.
+/// Per-(heap-object, slot) taint state: abstract contents of all tracked
+/// containers with optional per-index precision.
 ///
-/// Sorted by HeapObjectId for O(n) merge-join (lattice join = union of
-/// per-object taint), matching the SsaTaintState pattern.
+/// Sorted by `(HeapObjectId, HeapSlot)` for O(n) merge-join (lattice join =
+/// union of per-slot taint), matching the `SsaTaintState` pattern.
+///
+/// Load semantics:
+/// - `load(id, Index(n))`: union of `(id, Index(n))` and `(id, Elements)` —
+///   indexed reads also see taint from dynamic/push operations.
+/// - `load(id, Elements)`: union of `(id, Elements)` and ALL `(id, Index(*))`
+///   entries — dynamic reads conservatively see all indexed taint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeapState {
-    entries: SmallVec<[(HeapObjectId, HeapTaint); 4]>,
+    entries: SmallVec<[((HeapObjectId, HeapSlot), HeapTaint); 4]>,
 }
 
 impl HeapState {
@@ -171,12 +206,51 @@ impl HeapState {
         self.entries.is_empty()
     }
 
-    /// Store taint into a specific heap object (monotone merge).
-    pub fn store(&mut self, id: HeapObjectId, caps: Cap, origins: &[TaintOrigin]) {
+    /// Store taint into a specific (object, slot) pair (monotone merge).
+    ///
+    /// If storing to `Index(n)` would exceed `MAX_TRACKED_INDICES` distinct
+    /// indices for this object, all `Index(*)` entries for the object are
+    /// collapsed into `Elements` and the new taint is merged there instead.
+    pub fn store(
+        &mut self,
+        id: HeapObjectId,
+        slot: HeapSlot,
+        caps: Cap,
+        origins: &[TaintOrigin],
+    ) {
         if caps.is_empty() {
             return;
         }
-        match self.entries.binary_search_by_key(&id, |(h, _)| *h) {
+
+        // Check index overflow before inserting a new Index slot.
+        if let HeapSlot::Index(_) = slot {
+            let key = (id, slot);
+            let already_present = self.entries.binary_search_by_key(&key, |(k, _)| *k).is_ok();
+            if !already_present {
+                let index_count = self.count_indices_for(id);
+                if index_count >= MAX_TRACKED_INDICES {
+                    // Collapse: merge all Index(*) entries into Elements,
+                    // then store the new taint into Elements too.
+                    self.collapse_indices_to_elements(id);
+                    self.store_raw(id, HeapSlot::Elements, caps, origins);
+                    return;
+                }
+            }
+        }
+
+        self.store_raw(id, slot, caps, origins);
+    }
+
+    /// Raw store without overflow checking.
+    fn store_raw(
+        &mut self,
+        id: HeapObjectId,
+        slot: HeapSlot,
+        caps: Cap,
+        origins: &[TaintOrigin],
+    ) {
+        let key = (id, slot);
+        match self.entries.binary_search_by_key(&key, |(k, _)| *k) {
             Ok(idx) => {
                 self.entries[idx].1.merge(caps, origins);
             }
@@ -184,7 +258,7 @@ impl HeapState {
                 self.entries.insert(
                     idx,
                     (
-                        id,
+                        key,
                         HeapTaint {
                             caps,
                             origins: {
@@ -202,52 +276,92 @@ impl HeapState {
     }
 
     /// Store taint into all heap objects in a points-to set.
-    pub fn store_set(&mut self, pts: &PointsToSet, caps: Cap, origins: &[TaintOrigin]) {
+    pub fn store_set(
+        &mut self,
+        pts: &PointsToSet,
+        slot: HeapSlot,
+        caps: Cap,
+        origins: &[TaintOrigin],
+    ) {
         for &id in pts.iter() {
-            self.store(id, caps, origins);
+            self.store(id, slot, caps, origins);
         }
     }
 
-    /// Load taint from a specific heap object.
-    pub fn load(&self, id: HeapObjectId) -> Option<&HeapTaint> {
+    /// Load taint from a specific (object, slot) pair.
+    ///
+    /// - `Index(n)`: returns union of `(id, Index(n))` ∪ `(id, Elements)`.
+    /// - `Elements`: returns union of `(id, Elements)` ∪ all `(id, Index(*))`.
+    pub fn load(&self, id: HeapObjectId, slot: HeapSlot) -> Option<HeapTaint> {
+        match slot {
+            HeapSlot::Index(n) => {
+                // Union specific index with Elements.
+                let idx_taint = self.load_raw(id, HeapSlot::Index(n));
+                let elem_taint = self.load_raw(id, HeapSlot::Elements);
+                match (idx_taint, elem_taint) {
+                    (Some(a), Some(b)) => Some(a.union(b)),
+                    (Some(a), None) => Some(a.clone()),
+                    (None, Some(b)) => Some(b.clone()),
+                    (None, None) => None,
+                }
+            }
+            HeapSlot::Elements => {
+                // Union Elements with ALL Index(*) entries for this object.
+                let mut result: Option<HeapTaint> = None;
+                for ((eid, _slot), taint) in &self.entries {
+                    if *eid == id {
+                        result = Some(match result {
+                            Some(r) => r.union(taint),
+                            None => taint.clone(),
+                        });
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    /// Direct lookup of a single (id, slot) entry without cross-slot unioning.
+    fn load_raw(&self, id: HeapObjectId, slot: HeapSlot) -> Option<&HeapTaint> {
+        let key = (id, slot);
         self.entries
-            .binary_search_by_key(&id, |(h, _)| *h)
+            .binary_search_by_key(&key, |(k, _)| *k)
             .ok()
             .map(|idx| &self.entries[idx].1)
     }
 
     /// Load and union taint from all heap objects in a points-to set.
-    pub fn load_set(&self, pts: &PointsToSet) -> Option<HeapTaint> {
+    pub fn load_set(&self, pts: &PointsToSet, slot: HeapSlot) -> Option<HeapTaint> {
         let mut result: Option<HeapTaint> = None;
         for &id in pts.iter() {
-            if let Some(ht) = self.load(id) {
+            if let Some(ht) = self.load(id, slot) {
                 result = Some(match result {
-                    Some(r) => r.union(ht),
-                    None => ht.clone(),
+                    Some(r) => r.union(&ht),
+                    None => ht,
                 });
             }
         }
         result
     }
 
-    /// Lattice join: merge-join by HeapObjectId, union per-object taint.
+    /// Lattice join: merge-join by (HeapObjectId, HeapSlot), union per-slot taint.
     pub fn join(&self, other: &Self) -> Self {
         let mut result = SmallVec::new();
         let (mut i, mut j) = (0, 0);
         while i < self.entries.len() && j < other.entries.len() {
-            let (ha, ta) = &self.entries[i];
-            let (hb, tb) = &other.entries[j];
-            match ha.cmp(hb) {
+            let (ka, ta) = &self.entries[i];
+            let (kb, tb) = &other.entries[j];
+            match ka.cmp(kb) {
                 std::cmp::Ordering::Less => {
-                    result.push((*ha, ta.clone()));
+                    result.push((*ka, ta.clone()));
                     i += 1;
                 }
                 std::cmp::Ordering::Greater => {
-                    result.push((*hb, tb.clone()));
+                    result.push((*kb, tb.clone()));
                     j += 1;
                 }
                 std::cmp::Ordering::Equal => {
-                    result.push((*ha, ta.union(tb)));
+                    result.push((*ka, ta.union(tb)));
                     i += 1;
                     j += 1;
                 }
@@ -267,27 +381,59 @@ impl HeapState {
     /// Lattice ordering: every entry in self must be present in other with subset caps.
     pub fn leq(&self, other: &Self) -> bool {
         let mut j = 0;
-        for (ha, ta) in &self.entries {
-            // Find matching entry in other
+        for (ka, ta) in &self.entries {
             loop {
                 if j >= other.entries.len() {
                     return false;
                 }
-                let (hb, _) = &other.entries[j];
-                match ha.cmp(hb) {
+                let (kb, _) = &other.entries[j];
+                match ka.cmp(kb) {
                     std::cmp::Ordering::Equal => break,
                     std::cmp::Ordering::Greater => j += 1,
                     std::cmp::Ordering::Less => return false,
                 }
             }
             let (_, tb) = &other.entries[j];
-            // Check caps subset
             if (ta.caps & !tb.caps) != Cap::empty() {
                 return false;
             }
             j += 1;
         }
         true
+    }
+
+    /// Count distinct `Index(*)` slots for a given object.
+    fn count_indices_for(&self, id: HeapObjectId) -> usize {
+        self.entries
+            .iter()
+            .filter(|((eid, slot), _)| *eid == id && matches!(slot, HeapSlot::Index(_)))
+            .count()
+    }
+
+    /// Collapse all `Index(*)` entries for `id` into `Elements`.
+    fn collapse_indices_to_elements(&mut self, id: HeapObjectId) {
+        // Collect taint from all Index entries for this object.
+        let mut merged_caps = Cap::empty();
+        let mut merged_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+        self.entries.retain(|((eid, slot), taint)| {
+            if *eid == id && matches!(slot, HeapSlot::Index(_)) {
+                merged_caps |= taint.caps;
+                for orig in &taint.origins {
+                    if merged_origins.len() < MAX_HEAP_ORIGINS
+                        && !merged_origins.iter().any(|o| o.node == orig.node)
+                    {
+                        merged_origins.push(*orig);
+                    }
+                }
+                false // remove this entry
+            } else {
+                true // keep
+            }
+        });
+        // Merge into Elements.
+        if !merged_caps.is_empty() {
+            self.store_raw(id, HeapSlot::Elements, merged_caps, &merged_origins);
+        }
     }
 }
 
@@ -627,9 +773,9 @@ mod tests {
     fn heap_store_and_load() {
         let mut h = HeapState::empty();
         let id = HeapObjectId(SsaValue(0));
-        h.store(id, Cap::HTML_ESCAPE, &[origin(0)]);
+        h.store(id, HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
 
-        let t = h.load(id).unwrap();
+        let t = h.load(id, HeapSlot::Elements).unwrap();
         assert_eq!(t.caps, Cap::HTML_ESCAPE);
         assert_eq!(t.origins.len(), 1);
     }
@@ -638,10 +784,10 @@ mod tests {
     fn heap_store_monotone_merge() {
         let mut h = HeapState::empty();
         let id = HeapObjectId(SsaValue(0));
-        h.store(id, Cap::HTML_ESCAPE, &[origin(0)]);
-        h.store(id, Cap::SQL_QUERY, &[origin(1)]);
+        h.store(id, HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
+        h.store(id, HeapSlot::Elements, Cap::SQL_QUERY, &[origin(1)]);
 
-        let t = h.load(id).unwrap();
+        let t = h.load(id, HeapSlot::Elements).unwrap();
         assert_eq!(t.caps, Cap::HTML_ESCAPE | Cap::SQL_QUERY);
         assert_eq!(t.origins.len(), 2);
     }
@@ -649,27 +795,27 @@ mod tests {
     #[test]
     fn heap_store_empty_caps_noop() {
         let mut h = HeapState::empty();
-        h.store(HeapObjectId(SsaValue(0)), Cap::empty(), &[origin(0)]);
+        h.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::empty(), &[origin(0)]);
         assert!(h.is_empty());
     }
 
     #[test]
     fn heap_load_missing() {
         let h = HeapState::empty();
-        assert!(h.load(HeapObjectId(SsaValue(0))).is_none());
+        assert!(h.load(HeapObjectId(SsaValue(0)), HeapSlot::Elements).is_none());
     }
 
     #[test]
     fn heap_load_set_unions() {
         let mut h = HeapState::empty();
-        h.store(HeapObjectId(SsaValue(0)), Cap::HTML_ESCAPE, &[origin(0)]);
-        h.store(HeapObjectId(SsaValue(1)), Cap::SQL_QUERY, &[origin(1)]);
+        h.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
+        h.store(HeapObjectId(SsaValue(1)), HeapSlot::Elements, Cap::SQL_QUERY, &[origin(1)]);
 
         let mut pts = PointsToSet::empty();
         pts.insert(HeapObjectId(SsaValue(0)));
         pts.insert(HeapObjectId(SsaValue(1)));
 
-        let t = h.load_set(&pts).unwrap();
+        let t = h.load_set(&pts, HeapSlot::Elements).unwrap();
         assert_eq!(t.caps, Cap::HTML_ESCAPE | Cap::SQL_QUERY);
         assert_eq!(t.origins.len(), 2);
     }
@@ -677,9 +823,9 @@ mod tests {
     #[test]
     fn heap_load_set_empty_pts() {
         let mut h = HeapState::empty();
-        h.store(HeapObjectId(SsaValue(0)), Cap::HTML_ESCAPE, &[origin(0)]);
+        h.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
         let pts = PointsToSet::empty();
-        assert!(h.load_set(&pts).is_none());
+        assert!(h.load_set(&pts, HeapSlot::Elements).is_none());
     }
 
     #[test]
@@ -689,35 +835,35 @@ mod tests {
         pts.insert(HeapObjectId(SsaValue(0)));
         pts.insert(HeapObjectId(SsaValue(1)));
 
-        h.store_set(&pts, Cap::HTML_ESCAPE, &[origin(0)]);
+        h.store_set(&pts, HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
 
-        assert_eq!(h.load(HeapObjectId(SsaValue(0))).unwrap().caps, Cap::HTML_ESCAPE);
-        assert_eq!(h.load(HeapObjectId(SsaValue(1))).unwrap().caps, Cap::HTML_ESCAPE);
+        assert_eq!(h.load(HeapObjectId(SsaValue(0)), HeapSlot::Elements).unwrap().caps, Cap::HTML_ESCAPE);
+        assert_eq!(h.load(HeapObjectId(SsaValue(1)), HeapSlot::Elements).unwrap().caps, Cap::HTML_ESCAPE);
     }
 
     #[test]
     fn heap_join() {
         let mut a = HeapState::empty();
-        a.store(HeapObjectId(SsaValue(0)), Cap::HTML_ESCAPE, &[origin(0)]);
+        a.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
 
         let mut b = HeapState::empty();
-        b.store(HeapObjectId(SsaValue(0)), Cap::SQL_QUERY, &[origin(1)]);
-        b.store(HeapObjectId(SsaValue(1)), Cap::FILE_IO, &[origin(2)]);
+        b.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::SQL_QUERY, &[origin(1)]);
+        b.store(HeapObjectId(SsaValue(1)), HeapSlot::Elements, Cap::FILE_IO, &[origin(2)]);
 
         let c = a.join(&b);
-        let t0 = c.load(HeapObjectId(SsaValue(0))).unwrap();
+        let t0 = c.load(HeapObjectId(SsaValue(0)), HeapSlot::Elements).unwrap();
         assert_eq!(t0.caps, Cap::HTML_ESCAPE | Cap::SQL_QUERY);
-        let t1 = c.load(HeapObjectId(SsaValue(1))).unwrap();
+        let t1 = c.load(HeapObjectId(SsaValue(1)), HeapSlot::Elements).unwrap();
         assert_eq!(t1.caps, Cap::FILE_IO);
     }
 
     #[test]
     fn heap_leq() {
         let mut a = HeapState::empty();
-        a.store(HeapObjectId(SsaValue(0)), Cap::HTML_ESCAPE, &[origin(0)]);
+        a.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
 
         let mut b = HeapState::empty();
-        b.store(HeapObjectId(SsaValue(0)), Cap::HTML_ESCAPE | Cap::SQL_QUERY, &[origin(0)]);
+        b.store(HeapObjectId(SsaValue(0)), HeapSlot::Elements, Cap::HTML_ESCAPE | Cap::SQL_QUERY, &[origin(0)]);
 
         assert!(a.leq(&b)); // a ⊆ b
         assert!(!b.leq(&a)); // b ⊄ a
@@ -726,10 +872,90 @@ mod tests {
     #[test]
     fn heap_leq_missing_entry() {
         let mut a = HeapState::empty();
-        a.store(HeapObjectId(SsaValue(5)), Cap::HTML_ESCAPE, &[origin(0)]);
+        a.store(HeapObjectId(SsaValue(5)), HeapSlot::Elements, Cap::HTML_ESCAPE, &[origin(0)]);
         let b = HeapState::empty();
         assert!(!a.leq(&b)); // a has entry, b doesn't
         assert!(b.leq(&a)); // b empty is always ⊆
+    }
+
+    // ── HeapSlot indexed tests ──────────────────────────────────────
+
+    #[test]
+    fn heap_indexed_store_load_isolation() {
+        // Store to Index(0), load from Index(1) → no taint
+        let mut h = HeapState::empty();
+        let id = HeapObjectId(SsaValue(0));
+        h.store(id, HeapSlot::Index(0), Cap::HTML_ESCAPE, &[origin(0)]);
+
+        // Index(0) should have taint
+        let t0 = h.load(id, HeapSlot::Index(0)).unwrap();
+        assert_eq!(t0.caps, Cap::HTML_ESCAPE);
+
+        // Index(1) should NOT have taint (no Elements, no Index(1) entry)
+        assert!(h.load(id, HeapSlot::Index(1)).is_none());
+    }
+
+    #[test]
+    fn heap_indexed_load_unions_with_elements() {
+        // Store to Elements → indexed load should see it
+        let mut h = HeapState::empty();
+        let id = HeapObjectId(SsaValue(0));
+        h.store(id, HeapSlot::Elements, Cap::SQL_QUERY, &[origin(0)]);
+
+        // Index(1) load should union with Elements
+        let t = h.load(id, HeapSlot::Index(1)).unwrap();
+        assert_eq!(t.caps, Cap::SQL_QUERY);
+    }
+
+    #[test]
+    fn heap_elements_load_unions_all_indices() {
+        // Store to Index(0) and Index(2) — Elements load should see both
+        let mut h = HeapState::empty();
+        let id = HeapObjectId(SsaValue(0));
+        h.store(id, HeapSlot::Index(0), Cap::HTML_ESCAPE, &[origin(0)]);
+        h.store(id, HeapSlot::Index(2), Cap::SQL_QUERY, &[origin(1)]);
+
+        let t = h.load(id, HeapSlot::Elements).unwrap();
+        assert_eq!(t.caps, Cap::HTML_ESCAPE | Cap::SQL_QUERY);
+    }
+
+    #[test]
+    fn heap_indexed_and_elements_combined() {
+        // Index(0) = tainted, Elements = tainted with different cap
+        // Index(0) load should see both; Index(1) should see only Elements
+        let mut h = HeapState::empty();
+        let id = HeapObjectId(SsaValue(0));
+        h.store(id, HeapSlot::Index(0), Cap::HTML_ESCAPE, &[origin(0)]);
+        h.store(id, HeapSlot::Elements, Cap::FILE_IO, &[origin(1)]);
+
+        let t0 = h.load(id, HeapSlot::Index(0)).unwrap();
+        assert_eq!(t0.caps, Cap::HTML_ESCAPE | Cap::FILE_IO);
+
+        let t1 = h.load(id, HeapSlot::Index(1)).unwrap();
+        assert_eq!(t1.caps, Cap::FILE_IO); // only Elements taint
+    }
+
+    #[test]
+    fn heap_max_tracked_indices_collapse() {
+        let mut h = HeapState::empty();
+        let id = HeapObjectId(SsaValue(0));
+
+        // Fill MAX_TRACKED_INDICES index slots
+        for i in 0..MAX_TRACKED_INDICES as u64 {
+            h.store(id, HeapSlot::Index(i), Cap::HTML_ESCAPE, &[origin(i as u32)]);
+        }
+
+        // One more should trigger collapse into Elements
+        h.store(id, HeapSlot::Index(MAX_TRACKED_INDICES as u64), Cap::SQL_QUERY, &[origin(99)]);
+
+        // All Index entries should be collapsed into Elements.
+        // There should be no Index entries left.
+        assert_eq!(h.count_indices_for(id), 0);
+
+        // Elements load should see all taint
+        let t = h.load(id, HeapSlot::Elements).unwrap();
+        assert!(t.caps.contains(Cap::HTML_ESCAPE));
+        assert!(t.caps.contains(Cap::SQL_QUERY));
     }
 
     // ── is_container_literal tests ───────────────────────────────────

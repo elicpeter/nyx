@@ -14,32 +14,61 @@ use smallvec::SmallVec;
 pub enum ContainerOp {
     /// Taint flows from the listed argument positions into the receiver
     /// container (e.g. `arr.push(val)` — val taint merges into arr).
-    Store { value_args: SmallVec<[usize; 2]> },
+    ///
+    /// `index_arg`: when `Some(pos)`, the argument at that logical position
+    /// is the container index/key.  If constant-propagation proves it a
+    /// non-negative integer, the taint engine stores into `HeapSlot::Index(n)`
+    /// instead of `HeapSlot::Elements`.  `None` → always `Elements`.
+    Store {
+        value_args: SmallVec<[usize; 2]>,
+        index_arg: Option<usize>,
+    },
     /// Taint flows from the receiver container to the call's return value
     /// (e.g. `arr.pop()`, `items.join('')`).
-    Load,
+    ///
+    /// `index_arg`: same semantics as `Store::index_arg` — when present and
+    /// provably constant, loads from `HeapSlot::Index(n)`.
+    Load {
+        index_arg: Option<usize>,
+    },
 }
 
-/// Convenience: store with a single value argument at the given position.
+/// Convenience: store with a single value argument, no index tracking.
 #[inline]
 fn store(pos: usize) -> Option<ContainerOp> {
     let mut v = SmallVec::new();
     v.push(pos);
-    Some(ContainerOp::Store { value_args: v })
+    Some(ContainerOp::Store { value_args: v, index_arg: None })
 }
 
-/// Convenience: store with two value arguments.
+/// Convenience: store with index tracking.  `val_pos` is the value arg,
+/// `idx_pos` is the index/key arg (resolved via const propagation).
+#[inline]
+fn store_indexed(val_pos: usize, idx_pos: usize) -> Option<ContainerOp> {
+    let mut v = SmallVec::new();
+    v.push(val_pos);
+    Some(ContainerOp::Store { value_args: v, index_arg: Some(idx_pos) })
+}
+
+/// Convenience: store with two value arguments, no index tracking.
 #[inline]
 fn store2(a: usize, b: usize) -> Option<ContainerOp> {
     let mut v = SmallVec::new();
     v.push(a);
     v.push(b);
-    Some(ContainerOp::Store { value_args: v })
+    Some(ContainerOp::Store { value_args: v, index_arg: None })
 }
 
+/// Convenience: load without index tracking.
 #[inline]
 fn load() -> Option<ContainerOp> {
-    Some(ContainerOp::Load)
+    Some(ContainerOp::Load { index_arg: None })
+}
+
+/// Convenience: load with index tracking.  `idx_pos` is the index/key arg.
+#[inline]
+fn load_indexed(idx_pos: usize) -> Option<ContainerOp> {
+    Some(ContainerOp::Load { index_arg: Some(idx_pos) })
 }
 
 // ── Classification ──────────────────────────────────────────────────────
@@ -74,13 +103,15 @@ fn classify_js(method: &str) -> Option<ContainerOp> {
     match method {
         // Array store
         "push" | "unshift" => store(0),
-        // Map/Set store
-        "set" => store(1),  // map.set(key, value) — value is arg 1
+        // Map/Set store: map.set(key, value) — key at 0, value at 1
+        "set" => store_indexed(1, 0),
         "add" => store(0),  // set.add(value)
         // Array/Map load
         "pop" | "shift" => load(),
         "join" | "flat" | "concat" | "slice" | "toString" => load(),
-        "get" | "values" | "keys" | "entries" => load(),
+        // map.get(key) — key at 0
+        "get" => load_indexed(0),
+        "values" | "keys" | "entries" => load(),
         _ => None,
     }
 }
@@ -89,7 +120,7 @@ fn classify_python(method: &str) -> Option<ContainerOp> {
     match method {
         // List store
         "append" | "extend" => store(0),
-        "insert" => store(1),  // list.insert(index, value)
+        "insert" => store_indexed(1, 0),  // list.insert(index, value) — index at 0, value at 1
         // Set store
         "add" => store(0),
         // Dict store
@@ -97,11 +128,9 @@ fn classify_python(method: &str) -> Option<ContainerOp> {
         "setdefault" => store2(0, 1), // dict.setdefault(key, default)
         // List/Dict load
         "pop" => load(),
-        "get" => load(),
+        "get" => load_indexed(0),  // dict.get(key) / list index — key/index at 0
         "items" | "values" | "keys" => load(),
-        "join" => load(), // str.join(iterable) — taint from receiver (separator) is irrelevant,
-                          // but taint from the iterable (which is the receiver in "sep".join(list))
-                          // is what matters. In SSA the list is typically the arg.
+        "join" => load(),
         _ => None,
     }
 }
@@ -109,9 +138,14 @@ fn classify_python(method: &str) -> Option<ContainerOp> {
 fn classify_java(method: &str) -> Option<ContainerOp> {
     match method {
         // Collection store
-        "add" | "addAll" | "put" | "putAll" | "set" | "offer" | "push" => store(0),
-        // Collection load
-        "get" | "poll" | "peek" | "remove" | "pop" => load(),
+        "add" | "addAll" | "putAll" | "offer" | "push" => store(0),
+        // ArrayList.set(index, value) — index at 0, value at 1
+        "set" => store_indexed(1, 0),
+        // Map.put(key, value) — key at 0, value at 1
+        "put" => store_indexed(1, 0),
+        // Collection load: ArrayList.get(index) — index at 0
+        "get" => load_indexed(0),
+        "poll" | "peek" | "remove" | "pop" => load(),
         "stream" | "toArray" | "iterator" => load(),
         _ => None,
     }
@@ -153,7 +187,9 @@ fn classify_php(method: &str) -> Option<ContainerOp> {
 fn classify_cpp(method: &str) -> Option<ContainerOp> {
     match method {
         "push_back" | "emplace_back" | "insert" | "emplace" | "push" => store(0),
-        "front" | "back" | "pop_back" | "pop_front" | "at" | "top" => load(),
+        "front" | "back" | "pop_back" | "pop_front" | "top" => load(),
+        // vector.at(index) — index at 0
+        "at" => load_indexed(0),
         _ => None,
     }
 }
@@ -161,7 +197,9 @@ fn classify_cpp(method: &str) -> Option<ContainerOp> {
 fn classify_rust(method: &str) -> Option<ContainerOp> {
     match method {
         "push" | "insert" | "extend" => store(0),
-        "pop" | "get" | "first" | "last" | "iter" | "remove" => load(),
+        "pop" | "first" | "last" | "iter" | "remove" => load(),
+        // vec.get(index) — index at 0
+        "get" => load_indexed(0),
         _ => None,
     }
 }
@@ -181,13 +219,13 @@ mod tests {
     #[test]
     fn js_pop_is_load() {
         let op = classify_container_op("arr.pop", Lang::JavaScript);
-        assert!(matches!(op, Some(ContainerOp::Load)));
+        assert!(matches!(op, Some(ContainerOp::Load { .. })));
     }
 
     #[test]
     fn js_join_is_load() {
         let op = classify_container_op("items.join", Lang::JavaScript);
-        assert!(matches!(op, Some(ContainerOp::Load)));
+        assert!(matches!(op, Some(ContainerOp::Load { .. })));
     }
 
     #[test]
@@ -221,21 +259,43 @@ mod tests {
 
     #[test]
     fn store_value_args_correct() {
-        // JS set → value at arg 1
-        if let Some(ContainerOp::Store { value_args }) =
+        // JS set → value at arg 1, index at arg 0
+        if let Some(ContainerOp::Store { value_args, index_arg }) =
             classify_container_op("map.set", Lang::JavaScript)
         {
             assert_eq!(value_args.as_slice(), &[1]);
+            assert_eq!(index_arg, Some(0));
         } else {
             panic!("expected Store");
         }
-        // JS push → value at arg 0
-        if let Some(ContainerOp::Store { value_args }) =
+        // JS push → value at arg 0, no index
+        if let Some(ContainerOp::Store { value_args, index_arg }) =
             classify_container_op("arr.push", Lang::JavaScript)
         {
             assert_eq!(value_args.as_slice(), &[0]);
+            assert_eq!(index_arg, None);
         } else {
             panic!("expected Store");
+        }
+    }
+
+    #[test]
+    fn load_index_arg_correct() {
+        // JS get → index at arg 0
+        if let Some(ContainerOp::Load { index_arg }) =
+            classify_container_op("map.get", Lang::JavaScript)
+        {
+            assert_eq!(index_arg, Some(0));
+        } else {
+            panic!("expected Load");
+        }
+        // JS pop → no index
+        if let Some(ContainerOp::Load { index_arg }) =
+            classify_container_op("arr.pop", Lang::JavaScript)
+        {
+            assert_eq!(index_arg, None);
+        } else {
+            panic!("expected Load");
         }
     }
 }

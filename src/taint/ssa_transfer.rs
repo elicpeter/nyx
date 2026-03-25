@@ -2,7 +2,7 @@ use crate::callgraph::normalize_callee_name;
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
 use crate::interop::InteropEdge;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule, SourceKind};
-use crate::ssa::heap::{HeapState, PointsToResult, PointsToSet};
+use crate::ssa::heap::{HeapSlot, HeapState, PointsToResult, PointsToSet};
 use crate::ssa::ir::*;
 use crate::state::lattice::Lattice;
 use crate::summary::{CalleeResolution, GlobalSummaries};
@@ -1653,7 +1653,7 @@ fn transfer_inst(
                         ) {
                             // Also store into heap objects when available
                             if let Some(pts) = lookup_pts(transfer, container_val) {
-                                state.heap.store_set(&pts, return_bits, &return_origins);
+                                state.heap.store_set(&pts, HeapSlot::Elements, return_bits, &return_origins);
                             }
                             merge_taint_into(state, container_val, return_bits, &return_origins);
                         }
@@ -1765,7 +1765,7 @@ fn transfer_inst(
                     // Store source taint into container's heap objects
                     if !src_caps.is_empty() {
                         for pts in &container_pts {
-                            state.heap.store_set(pts, src_caps, &src_origins);
+                            state.heap.store_set(pts, HeapSlot::Elements, src_caps, &src_origins);
                         }
                     }
                 }
@@ -2722,6 +2722,55 @@ fn try_curl_url_propagation(
     true
 }
 
+/// Resolve a container index SSA operand to a `HeapSlot`.
+///
+/// Uses the current function's `const_values` (from `SsaTaintTransfer`) to
+/// determine whether the index is a provably non-negative integer constant
+/// within `MAX_TRACKED_INDICES`.
+///
+/// - Intraprocedural: guaranteed — each function's own const propagation
+///   results are used.
+/// - Inline callee analysis (k=1): guaranteed — `inline_analyse_callee()`
+///   sets `const_values: Some(&callee_body.opt.const_values)` on the child
+///   transfer, so callee-local constants are resolved.
+/// - Unknown / non-integer / out-of-bounds: falls back to `HeapSlot::Elements`.
+fn resolve_container_index(
+    index_val: SsaValue,
+    transfer: &SsaTaintTransfer,
+) -> HeapSlot {
+    use crate::ssa::heap::MAX_TRACKED_INDICES;
+
+    if let Some(cv) = transfer.const_values {
+        if let Some(crate::ssa::const_prop::ConstLattice::Int(n)) = cv.get(&index_val) {
+            if *n >= 0 && (*n as u64) < MAX_TRACKED_INDICES as u64 {
+                return HeapSlot::Index(*n as u64);
+            }
+        }
+    }
+    HeapSlot::Elements
+}
+
+/// Resolve the `HeapSlot` for a container operation given its `index_arg`.
+///
+/// When `index_arg` is `Some(idx_pos)`, applies `arg_offset` and resolves
+/// the SSA value from `args`.  Otherwise returns `HeapSlot::Elements`.
+fn resolve_op_slot(
+    index_arg: Option<usize>,
+    arg_offset: usize,
+    args: &[SmallVec<[SsaValue; 2]>],
+    transfer: &SsaTaintTransfer,
+) -> HeapSlot {
+    if let Some(idx_pos) = index_arg {
+        let effective = idx_pos + arg_offset;
+        if let Some(arg_vals) = args.get(effective) {
+            if let Some(&v) = arg_vals.first() {
+                return resolve_container_index(v, transfer);
+            }
+        }
+    }
+    HeapSlot::Elements
+}
+
 /// Handle container operations: propagate taint between receiver and arguments.
 ///
 /// **Store** operations (push, append, set, add, insert, etc.):
@@ -2781,7 +2830,7 @@ fn try_container_propagation(
     };
 
     match op {
-        ContainerOp::Store { value_args } => {
+        ContainerOp::Store { value_args, index_arg } => {
             let container_val = match resolve_container(receiver) {
                 Some(v) => v,
                 None => return false,
@@ -2798,6 +2847,9 @@ fn try_container_propagation(
             } else {
                 0
             };
+
+            // Resolve index argument to HeapSlot (Index(n) or Elements).
+            let slot = resolve_op_slot(index_arg, arg_offset, args, transfer);
 
             // Collect taint from value argument(s)
             let mut val_caps = Cap::empty();
@@ -2826,10 +2878,10 @@ fn try_container_propagation(
 
             // When points-to info available, store through heap objects
             if let Some(pts) = lookup_pts(transfer, container_val) {
-                state.heap.store_set(&pts, val_caps, &val_origins);
+                state.heap.store_set(&pts, slot, val_caps, &val_origins);
                 // For Go append, result also points to same heap objects
                 if lang == Lang::Go && receiver.is_none() {
-                    if let Some(ht) = state.heap.load_set(&pts) {
+                    if let Some(ht) = state.heap.load_set(&pts, HeapSlot::Elements) {
                         state.set(inst.value, VarTaint {
                             caps: ht.caps,
                             origins: ht.origins,
@@ -2851,14 +2903,25 @@ fn try_container_propagation(
 
             true
         }
-        ContainerOp::Load => {
+        ContainerOp::Load { index_arg } => {
             let container_val = match resolve_container(receiver) {
                 Some(v) => v,
                 None => return false,
             };
+
+            // Resolve index argument to HeapSlot.
+            let arg_offset = if lang == Lang::Go && receiver.is_none() {
+                1usize
+            } else if receiver.is_some() {
+                1usize
+            } else {
+                0
+            };
+            let slot = resolve_op_slot(index_arg, arg_offset, args, transfer);
+
             // When points-to info available, load from heap objects
             if let Some(pts) = lookup_pts(transfer, container_val) {
-                if let Some(ht) = state.heap.load_set(&pts) {
+                if let Some(ht) = state.heap.load_set(&pts, slot) {
                     state.set(inst.value, VarTaint {
                         caps: ht.caps,
                         origins: ht.origins,
@@ -3004,10 +3067,10 @@ fn collect_tainted_sink_values(
     let mut result = Vec::new();
 
     // Helper: check heap taint for an SSA value that may point to container(s).
-    // Returns true if heap taint was found and added to result.
+    // At sinks we use Elements to conservatively see all indexed taint.
     let check_heap_taint = |v: SsaValue, result: &mut Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>| {
         if let Some(pts) = lookup_pts(transfer, v) {
-            if let Some(ht) = state.heap.load_set(&pts) {
+            if let Some(ht) = state.heap.load_set(&pts, HeapSlot::Elements) {
                 let effective = ht.caps & sink_caps;
                 if !effective.is_empty() && !result.iter().any(|&(rv, _, _)| rv == v) {
                     result.push((v, ht.caps, ht.origins));
@@ -4611,7 +4674,7 @@ pub(crate) fn extract_container_flow_summary(
         for inst in block.body.iter() {
             if let SsaOp::Call { callee, args, receiver } = &inst.op {
                 let op = match classify_container_op(callee, lang) {
-                    Some(ContainerOp::Store { value_args }) => value_args,
+                    Some(ContainerOp::Store { value_args, .. }) => value_args,
                     _ => continue,
                 };
 

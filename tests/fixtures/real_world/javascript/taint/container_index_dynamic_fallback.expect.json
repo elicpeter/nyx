@@ -1,0 +1,28 @@
+{
+  "description": "XSS: dynamic index into tainted Map falls back to coarse Elements — taint conservatively flows to sink",
+  "tags": [
+    "taint",
+    "xss",
+    "express",
+    "container",
+    "heap",
+    "index",
+    "fallback"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        6,
+        12
+      ],
+      "evidence_contains": [],
+      "notes": "dynamic index falls back to Elements, which unions with all indexed taint"
+    }
+  ]
+}
