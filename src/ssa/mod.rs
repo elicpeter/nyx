@@ -19,9 +19,11 @@ pub use lower::lower_to_ssa_with_params;
 
 use crate::cfg::Cfg;
 use crate::symbol::Lang;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Result of SSA optimization passes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OptimizeResult {
     /// Per-SSA-value constant lattice values.
     pub const_values: HashMap<SsaValue, const_prop::ConstLattice>,

@@ -52,7 +52,7 @@ const MAX_CONDITION_TEXT_LEN: usize = 256;
 /// Only set when the SSA assignment maps one-to-one to a single
 /// binary expression. Left `None` for nested, compound, or boolean
 /// expressions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BinOp {
     Add,
     Sub,

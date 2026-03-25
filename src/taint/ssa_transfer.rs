@@ -343,12 +343,59 @@ pub(crate) struct InlineResult {
 /// Cache for context-sensitive inline analysis results.
 pub(crate) type InlineCache = HashMap<(String, ArgTaintSig), InlineResult>;
 
-/// Pre-lowered and optimized SSA body for an intra-file function,
+/// Minimal CFG node metadata embedded in cross-file callee bodies.
+///
+/// The symex executor accesses `bin_op` (for binary-op detection in Assign
+/// transfer) and `labels` (for internal sink detection) from the CFG.
+/// Cross-file bodies store these per-NodeIndex so the original CFG is not needed.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CrossFileNodeMeta {
+    pub bin_op: Option<crate::cfg::BinOp>,
+    pub labels: smallvec::SmallVec<[crate::labels::DataLabel; 2]>,
+}
+
+/// Pre-lowered and optimized SSA body for a function,
 /// ready for context-sensitive re-analysis with different argument taint.
+///
+/// For intra-file use, `node_meta` is empty and the original CFG is used.
+/// For cross-file persistence (Phase 30), `node_meta` carries the minimal
+/// CFG metadata needed by the symex executor.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CalleeSsaBody {
     pub ssa: SsaBody,
     pub opt: crate::ssa::OptimizeResult,
     pub param_count: usize,
+    /// Per-NodeIndex CFG metadata for cross-file bodies.
+    /// Empty for intra-file bodies (the original CFG is used instead).
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub node_meta: std::collections::HashMap<u32, CrossFileNodeMeta>,
+}
+
+/// Populate `node_meta` from the original CFG for cross-file persistence.
+///
+/// Returns `true` if all referenced NodeIndex values were resolved successfully.
+/// Returns `false` if any node was out of bounds (body is ineligible for cross-file use).
+pub fn populate_node_meta(body: &mut CalleeSsaBody, cfg: &crate::cfg::Cfg) -> bool {
+    for block in &body.ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            let idx = inst.cfg_node.index() as u32;
+            if body.node_meta.contains_key(&idx) {
+                continue;
+            }
+            if inst.cfg_node.index() >= cfg.node_count() {
+                return false;
+            }
+            let info = &cfg[inst.cfg_node];
+            body.node_meta.insert(
+                idx,
+                CrossFileNodeMeta {
+                    bin_op: info.bin_op,
+                    labels: info.labels.clone(),
+                },
+            );
+        }
+    }
+    true
 }
 
 // ── SSA Taint Transfer ──────────────────────────────────────────────────
@@ -5094,4 +5141,184 @@ pub(crate) fn extract_container_flow_summary(
     ctr.sort();
     container_store.sort();
     (ctr, container_store)
+}
+
+// ── Phase 30: populate_node_meta + CrossFileNodeMeta tests ───────────────
+
+#[cfg(test)]
+mod cross_file_tests {
+    use super::*;
+    use crate::cfg::{BinOp, EdgeKind, NodeInfo, StmtKind};
+    use crate::labels::DataLabel;
+    use crate::ssa::ir::*;
+    use petgraph::prelude::*;
+    use smallvec::smallvec;
+
+    fn make_test_cfg() -> crate::cfg::Cfg {
+        let mut cfg = Graph::new();
+        let n0 = cfg.add_node(NodeInfo {
+            kind: StmtKind::Seq,
+            span: (0, 10),
+            labels: smallvec![DataLabel::Source(crate::labels::Cap::all())],
+            defines: Some("x".into()),
+            extra_defines: vec![],
+            uses: vec![],
+            callee: None,
+            receiver: None,
+            enclosing_func: None,
+            call_ordinal: 0,
+            condition_text: None,
+            condition_vars: vec![],
+            condition_negated: false,
+            arg_uses: vec![],
+            sink_payload_args: None,
+            all_args_literal: false,
+            catch_param: false,
+            const_text: None,
+            arg_callees: vec![],
+            outer_callee: None,
+            cast_target_type: None,
+            bin_op: Some(BinOp::Add),
+            bin_op_const: None,
+            managed_resource: false,
+            in_defer: false,
+        });
+        let n1 = cfg.add_node(NodeInfo {
+            kind: StmtKind::Seq,
+            span: (10, 20),
+            labels: smallvec![],
+            defines: Some("y".into()),
+            extra_defines: vec![],
+            uses: vec![],
+            callee: None,
+            receiver: None,
+            enclosing_func: None,
+            call_ordinal: 0,
+            condition_text: None,
+            condition_vars: vec![],
+            condition_negated: false,
+            arg_uses: vec![],
+            sink_payload_args: None,
+            all_args_literal: false,
+            catch_param: false,
+            const_text: None,
+            arg_callees: vec![],
+            outer_callee: None,
+            cast_target_type: None,
+            bin_op: None,
+            bin_op_const: None,
+            managed_resource: false,
+            in_defer: false,
+        });
+        cfg.add_edge(n0, n1, EdgeKind::Seq);
+        cfg
+    }
+
+    fn make_body_referencing_nodes(n0: NodeIndex, n1: NodeIndex) -> CalleeSsaBody {
+        CalleeSsaBody {
+            ssa: SsaBody {
+                blocks: vec![SsaBlock {
+                    id: BlockId(0),
+                    phis: vec![],
+                    body: vec![
+                        SsaInst {
+                            value: SsaValue(0),
+                            op: SsaOp::Source,
+                            cfg_node: n0,
+                            var_name: Some("x".into()),
+                            span: (0, 5),
+                        },
+                        SsaInst {
+                            value: SsaValue(1),
+                            op: SsaOp::Assign(smallvec![SsaValue(0)]),
+                            cfg_node: n1,
+                            var_name: Some("y".into()),
+                            span: (5, 10),
+                        },
+                    ],
+                    terminator: Terminator::Return(Some(SsaValue(1))),
+                    preds: smallvec![],
+                    succs: smallvec![],
+                }],
+                entry: BlockId(0),
+                value_defs: vec![
+                    ValueDef { var_name: Some("x".into()), cfg_node: n0, block: BlockId(0) },
+                    ValueDef { var_name: Some("y".into()), cfg_node: n1, block: BlockId(0) },
+                ],
+                cfg_node_map: std::collections::HashMap::new(),
+                exception_edges: vec![],
+            },
+            opt: crate::ssa::OptimizeResult {
+                const_values: std::collections::HashMap::new(),
+                type_facts: crate::ssa::type_facts::TypeFactResult {
+                    facts: std::collections::HashMap::new(),
+                },
+                alias_result: crate::ssa::alias::BaseAliasResult::empty(),
+                points_to: crate::ssa::heap::PointsToResult::empty(),
+                branches_pruned: 0,
+                copies_eliminated: 0,
+                dead_defs_removed: 0,
+            },
+            param_count: 0,
+            node_meta: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn populate_node_meta_extracts_bin_op_and_labels() {
+        let cfg = make_test_cfg();
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let mut body = make_body_referencing_nodes(n0, n1);
+
+        assert!(body.node_meta.is_empty());
+        let ok = populate_node_meta(&mut body, &cfg);
+        assert!(ok, "should succeed for valid nodes");
+
+        assert_eq!(body.node_meta.len(), 2);
+
+        // Node 0: has bin_op=Add and Source label
+        let meta0 = &body.node_meta[&0];
+        assert_eq!(meta0.bin_op, Some(BinOp::Add));
+        assert_eq!(meta0.labels.len(), 1);
+        assert!(matches!(meta0.labels[0], DataLabel::Source(_)));
+
+        // Node 1: no bin_op, no labels
+        let meta1 = &body.node_meta[&1];
+        assert_eq!(meta1.bin_op, None);
+        assert!(meta1.labels.is_empty());
+    }
+
+    #[test]
+    fn populate_node_meta_fails_on_invalid_node() {
+        let cfg = make_test_cfg(); // only has 2 nodes (0, 1)
+        let bad_node = NodeIndex::new(999);
+        let n0 = NodeIndex::new(0);
+
+        let mut body = make_body_referencing_nodes(n0, bad_node);
+
+        let ok = populate_node_meta(&mut body, &cfg);
+        assert!(!ok, "should fail for out-of-bounds NodeIndex");
+    }
+
+    #[test]
+    fn populate_node_meta_idempotent() {
+        let cfg = make_test_cfg();
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let mut body = make_body_referencing_nodes(n0, n1);
+
+        populate_node_meta(&mut body, &cfg);
+        let first_pass = body.node_meta.clone();
+
+        populate_node_meta(&mut body, &cfg);
+        assert_eq!(body.node_meta, first_pass, "second call should be idempotent");
+    }
+
+    #[test]
+    fn cross_file_node_meta_default() {
+        let meta = CrossFileNodeMeta::default();
+        assert_eq!(meta.bin_op, None);
+        assert!(meta.labels.is_empty());
+    }
 }

@@ -1034,7 +1034,7 @@ pub fn analyse_file_summaries(
     config: &Config,
 ) -> Result<GlobalSummaries, StatusCode> {
     let bytes = std::fs::read(file_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let (func_summaries, ssa_rows) =
+    let (func_summaries, ssa_rows, _ssa_bodies) =
         crate::ast::extract_all_summaries_from_bytes(&bytes, file_path, config, None)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

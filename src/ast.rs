@@ -484,18 +484,32 @@ impl<'a> ParsedFile<'a> {
     }
 
     /// Extract SSA function summaries for all functions in this file.
-    fn extract_ssa_summaries(
+    /// Extract SSA summaries and eligible callee bodies in a single lowering pass.
+    ///
+    /// Returns `(ssa_summaries, ssa_bodies)` where bodies include lang/namespace
+    /// metadata needed for cross-file FuncKey construction.
+    fn extract_ssa_artifacts(
         &self,
         global_summaries: Option<&GlobalSummaries>,
         scan_root: Option<&Path>,
-    ) -> Vec<(String, usize, SsaFuncSummary)> {
+    ) -> (
+        Vec<(String, usize, SsaFuncSummary)>,
+        Vec<(
+            String,
+            usize,
+            String,
+            String,
+            crate::taint::ssa_transfer::CalleeSsaBody,
+        )>,
+    ) {
         use crate::state::symbol::SymbolInterner;
         let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
+        let lang_slug = caller_lang.as_str().to_string();
         let interner = SymbolInterner::from_cfg(&self.cfg_graph);
         let scan_root_str = scan_root.map(|p| p.to_string_lossy());
         let namespace = normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
 
-        let map = crate::taint::extract_intra_file_ssa_summaries(
+        let (sum_map, body_vec) = crate::taint::extract_ssa_artifacts(
             &self.cfg_graph,
             &interner,
             caller_lang,
@@ -504,16 +518,15 @@ impl<'a> ParsedFile<'a> {
             global_summaries,
         );
 
-        map.into_iter()
+        let ssa_summaries = sum_map
+            .into_iter()
             .map(|(name, summary)| {
-                // Look up param_count from local summaries (same function name).
                 let param_count = self
                     .local_summaries
                     .iter()
                     .find(|(k, _)| k.name == name)
                     .map(|(_, ls)| ls.param_count)
                     .unwrap_or_else(|| {
-                        // Fallback: infer from summary contents
                         summary
                             .param_to_return
                             .iter()
@@ -525,7 +538,22 @@ impl<'a> ParsedFile<'a> {
                     });
                 (name, param_count, summary)
             })
-            .collect()
+            .collect();
+
+        let ssa_bodies = body_vec
+            .into_iter()
+            .map(|(name, param_count, body)| {
+                (
+                    name,
+                    param_count,
+                    lang_slug.clone(),
+                    namespace.clone(),
+                    body,
+                )
+            })
+            .collect();
+
+        (ssa_summaries, ssa_bodies)
     }
 
     /// Run taint analysis, CFG structural analyses, and state-model analysis.
@@ -758,15 +786,25 @@ pub fn extract_all_summaries_from_bytes(
     path: &Path,
     cfg: &Config,
     scan_root: Option<&Path>,
-) -> NyxResult<(Vec<FuncSummary>, Vec<(String, usize, SsaFuncSummary)>)> {
+) -> NyxResult<(
+    Vec<FuncSummary>,
+    Vec<(String, usize, SsaFuncSummary)>,
+    Vec<(
+        String,
+        usize,
+        String,
+        String,
+        crate::taint::ssa_transfer::CalleeSsaBody,
+    )>,
+)> {
     let _span = tracing::debug_span!("extract_all_summaries", file = %path.display()).entered();
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
-        return Ok((vec![], vec![]));
+        return Ok((vec![], vec![], vec![]));
     };
     let parsed = ParsedFile::from_source(source, cfg);
     let func_summaries = parsed.export_summaries();
-    let ssa_summaries = parsed.extract_ssa_summaries(None, scan_root);
-    Ok((func_summaries, ssa_summaries))
+    let (ssa_summaries, ssa_bodies) = parsed.extract_ssa_artifacts(None, scan_root);
+    Ok((func_summaries, ssa_summaries, ssa_bodies))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1110,6 +1148,15 @@ pub struct FusedResult {
     /// SSA-derived per-parameter summaries: (func_name, param_count, summary).
     pub ssa_summaries: Vec<(String, usize, SsaFuncSummary)>,
     pub cfg_nodes: usize,
+    /// Phase 30: eligible callee bodies for cross-file symex.
+    /// (func_name, param_count, lang_slug, namespace, body).
+    pub ssa_bodies: Vec<(
+        String,
+        usize,
+        String,
+        String,
+        crate::taint::ssa_transfer::CalleeSsaBody,
+    )>,
 }
 
 /// Parse the file once, build the CFG once, and produce both function
@@ -1135,6 +1182,7 @@ pub fn analyse_file_fused(
             diags: vec![],
             ssa_summaries: vec![],
             cfg_nodes: 0,
+            ssa_bodies: vec![],
         });
     };
 
@@ -1147,11 +1195,11 @@ pub fn analyse_file_fused(
     let needs_cfg =
         cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Taint;
 
-    let ssa_summaries = if needs_cfg {
+    let (ssa_summaries, ssa_bodies) = if needs_cfg {
         out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
-        parsed.extract_ssa_summaries(global_summaries, scan_root)
+        parsed.extract_ssa_artifacts(global_summaries, scan_root)
     } else {
-        vec![]
+        (vec![], vec![])
     };
 
     if cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Ast {
@@ -1176,6 +1224,7 @@ pub fn analyse_file_fused(
         diags: out,
         ssa_summaries,
         cfg_nodes,
+        ssa_bodies,
     })
 }
 

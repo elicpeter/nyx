@@ -184,6 +184,7 @@ pub fn analyse_file(
                         points_to: Some(&opt.points_to),
                         callee_bodies: callee_bodies_ref,
                         scc_membership: None,
+                        cross_file_bodies: global_summaries,
                     };
                     crate::symex::annotate_findings(&mut f, &symex_ctx);
                 }
@@ -256,6 +257,7 @@ fn lookup_formal_params(local_summaries: &FuncSummaries, func_name: &str) -> Vec
 ///
 /// Lowers each function to SSA individually and runs per-parameter probing
 /// to produce an `SsaFuncSummary`. The resulting map is keyed by function name.
+#[allow(dead_code)] // Used by tests; production code uses extract_ssa_artifacts
 pub(crate) fn extract_intra_file_ssa_summaries(
     cfg: &Cfg,
     interner: &SymbolInterner,
@@ -410,6 +412,7 @@ fn lower_all_functions(
                 ssa: func_ssa,
                 opt,
                 param_count,
+                node_meta: std::collections::HashMap::new(),
             },
         );
     }
@@ -423,6 +426,54 @@ fn lower_all_functions(
     }
 
     (summaries, bodies)
+}
+
+/// Maximum blocks for a callee body to be eligible for cross-file persistence.
+const MAX_CROSS_FILE_BODY_BLOCKS: usize = 100;
+
+/// Extract both SSA summaries and eligible callee bodies from a file in a single
+/// lowering pass. Called from `ParsedFile::extract_ssa_summaries()` when
+/// cross-file symex is enabled.
+///
+/// Returns: (ssa_summaries, ssa_bodies) where bodies are size-gated and have
+/// `node_meta` populated for cross-file use.
+pub(crate) fn extract_ssa_artifacts(
+    cfg: &Cfg,
+    interner: &SymbolInterner,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+) -> (
+    std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
+    Vec<(String, usize, ssa_transfer::CalleeSsaBody)>,
+) {
+    let (summaries, bodies) = lower_all_functions(
+        cfg,
+        interner,
+        lang,
+        namespace,
+        local_summaries,
+        global_summaries,
+    );
+
+    let mut eligible_bodies = Vec::new();
+    if crate::symex::cross_file_symex_enabled() {
+        for (name, mut body) in bodies {
+            // Size gate
+            if body.ssa.blocks.len() > MAX_CROSS_FILE_BODY_BLOCKS {
+                continue;
+            }
+            // Populate node metadata for cross-file use
+            if !ssa_transfer::populate_node_meta(&mut body, cfg) {
+                continue; // Failed to resolve all nodes — skip
+            }
+            let param_count = body.param_count;
+            eligible_bodies.push((name, param_count, body));
+        }
+    }
+
+    (summaries, eligible_bodies)
 }
 
 /// JS/TS two-level SSA solve: top-level scope + per-function, with global seed.
@@ -509,6 +560,7 @@ fn analyse_ssa_js_two_level(
             points_to: Some(&toplevel_opt.points_to),
             callee_bodies,
             scc_membership: None,
+            cross_file_bodies: global_summaries,
         };
         crate::symex::annotate_findings(&mut all_findings, &symex_ctx);
     }
@@ -573,6 +625,7 @@ fn analyse_ssa_js_two_level(
                     points_to: Some(&func_opt.points_to),
                     callee_bodies,
                     scc_membership: None,
+                    cross_file_bodies: global_summaries,
                 };
                 crate::symex::annotate_findings(&mut func_findings, &symex_ctx);
             }

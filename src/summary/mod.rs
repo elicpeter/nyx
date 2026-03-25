@@ -152,6 +152,9 @@ pub struct GlobalSummaries {
     /// Precise SSA-derived per-parameter summaries, keyed by `FuncKey`.
     /// These take precedence over `FuncSummary` during callee resolution.
     ssa_by_key: HashMap<FuncKey, SsaFuncSummary>,
+    /// Phase 30: Cross-file callee bodies for interprocedural symbolic execution.
+    /// Keyed by `FuncKey` (same identity model as SSA summaries).
+    bodies_by_key: HashMap<FuncKey, crate::taint::ssa_transfer::CalleeSsaBody>,
 }
 
 impl GlobalSummaries {
@@ -222,6 +225,10 @@ impl GlobalSummaries {
         for (key, ssa_sum) in other.ssa_by_key {
             self.ssa_by_key.insert(key, ssa_sum);
         }
+        // Phase 30: Cross-file bodies: last-writer-wins
+        for (key, body) in other.bodies_by_key {
+            self.bodies_by_key.insert(key, body);
+        }
     }
 
     /// Insert an SSA summary with exact-key replacement (no union merge).
@@ -232,6 +239,33 @@ impl GlobalSummaries {
     /// Exact lookup of an SSA summary by fully-qualified key.
     pub fn get_ssa(&self, key: &FuncKey) -> Option<&SsaFuncSummary> {
         self.ssa_by_key.get(key)
+    }
+
+    /// Insert a cross-file callee body (exact-key replacement, no union merge).
+    pub fn insert_body(&mut self, key: FuncKey, body: crate::taint::ssa_transfer::CalleeSsaBody) {
+        self.bodies_by_key.insert(key, body);
+    }
+
+    /// Exact lookup of a cross-file callee body by fully-qualified key.
+    pub fn get_body(&self, key: &FuncKey) -> Option<&crate::taint::ssa_transfer::CalleeSsaBody> {
+        self.bodies_by_key.get(key)
+    }
+
+    /// Resolve a bare callee name to a cross-file body.
+    ///
+    /// Uses `resolve_callee_key()` for strict deterministic resolution,
+    /// then checks `bodies_by_key`. Returns `None` on `Ambiguous` or `NotFound`.
+    pub fn resolve_callee_body(
+        &self,
+        lang: Lang,
+        name: &str,
+        arity_hint: Option<usize>,
+        caller_namespace: &str,
+    ) -> Option<&crate::taint::ssa_transfer::CalleeSsaBody> {
+        match self.resolve_callee_key(name, lang, caller_namespace, arity_hint) {
+            CalleeResolution::Resolved(key) => self.bodies_by_key.get(&key),
+            CalleeResolution::NotFound | CalleeResolution::Ambiguous(_) => None,
+        }
     }
 
     #[allow(dead_code)] // used by tests and future call-graph consumers
@@ -332,6 +366,7 @@ impl std::fmt::Debug for GlobalSummaries {
         f.debug_struct("GlobalSummaries")
             .field("len", &self.by_key.len())
             .field("ssa_len", &self.ssa_by_key.len())
+            .field("bodies_len", &self.bodies_by_key.len())
             .finish()
     }
 }

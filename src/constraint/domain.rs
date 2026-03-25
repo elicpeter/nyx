@@ -11,6 +11,7 @@
 use crate::ssa::const_prop::ConstLattice;
 use crate::ssa::ir::SsaValue;
 use crate::ssa::type_facts::{TypeFactResult, TypeKind};
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
@@ -56,7 +57,7 @@ pub enum RelOp {
 /// - Go `nil` → `Null`
 /// - Empty string / zero / false → distinct from `Null`
 /// - Floats → not modeled in V1 (fall through to `None` in parse)
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConstValue {
     Int(i64),
     Str(String),

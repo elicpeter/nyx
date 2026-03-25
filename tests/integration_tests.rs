@@ -123,6 +123,20 @@ fn cross_file_scc_convergence() {
     validate_expectations(&diags, &dir);
 }
 
+#[test]
+fn cross_file_symex_body() {
+    let dir = fixture_path("cross_file_symex_body");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn cross_file_symex_js() {
+    let dir = fixture_path("cross_file_symex_js");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── Cross-cutting tests ───────────────────────────────────────────────────
 
 #[test]

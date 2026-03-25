@@ -68,6 +68,9 @@ pub struct SymexContext<'a> {
     /// SCC membership: maps normalized function name → SCC index.
     /// Used by interprocedural symex for mutual recursion detection (Phase 24B).
     pub scc_membership: Option<&'a HashMap<String, usize>>,
+    /// Phase 30: Cross-file callee bodies for interprocedural symbolic execution.
+    /// Provides body resolution via `GlobalSummaries.resolve_callee_body()`.
+    pub cross_file_bodies: Option<&'a GlobalSummaries>,
 }
 
 /// Maximum candidates to analyse per file (budget bound).
@@ -89,6 +92,16 @@ pub fn smt_enabled() -> bool {
 #[cfg(not(feature = "smt"))]
 pub fn smt_enabled() -> bool {
     false
+}
+
+/// Feature gate: check if cross-file symbolic body execution is enabled.
+///
+/// Enabled by default. Set `NYX_CROSS_FILE_SYMEX=0` or `NYX_CROSS_FILE_SYMEX=false` to disable.
+/// When disabled: body extraction, persistence, loading, and resolution are all skipped.
+pub fn cross_file_symex_enabled() -> bool {
+    std::env::var("NYX_CROSS_FILE_SYMEX")
+        .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
+        .unwrap_or(true)
 }
 
 /// Feature gate: check if symbolic execution targeting is enabled.
@@ -467,6 +480,7 @@ mod tests {
             points_to: None,
             callee_bodies: None,
             scc_membership: None,
+            cross_file_bodies: None,
         };
         let verdict = analyse_finding_path(&finding, &ctx);
         assert_eq!(verdict.verdict, Verdict::Confirmed);
@@ -525,6 +539,7 @@ mod tests {
             points_to: None,
             callee_bodies: None,
             scc_membership: None,
+            cross_file_bodies: None,
         };
         annotate_findings(std::slice::from_mut(&mut finding), &ctx);
         // Should remain None — skipped due to path_validated
@@ -574,6 +589,7 @@ mod tests {
             points_to: None,
             callee_bodies: None,
             scc_membership: None,
+            cross_file_bodies: None,
         };
         annotate_findings(std::slice::from_mut(&mut finding), &ctx);
         // Should remain None — only 1 flow step

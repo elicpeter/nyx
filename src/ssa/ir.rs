@@ -1,17 +1,18 @@
 use crate::constraint::lower::ConditionExpr;
 use petgraph::graph::NodeIndex;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 /// Unique identifier for an SSA value (one per definition point).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SsaValue(pub u32);
 
 /// Basic block identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BlockId(pub u32);
 
 /// SSA instruction operation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SsaOp {
     /// Phi: merge values from predecessor blocks.
     Phi(SmallVec<[(BlockId, SsaValue); 2]>),
@@ -39,7 +40,7 @@ pub enum SsaOp {
 }
 
 /// A single SSA instruction.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SsaInst {
     /// The SSA value defined by this instruction.
     pub value: SsaValue,
@@ -54,7 +55,7 @@ pub struct SsaInst {
 }
 
 /// Basic block terminator.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Terminator {
     Goto(BlockId),
     Branch {
@@ -71,7 +72,7 @@ pub enum Terminator {
 }
 
 /// A basic block in SSA form.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SsaBlock {
     pub id: BlockId,
     /// Phi instructions (always at block start).
@@ -87,7 +88,7 @@ pub struct SsaBlock {
 }
 
 /// Per-value definition metadata.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ValueDef {
     /// Original variable name (if any).
     pub var_name: Option<String>,
@@ -98,7 +99,7 @@ pub struct ValueDef {
 }
 
 /// Complete SSA representation for a function/scope.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SsaBody {
     /// All basic blocks, indexed by BlockId.
     pub blocks: Vec<SsaBlock>,

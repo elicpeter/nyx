@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use serde::{Deserialize, Serialize};
+
 use super::ir::*;
 
 /// Lattice value for constant propagation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConstLattice {
     /// Not yet analyzed (optimistic top).
     Top,

@@ -43,7 +43,7 @@ impl TypeKind {
 }
 
 /// A type fact about an SSA value.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeFact {
     pub kind: TypeKind,
     pub nullable: bool,
@@ -75,6 +75,7 @@ impl TypeFact {
 }
 
 /// Result of type fact analysis.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TypeFactResult {
     pub facts: HashMap<SsaValue, TypeFact>,
 }

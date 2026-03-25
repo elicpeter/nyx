@@ -55,6 +55,9 @@ pub(crate) const DEFAULT_MAX_DEPTH: usize = 3;
 /// Max callee blocks before declining to execute.
 const MAX_CALLEE_BLOCKS: usize = 200;
 
+/// Phase 30: Max cross-file nesting depth (one level of cross-file descent).
+const MAX_CROSS_FILE_DEPTH: usize = 1;
+
 /// Max transfer steps (phis + body instructions) per single callee frame.
 const MAX_CALLEE_STEPS: usize = 200;
 
@@ -262,6 +265,12 @@ pub struct InterprocCtx<'a> {
     pub max_scc_reentry: usize,
     /// Optional statistics counters.
     pub stats: &'a Cell<InterprocStats>,
+    /// Phase 30: Cross-file callee bodies via GlobalSummaries.
+    pub cross_file_bodies: Option<&'a crate::summary::GlobalSummaries>,
+    /// Phase 30: Current cross-file nesting depth.
+    pub cross_file_depth: usize,
+    /// Phase 30: Caller namespace (for cross-file resolution disambiguation).
+    pub caller_namespace: &'a str,
 }
 
 /// Budget counters shared across all interprocedural frames for one finding.
@@ -605,9 +614,24 @@ pub fn execute_callee(
 
     // Resolve callee
     let normalized = normalize_callee_name(callee_name);
-    let body = match ctx.callee_bodies.get(normalized) {
-        Some(b) => b,
-        None => return None, // No body — fall through to summary
+    let (body, is_cross_file) = match ctx.callee_bodies.get(normalized) {
+        Some(b) => (b, false),
+        None => {
+            // Phase 30: Cross-file body resolution (gated + depth-limited)
+            if !super::cross_file_symex_enabled() {
+                return None;
+            }
+            if ctx.cross_file_depth >= MAX_CROSS_FILE_DEPTH {
+                return None;
+            }
+            let arity_hint = Some(arg_values.len());
+            match ctx.cross_file_bodies.and_then(|gs| {
+                gs.resolve_callee_body(ctx.lang, normalized, arity_hint, ctx.caller_namespace)
+            }) {
+                Some(b) => (b, true),
+                None => return None, // No body — fall through to summary
+            }
+        }
     };
 
     if body.ssa.blocks.len() > MAX_CALLEE_BLOCKS {
@@ -783,6 +807,11 @@ pub fn execute_callee(
             };
 
             // Transfer block instructions
+            let xfile_meta = if is_cross_file {
+                Some(&body.node_meta)
+            } else {
+                None
+            };
             transfer::transfer_block_with_predecessor(
                 &mut path.sym_state,
                 block,
@@ -794,6 +823,7 @@ pub fn execute_callee(
                 // Pass None for interproc_ctx — we handle nested calls directly below.
                 None,
                 Some(ctx.lang),
+                xfile_meta,
             );
 
             // Count steps and update global budget
@@ -818,6 +848,7 @@ pub fn execute_callee(
                 &path.sym_state,
                 &frame_chain,
                 &mut internal_findings,
+                xfile_meta,
             );
 
             // Handle nested calls
@@ -954,10 +985,20 @@ fn detect_internal_sinks(
     callee_state: &SymbolicState,
     frame_chain: &[String],
     internal_findings: &mut Vec<InternalSinkFinding>,
+    node_meta: Option<
+        &std::collections::HashMap<u32, crate::taint::ssa_transfer::CrossFileNodeMeta>,
+    >,
 ) {
     for inst in block.body.iter() {
-        let info = &cfg[inst.cfg_node];
-        for label in &info.labels {
+        let labels: &[DataLabel] = if let Some(meta) = node_meta {
+            // Phase 30: cross-file body — use embedded metadata
+            meta.get(&(inst.cfg_node.index() as u32))
+                .map(|m| m.labels.as_slice())
+                .unwrap_or(&[])
+        } else {
+            &cfg[inst.cfg_node].labels
+        };
+        for label in labels {
             if let DataLabel::Sink(cap) = label {
                 let operands = match &inst.op {
                     SsaOp::Call { args, receiver, .. } => {

@@ -316,6 +316,9 @@ pub(super) fn explore_finding(finding: &Finding, ctx: &SymexContext) -> Explorat
             scc_membership: ctx.scc_membership,
             max_scc_reentry: super::interproc::DEFAULT_MAX_SCC_REENTRY,
             stats: &interproc_stats,
+            cross_file_bodies: ctx.cross_file_bodies,
+            cross_file_depth: 0,
+            caller_namespace: ctx.namespace,
         });
     let interproc_ctx_ref = interproc_ctx.as_ref();
 
@@ -482,6 +485,7 @@ fn run_path(
             heap_ctx,
             interproc_ctx,
             lang,
+            None, // Caller-level: always uses real CFG
         );
 
         // Phase 20: Collapse induction variables after re-visit to prevent
@@ -1348,6 +1352,7 @@ mod tests {
             points_to: None,
             callee_bodies: None,
             scc_membership: None,
+            cross_file_bodies: None,
         };
         let result = explore_finding(&finding, &ctx);
 
@@ -1505,6 +1510,7 @@ mod tests {
             points_to: None,
             callee_bodies: None,
             scc_membership: None,
+            cross_file_bodies: None,
         };
         let result = explore_finding(&finding, &ctx);
 
@@ -1662,6 +1668,7 @@ mod tests {
             points_to: None,
             callee_bodies: None,
             scc_membership: None,
+            cross_file_bodies: None,
         };
         let result = explore_finding(&finding, &ctx);
 
@@ -1927,6 +1934,7 @@ mod tests {
             points_to: None,
             callee_bodies: None,
             scc_membership: None,
+            cross_file_bodies: None,
         };
         let result = explore_finding(&finding, &ctx);
 

@@ -63,6 +63,20 @@ pub mod index {
             UNIQUE(project, file_path, name, arity)
         );
 
+        CREATE TABLE IF NOT EXISTS ssa_function_bodies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash BLOB NOT NULL,
+            name TEXT NOT NULL,
+            arity INTEGER NOT NULL DEFAULT -1,
+            lang TEXT NOT NULL,
+            namespace TEXT NOT NULL DEFAULT '',
+            body TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(project, file_path, name, arity)
+        );
+
         CREATE TABLE IF NOT EXISTS scans (
             id TEXT PRIMARY KEY,
             status TEXT NOT NULL,
@@ -648,6 +662,134 @@ pub mod index {
             Ok(rows)
         }
 
+        /// Atomically replace all SSA callee bodies for a single file.
+        ///
+        /// Phase 30: persists cross-file callee bodies for interprocedural symex.
+        /// Bodies are serialized as JSON TEXT, matching the ssa_function_summaries pattern.
+        pub fn replace_ssa_bodies_for_file(
+            &mut self,
+            file_path: &Path,
+            file_hash: &[u8],
+            bodies: &[(
+                String,
+                usize,
+                String,
+                String,
+                crate::taint::ssa_transfer::CalleeSsaBody,
+            )],
+        ) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = file_path.to_string_lossy();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+            tx.execute(
+                "DELETE FROM ssa_function_bodies WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO ssa_function_bodies
+                        (project, file_path, file_hash, name, arity, lang, namespace, body, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                )?;
+
+                for (name, arity, lang, namespace, body) in bodies {
+                    let json = serde_json::to_string(body)
+                        .map_err(|e| NyxError::Msg(format!("SSA body serialise: {e}")))?;
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Load every SSA callee body for this project.
+        ///
+        /// Returns rows with full metadata for `FuncKey` reconstruction:
+        /// `(file_path, name, lang, arity, namespace, CalleeSsaBody)`.
+        pub fn load_all_ssa_bodies(
+            &self,
+        ) -> NyxResult<
+            Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                crate::taint::ssa_transfer::CalleeSsaBody,
+            )>,
+        > {
+            let mut stmt = self.c().prepare(
+                "SELECT file_path, name, lang, arity, namespace, body
+                 FROM ssa_function_bodies WHERE project = ?1",
+            )?;
+
+            let rows: Vec<(String, String, String, i64, String, String)> = stmt
+                .query_map([&self.project], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                })?
+                .filter_map(Result::ok)
+                .collect();
+
+            if rows.len() > 256 {
+                use rayon::prelude::*;
+                let results: Vec<_> = rows
+                    .par_iter()
+                    .filter_map(|(fp, name, lang, arity, ns, json)| {
+                        serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json)
+                            .ok()
+                            .map(|b| {
+                                (
+                                    fp.clone(),
+                                    name.clone(),
+                                    lang.clone(),
+                                    *arity,
+                                    ns.clone(),
+                                    b,
+                                )
+                            })
+                    })
+                    .collect();
+                Ok(results)
+            } else {
+                let mut out = Vec::with_capacity(rows.len());
+                for (fp, name, lang, arity, ns, json) in &rows {
+                    if let Ok(b) =
+                        serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json)
+                    {
+                        out.push((
+                            fp.clone(),
+                            name.clone(),
+                            lang.clone(),
+                            *arity,
+                            ns.clone(),
+                            b,
+                        ));
+                    }
+                }
+                Ok(out)
+            }
+        }
+
         /// Remove a file and all derived persisted state for this project.
         ///
         /// This deletes the file row, issues, and all persisted summary rows so
@@ -675,6 +817,10 @@ pub mod index {
             )?;
             tx.execute(
                 "DELETE FROM ssa_function_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+            tx.execute(
+                "DELETE FROM ssa_function_bodies WHERE project = ?1 AND file_path = ?2",
                 params![self.project, path_str.as_ref()],
             )?;
 
@@ -1594,4 +1740,183 @@ fn clear_drops_ssa_summaries_table() {
 
     idx.clear().unwrap();
     assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 0);
+}
+
+// ── Phase 30: CalleeSsaBody persistence tests ────────────────────────────
+
+/// Helper: build a minimal CalleeSsaBody for DB tests.
+#[allow(dead_code)] // used by tests below
+fn make_test_callee_body(num_blocks: usize, param_count: usize) -> crate::taint::ssa_transfer::CalleeSsaBody {
+    use crate::ssa::ir::*;
+    use smallvec::smallvec;
+
+    let mut blocks = Vec::new();
+    for i in 0..num_blocks {
+        blocks.push(SsaBlock {
+            id: BlockId(i as u32),
+            phis: vec![],
+            body: vec![SsaInst {
+                value: SsaValue(i as u32),
+                op: SsaOp::Const(Some(format!("{i}"))),
+                cfg_node: petgraph::graph::NodeIndex::new(0),
+                var_name: None,
+                span: (0, 0),
+            }],
+            terminator: Terminator::Return(Some(SsaValue(0))),
+            preds: smallvec![],
+            succs: smallvec![],
+        });
+    }
+
+    let value_defs: Vec<ValueDef> = (0..num_blocks)
+        .map(|i| ValueDef {
+            var_name: None,
+            cfg_node: petgraph::graph::NodeIndex::new(0),
+            block: BlockId(i as u32),
+        })
+        .collect();
+
+    crate::taint::ssa_transfer::CalleeSsaBody {
+        ssa: SsaBody {
+            blocks,
+            entry: BlockId(0),
+            value_defs,
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        },
+        opt: crate::ssa::OptimizeResult {
+            const_values: std::collections::HashMap::new(),
+            type_facts: crate::ssa::type_facts::TypeFactResult {
+                facts: std::collections::HashMap::new(),
+            },
+            alias_result: crate::ssa::alias::BaseAliasResult::empty(),
+            points_to: crate::ssa::heap::PointsToResult::empty(),
+            branches_pruned: 0,
+            copies_eliminated: 0,
+            dead_defs_removed: 0,
+        },
+        param_count,
+        node_meta: std::collections::HashMap::new(),
+    }
+}
+
+#[test]
+fn ssa_bodies_round_trip() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("helper.py");
+    std::fs::write(&f, "def transform(val): return val").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let hash = index::Indexer::digest_bytes(b"def transform(val): return val");
+
+    let body = make_test_callee_body(3, 1);
+    let bodies = vec![
+        ("transform".to_string(), 1_usize, "python".to_string(), "helper.py".to_string(), body),
+    ];
+
+    idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
+
+    let loaded = idx.load_all_ssa_bodies().unwrap();
+    assert_eq!(loaded.len(), 1);
+
+    let (fp, name, lang, arity, ns, loaded_body) = &loaded[0];
+    assert_eq!(fp, &f.to_string_lossy().to_string());
+    assert_eq!(name, "transform");
+    assert_eq!(lang, "python");
+    assert_eq!(*arity, 1);
+    assert_eq!(ns, "helper.py");
+    assert_eq!(loaded_body.param_count, 1);
+    assert_eq!(loaded_body.ssa.blocks.len(), 3);
+}
+
+#[test]
+fn ssa_bodies_replace_on_rescan() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("helper.py");
+    std::fs::write(&f, "v1").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    // Store v1 with 2 blocks
+    let hash1 = index::Indexer::digest_bytes(b"v1");
+    let bodies1 = vec![
+        ("func".to_string(), 1_usize, "python".to_string(), "h.py".to_string(), make_test_callee_body(2, 1)),
+    ];
+    idx.replace_ssa_bodies_for_file(&f, &hash1, &bodies1).unwrap();
+    assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
+    assert_eq!(idx.load_all_ssa_bodies().unwrap()[0].5.ssa.blocks.len(), 2);
+
+    // Store v2 with 5 blocks — should replace, not accumulate
+    let hash2 = index::Indexer::digest_bytes(b"v2");
+    let bodies2 = vec![
+        ("func".to_string(), 1_usize, "python".to_string(), "h.py".to_string(), make_test_callee_body(5, 1)),
+    ];
+    idx.replace_ssa_bodies_for_file(&f, &hash2, &bodies2).unwrap();
+
+    let loaded = idx.load_all_ssa_bodies().unwrap();
+    assert_eq!(loaded.len(), 1, "should replace, not accumulate");
+    assert_eq!(loaded[0].5.ssa.blocks.len(), 5);
+}
+
+#[test]
+fn ssa_bodies_with_node_meta_round_trip() {
+    use crate::taint::ssa_transfer::CrossFileNodeMeta;
+    use crate::labels::{Cap, DataLabel};
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("helper.py");
+    std::fs::write(&f, "code").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let hash = index::Indexer::digest_bytes(b"code");
+
+    let mut body = make_test_callee_body(1, 0);
+    body.node_meta.insert(0, CrossFileNodeMeta {
+        bin_op: Some(crate::cfg::BinOp::Add),
+        labels: smallvec::smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+    });
+
+    let bodies = vec![
+        ("f".to_string(), 0_usize, "python".to_string(), "h.py".to_string(), body),
+    ];
+    idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
+
+    let loaded = idx.load_all_ssa_bodies().unwrap();
+    assert_eq!(loaded.len(), 1);
+
+    let meta = &loaded[0].5.node_meta;
+    assert_eq!(meta.len(), 1);
+    assert_eq!(meta[&0].bin_op, Some(crate::cfg::BinOp::Add));
+    assert!(matches!(meta[&0].labels[0], DataLabel::Sink(cap) if cap == Cap::SQL_QUERY));
+}
+
+#[test]
+fn ssa_bodies_removed_on_file_delete() {
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("helper.py");
+    std::fs::write(&f, "code").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+    let hash = index::Indexer::digest_bytes(b"code");
+
+    // Register file first so remove_file_and_related has something to find
+    idx.upsert_file(&f).unwrap();
+
+    let bodies = vec![
+        ("f".to_string(), 0_usize, "python".to_string(), "h.py".to_string(), make_test_callee_body(1, 0)),
+    ];
+    idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
+    assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
+
+    // Delete file — should also remove bodies
+    idx.remove_file_and_related(&f).unwrap();
+    assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 0);
 }

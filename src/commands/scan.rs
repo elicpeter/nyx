@@ -373,6 +373,13 @@ fn run_topo_batches(
                     Vec<Diag>,
                     Vec<crate::summary::FuncSummary>,
                     Vec<(String, usize, crate::summary::ssa_summary::SsaFuncSummary)>,
+                    Vec<(
+                        String,
+                        usize,
+                        String,
+                        String,
+                        crate::taint::ssa_transfer::CalleeSsaBody,
+                    )>,
                 )> = batch
                     .files
                     .par_iter()
@@ -390,7 +397,13 @@ fn run_topo_batches(
                         ) {
                             Ok(r) => {
                                 pb.inc(0); // don't double-count iterations in progress bar
-                                (path.to_path_buf(), r.diags, r.summaries, r.ssa_summaries)
+                                (
+                                    path.to_path_buf(),
+                                    r.diags,
+                                    r.summaries,
+                                    r.ssa_summaries,
+                                    r.ssa_bodies,
+                                )
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -405,14 +418,14 @@ fn run_topo_batches(
                                         None,
                                     );
                                 }
-                                (path.to_path_buf(), vec![], vec![], vec![])
+                                (path.to_path_buf(), vec![], vec![], vec![], vec![])
                             }
                         }
                     })
                     .collect();
 
                 let mut ssa_count: usize = 0;
-                for (path, diags, summaries, ssa_summaries) in batch_results {
+                for (path, diags, summaries, ssa_summaries, _ssa_bodies) in batch_results {
                     iteration_diags.extend(diags);
 
                     // Derive lang: prefer FuncSummary slug, fall back to file extension.
@@ -762,6 +775,19 @@ pub(crate) fn scan_filesystem_with_observer(
                                 }
                             }
 
+                            // Phase 30: Insert eligible callee bodies
+                            for (name, arity, lang_str, ns, body) in r.ssa_bodies {
+                                let lang = crate::symbol::Lang::from_slug(&lang_str)
+                                    .unwrap_or(crate::symbol::Lang::Rust);
+                                let key = crate::symbol::FuncKey {
+                                    lang,
+                                    namespace: ns,
+                                    name,
+                                    arity: Some(arity),
+                                };
+                                local_gs.insert_body(key, body);
+                            }
+
                             // Record language for progress
                             if let Some(p) = progress {
                                 if let Some(ref lang) = first_lang {
@@ -1100,7 +1126,7 @@ pub fn scan_with_index_parallel_observer(
                             cfg,
                             Some(&scan_root_ref),
                         ) {
-                            Ok((func_sums, ssa_sums)) => {
+                            Ok((func_sums, ssa_sums, ssa_bodies)) => {
                                 if let Some(p) = &progress_ref {
                                     p.inc_parsed(1);
                                     if let Some(lang) = func_sums.first().map(|s| s.lang.as_str()) {
@@ -1137,6 +1163,17 @@ pub fn scan_with_index_parallel_observer(
                                         record_persist_error(
                                             &persist_errors_ref,
                                             format!("SSA summaries {}: {e}", path.display()),
+                                        );
+                                    }
+                                }
+                                // Phase 30: Persist SSA callee bodies
+                                if !ssa_bodies.is_empty() {
+                                    if let Err(e) =
+                                        idx.replace_ssa_bodies_for_file(path, &hash, &ssa_bodies)
+                                    {
+                                        record_persist_error(
+                                            &persist_errors_ref,
+                                            format!("SSA bodies {}: {e}", path.display()),
                                         );
                                     }
                                 }
@@ -1222,12 +1259,50 @@ pub fn scan_with_index_parallel_observer(
                 gs.insert_ssa(key, ssa_sum);
             }
         }
+
+        // Phase 30: Load cross-file callee bodies from DB
+        let body_count = if crate::symex::cross_file_symex_enabled() {
+            match idx.load_all_ssa_bodies() {
+                Ok(body_rows) => {
+                    let count = body_rows.len();
+                    for (file_path, name, lang_str, arity, namespace, body) in body_rows {
+                        let lang = crate::symbol::Lang::from_slug(&lang_str)
+                            .unwrap_or(crate::symbol::Lang::Rust);
+                        let ns = if namespace.is_empty() {
+                            crate::symbol::normalize_namespace(&file_path, Some(&root_str))
+                        } else {
+                            namespace
+                        };
+                        let key = crate::symbol::FuncKey {
+                            lang,
+                            namespace: ns,
+                            name,
+                            arity: if arity >= 0 {
+                                Some(arity as usize)
+                            } else {
+                                None
+                            },
+                        };
+                        gs.insert_body(key, body);
+                    }
+                    count
+                }
+                Err(e) => {
+                    tracing::warn!("failed to load SSA bodies from DB: {e}");
+                    0
+                }
+            }
+        } else {
+            0
+        };
+
         if let Some(l) = logs {
             l.info(
                 format!(
-                    "Loaded {} coarse summaries and {} SSA summaries from DB",
+                    "Loaded {} coarse summaries, {} SSA summaries, {} SSA bodies from DB",
                     gs.snapshot_caps().len(),
-                    ssa_count
+                    ssa_count,
+                    body_count
                 ),
                 None,
             );

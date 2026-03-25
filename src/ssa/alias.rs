@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use super::ir::*;
@@ -13,6 +14,7 @@ const MAX_ALIAS_GROUP_SIZE: usize = 16;
 /// Two names in the same group are must-aliases: a copy `b = a` (with no
 /// semantic labels) means `b` and `a` reference the same value, so field
 /// paths like `b.data` and `a.data` are interchangeable.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BaseAliasResult {
     /// base_name → canonical name.  All aliases map to the same canonical.
     canonical: HashMap<String, String>,

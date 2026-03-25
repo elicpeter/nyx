@@ -20,6 +20,7 @@
 use crate::cfg::NodeInfo;
 use crate::ssa::const_prop::ConstLattice;
 use crate::ssa::ir::{BlockId, SsaBody, SsaValue};
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
@@ -28,7 +29,7 @@ use super::domain::ConstValue;
 // ── Operand ─────────────────────────────────────────────────────────────
 
 /// An operand in a condition expression.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Operand {
     /// A resolved SSA value.
     Value(SsaValue),
@@ -41,7 +42,7 @@ pub enum Operand {
 // ── CompOp ──────────────────────────────────────────────────────────────
 
 /// Comparison operator.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CompOp {
     Eq,
     Neq,
@@ -79,7 +80,7 @@ impl CompOp {
 // ── ConditionExpr ───────────────────────────────────────────────────────
 
 /// Structured condition expression with SSA-resolved operands.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConditionExpr {
     /// `lhs op rhs` — e.g., `x > 5`, `x == y`.
     Comparison {

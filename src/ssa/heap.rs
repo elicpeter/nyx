@@ -24,6 +24,7 @@ use crate::ssa::ir::*;
 use crate::ssa::pointsto::{ContainerOp, classify_container_op};
 use crate::symbol::Lang;
 use crate::taint::domain::TaintOrigin;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
@@ -62,7 +63,7 @@ pub enum HeapSlot {
 ///
 /// When `items = []` creates SsaValue(5), the heap object is HeapObjectId(SsaValue(5)).
 /// SSA guarantees each definition is unique, so heap identity is deterministic.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct HeapObjectId(pub SsaValue);
 
 // ── PointsToSet ──────────────────────────────────────────────────────────
@@ -71,7 +72,7 @@ pub struct HeapObjectId(pub SsaValue);
 ///
 /// Stored as a sorted, deduped SmallVec for O(n) merge-join, matching the
 /// pattern used by SsaTaintState.values.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PointsToSet {
     ids: SmallVec<[HeapObjectId; 4]>,
 }
@@ -434,6 +435,7 @@ impl HeapState {
 // ── PointsToResult ───────────────────────────────────────────────────────
 
 /// Result of intra-procedural points-to analysis.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PointsToResult {
     pts: HashMap<SsaValue, PointsToSet>,
 }
