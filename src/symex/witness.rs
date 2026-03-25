@@ -42,6 +42,11 @@ pub fn extract_witness(
         return None;
     }
 
+    // 1b. When the sink is a Call node, the return value is typically opaque.
+    // Look for the best tainted argument instead — that's where injected
+    // data actually flows into the sink.
+    let sym = unwrap_sink_call_arg(&sym, state);
+
     // 2. Derive sink cap from CFG labels
     let cap = sink_cap(finding, cfg);
 
@@ -100,10 +105,14 @@ pub fn extract_witness(
             source_var, payload, sink_callee, concrete, field_suffix, mismatch_suffix
         ))
     } else {
-        // Not string-renderable: generic witness
+        // Not string-renderable: generic witness.
+        // Phase 28: Still check for transform mismatch in the expression tree.
+        let mismatch_suffix = detect_transform_mismatch(&sym, cap)
+            .map(|note| format!(" {}", note))
+            .unwrap_or_default();
         Some(format!(
-            "tainted input '{}' reaches {}() unsanitized{}",
-            source_var, sink_callee, field_suffix
+            "tainted input '{}' reaches {}() unsanitized{}{}",
+            source_var, sink_callee, field_suffix, mismatch_suffix
         ))
     }
 }
@@ -111,6 +120,38 @@ pub fn extract_witness(
 // ─────────────────────────────────────────────────────────────────────────────
 //  Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// When the sink expression is a `Call`, find the most informative tainted
+/// argument to use for witness generation instead of the opaque return value.
+///
+/// Prefers string-renderable tainted arguments over non-renderable ones.
+/// Returns the original expression unchanged if it's not a `Call` or no
+/// tainted argument is found.
+fn unwrap_sink_call_arg<'a>(expr: &'a SymbolicValue, state: &SymbolicState) -> &'a SymbolicValue {
+    if let SymbolicValue::Call(_, args) = expr {
+        // Prefer a string-renderable tainted arg
+        let best = args
+            .iter()
+            .filter(|a| {
+                let t = collect_tainted_symbols(a, state);
+                !t.is_empty()
+            })
+            .find(|a| is_string_renderable(a));
+
+        // Fall back to any tainted arg
+        let fallback = || {
+            args.iter().find(|a| {
+                let t = collect_tainted_symbols(a, state);
+                !t.is_empty()
+            })
+        };
+
+        if let Some(arg) = best.or_else(fallback) {
+            return arg;
+        }
+    }
+    expr
+}
 
 /// Derive the sink's capability bits from CFG node labels.
 fn sink_cap(finding: &Finding, cfg: &Cfg) -> Cap {
@@ -167,7 +208,16 @@ fn is_string_renderable(expr: &SymbolicValue) -> bool {
         SymbolicValue::Encode(_, s) | SymbolicValue::Decode(_, s) => is_string_renderable(s),
         // StrLen returns integer — not string-renderable
         SymbolicValue::StrLen(_) => false,
-        // Arithmetic, opaque calls, phis, integers, unknown — not string-renderable
+        // BinOp(Add) on string-renderable operands is string concatenation
+        // in languages where + is overloaded (JS, Python, etc.)
+        SymbolicValue::BinOp(super::value::Op::Add, l, r) => {
+            is_string_renderable(l) && is_string_renderable(r)
+        }
+        // Call nodes with a single string-renderable argument are treated as
+        // pass-through for witness purposes (covers property access, simple
+        // wrappers). Multi-arg calls or calls with non-renderable args are opaque.
+        SymbolicValue::Call(_, args) if args.len() == 1 => is_string_renderable(&args[0]),
+        // Other arithmetic, opaque calls, phis, integers, unknown — not string-renderable
         SymbolicValue::Concrete(_)
         | SymbolicValue::BinOp(_, _, _)
         | SymbolicValue::Call(_, _)
@@ -322,6 +372,12 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
             let right = evaluate_concrete(r);
             format!("{}{}", left, right)
         }
+        // BinOp(Add) on concrete strings acts as concatenation
+        SymbolicValue::BinOp(super::value::Op::Add, l, r) if is_string_renderable(expr) => {
+            let left = evaluate_concrete(l);
+            let right = evaluate_concrete(r);
+            format!("{}{}", left, right)
+        }
         // Phase 22: String operations — apply to recursively evaluated inner
         SymbolicValue::Trim(s) => evaluate_concrete(s).trim().to_owned(),
         SymbolicValue::ToLower(s) => evaluate_concrete(s).to_lowercase(),
@@ -365,6 +421,8 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
             super::strings::decode_concrete_for_witness(*kind, &inner)
                 .unwrap_or_else(|| format!("{}", expr))
         }
+        // Single-arg Call: pass-through for witness rendering (property access)
+        SymbolicValue::Call(_, args) if args.len() == 1 => evaluate_concrete(&args[0]),
         // For non-foldable expressions, use Display
         other => format!("{}", other),
     }

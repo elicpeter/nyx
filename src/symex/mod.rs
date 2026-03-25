@@ -146,12 +146,26 @@ fn analyse_finding_path(
 ) -> SymbolicVerdict {
     let path_blocks = extract_path_blocks(finding, ctx.ssa);
 
+    if path_blocks.is_empty() {
+        return SymbolicVerdict {
+            verdict: Verdict::Inconclusive,
+            constraints_checked: 0,
+            paths_explored: 0,
+            witness: None,
+            interproc_call_chains: Vec::new(),
+            cutoff_notes: Vec::new(),
+        };
+    }
+
     if path_blocks.len() < 2 {
+        // Short path (single block, no branches) — skip the multi-path
+        // explorer but still run a linear transfer to extract a witness.
+        let witness = linear_witness(finding, ctx, &path_blocks);
         return SymbolicVerdict {
             verdict: Verdict::Inconclusive,
             constraints_checked: 0,
             paths_explored: 1,
-            witness: None,
+            witness,
             interproc_call_chains: Vec::new(),
             cutoff_notes: Vec::new(),
         };
@@ -170,6 +184,116 @@ fn analyse_finding_path(
 
     let result = executor::explore_finding(finding, ctx);
     result.aggregate_verdict()
+}
+
+/// Run a minimal linear symbolic transfer on `path_blocks` and extract
+/// a witness. Used for short paths (single block, no branches) that
+/// don't need the full multi-path exploration engine.
+fn linear_witness(
+    finding: &Finding,
+    ctx: &SymexContext,
+    path_blocks: &[BlockId],
+) -> Option<String> {
+    use crate::ssa::ir::SsaValue;
+
+    let mut sym_state = SymbolicState::new();
+
+    // Seed constants from const_prop
+    sym_state.seed_from_const_values(&ctx.const_values);
+
+    // Seed source flow steps as tainted symbols before transfer.
+    for step in &finding.flow_steps {
+        if let Some(&val) = ctx.ssa.cfg_node_map.get(&step.cfg_node) {
+            if matches!(step.op_kind, crate::evidence::FlowStepKind::Source) {
+                sym_state.set(val, value::SymbolicValue::Symbol(val));
+                sym_state.mark_tainted(val);
+            }
+        }
+    }
+
+    // Build context structs for transfer
+    let summary_ctx = ctx.global_summaries.map(|gs| transfer::SymexSummaryCtx {
+        global_summaries: gs,
+        lang: ctx.lang,
+        namespace: ctx.namespace,
+        type_facts: Some(ctx.type_facts),
+    });
+    let heap_ctx = ctx.points_to.map(|pts| transfer::SymexHeapCtx {
+        points_to: pts,
+        ssa: ctx.ssa,
+        lang: ctx.lang,
+    });
+
+    // Transfer each block in order
+    for &bid in path_blocks {
+        if let Some(block) = ctx.ssa.blocks.get(bid.0 as usize) {
+            transfer::transfer_block(
+                &mut sym_state,
+                block,
+                ctx.cfg,
+                ctx.ssa,
+                summary_ctx.as_ref(),
+                heap_ctx.as_ref(),
+                None, // no interproc for short paths
+                Some(ctx.lang),
+            );
+        }
+    }
+
+    // After transfer, mark all Symbol values that appear in the sink
+    // expression as tainted. The transfer builds the expression tree from
+    // base SSA values (parameters, etc.); we mark them tainted so that
+    // witness extraction can identify tainted sub-expressions.
+    if let Some(&sink_val) = ctx.ssa.cfg_node_map.get(&finding.sink) {
+        let sink_sym = sym_state.get(sink_val);
+        mark_symbols_tainted(&sink_sym, &mut sym_state);
+    }
+
+    // Extract witness
+    witness::extract_witness(&sym_state, finding, ctx.ssa, ctx.cfg)
+        .or_else(|| sym_state.get_sink_witness(finding, ctx.ssa))
+}
+
+/// Recursively mark all `Symbol(v)` values in an expression tree as tainted.
+fn mark_symbols_tainted(expr: &value::SymbolicValue, state: &mut SymbolicState) {
+    match expr {
+        value::SymbolicValue::Symbol(v) => {
+            state.mark_tainted(*v);
+        }
+        value::SymbolicValue::BinOp(_, l, r) | value::SymbolicValue::Concat(l, r) => {
+            mark_symbols_tainted(l, state);
+            mark_symbols_tainted(r, state);
+        }
+        value::SymbolicValue::Call(_, args) => {
+            for a in args {
+                mark_symbols_tainted(a, state);
+            }
+        }
+        value::SymbolicValue::Phi(ops) => {
+            for (_, v) in ops {
+                mark_symbols_tainted(v, state);
+            }
+        }
+        value::SymbolicValue::ToLower(s)
+        | value::SymbolicValue::ToUpper(s)
+        | value::SymbolicValue::Trim(s)
+        | value::SymbolicValue::StrLen(s)
+        | value::SymbolicValue::Replace(s, _, _)
+        | value::SymbolicValue::Encode(_, s)
+        | value::SymbolicValue::Decode(_, s) => {
+            mark_symbols_tainted(s, state);
+        }
+        value::SymbolicValue::Substr(s, start, end) => {
+            mark_symbols_tainted(s, state);
+            mark_symbols_tainted(start, state);
+            if let Some(e) = end {
+                mark_symbols_tainted(e, state);
+            }
+        }
+        value::SymbolicValue::Concrete(_)
+        | value::SymbolicValue::ConcreteStr(_)
+        | value::SymbolicValue::Unknown => {}
+    }
 }
 
 #[cfg(test)]

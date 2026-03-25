@@ -1,8 +1,9 @@
 {
-  "description": "SQL injection via URL-encoded input: encodeURIComponent does not protect against SQLi. Tests that the taint engine correctly preserves SQL_QUERY cap through URL encoding.",
+  "description": "SQL injection via URL-encoded input: encodeURIComponent does not protect against SQLi. Tests that symex models encoding structurally and detects transform-sink mismatch.",
   "tags": [
     "taint",
     "sqli",
+    "symex",
     "encoding",
     "phase-28"
   ],
@@ -18,8 +19,11 @@
         14,
         19
       ],
-      "evidence_contains": [],
-      "notes": "req.query.q flows through encodeURIComponent into client.query — URL encoding strips URL_ENCODE cap but SQL_QUERY cap remains, so finding is produced. Mismatch note depends on symex reaching the sink with a string-renderable Encode expression."
+      "evidence_contains": [
+        "transform note",
+        "does not match sink neutralization class"
+      ],
+      "notes": "req.query.q flows through encodeURIComponent into client.query — URL encoding does not neutralize SQL injection. Witness includes mismatch note."
     }
   ]
 }
