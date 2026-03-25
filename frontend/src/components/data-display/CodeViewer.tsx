@@ -54,7 +54,8 @@ export function CodeViewer({
       const target = bodyRef.current?.querySelector(
         `[data-line="${scrollTarget}"]`,
       );
-      if (target) target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      if (target)
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
     return () => cancelAnimationFrame(timer);
   }, [fileData, scrollTarget]);

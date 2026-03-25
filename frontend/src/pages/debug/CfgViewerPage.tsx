@@ -9,7 +9,10 @@ function truncate(s: string, max: number): string {
 }
 
 export function CfgViewerPage() {
-  const { file, fn_name } = useOutletContext<{ file: string | null; fn_name: string | null }>();
+  const { file, fn_name } = useOutletContext<{
+    file: string | null;
+    fn_name: string | null;
+  }>();
   const { data, isLoading, error } = useDebugCfg(file, fn_name);
   const [selectedNode, setSelectedNode] = useState<number | null>(null);
 
@@ -18,7 +21,11 @@ export function CfgViewerPage() {
   }, [file, fn_name]);
 
   if (!file || !fn_name) {
-    return <div className="empty-state">Select a file and function to view the CFG.</div>;
+    return (
+      <div className="empty-state">
+        Select a file and function to view the CFG.
+      </div>
+    );
   }
   if (isLoading) return <div className="loading">Loading CFG...</div>;
   if (error) return <div className="error-state">Failed to load CFG.</div>;
@@ -26,7 +33,11 @@ export function CfgViewerPage() {
 
   const graphNodes = data.nodes.map((n) => ({
     id: n.id,
-    label: n.callee ? `${n.kind}: ${n.callee}` : n.defines ? `${n.kind}: ${n.defines}` : n.kind,
+    label: n.callee
+      ? `${n.kind}: ${n.callee}`
+      : n.defines
+        ? `${n.kind}: ${n.defines}`
+        : n.kind,
     type: n.kind,
     detail: `Line ${n.line}`,
     sublabel: n.condition_text ? truncate(n.condition_text, 35) : undefined,
@@ -47,7 +58,9 @@ export function CfgViewerPage() {
   };
 
   return (
-    <div className={`debug-split ${selectedInfo ? 'debug-split-with-sidebar' : 'debug-split-full'}`}>
+    <div
+      className={`debug-split ${selectedInfo ? 'debug-split-with-sidebar' : 'debug-split-full'}`}
+    >
       <div className="debug-split-main">
         <GraphRenderer
           nodes={graphNodes}
@@ -87,7 +100,9 @@ function NodeDetail({ node }: { node: CfgNodeView }) {
       {node.uses.length > 0 && (
         <div className="debug-detail-row">
           <span className="debug-detail-label">Uses</span>
-          <span className="debug-detail-value mono">{node.uses.join(', ')}</span>
+          <span className="debug-detail-value mono">
+            {node.uses.join(', ')}
+          </span>
         </div>
       )}
       {node.callee && (
@@ -101,7 +116,9 @@ function NodeDetail({ node }: { node: CfgNodeView }) {
           <span className="debug-detail-label">Labels</span>
           <div>
             {node.labels.map((l, i) => (
-              <span key={i} className="cap-badge">{l}</span>
+              <span key={i} className="cap-badge">
+                {l}
+              </span>
             ))}
           </div>
         </div>

@@ -32,7 +32,9 @@ function RuleDetail({
       <div className="rule-detail-grid">
         <div className="rule-detail-label">ID</div>
         <div>
-          <code style={{ fontSize: 'var(--text-xs)', wordBreak: 'break-all' }}>{rule.id}</code>
+          <code style={{ fontSize: 'var(--text-xs)', wordBreak: 'break-all' }}>
+            {rule.id}
+          </code>
         </div>
         <div className="rule-detail-label">Language</div>
         <div>{rule.language}</div>
@@ -71,7 +73,10 @@ function RuleDetail({
         </div>
       )}
       <div style={{ marginTop: 'var(--space-4)' }}>
-        <div className="rule-detail-label" style={{ marginBottom: 'var(--space-2)' }}>
+        <div
+          className="rule-detail-label"
+          style={{ marginBottom: 'var(--space-2)' }}
+        >
           Matchers
         </div>
         <div>
@@ -82,7 +87,13 @@ function RuleDetail({
           ))}
         </div>
       </div>
-      <div style={{ marginTop: 'var(--space-5)', display: 'flex', gap: 'var(--space-2)' }}>
+      <div
+        style={{
+          marginTop: 'var(--space-5)',
+          display: 'flex',
+          gap: 'var(--space-2)',
+        }}
+      >
         <button className="btn btn-sm" onClick={onToggle}>
           {rule.enabled ? 'Disable' : 'Enable'}
         </button>
@@ -194,7 +205,9 @@ export function RulesPage() {
   const toggleRule = useToggleRule();
   const cloneRule = useCloneRule();
 
-  const [selectedId, setSelectedId] = useState<string | null>(params.id || null);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    params.id || null,
+  );
   const [langFilter, setLangFilter] = useState('');
   const [kindFilter, setKindFilter] = useState('');
   const [customOnly, setCustomOnly] = useState(false);
@@ -216,7 +229,9 @@ export function RulesPage() {
       if (customOnly && !r.is_custom) return false;
       if (
         search &&
-        !r.matchers.some((m) => m.toLowerCase().includes(search.toLowerCase())) &&
+        !r.matchers.some((m) =>
+          m.toLowerCase().includes(search.toLowerCase()),
+        ) &&
         !r.title.toLowerCase().includes(search.toLowerCase())
       )
         return false;
@@ -229,13 +244,14 @@ export function RulesPage() {
     [selectedId, rules],
   );
 
-  const handleSelect = useCallback(
-    (id: string) => {
-      setSelectedId(id);
-      history.replaceState(null, '', id ? '/rules/' + encodeURIComponent(id) : '/rules');
-    },
-    [],
-  );
+  const handleSelect = useCallback((id: string) => {
+    setSelectedId(id);
+    history.replaceState(
+      null,
+      '',
+      id ? '/rules/' + encodeURIComponent(id) : '/rules',
+    );
+  }, []);
 
   const handleToggle = useCallback(
     (id: string) => {
@@ -270,7 +286,10 @@ export function RulesPage() {
       <div className="rules-layout">
         <div className="rules-list-panel">
           <div className="rules-filters">
-            <select value={langFilter} onChange={(e) => setLangFilter(e.target.value)}>
+            <select
+              value={langFilter}
+              onChange={(e) => setLangFilter(e.target.value)}
+            >
               <option value="">All Languages</option>
               {langs.map((l) => (
                 <option key={l} value={l}>
@@ -278,7 +297,10 @@ export function RulesPage() {
                 </option>
               ))}
             </select>
-            <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)}>
+            <select
+              value={kindFilter}
+              onChange={(e) => setKindFilter(e.target.value)}
+            >
               <option value="">All Kinds</option>
               {kinds.map((k) => (
                 <option key={k} value={k}>
@@ -287,7 +309,12 @@ export function RulesPage() {
               ))}
             </select>
             <label
-              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 'var(--text-sm)' }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 'var(--text-sm)',
+              }}
             >
               <input
                 type="checkbox"

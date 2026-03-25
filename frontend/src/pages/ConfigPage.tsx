@@ -68,13 +68,20 @@ function ConfigSection({
 
   return (
     <div className="config-section" id={id}>
-      <div className={`config-section-header${collapsed ? ' collapsed' : ''}`} onClick={() => setCollapsed(!collapsed)}>
-        <span className={`config-collapse-arrow${collapsed ? ' collapsed' : ''}`}>
+      <div
+        className={`config-section-header${collapsed ? ' collapsed' : ''}`}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <span
+          className={`config-collapse-arrow${collapsed ? ' collapsed' : ''}`}
+        >
           &#9660;
         </span>{' '}
         <strong>{title}</strong>
       </div>
-      <div className={`config-section-body${collapsed ? ' collapsed' : ''}`}>{children}</div>
+      <div className={`config-section-body${collapsed ? ' collapsed' : ''}`}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -114,7 +121,11 @@ function LabelSection({
       <div className="inline-form add-label-form">
         <div className="form-group">
           <label>Language</label>
-          <select style={{ width: 140 }} value={lang} onChange={(e) => setLang(e.target.value)}>
+          <select
+            style={{ width: 140 }}
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+          >
             <option value="">Select...</option>
             {LANG_OPTIONS.map((l) => (
               <option key={l} value={l}>
@@ -165,7 +176,9 @@ function LabelSection({
               {builtins.map((e, i) => (
                 <tr key={`b-${i}`} className="label-builtin">
                   <td>{e.lang}</td>
-                  <td style={{ fontFamily: 'var(--font-mono)' }}>{e.matchers.join(', ')}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>
+                    {e.matchers.join(', ')}
+                  </td>
                   <td>{e.cap}</td>
                   <td>
                     <span className="badge-builtin">built-in</span>
@@ -175,7 +188,9 @@ function LabelSection({
               {custom.map((e, i) => (
                 <tr key={`c-${i}`}>
                   <td>{e.lang}</td>
-                  <td style={{ fontFamily: 'var(--font-mono)' }}>{e.matchers.join(', ')}</td>
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>
+                    {e.matchers.join(', ')}
+                  </td>
                   <td>{e.cap}</td>
                   <td>
                     <button
@@ -198,7 +213,11 @@ function LabelSection({
 // ── Config Page ──────────────────────────────────────────────────────────────
 
 export function ConfigPage() {
-  const { data: config, isLoading: configLoading, error: configError } = useConfig();
+  const {
+    data: config,
+    isLoading: configLoading,
+    error: configError,
+  } = useConfig();
   const { data: sources } = useSources();
   const { data: sinks } = useSinks();
   const { data: sanitizers } = useSanitizers();
@@ -253,8 +272,7 @@ export function ConfigPage() {
       <ConfigSection title="General" id="config-general">
         <div className="detail-meta">
           <div>
-            <strong>Analysis Mode:</strong>{' '}
-            {String(scanner?.mode || 'full')}
+            <strong>Analysis Mode:</strong> {String(scanner?.mode || 'full')}
           </div>
           <div>
             <strong>Min Severity:</strong>{' '}
@@ -276,7 +294,7 @@ export function ConfigPage() {
           </div>
           <div>
             <strong>Attack Surface Ranking:</strong>{' '}
-            {(output?.attack_surface_ranking) ? 'Enabled' : 'Disabled'}
+            {output?.attack_surface_ranking ? 'Enabled' : 'Disabled'}
           </div>
         </div>
         <div
@@ -291,7 +309,9 @@ export function ConfigPage() {
               type="checkbox"
               id="triage-sync-toggle"
               checked={!!server?.triage_sync}
-              onChange={(e) => toggleTriageSync.mutate({ enabled: e.target.checked })}
+              onChange={(e) =>
+                toggleTriageSync.mutate({ enabled: e.target.checked })
+              }
             />
             <label htmlFor="triage-sync-toggle">
               <strong>Triage Sync</strong> &mdash; Auto-sync triage decisions to{' '}
@@ -309,7 +329,11 @@ export function ConfigPage() {
         entries={sources || []}
         onAdd={(body) => addSource.mutate(body)}
         onDelete={(e) =>
-          deleteSource.mutate({ lang: e.lang, matchers: e.matchers, cap: e.cap })
+          deleteSource.mutate({
+            lang: e.lang,
+            matchers: e.matchers,
+            cap: e.cap,
+          })
         }
       />
 
@@ -333,7 +357,11 @@ export function ConfigPage() {
         entries={sanitizers || []}
         onAdd={(body) => addSanitizer.mutate(body)}
         onDelete={(e) =>
-          deleteSanitizer.mutate({ lang: e.lang, matchers: e.matchers, cap: e.cap })
+          deleteSanitizer.mutate({
+            lang: e.lang,
+            matchers: e.matchers,
+            cap: e.cap,
+          })
         }
       />
 
@@ -364,7 +392,10 @@ export function ConfigPage() {
               onChange={(e) => setTermName(e.target.value)}
             />
           </div>
-          <button className="btn btn-primary btn-sm" onClick={handleAddTerminator}>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={handleAddTerminator}
+          >
             Add Terminator
           </button>
         </div>
@@ -475,7 +506,10 @@ export function ConfigPage() {
               onChange={(e) => setProfileName(e.target.value)}
             />
           </div>
-          <button className="btn btn-primary btn-sm" onClick={handleSaveProfile}>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={handleSaveProfile}
+          >
             Save Current as Profile
           </button>
         </div>

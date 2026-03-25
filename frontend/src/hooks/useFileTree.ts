@@ -17,9 +17,13 @@ export function useFileTree(
   initialPath?: string | null,
   onSelectFile?: (path: string) => void,
 ): UseFileTreeReturn {
-  const [selectedPath, setSelectedPath] = useState<string | null>(initialPath ?? null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(
+    initialPath ?? null,
+  );
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
-  const [loadedChildren, setLoadedChildren] = useState<Map<string, TreeEntry[]>>(new Map());
+  const [loadedChildren, setLoadedChildren] = useState<
+    Map<string, TreeEntry[]>
+  >(new Map());
   const [expandQueue, setExpandQueue] = useState<string | null>(null);
 
   const { data: rootEntries, isLoading } = useExplorerTree();

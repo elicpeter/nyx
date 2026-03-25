@@ -11,23 +11,51 @@ interface Props {
   onClick: () => void;
 }
 
-export function CfgNode({ node, selected, dimmed, highlighted, onMouseEnter, onMouseLeave, onClick }: Props) {
+export function CfgNode({
+  node,
+  selected,
+  dimmed,
+  highlighted,
+  onMouseEnter,
+  onMouseLeave,
+  onClick,
+}: Props) {
   const style = getNodeStyle(node.type);
   const x = node.x - node.w / 2;
   const y = node.y - node.h / 2;
 
-  const strokeColor = selected ? 'var(--accent, #5856d6)' : highlighted ? style.stroke : style.stroke;
+  const strokeColor = selected
+    ? 'var(--accent, #5856d6)'
+    : highlighted
+      ? style.stroke
+      : style.stroke;
   const strokeW = selected ? 2.5 : style.strokeWidth;
   const opacity = dimmed ? 0.2 : 1;
 
   // Compute text lines
-  const lines: { text: string; fill: string; size: number; weight: string }[] = [];
-  lines.push({ text: node.label, fill: style.textFill, size: 12, weight: '600' });
+  const lines: { text: string; fill: string; size: number; weight: string }[] =
+    [];
+  lines.push({
+    text: node.label,
+    fill: style.textFill,
+    size: 12,
+    weight: '600',
+  });
   if (node.detail) {
-    lines.push({ text: node.detail, fill: style.secondaryFill, size: 10, weight: '400' });
+    lines.push({
+      text: node.detail,
+      fill: style.secondaryFill,
+      size: 10,
+      weight: '400',
+    });
   }
   if (node.sublabel) {
-    lines.push({ text: node.sublabel, fill: style.secondaryFill, size: 10, weight: '400' });
+    lines.push({
+      text: node.sublabel,
+      fill: style.secondaryFill,
+      size: 10,
+      weight: '400',
+    });
   }
 
   const textStartY = node.y - ((lines.length - 1) * 16) / 2;
@@ -57,9 +85,25 @@ export function CfgNode({ node, selected, dimmed, highlighted, onMouseEnter, onM
 
       {/* Main shape */}
       {style.shape === 'double' ? (
-        <DoubleRect x={x} y={y} w={node.w} h={node.h} fill={style.fill} stroke={strokeColor} strokeWidth={strokeW} />
+        <DoubleRect
+          x={x}
+          y={y}
+          w={node.w}
+          h={node.h}
+          fill={style.fill}
+          stroke={strokeColor}
+          strokeWidth={strokeW}
+        />
       ) : style.shape === 'terminal' ? (
-        <TerminalShape x={x} y={y} w={node.w} h={node.h} fill={style.fill} stroke={strokeColor} strokeWidth={strokeW} />
+        <TerminalShape
+          x={x}
+          y={y}
+          w={node.w}
+          h={node.h}
+          fill={style.fill}
+          stroke={strokeColor}
+          strokeWidth={strokeW}
+        />
       ) : (
         <rect
           x={x}
@@ -96,7 +140,11 @@ export function CfgNode({ node, selected, dimmed, highlighted, onMouseEnter, onM
         <g>
           {node.badges.slice(0, 3).map((badge, i) => {
             const bw = Math.min(badge.length * 5.5 + 8, node.w / 3);
-            const bx = node.x - (node.badges!.length * (bw + 4)) / 2 + i * (bw + 4) + bw / 2;
+            const bx =
+              node.x -
+              (node.badges!.length * (bw + 4)) / 2 +
+              i * (bw + 4) +
+              bw / 2;
             const by = node.y + node.h / 2 - 10;
             return (
               <g key={i}>
@@ -127,31 +175,85 @@ export function CfgNode({ node, selected, dimmed, highlighted, onMouseEnter, onM
       )}
 
       {/* Loop indicator */}
-      {node.type === 'Loop' && (
-        <LoopIcon cx={x + node.w - 10} cy={y + 10} />
-      )}
+      {node.type === 'Loop' && <LoopIcon cx={x + node.w - 10} cy={y + 10} />}
     </g>
   );
 }
 
-function DoubleRect({ x, y, w, h, fill, stroke, strokeWidth }: {
-  x: number; y: number; w: number; h: number; fill: string; stroke: string; strokeWidth: number;
+function DoubleRect({
+  x,
+  y,
+  w,
+  h,
+  fill,
+  stroke,
+  strokeWidth,
+}: {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
 }) {
   return (
     <g>
-      <rect x={x} y={y} width={w} height={h} rx={6} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
-      <rect x={x + 3} y={y + 3} width={w - 6} height={h - 6} rx={4} fill="none" stroke={stroke} strokeWidth={0.8} opacity={0.5} />
+      <rect
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        rx={6}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+      />
+      <rect
+        x={x + 3}
+        y={y + 3}
+        width={w - 6}
+        height={h - 6}
+        rx={4}
+        fill="none"
+        stroke={stroke}
+        strokeWidth={0.8}
+        opacity={0.5}
+      />
     </g>
   );
 }
 
-function TerminalShape({ x, y, w, h, fill, stroke, strokeWidth }: {
-  x: number; y: number; w: number; h: number; fill: string; stroke: string; strokeWidth: number;
+function TerminalShape({
+  x,
+  y,
+  w,
+  h,
+  fill,
+  stroke,
+  strokeWidth,
+}: {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
 }) {
   // Stadium / pill shape for terminal nodes
   const r = h / 2;
   return (
-    <rect x={x} y={y} width={w} height={h} rx={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} />
+    <rect
+      x={x}
+      y={y}
+      width={w}
+      height={h}
+      rx={r}
+      fill={fill}
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+    />
   );
 }
 

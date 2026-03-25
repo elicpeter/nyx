@@ -60,9 +60,10 @@ function FileTreeNode({
   const isSelected = selectedPath === entry.path;
   const children = loadedChildren.get(entry.path);
 
-  const sevClass = entry.finding_count > 0 && entry.severity_max
-    ? ` sev-${entry.severity_max.toLowerCase()}`
-    : '';
+  const sevClass =
+    entry.finding_count > 0 && entry.severity_max
+      ? ` sev-${entry.severity_max.toLowerCase()}`
+      : '';
 
   const handleClick = () => {
     if (isDir) {

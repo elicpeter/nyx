@@ -21,8 +21,7 @@ export interface AddSuppressionBody {
 export function useBulkTriage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: BulkTriageBody) =>
-      apiPost<void>('/triage', body),
+    mutationFn: (body: BulkTriageBody) => apiPost<void>('/triage', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['findings'] });
       qc.invalidateQueries({ queryKey: ['triage'] });
@@ -62,8 +61,7 @@ export function useAddSuppression() {
 export function useDeleteSuppression() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) =>
-      apiDelete<void>(`/triage/suppress?id=${id}`),
+    mutationFn: (id: number) => apiDelete<void>(`/triage/suppress?id=${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['triage', 'suppress'] });
     },

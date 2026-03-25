@@ -1,5 +1,11 @@
 import dagre from '@dagrejs/dagre';
-import type { GraphNode, GraphEdge, LayoutResult, LayoutNode, LayoutEdge } from './types';
+import type {
+  GraphNode,
+  GraphEdge,
+  LayoutResult,
+  LayoutNode,
+  LayoutEdge,
+} from './types';
 
 const CHAR_W = 7.2;
 const PAD_X = 32;

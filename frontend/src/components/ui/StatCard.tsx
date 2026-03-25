@@ -6,7 +6,13 @@ interface StatCardProps {
   subtitle?: string;
 }
 
-export function StatCard({ label, value, delta, color, subtitle }: StatCardProps) {
+export function StatCard({
+  label,
+  value,
+  delta,
+  color,
+  subtitle,
+}: StatCardProps) {
   const colorStyle = color ? { color } : undefined;
 
   return (

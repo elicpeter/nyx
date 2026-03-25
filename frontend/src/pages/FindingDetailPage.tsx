@@ -5,7 +5,13 @@ import { useBulkTriage } from '../api/mutations/triage';
 import { truncPath } from '../utils/truncPath';
 import { escapeHtml, highlightSyntax } from '../utils/syntaxHighlight';
 import { CodeViewerModal } from '../modals/CodeViewerModal';
-import type { FindingView, Evidence, FlowStep, SpanEvidence, RelatedFindingView } from '../api/types';
+import type {
+  FindingView,
+  Evidence,
+  FlowStep,
+  SpanEvidence,
+  RelatedFindingView,
+} from '../api/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -35,11 +41,14 @@ function parseNoteText(note: string): string {
     };
     return `Source type: ${readable[kind] || kind}`;
   }
-  if (note.startsWith('hop_count:')) return `Path length: ${note.split(':')[1]} blocks`;
+  if (note.startsWith('hop_count:'))
+    return `Path length: ${note.split(':')[1]} blocks`;
   if (note === 'uses_summary') return 'Uses cross-file summary';
   if (note === 'path_validated') return 'Path has validation guard';
-  if (note.startsWith('cap_specificity:')) return `Cap specificity: ${note.split(':')[1]}`;
-  if (note.startsWith('degraded:')) return `Degraded analysis: ${note.split(':')[1]}`;
+  if (note.startsWith('cap_specificity:'))
+    return `Cap specificity: ${note.split(':')[1]}`;
+  if (note.startsWith('degraded:'))
+    return `Degraded analysis: ${note.split(':')[1]}`;
   return note;
 }
 
@@ -76,22 +85,39 @@ interface CollapsibleSectionProps {
   children: React.ReactNode;
 }
 
-function CollapsibleSection({ title, defaultOpen = true, children }: CollapsibleSectionProps) {
+function CollapsibleSection({
+  title,
+  defaultOpen = true,
+  children,
+}: CollapsibleSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
 
   return (
     <div className="detail-section">
       <div className="section-toggle" onClick={() => setOpen((v) => !v)}>
-        <span className={`toggle-arrow${!open ? ' collapsed' : ''}`}>&#9660;</span> {title}
+        <span className={`toggle-arrow${!open ? ' collapsed' : ''}`}>
+          &#9660;
+        </span>{' '}
+        {title}
       </div>
-      <div className={`section-body${!open ? ' collapsed' : ''}`}>{children}</div>
+      <div className={`section-body${!open ? ' collapsed' : ''}`}>
+        {children}
+      </div>
     </div>
   );
 }
 
 // ── Evidence Cards ──────────────────────────────────────────────────────────
 
-function EvidenceCard({ kind, color, span }: { kind: string; color: string; span: SpanEvidence }) {
+function EvidenceCard({
+  kind,
+  color,
+  span,
+}: {
+  kind: string;
+  color: string;
+  span: SpanEvidence;
+}) {
   return (
     <div className="evidence-card">
       <div className="evidence-kind" style={{ color }}>
@@ -105,14 +131,20 @@ function EvidenceCard({ kind, color, span }: { kind: string; color: string; span
   );
 }
 
-function StateTransitionCard({ evidence, ruleId }: { evidence: Evidence; ruleId: string }) {
+function StateTransitionCard({
+  evidence,
+  ruleId,
+}: {
+  evidence: Evidence;
+  ruleId: string;
+}) {
   const st = evidence.state;
   if (!st) return null;
 
   const isAuth = st.machine === 'auth';
   const machineLabel = isAuth ? 'Authentication State' : 'Resource Lifecycle';
   const acquireLocation =
-    (ruleId.includes('leak') && evidence.sink)
+    ruleId.includes('leak') && evidence.sink
       ? `${evidence.sink.path}:${evidence.sink.line}:${evidence.sink.col}`
       : null;
 
@@ -131,7 +163,9 @@ function StateTransitionCard({ evidence, ruleId }: { evidence: Evidence; ruleId:
         <span className="state-to">{st.to_state}</span>
       </div>
       {acquireLocation && (
-        <div className="state-acquire-location">Acquired at: {acquireLocation}</div>
+        <div className="state-acquire-location">
+          Acquired at: {acquireLocation}
+        </div>
       )}
     </div>
   );
@@ -149,24 +183,45 @@ function StateRemediationHint({ ruleId }: { ruleId: string }) {
   );
 }
 
-function EvidenceSection({ evidence, skipStateCard }: { evidence: Evidence; skipStateCard?: boolean }) {
+function EvidenceSection({
+  evidence,
+  skipStateCard,
+}: {
+  evidence: Evidence;
+  skipStateCard?: boolean;
+}) {
   const cards: React.ReactNode[] = [];
 
   if (evidence.source) {
     cards.push(
-      <EvidenceCard key="source" kind="Source" color="var(--success)" span={evidence.source} />,
+      <EvidenceCard
+        key="source"
+        kind="Source"
+        color="var(--success)"
+        span={evidence.source}
+      />,
     );
   }
 
   if (evidence.sink) {
     cards.push(
-      <EvidenceCard key="sink" kind="Sink" color="var(--sev-high)" span={evidence.sink} />,
+      <EvidenceCard
+        key="sink"
+        kind="Sink"
+        color="var(--sev-high)"
+        span={evidence.sink}
+      />,
     );
   }
 
   for (let i = 0; i < (evidence.guards?.length ?? 0); i++) {
     cards.push(
-      <EvidenceCard key={`guard-${i}`} kind="Guard" color="var(--accent)" span={evidence.guards[i]} />,
+      <EvidenceCard
+        key={`guard-${i}`}
+        kind="Guard"
+        color="var(--accent)"
+        span={evidence.guards[i]}
+      />,
     );
   }
 
@@ -359,7 +414,9 @@ function FlowTimeline({ steps }: { steps: FlowStep[] }) {
                 {s.file}:{s.line}:{s.col}
                 {s.function ? ` in ${s.function}` : ''}
               </div>
-              {s.snippet && <div className="flow-step-snippet">{s.snippet}</div>}
+              {s.snippet && (
+                <div className="flow-step-snippet">{s.snippet}</div>
+              )}
             </div>
           </div>
         );
@@ -420,7 +477,10 @@ function CodePreview({
         const lineNum = startLine + i;
         const isHighlight = lineNum === highlightLine;
         return (
-          <div key={lineNum} className={`code-line${isHighlight ? ' highlight' : ''}`}>
+          <div
+            key={lineNum}
+            className={`code-line${isHighlight ? ' highlight' : ''}`}
+          >
             <span className="line-number">{lineNum}</span>
             <span
               className="line-content"
@@ -551,7 +611,8 @@ export function FindingDetailPage() {
   const evidence = f.evidence;
   const isState = isStateFinding(f);
   const hasWhySection =
-    f.message || (evidence && (evidence.source || evidence.sink || evidence.state));
+    f.message ||
+    (evidence && (evidence.source || evidence.sink || evidence.state));
   const hasEvidence =
     evidence &&
     (evidence.source ||
@@ -560,20 +621,22 @@ export function FindingDetailPage() {
       (evidence.sanitizers && evidence.sanitizers.length > 0) ||
       evidence.state);
   const hasNotes = evidence && evidence.notes && evidence.notes.length > 0;
-  const hasFlow = evidence && evidence.flow_steps && evidence.flow_steps.length > 0;
+  const hasFlow =
+    evidence && evidence.flow_steps && evidence.flow_steps.length > 0;
   const hasRelated = f.related_findings && f.related_findings.length > 0;
   const hasLabels = f.labels && f.labels.length > 0;
   const hasCode = !!f.code_context;
 
-  const sanitizerBadge = (f.sanitizer_status && !isState) ? (
-    <span className={`badge sanitizer-badge-${f.sanitizer_status}`}>
-      {f.sanitizer_status === 'none'
-        ? 'No sanitizers'
-        : f.sanitizer_status === 'bypassed'
-          ? 'Sanitizer bypassed'
-          : 'Sanitized'}
-    </span>
-  ) : null;
+  const sanitizerBadge =
+    f.sanitizer_status && !isState ? (
+      <span className={`badge sanitizer-badge-${f.sanitizer_status}`}>
+        {f.sanitizer_status === 'none'
+          ? 'No sanitizers'
+          : f.sanitizer_status === 'bypassed'
+            ? 'Sanitizer bypassed'
+            : 'Sanitized'}
+      </span>
+    ) : null;
 
   return (
     <div className="detail-panel">
@@ -588,7 +651,9 @@ export function FindingDetailPage() {
       <h2>{f.rule_id}</h2>
 
       <div className="badge-row">
-        <span className={`badge badge-${f.severity.toLowerCase()}`}>{f.severity}</span>
+        <span className={`badge badge-${f.severity.toLowerCase()}`}>
+          {f.severity}
+        </span>
         {f.confidence && (
           <span className={`badge badge-conf-${f.confidence.toLowerCase()}`}>
             {f.confidence}
@@ -629,8 +694,12 @@ export function FindingDetailPage() {
                   {STATE_RULE_DESCRIPTIONS[f.rule_id]}
                 </p>
               )}
-              {f.message && <p style={{ marginBottom: 'var(--space-3)' }}>{f.message}</p>}
-              {evidence && <StateTransitionCard evidence={evidence} ruleId={f.rule_id} />}
+              {f.message && (
+                <p style={{ marginBottom: 'var(--space-3)' }}>{f.message}</p>
+              )}
+              {evidence && (
+                <StateTransitionCard evidence={evidence} ruleId={f.rule_id} />
+              )}
               <StateRemediationHint ruleId={f.rule_id} />
             </>
           ) : (
@@ -640,10 +709,13 @@ export function FindingDetailPage() {
                   {evidence.explanation}
                 </p>
               )}
-              {f.message && <p style={{ marginBottom: 'var(--space-3)' }}>{f.message}</p>}
+              {f.message && (
+                <p style={{ marginBottom: 'var(--space-3)' }}>{f.message}</p>
+              )}
               {evidence?.source && (
                 <p className="evidence-note">
-                  Tainted data flows from <strong>{evidence.source.kind}</strong> at line{' '}
+                  Tainted data flows from{' '}
+                  <strong>{evidence.source.kind}</strong> at line{' '}
                   {evidence.source.line} to a dangerous operation.
                 </p>
               )}
@@ -657,7 +729,9 @@ export function FindingDetailPage() {
                   ) : null}
                 </p>
               )}
-              {f.guard_kind && <p className="evidence-note">Guard: {f.guard_kind}</p>}
+              {f.guard_kind && (
+                <p className="evidence-note">Guard: {f.guard_kind}</p>
+              )}
             </>
           )}
         </CollapsibleSection>
@@ -723,7 +797,11 @@ export function FindingDetailPage() {
           />
         </CollapsibleSection>
       )}
-      <CodeViewerModal open={codeModalOpen} onClose={() => setCodeModalOpen(false)} finding={f} />
+      <CodeViewerModal
+        open={codeModalOpen}
+        onClose={() => setCodeModalOpen(false)}
+        finding={f}
+      />
     </div>
   );
 }

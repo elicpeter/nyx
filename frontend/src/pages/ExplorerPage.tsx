@@ -1,5 +1,8 @@
 import { useState, useCallback } from 'react';
-import { useExplorerSymbols, useExplorerFindings } from '../api/queries/explorer';
+import {
+  useExplorerSymbols,
+  useExplorerFindings,
+} from '../api/queries/explorer';
 import { useFinding } from '../api/queries/findings';
 import { FileTree } from '../components/data-display/FileTree';
 import { CodeViewer } from '../components/data-display/CodeViewer';
@@ -30,7 +33,9 @@ const FLOW_KIND_LABELS: Record<string, string> = {
 export function ExplorerPage() {
   const [explorerMode, setExplorerMode] = useState<ExplorerMode>('tree');
   const [highlightLine, setHighlightLine] = useState<number | undefined>();
-  const [selectedFindingIndex, setSelectedFindingIndex] = useState<number | null>(null);
+  const [selectedFindingIndex, setSelectedFindingIndex] = useState<
+    number | null
+  >(null);
 
   const handleFileSelect = useCallback((path: string) => {
     setHighlightLine(undefined);
@@ -79,15 +84,17 @@ export function ExplorerPage() {
   const evidence = fullFinding?.evidence;
   const flowSteps = evidence?.flow_steps;
   const hasFlow = flowSteps && flowSteps.length > 0;
-  const hasStateEvidence = fullFinding?.rule_id.startsWith('state-') && evidence?.state;
+  const hasStateEvidence =
+    fullFinding?.rule_id.startsWith('state-') && evidence?.state;
 
-  const codeHighlights = selectedFindingIndex != null && evidence
-    ? {
-        sourceLine: evidence.source?.line,
-        sinkLine: evidence.sink?.line,
-        findingLine: fullFinding?.line,
-      }
-    : undefined;
+  const codeHighlights =
+    selectedFindingIndex != null && evidence
+      ? {
+          sourceLine: evidence.source?.line,
+          sinkLine: evidence.sink?.line,
+          findingLine: fullFinding?.line,
+        }
+      : undefined;
 
   const flowLineSet = new Set<number>();
   if (hasFlow) {
@@ -108,7 +115,11 @@ export function ExplorerPage() {
                 className={`mode-btn${explorerMode === mode ? ' active' : ''}`}
                 onClick={() => setExplorerMode(mode)}
               >
-                {mode === 'tree' ? 'Files' : mode === 'symbols' ? 'Symbols' : 'Hotspots'}
+                {mode === 'tree'
+                  ? 'Files'
+                  : mode === 'symbols'
+                    ? 'Symbols'
+                    : 'Hotspots'}
               </button>
             ))}
           </div>
@@ -133,14 +144,19 @@ export function ExplorerPage() {
           {explorerMode === 'symbols' && (
             <div className="explorer-symbol-list">
               {!selectedPath && (
-                <div className="explorer-hint">Select a file to view symbols</div>
+                <div className="explorer-hint">
+                  Select a file to view symbols
+                </div>
               )}
               {selectedPath && symbols && symbols.length === 0 && (
                 <div className="explorer-hint">No symbols found</div>
               )}
               {symbols &&
                 symbols.map((sym, i) => (
-                  <div key={`${sym.name}-${i}`} className="explorer-symbol-item">
+                  <div
+                    key={`${sym.name}-${i}`}
+                    className="explorer-symbol-item"
+                  >
                     <span className={`symbol-kind symbol-kind-${sym.kind}`}>
                       {sym.kind === 'function' ? 'ƒ' : 'm'}
                     </span>
@@ -149,7 +165,9 @@ export function ExplorerPage() {
                       <span className="symbol-arity">({sym.arity})</span>
                     )}
                     {sym.finding_count > 0 && (
-                      <span className="tree-node-badge">{sym.finding_count}</span>
+                      <span className="tree-node-badge">
+                        {sym.finding_count}
+                      </span>
                     )}
                   </div>
                 ))}
@@ -159,7 +177,9 @@ export function ExplorerPage() {
           {explorerMode === 'hotspots' && (
             <div className="explorer-hotspot-list">
               {hotspotFiles.length === 0 && (
-                <div className="explorer-hint">No findings in scanned files</div>
+                <div className="explorer-hint">
+                  No findings in scanned files
+                </div>
               )}
               {hotspotFiles.map((entry) => (
                 <div
@@ -215,7 +235,9 @@ export function ExplorerPage() {
       <div className="explorer-right">
         {!selectedPath && (
           <div className="explorer-right-section">
-            <div className="explorer-hint">Select a file to view analysis details</div>
+            <div className="explorer-hint">
+              Select a file to view analysis details
+            </div>
           </div>
         )}
 
@@ -227,7 +249,8 @@ export function ExplorerPage() {
               <div className="explorer-file-meta">
                 {language && <span className="badge">{language}</span>}
                 <span className="meta-text">
-                  {findings ? findings.length : 0} finding{findings?.length !== 1 ? 's' : ''}
+                  {findings ? findings.length : 0} finding
+                  {findings?.length !== 1 ? 's' : ''}
                 </span>
               </div>
               {findings && findings.length > 0 && (
@@ -254,7 +277,10 @@ export function ExplorerPage() {
               )}
               {symbols &&
                 symbols.map((sym, i) => (
-                  <div key={`${sym.name}-${i}`} className="explorer-symbol-item compact">
+                  <div
+                    key={`${sym.name}-${i}`}
+                    className="explorer-symbol-item compact"
+                  >
                     <span className={`symbol-kind symbol-kind-${sym.kind}`}>
                       {sym.kind === 'function' ? 'ƒ' : 'm'}
                     </span>
@@ -277,7 +303,9 @@ export function ExplorerPage() {
                       className={`explorer-finding-item${selectedFindingIndex === f.index ? ' active' : ''}`}
                       onClick={() => handleSelectFinding(f.index, f.line)}
                     >
-                      <span className={`finding-sev-dot sev-${f.severity.toLowerCase()}`} />
+                      <span
+                        className={`finding-sev-dot sev-${f.severity.toLowerCase()}`}
+                      />
                       <span className="finding-line">L{f.line}</span>
                       <span className="finding-rule">{f.rule_id}</span>
                       {f.message && (
@@ -354,7 +382,9 @@ function ExplorerFlowTimeline({
                 L{s.line}:{s.col}
                 {s.function ? ` in ${s.function}` : ''}
               </div>
-              {s.snippet && <div className="flow-step-snippet">{s.snippet}</div>}
+              {s.snippet && (
+                <div className="flow-step-snippet">{s.snippet}</div>
+              )}
             </div>
           </div>
         );
@@ -386,7 +416,7 @@ function ExplorerStateDetail({ finding }: { finding: FindingView }) {
   const machineLabel = isAuth ? 'Authentication State' : 'Resource Lifecycle';
   const hint = STATE_REMEDIATION_HINTS[finding.rule_id];
   const acquireLocation =
-    (finding.rule_id.includes('leak') && finding.evidence?.sink)
+    finding.rule_id.includes('leak') && finding.evidence?.sink
       ? `L${finding.evidence.sink.line}:${finding.evidence.sink.col}`
       : null;
 
@@ -407,7 +437,9 @@ function ExplorerStateDetail({ finding }: { finding: FindingView }) {
           <span className="state-to">{st.to_state}</span>
         </div>
         {acquireLocation && (
-          <div className="state-acquire-location">Acquired at: {acquireLocation}</div>
+          <div className="state-acquire-location">
+            Acquired at: {acquireLocation}
+          </div>
         )}
       </div>
       {hint && (

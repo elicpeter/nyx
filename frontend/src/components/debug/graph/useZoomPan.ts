@@ -32,7 +32,7 @@ export function useZoomPan(): UseZoomPanResult {
   const [state, setState] = useState<ZoomPanState>({ x: 0, y: 0, scale: 1 });
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef({ mx: 0, my: 0, sx: 0, sy: 0 });
-  const containerRef = useRef<HTMLDivElement>(null!);  // eslint-disable-line @typescript-eslint/no-non-null-assertion
+  const containerRef = useRef<HTMLDivElement>(null!); // eslint-disable-line @typescript-eslint/no-non-null-assertion
 
   const clampScale = (s: number) => Math.max(MIN_SCALE, Math.min(MAX_SCALE, s));
 
@@ -60,20 +60,31 @@ export function useZoomPan(): UseZoomPanResult {
     });
   }, []);
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    setDragging(true);
-    dragStart.current = { mx: e.clientX, my: e.clientY, sx: state.x, sy: state.y };
-  }, [state.x, state.y]);
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      setDragging(true);
+      dragStart.current = {
+        mx: e.clientX,
+        my: e.clientY,
+        sx: state.x,
+        sy: state.y,
+      };
+    },
+    [state.x, state.y],
+  );
 
-  const onMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!dragging) return;
-    setState((prev) => ({
-      ...prev,
-      x: dragStart.current.sx + (e.clientX - dragStart.current.mx),
-      y: dragStart.current.sy + (e.clientY - dragStart.current.my),
-    }));
-  }, [dragging]);
+  const onMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!dragging) return;
+      setState((prev) => ({
+        ...prev,
+        x: dragStart.current.sx + (e.clientX - dragStart.current.mx),
+        y: dragStart.current.sy + (e.clientY - dragStart.current.my),
+      }));
+    },
+    [dragging],
+  );
 
   const onMouseUp = useCallback(() => setDragging(false), []);
 
@@ -103,7 +114,11 @@ export function useZoomPan(): UseZoomPanResult {
       const newScale = clampScale(prev.scale + ZOOM_STEP);
       const svgX = (cw - prev.x) / prev.scale;
       const svgY = (ch - prev.y) / prev.scale;
-      return { x: cw - svgX * newScale, y: ch - svgY * newScale, scale: newScale };
+      return {
+        x: cw - svgX * newScale,
+        y: ch - svgY * newScale,
+        scale: newScale,
+      };
     });
   }, []);
 
@@ -116,13 +131,20 @@ export function useZoomPan(): UseZoomPanResult {
       const newScale = clampScale(prev.scale - ZOOM_STEP);
       const svgX = (cw - prev.x) / prev.scale;
       const svgY = (ch - prev.y) / prev.scale;
-      return { x: cw - svgX * newScale, y: ch - svgY * newScale, scale: newScale };
+      return {
+        x: cw - svgX * newScale,
+        y: ch - svgY * newScale,
+        scale: newScale,
+      };
     });
   }, []);
 
-  const resetView = useCallback((graphWidth: number, graphHeight: number) => {
-    fitToView(graphWidth, graphHeight);
-  }, [fitToView]);
+  const resetView = useCallback(
+    (graphWidth: number, graphHeight: number) => {
+      fitToView(graphWidth, graphHeight);
+    },
+    [fitToView],
+  );
 
   const centerOnNode = useCallback((nx: number, ny: number) => {
     const container = containerRef.current;
@@ -138,7 +160,13 @@ export function useZoomPan(): UseZoomPanResult {
 
   return {
     state,
-    handlers: { onWheel, onMouseDown, onMouseMove, onMouseUp, onMouseLeave: onMouseUp },
+    handlers: {
+      onWheel,
+      onMouseDown,
+      onMouseMove,
+      onMouseUp,
+      onMouseLeave: onMouseUp,
+    },
     dragging,
     fitToView,
     zoomIn,

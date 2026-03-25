@@ -20,8 +20,7 @@ export function useSources() {
 export function useSinks() {
   return useQuery({
     queryKey: ['config', 'sinks'],
-    queryFn: ({ signal }) =>
-      apiGet<LabelEntryView[]>('/config/sinks', signal),
+    queryFn: ({ signal }) => apiGet<LabelEntryView[]>('/config/sinks', signal),
   });
 }
 
@@ -44,7 +43,6 @@ export function useTerminators() {
 export function useProfiles() {
   return useQuery({
     queryKey: ['config', 'profiles'],
-    queryFn: ({ signal }) =>
-      apiGet<ProfileView[]>('/config/profiles', signal),
+    queryFn: ({ signal }) => apiGet<ProfileView[]>('/config/profiles', signal),
   });
 }

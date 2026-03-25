@@ -42,7 +42,10 @@ export function AppLayout() {
             <Route path="/findings" element={<FindingsPage />} />
             <Route path="/findings/:id" element={<FindingDetailPage />} />
             <Route path="/scans" element={<ScansPage />} />
-            <Route path="/scans/compare/:left/:right" element={<ScanComparePage />} />
+            <Route
+              path="/scans/compare/:left/:right"
+              element={<ScanComparePage />}
+            />
             <Route path="/scans/:id" element={<ScanDetailPage />} />
             <Route path="/rules" element={<RulesPage />} />
             <Route path="/rules/:id" element={<RulesPage />} />
@@ -63,7 +66,10 @@ export function AppLayout() {
           </Routes>
         </main>
       </div>
-      <NewScanModal open={scanModalOpen} onClose={() => setScanModalOpen(false)} />
+      <NewScanModal
+        open={scanModalOpen}
+        onClose={() => setScanModalOpen(false)}
+      />
     </div>
   );
 }

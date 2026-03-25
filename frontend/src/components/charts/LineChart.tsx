@@ -12,7 +12,12 @@ interface LineChartProps {
   height?: number;
 }
 
-export function LineChart({ points, color = 'var(--accent)', width = 400, height = 160 }: LineChartProps) {
+export function LineChart({
+  points,
+  color = 'var(--accent)',
+  width = 400,
+  height = 160,
+}: LineChartProps) {
   if (!points || points.length < 2) {
     return (
       <div className="empty-state" style={{ padding: 20 }}>
@@ -25,7 +30,7 @@ export function LineChart({ points, color = 'var(--accent)', width = 400, height
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
 
-  const maxVal = Math.max(...points.map(p => p.value), 1);
+  const maxVal = Math.max(...points.map((p) => p.value), 1);
   const minVal = 0;
   const yRange = maxVal - minVal || 1;
 
@@ -37,7 +42,7 @@ export function LineChart({ points, color = 'var(--accent)', width = 400, height
     value: p.value,
   }));
 
-  const polyPoints = coords.map(c => `${c.x},${c.y}`).join(' ');
+  const polyPoints = coords.map((c) => `${c.x},${c.y}`).join(' ');
   const areaPoints = `${coords[0].x},${pad.top + plotH} ${polyPoints} ${coords[coords.length - 1].x},${pad.top + plotH}`;
 
   // Y-axis grid lines

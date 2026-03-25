@@ -28,7 +28,8 @@ function fmtNum(n?: number | null): string {
 // ── Summary Tab ──────────────────────────────────────────────────────────────
 
 function SummaryTab({ scan }: { scan: ScanView }) {
-  const duration = scan.duration_secs != null ? scan.duration_secs.toFixed(2) + 's' : '-';
+  const duration =
+    scan.duration_secs != null ? scan.duration_secs.toFixed(2) + 's' : '-';
   const langs = (scan.languages || []).join(', ') || '-';
 
   const timing = scan.timing;
@@ -60,7 +61,10 @@ function SummaryTab({ scan }: { scan: ScanView }) {
         </div>
         <div className="scan-stat-card">
           <div className="scan-stat-label">Languages</div>
-          <div className="scan-stat-value" style={{ fontSize: 'var(--text-base)' }}>
+          <div
+            className="scan-stat-value"
+            style={{ fontSize: 'var(--text-base)' }}
+          >
             {langs}
           </div>
         </div>
@@ -71,14 +75,26 @@ function SummaryTab({ scan }: { scan: ScanView }) {
         <table>
           <tbody>
             <tr>
-              <td style={{ color: 'var(--text-secondary)', width: 140 }}>Scan ID</td>
-              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
+              <td style={{ color: 'var(--text-secondary)', width: 140 }}>
+                Scan ID
+              </td>
+              <td
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 'var(--text-xs)',
+                }}
+              >
                 {scan.id}
               </td>
             </tr>
             <tr>
               <td style={{ color: 'var(--text-secondary)' }}>Root</td>
-              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)' }}>
+              <td
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 'var(--text-sm)',
+                }}
+              >
                 {scan.scan_root}
               </td>
             </tr>
@@ -226,7 +242,9 @@ function FindingsTab({ scanId }: { scanId: string }) {
                 <td>{f.line}</td>
                 <td>
                   {f.confidence ? (
-                    <span className={`badge badge-conf-${f.confidence.toLowerCase()}`}>
+                    <span
+                      className={`badge badge-conf-${f.confidence.toLowerCase()}`}
+                    >
                       {f.confidence}
                     </span>
                   ) : (
@@ -289,11 +307,16 @@ function LogsTab({ scanId }: { scanId: string }) {
           {logs.map((l: ScanLogEntry, i: number) => (
             <div key={i} className={`log-entry log-${l.level}`}>
               <span className={`log-level ${l.level}`}>{l.level}</span>
-              <span className="log-time">{new Date(l.timestamp).toLocaleTimeString()}</span>
+              <span className="log-time">
+                {new Date(l.timestamp).toLocaleTimeString()}
+              </span>
               <span className="log-message">
                 {l.message}
                 {l.file_path && (
-                  <span style={{ color: 'var(--text-tertiary)' }}> {l.file_path}</span>
+                  <span style={{ color: 'var(--text-tertiary)' }}>
+                    {' '}
+                    {l.file_path}
+                  </span>
                 )}
               </span>
             </div>
@@ -308,7 +331,8 @@ function LogsTab({ scanId }: { scanId: string }) {
 
 function MetricsTab({ scanId, scan }: { scanId: string; scan: ScanView }) {
   const { data: fetchedMetrics } = useScanMetrics(scanId);
-  const metrics: ScanMetricsSnapshot | undefined = scan.metrics || fetchedMetrics || undefined;
+  const metrics: ScanMetricsSnapshot | undefined =
+    scan.metrics || fetchedMetrics || undefined;
 
   if (!metrics) {
     return (
@@ -330,15 +354,21 @@ function MetricsTab({ scanId, scan }: { scanId: string; scan: ScanView }) {
       </div>
       <div className="metric-card">
         <div className="metric-card-label">Functions Analyzed</div>
-        <div className="metric-card-value">{fmtNum(metrics.functions_analyzed)}</div>
+        <div className="metric-card-value">
+          {fmtNum(metrics.functions_analyzed)}
+        </div>
       </div>
       <div className="metric-card">
         <div className="metric-card-label">Summaries Reused</div>
-        <div className="metric-card-value">{fmtNum(metrics.summaries_reused)}</div>
+        <div className="metric-card-value">
+          {fmtNum(metrics.summaries_reused)}
+        </div>
       </div>
       <div className="metric-card">
         <div className="metric-card-label">Unresolved Calls</div>
-        <div className="metric-card-value">{fmtNum(metrics.unresolved_calls)}</div>
+        <div className="metric-card-value">
+          {fmtNum(metrics.unresolved_calls)}
+        </div>
       </div>
     </div>
   );
@@ -367,7 +397,12 @@ export function ScanDetailPage() {
 
   if (isLoading) return <LoadingState message="Loading scan..." />;
   if (error || !scan) {
-    return <ErrorState title="Scan not found" message={error?.message || 'Not found'} />;
+    return (
+      <ErrorState
+        title="Scan not found"
+        message={error?.message || 'Not found'}
+      />
+    );
   }
 
   const tabs: { id: TabId; label: string }[] = [

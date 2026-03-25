@@ -3,11 +3,18 @@ import { useDebugSsa } from '../../api/queries/debug';
 import type { SsaBlockView, SsaInstView } from '../../api/types';
 
 export function SsaViewerPage() {
-  const { file, fn_name } = useOutletContext<{ file: string | null; fn_name: string | null }>();
+  const { file, fn_name } = useOutletContext<{
+    file: string | null;
+    fn_name: string | null;
+  }>();
   const { data, isLoading, error } = useDebugSsa(file, fn_name);
 
   if (!file || !fn_name) {
-    return <div className="empty-state">Select a file and function to view SSA IR.</div>;
+    return (
+      <div className="empty-state">
+        Select a file and function to view SSA IR.
+      </div>
+    );
   }
   if (isLoading) return <div className="loading">Loading SSA...</div>;
   if (error) return <div className="error-state">Failed to load SSA.</div>;
@@ -21,16 +28,28 @@ export function SsaViewerPage() {
   return (
     <div className="ssa-viewer">
       <div className="ssa-header">
-        <span className="text-secondary">{data.num_values} SSA values, {data.blocks.length} blocks</span>
+        <span className="text-secondary">
+          {data.num_values} SSA values, {data.blocks.length} blocks
+        </span>
       </div>
       {ordered.map((block) => (
-        <SsaBlock key={block.id} block={block} isEntry={block.id === data.entry} />
+        <SsaBlock
+          key={block.id}
+          block={block}
+          isEntry={block.id === data.entry}
+        />
       ))}
     </div>
   );
 }
 
-function SsaBlock({ block, isEntry }: { block: SsaBlockView; isEntry: boolean }) {
+function SsaBlock({
+  block,
+  isEntry,
+}: {
+  block: SsaBlockView;
+  isEntry: boolean;
+}) {
   return (
     <div className={`ssa-block${isEntry ? ' ssa-block-entry' : ''}`}>
       <div className="ssa-block-header">
@@ -65,14 +84,17 @@ function SsaBlock({ block, isEntry }: { block: SsaBlockView; isEntry: boolean })
 }
 
 function SsaInstLine({ inst, isPhi }: { inst: SsaInstView; isPhi?: boolean }) {
-  const operands = inst.operands.length > 0 ? `(${inst.operands.join(', ')})` : '';
+  const operands =
+    inst.operands.length > 0 ? `(${inst.operands.join(', ')})` : '';
   return (
     <div className={`ssa-inst${isPhi ? ' ssa-inst-phi' : ''}`}>
       <span className="ssa-value">v{inst.value}</span>
       <span className="ssa-eq"> = </span>
       <span className="ssa-op">{inst.op}</span>
       <span className="ssa-operands">{operands}</span>
-      {inst.var_name && <span className="ssa-var-name">  # {inst.var_name}</span>}
+      {inst.var_name && (
+        <span className="ssa-var-name"> # {inst.var_name}</span>
+      )}
       <span className="ssa-line-ref"> L{inst.line}</span>
     </div>
   );

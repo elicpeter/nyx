@@ -1,7 +1,10 @@
 const BASE = '/api';
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
     super(message);
     this.name = 'ApiError';
   }
@@ -9,7 +12,9 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const url = `${BASE}${path}`;
-  const headers: Record<string, string> = { ...opts.headers as Record<string, string> };
+  const headers: Record<string, string> = {
+    ...(opts.headers as Record<string, string>),
+  };
   if (opts.body) {
     headers['Content-Type'] = 'application/json';
   }
@@ -33,7 +38,11 @@ export function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
   return request<T>(path, { signal });
 }
 
-export function apiPost<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+export function apiPost<T>(
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
   return request<T>(path, {
     method: 'POST',
     body: body != null ? JSON.stringify(body) : undefined,

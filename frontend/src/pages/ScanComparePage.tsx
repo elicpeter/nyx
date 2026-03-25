@@ -43,7 +43,8 @@ function CompareRow({
   const confidence = f.confidence;
   const index = f.index;
 
-  const changes = showChanges && 'changes' in f ? (f as ChangedFinding).changes : [];
+  const changes =
+    showChanges && 'changes' in f ? (f as ChangedFinding).changes : [];
 
   return (
     <div
@@ -51,22 +52,29 @@ function CompareRow({
       onClick={() => index != null && navigate(`/findings/${index}`)}
       style={{ cursor: 'pointer' }}
     >
-      <span className={`badge badge-${severity.toLowerCase()}`}>{severity}</span>
+      <span className={`badge badge-${severity.toLowerCase()}`}>
+        {severity}
+      </span>
       <span style={{ fontSize: 'var(--text-xs)' }}>{ruleId}</span>
       <span className="finding-path" title={path}>
         {truncPath(path)}
       </span>
-      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+      <span
+        style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}
+      >
         L{line}
       </span>
       {confidence && (
-        <span className={`badge badge-conf-${confidence.toLowerCase()}`}>{confidence}</span>
+        <span className={`badge badge-conf-${confidence.toLowerCase()}`}>
+          {confidence}
+        </span>
       )}
       {changes &&
         changes.length > 0 &&
         changes.map((c, i) => (
           <span key={i} className="compare-delta-inline">
-            {c.field}: {c.old_value} <span className="delta-arrow">&rarr;</span> {c.new_value}
+            {c.field}: {c.old_value} <span className="delta-arrow">&rarr;</span>{' '}
+            {c.new_value}
           </span>
         ))}
     </div>
@@ -90,8 +98,13 @@ function CollapsibleSection({
 
   return (
     <div className="compare-section" data-section={sectionKey}>
-      <div className="compare-section-header" onClick={() => setCollapsed(!collapsed)}>
-        <span className={`section-toggle ${collapsed ? 'collapsed' : ''}`}>&#9660;</span>
+      <div
+        className="compare-section-header"
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <span className={`section-toggle ${collapsed ? 'collapsed' : ''}`}>
+          &#9660;
+        </span>
         {headerContent}
       </div>
       <div
@@ -191,7 +204,9 @@ function CompareByGroup({
     data.changed_findings.forEach((f) =>
       all.push({ ...(f as unknown as ComparedFinding), _status: 'changed' }),
     );
-    data.unchanged_findings.forEach((f) => all.push({ ...f, _status: 'unchanged' }));
+    data.unchanged_findings.forEach((f) =>
+      all.push({ ...f, _status: 'unchanged' }),
+    );
 
     const grouped: Record<string, TaggedFinding[]> = {};
     all.forEach((f) => {
@@ -209,7 +224,9 @@ function CompareByGroup({
       {groups.map(([key, items]) => {
         const counts = { new: 0, fixed: 0, changed: 0, unchanged: 0 };
         items.forEach(
-          (f) => (counts[f._status as keyof typeof counts] = (counts[f._status as keyof typeof counts] || 0) + 1),
+          (f) =>
+            (counts[f._status as keyof typeof counts] =
+              (counts[f._status as keyof typeof counts] || 0) + 1),
         );
         const summary =
           [
@@ -226,7 +243,12 @@ function CompareByGroup({
             sectionKey={key}
             headerContent={
               <>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
+                <span
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--text-xs)',
+                  }}
+                >
                   {key}
                 </span>
                 <span className="compare-group-summary">{summary}</span>
@@ -259,7 +281,8 @@ export function ScanComparePage() {
   const [activeTab, setActiveTab] = useState<CompareTab>('status');
 
   if (isLoading) return <LoadingState message="Loading comparison..." />;
-  if (error) return <ErrorState title="Comparison failed" message={error.message} />;
+  if (error)
+    return <ErrorState title="Comparison failed" message={error.message} />;
   if (!data) return <ErrorState message="No comparison data" />;
 
   const severities = ['HIGH', 'MEDIUM', 'LOW'];
@@ -282,8 +305,15 @@ export function ScanComparePage() {
         <div className="compare-scan-pill">
           <span>Left</span>
           <span className="pill-id">{shortId(data.left_scan.id)}</span>
-          <span className="pill-count">{data.left_scan.finding_count} findings</span>
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--text-xs)' }}>
+          <span className="pill-count">
+            {data.left_scan.finding_count} findings
+          </span>
+          <span
+            style={{
+              color: 'var(--text-tertiary)',
+              fontSize: 'var(--text-xs)',
+            }}
+          >
             {fmtDate(data.left_scan.started_at)}
           </span>
         </div>
@@ -291,8 +321,15 @@ export function ScanComparePage() {
         <div className="compare-scan-pill">
           <span>Right</span>
           <span className="pill-id">{shortId(data.right_scan.id)}</span>
-          <span className="pill-count">{data.right_scan.finding_count} findings</span>
-          <span style={{ color: 'var(--text-tertiary)', fontSize: 'var(--text-xs)' }}>
+          <span className="pill-count">
+            {data.right_scan.finding_count} findings
+          </span>
+          <span
+            style={{
+              color: 'var(--text-tertiary)',
+              fontSize: 'var(--text-xs)',
+            }}
+          >
             {fmtDate(data.right_scan.started_at)}
           </span>
         </div>
@@ -313,7 +350,9 @@ export function ScanComparePage() {
         </div>
         <div className="compare-card compare-card--unchanged">
           <div className="compare-card-label">Unchanged</div>
-          <div className="compare-card-value">{data.summary.unchanged_count}</div>
+          <div className="compare-card-value">
+            {data.summary.unchanged_count}
+          </div>
         </div>
       </div>
 
@@ -363,8 +402,12 @@ export function ScanComparePage() {
 
       <div id="compare-tab-content">
         {activeTab === 'status' && <CompareByStatus data={data} />}
-        {activeTab === 'rule' && <CompareByGroup data={data} groupField="rule_id" />}
-        {activeTab === 'file' && <CompareByGroup data={data} groupField="path" />}
+        {activeTab === 'rule' && (
+          <CompareByGroup data={data} groupField="rule_id" />
+        )}
+        {activeTab === 'file' && (
+          <CompareByGroup data={data} groupField="path" />
+        )}
       </div>
     </>
   );

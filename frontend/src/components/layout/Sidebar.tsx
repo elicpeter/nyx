@@ -26,15 +26,69 @@ interface NavItem {
 }
 
 const NAV_SECTIONS: NavItem[] = [
-  { id: 'overview',  label: 'Overview',  path: '/',          Icon: OverviewIcon, group: 'primary' },
-  { id: 'findings',  label: 'Findings',  path: '/findings',  Icon: FindingsIcon, group: 'primary' },
-  { id: 'scans',     label: 'Scans',     path: '/scans',     Icon: ScansIcon,    group: 'primary' },
-  { id: 'rules',     label: 'Rules',     path: '/rules',     Icon: RulesIcon,    group: 'primary' },
-  { id: 'triage',    label: 'Triage',    path: '/triage',    Icon: TriageIcon,   group: 'primary' },
-  { id: 'config',    label: 'Config',    path: '/config',    Icon: ConfigIcon,   group: 'secondary' },
-  { id: 'explorer',  label: 'Explorer',  path: '/explorer',  Icon: ExplorerIcon, group: 'secondary' },
-  { id: 'debug',     label: 'Debug',     path: '/debug',     Icon: DebugIcon,    group: 'secondary' },
-  { id: 'settings',  label: 'Settings',  path: '/settings',  Icon: SettingsIcon, group: 'footer' },
+  {
+    id: 'overview',
+    label: 'Overview',
+    path: '/',
+    Icon: OverviewIcon,
+    group: 'primary',
+  },
+  {
+    id: 'findings',
+    label: 'Findings',
+    path: '/findings',
+    Icon: FindingsIcon,
+    group: 'primary',
+  },
+  {
+    id: 'scans',
+    label: 'Scans',
+    path: '/scans',
+    Icon: ScansIcon,
+    group: 'primary',
+  },
+  {
+    id: 'rules',
+    label: 'Rules',
+    path: '/rules',
+    Icon: RulesIcon,
+    group: 'primary',
+  },
+  {
+    id: 'triage',
+    label: 'Triage',
+    path: '/triage',
+    Icon: TriageIcon,
+    group: 'primary',
+  },
+  {
+    id: 'config',
+    label: 'Config',
+    path: '/config',
+    Icon: ConfigIcon,
+    group: 'secondary',
+  },
+  {
+    id: 'explorer',
+    label: 'Explorer',
+    path: '/explorer',
+    Icon: ExplorerIcon,
+    group: 'secondary',
+  },
+  {
+    id: 'debug',
+    label: 'Debug',
+    path: '/debug',
+    Icon: DebugIcon,
+    group: 'secondary',
+  },
+  {
+    id: 'settings',
+    label: 'Settings',
+    path: '/settings',
+    Icon: SettingsIcon,
+    group: 'footer',
+  },
 ];
 
 function navLinkClass({ isActive }: { isActive: boolean }) {
@@ -53,9 +107,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="sidebar-header">
         <span className="logo">nyx</span>
-        {health?.version && (
-          <span className="version">v{health.version}</span>
-        )}
+        {health?.version && <span className="version">v{health.version}</span>}
       </div>
 
       <ul className="nav-list">

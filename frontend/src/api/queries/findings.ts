@@ -38,8 +38,7 @@ export function useFindings(params: FindingsParams = {}) {
 export function useFinding(id: number | string) {
   return useQuery({
     queryKey: ['findings', id],
-    queryFn: ({ signal }) =>
-      apiGet<FindingView>(`/findings/${id}`, signal),
+    queryFn: ({ signal }) => apiGet<FindingView>(`/findings/${id}`, signal),
     enabled: id !== undefined && id !== null && id !== '',
   });
 }
@@ -47,7 +46,6 @@ export function useFinding(id: number | string) {
 export function useFindingFilters() {
   return useQuery({
     queryKey: ['findings', 'filters'],
-    queryFn: ({ signal }) =>
-      apiGet<FilterValues>('/findings/filters', signal),
+    queryFn: ({ signal }) => apiGet<FilterValues>('/findings/filters', signal),
   });
 }

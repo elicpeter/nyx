@@ -25,8 +25,7 @@ export function useAddSource() {
 export function useDeleteSource() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: AddLabelBody) =>
-      apiDelete<void>('/config/sources'),
+    mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sources'),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sources'] });
     },
@@ -49,8 +48,7 @@ export function useAddSink() {
 export function useDeleteSink() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: AddLabelBody) =>
-      apiDelete<void>('/config/sinks'),
+    mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sinks'),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sinks'] });
     },
@@ -73,8 +71,7 @@ export function useAddSanitizer() {
 export function useDeleteSanitizer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: AddLabelBody) =>
-      apiDelete<void>('/config/sanitizers'),
+    mutationFn: (body: AddLabelBody) => apiDelete<void>('/config/sanitizers'),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config', 'sanitizers'] });
     },

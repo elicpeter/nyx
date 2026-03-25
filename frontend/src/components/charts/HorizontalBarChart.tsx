@@ -10,7 +10,11 @@ interface HorizontalBarChartProps {
   width?: number;
 }
 
-export function HorizontalBarChart({ items, maxValue, width = 400 }: HorizontalBarChartProps) {
+export function HorizontalBarChart({
+  items,
+  maxValue,
+  width = 400,
+}: HorizontalBarChartProps) {
   if (!items || items.length === 0) {
     return (
       <div className="empty-state" style={{ padding: 20 }}>
@@ -25,7 +29,7 @@ export function HorizontalBarChart({ items, maxValue, width = 400 }: HorizontalB
   const valueW = 45;
   const barAreaW = width - labelW - valueW - 16;
   const totalH = items.length * (barH + gap);
-  const maxVal = maxValue ?? Math.max(...items.map(i => i.value), 1);
+  const maxVal = maxValue ?? Math.max(...items.map((i) => i.value), 1);
 
   return (
     <div className="chart-container">

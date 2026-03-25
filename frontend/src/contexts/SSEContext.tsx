@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useState, useRef, useCallback, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useRef,
+  useCallback,
+  type ReactNode,
+} from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 export interface ScanProgress {
@@ -49,7 +57,9 @@ export function SSEProvider({ children }: { children: ReactNode }) {
       try {
         const data = JSON.parse(e.data);
         setScanProgress(data.data ?? data);
-      } catch { /* ignore parse errors */ }
+      } catch {
+        /* ignore parse errors */
+      }
     });
 
     es.addEventListener('scan_completed', () => {

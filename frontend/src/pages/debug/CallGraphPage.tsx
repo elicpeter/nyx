@@ -8,7 +8,12 @@ export function CallGraphPage() {
   const [selectedNode, setSelectedNode] = useState<number | null>(null);
 
   if (isLoading) return <div className="loading">Loading call graph...</div>;
-  if (error) return <div className="error-state">Failed to load call graph. Have you run a scan?</div>;
+  if (error)
+    return (
+      <div className="error-state">
+        Failed to load call graph. Have you run a scan?
+      </div>
+    );
   if (!data) return null;
 
   const graphNodes = data.nodes.map((n) => ({
@@ -32,7 +37,10 @@ export function CallGraphPage() {
         <div className="debug-toolbar">
           <label>
             Scope:
-            <select value={scope} onChange={(e) => setScope(e.target.value as 'project' | 'file')}>
+            <select
+              value={scope}
+              onChange={(e) => setScope(e.target.value as 'project' | 'file')}
+            >
               <option value="project">Project</option>
               <option value="file">File</option>
             </select>
@@ -40,7 +48,8 @@ export function CallGraphPage() {
           <span className="text-secondary">
             {data.nodes.length} functions, {data.edges.length} edges
             {data.sccs.length > 0 && `, ${data.sccs.length} recursive SCCs`}
-            {data.unresolved_count > 0 && `, ${data.unresolved_count} unresolved`}
+            {data.unresolved_count > 0 &&
+              `, ${data.unresolved_count} unresolved`}
           </span>
         </div>
         <GraphRenderer
@@ -60,7 +69,9 @@ export function CallGraphPage() {
             </div>
             <div className="debug-detail-row">
               <span className="debug-detail-label">Namespace</span>
-              <span className="debug-detail-value mono">{selectedInfo.namespace}</span>
+              <span className="debug-detail-value mono">
+                {selectedInfo.namespace}
+              </span>
             </div>
             {selectedInfo.arity != null && (
               <div className="debug-detail-row">

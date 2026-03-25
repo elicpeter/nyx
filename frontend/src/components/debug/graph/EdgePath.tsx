@@ -53,7 +53,10 @@ export function EdgePath({ edge, dimmed, highlighted, markerId }: Props) {
   const labelPoint = getLabelPoint(edge);
 
   return (
-    <g className="cfg-edge" style={{ opacity, transition: 'opacity 150ms ease' }}>
+    <g
+      className="cfg-edge"
+      style={{ opacity, transition: 'opacity 150ms ease' }}
+    >
       <path
         d={path}
         fill="none"
@@ -149,10 +152,15 @@ export function EdgeMarkers() {
 
 export function getMarkerId(edgeType: string): string {
   switch (edgeType) {
-    case 'True': return 'arrow-true';
-    case 'False': return 'arrow-false';
-    case 'Back': return 'arrow-back';
-    case 'Exception': return 'arrow-exception';
-    default: return 'arrow-default';
+    case 'True':
+      return 'arrow-true';
+    case 'False':
+      return 'arrow-false';
+    case 'Back':
+      return 'arrow-back';
+    case 'Exception':
+      return 'arrow-exception';
+    default:
+      return 'arrow-default';
   }
 }

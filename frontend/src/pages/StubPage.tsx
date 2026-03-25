@@ -14,8 +14,7 @@ const STUB_DESCRIPTIONS: Record<string, string> = {
     'Explore the inter-procedural call graph with SCC highlighting and topo-order visualization.',
   '/debug/taint':
     'Step through taint propagation with per-instruction state snapshots and path tracking.',
-  '/settings':
-    'Application settings and preferences.',
+  '/settings': 'Application settings and preferences.',
 };
 
 const ROUTE_LABELS: Record<string, string> = {

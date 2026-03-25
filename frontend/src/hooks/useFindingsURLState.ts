@@ -52,7 +52,9 @@ export function useFindingsURLState() {
 
   const state: FindingsURLState = useMemo(() => {
     const s = {} as FindingsURLState;
-    for (const key of Object.keys(FINDINGS_DEFAULTS) as (keyof FindingsURLState)[]) {
+    for (const key of Object.keys(
+      FINDINGS_DEFAULTS,
+    ) as (keyof FindingsURLState)[]) {
       s[key] = searchParams.get(key) || FINDINGS_DEFAULTS[key];
     }
     return s;
@@ -62,7 +64,9 @@ export function useFindingsURLState() {
     (updates: Partial<FindingsURLState>) => {
       setSearchParams((prev) => {
         const current = {} as FindingsURLState;
-        for (const key of Object.keys(FINDINGS_DEFAULTS) as (keyof FindingsURLState)[]) {
+        for (const key of Object.keys(
+          FINDINGS_DEFAULTS,
+        ) as (keyof FindingsURLState)[]) {
           current[key] = prev.get(key) || FINDINGS_DEFAULTS[key];
         }
 

@@ -36,25 +36,37 @@ export function useHighlight(edges: LayoutEdge[]): UseHighlightResult {
     return set;
   }, [hoveredNode, adjacency]);
 
-  const isNodeDimmed = useCallback((id: number) => {
-    if (connectedNodes === null) return false;
-    return !connectedNodes.has(id);
-  }, [connectedNodes]);
+  const isNodeDimmed = useCallback(
+    (id: number) => {
+      if (connectedNodes === null) return false;
+      return !connectedNodes.has(id);
+    },
+    [connectedNodes],
+  );
 
-  const isNodeHighlighted = useCallback((id: number) => {
-    if (connectedNodes === null) return false;
-    return connectedNodes.has(id) && id !== hoveredNode;
-  }, [connectedNodes, hoveredNode]);
+  const isNodeHighlighted = useCallback(
+    (id: number) => {
+      if (connectedNodes === null) return false;
+      return connectedNodes.has(id) && id !== hoveredNode;
+    },
+    [connectedNodes, hoveredNode],
+  );
 
-  const isEdgeDimmed = useCallback((source: number, target: number) => {
-    if (hoveredNode === null) return false;
-    return source !== hoveredNode && target !== hoveredNode;
-  }, [hoveredNode]);
+  const isEdgeDimmed = useCallback(
+    (source: number, target: number) => {
+      if (hoveredNode === null) return false;
+      return source !== hoveredNode && target !== hoveredNode;
+    },
+    [hoveredNode],
+  );
 
-  const isEdgeHighlighted = useCallback((source: number, target: number) => {
-    if (hoveredNode === null) return false;
-    return source === hoveredNode || target === hoveredNode;
-  }, [hoveredNode]);
+  const isEdgeHighlighted = useCallback(
+    (source: number, target: number) => {
+      if (hoveredNode === null) return false;
+      return source === hoveredNode || target === hoveredNode;
+    },
+    [hoveredNode],
+  );
 
   const onNodeEnter = useCallback((id: number) => setHoveredNode(id), []);
   const onNodeLeave = useCallback(() => setHoveredNode(null), []);

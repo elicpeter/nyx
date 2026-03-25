@@ -1,18 +1,43 @@
 import { useOutletContext } from 'react-router-dom';
 import { useDebugAbstractInterp } from '../../api/queries/debug';
-import type { AbstractBlockView, AbstractValueView, TypeFactView, ConstValueViewEntry } from '../../api/types';
+import type {
+  AbstractBlockView,
+  AbstractValueView,
+  TypeFactView,
+  ConstValueViewEntry,
+} from '../../api/types';
 
 export function AbstractInterpPage() {
-  const { file, fn_name } = useOutletContext<{ file: string | null; fn_name: string | null }>();
+  const { file, fn_name } = useOutletContext<{
+    file: string | null;
+    fn_name: string | null;
+  }>();
   const { data, isLoading, error } = useDebugAbstractInterp(file, fn_name);
 
   if (!file || !fn_name) {
-    return <div className="empty-state">Select a file and function to view abstract interpretation state.</div>;
+    return (
+      <div className="empty-state">
+        Select a file and function to view abstract interpretation state.
+      </div>
+    );
   }
-  if (isLoading) return <div className="loading">Loading abstract interpretation...</div>;
-  if (error) return <div className="error-state">Failed to load abstract interpretation.</div>;
-  if (!data || (data.blocks.length === 0 && data.type_facts.length === 0 && data.const_values.length === 0)) {
-    return <div className="empty-state">No abstract domain facts tracked for this function.</div>;
+  if (isLoading)
+    return <div className="loading">Loading abstract interpretation...</div>;
+  if (error)
+    return (
+      <div className="error-state">Failed to load abstract interpretation.</div>
+    );
+  if (
+    !data ||
+    (data.blocks.length === 0 &&
+      data.type_facts.length === 0 &&
+      data.const_values.length === 0)
+  ) {
+    return (
+      <div className="empty-state">
+        No abstract domain facts tracked for this function.
+      </div>
+    );
   }
 
   return (
@@ -30,7 +55,9 @@ export function AbstractInterpPage() {
         <div className="abstract-block">
           <div className="abstract-block-header">
             <h3 style={{ margin: 0 }}>Type Facts</h3>
-            <span className="text-secondary">{data.type_facts.length} typed values</span>
+            <span className="text-secondary">
+              {data.type_facts.length} typed values
+            </span>
           </div>
           <table className="abstract-table">
             <thead>
@@ -59,7 +86,9 @@ export function AbstractInterpPage() {
         <div className="abstract-block">
           <div className="abstract-block-header">
             <h3 style={{ margin: 0 }}>Constant Values</h3>
-            <span className="text-secondary">{data.const_values.length} constants</span>
+            <span className="text-secondary">
+              {data.const_values.length} constants
+            </span>
           </div>
           <table className="abstract-table">
             <thead>
@@ -90,7 +119,9 @@ function AbstractBlock({ block }: { block: AbstractBlockView }) {
     <div className="abstract-block">
       <div className="abstract-block-header">
         <span className="ssa-block-id">B{block.block_id}</span>
-        <span className="text-secondary">{block.values.length} tracked values</span>
+        <span className="text-secondary">
+          {block.values.length} tracked values
+        </span>
       </div>
       <table className="abstract-table">
         <thead>

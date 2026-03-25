@@ -24,7 +24,13 @@ interface FilterSelectProps {
   onChange: (value: string) => void;
 }
 
-function FilterSelect({ id, label, values, current, onChange }: FilterSelectProps) {
+function FilterSelect({
+  id,
+  label,
+  values,
+  current,
+  onChange,
+}: FilterSelectProps) {
   if (!values || values.length === 0) return null;
   return (
     <select id={id} value={current} onChange={(e) => onChange(e.target.value)}>
@@ -46,20 +52,36 @@ interface BulkBarProps {
   onSuppressByPattern: () => void;
 }
 
-function BulkActionBar({ selectedCount, onBulkTriage, onSuppressByPattern }: BulkBarProps) {
+function BulkActionBar({
+  selectedCount,
+  onBulkTriage,
+  onSuppressByPattern,
+}: BulkBarProps) {
   return (
     <div className={`bulk-action-bar${selectedCount > 0 ? ' visible' : ''}`}>
       <span className="bulk-count">{selectedCount} selected</span>
-      <button className="btn btn-sm btn-bulk-triage" onClick={() => onBulkTriage('suppressed')}>
+      <button
+        className="btn btn-sm btn-bulk-triage"
+        onClick={() => onBulkTriage('suppressed')}
+      >
         Suppress
       </button>
-      <button className="btn btn-sm btn-bulk-triage" onClick={() => onBulkTriage('false_positive')}>
+      <button
+        className="btn btn-sm btn-bulk-triage"
+        onClick={() => onBulkTriage('false_positive')}
+      >
         Mark FP
       </button>
-      <button className="btn btn-sm btn-bulk-triage" onClick={() => onBulkTriage('accepted_risk')}>
+      <button
+        className="btn btn-sm btn-bulk-triage"
+        onClick={() => onBulkTriage('accepted_risk')}
+      >
         Accept Risk
       </button>
-      <button className="btn btn-sm btn-bulk-triage" onClick={() => onBulkTriage('investigating')}>
+      <button
+        className="btn btn-sm btn-bulk-triage"
+        onClick={() => onBulkTriage('investigating')}
+      >
         Investigating
       </button>
       <button className="btn btn-sm" onClick={onSuppressByPattern}>
@@ -78,11 +100,21 @@ interface SuppressModalProps {
   onClose: () => void;
 }
 
-function SuppressModal({ rules, files, onSuppress, onClose }: SuppressModalProps) {
+function SuppressModal({
+  rules,
+  files,
+  onSuppress,
+  onClose,
+}: SuppressModalProps) {
   const [note, setNote] = useState('');
 
   return (
-    <div className="suppress-modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div
+      className="suppress-modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="suppress-modal">
         <h3>Suppress by Pattern</h3>
         <div className="suppress-options">
@@ -112,7 +144,13 @@ function SuppressModal({ rules, files, onSuppress, onClose }: SuppressModalProps
           value={note}
           onChange={(e) => setNote(e.target.value)}
         />
-        <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+        <div
+          style={{
+            display: 'flex',
+            gap: 'var(--space-2)',
+            marginTop: 'var(--space-3)',
+          }}
+        >
           <button className="btn btn-sm" onClick={onClose}>
             Cancel
           </button>
@@ -132,17 +170,27 @@ interface SortableThProps {
   onSort: (col: string, dir: string) => void;
 }
 
-function SortableTh({ column, label, currentSort, currentDir, onSort }: SortableThProps) {
+function SortableTh({
+  column,
+  label,
+  currentSort,
+  currentDir,
+  onSort,
+}: SortableThProps) {
   const isActive = currentSort === column;
   const arrow = isActive ? (currentDir === 'desc' ? '\u2193' : '\u2191') : '';
 
   const handleClick = () => {
-    const newDir = currentSort === column && currentDir === 'asc' ? 'desc' : 'asc';
+    const newDir =
+      currentSort === column && currentDir === 'asc' ? 'desc' : 'asc';
     onSort(column, newDir);
   };
 
   return (
-    <th className={`sortable${isActive ? ' active' : ''}`} onClick={handleClick}>
+    <th
+      className={`sortable${isActive ? ' active' : ''}`}
+      onClick={handleClick}
+    >
       {label}
       {arrow && <span className="sort-arrow">{arrow}</span>}
     </th>
@@ -153,7 +201,8 @@ function SortableTh({ column, label, currentSort, currentDir, onSort }: Sortable
 
 export function FindingsPage() {
   const navigate = useNavigate();
-  const { state, updateState, resetFilters, hasActiveFilters } = useFindingsURLState();
+  const { state, updateState, resetFilters, hasActiveFilters } =
+    useFindingsURLState();
 
   // Local search input state (debounced before pushing to URL)
   const [searchInput, setSearchInput] = useState(state.search);
@@ -438,14 +487,62 @@ export function FindingsPage() {
                       onChange={(e) => toggleSelectAll(e.target.checked)}
                     />
                   </th>
-                  <SortableTh column="severity" label="Severity" currentSort={state.sort_by} currentDir={state.sort_dir} onSort={handleSort} />
-                  <SortableTh column="confidence" label="Confidence" currentSort={state.sort_by} currentDir={state.sort_dir} onSort={handleSort} />
-                  <SortableTh column="rule_id" label="Rule" currentSort={state.sort_by} currentDir={state.sort_dir} onSort={handleSort} />
-                  <SortableTh column="category" label="Category" currentSort={state.sort_by} currentDir={state.sort_dir} onSort={handleSort} />
-                  <SortableTh column="file" label="File" currentSort={state.sort_by} currentDir={state.sort_dir} onSort={handleSort} />
-                  <SortableTh column="line" label="Line" currentSort={state.sort_by} currentDir={state.sort_dir} onSort={handleSort} />
-                  <SortableTh column="language" label="Language" currentSort={state.sort_by} currentDir={state.sort_dir} onSort={handleSort} />
-                  <SortableTh column="status" label="Status" currentSort={state.sort_by} currentDir={state.sort_dir} onSort={handleSort} />
+                  <SortableTh
+                    column="severity"
+                    label="Severity"
+                    currentSort={state.sort_by}
+                    currentDir={state.sort_dir}
+                    onSort={handleSort}
+                  />
+                  <SortableTh
+                    column="confidence"
+                    label="Confidence"
+                    currentSort={state.sort_by}
+                    currentDir={state.sort_dir}
+                    onSort={handleSort}
+                  />
+                  <SortableTh
+                    column="rule_id"
+                    label="Rule"
+                    currentSort={state.sort_by}
+                    currentDir={state.sort_dir}
+                    onSort={handleSort}
+                  />
+                  <SortableTh
+                    column="category"
+                    label="Category"
+                    currentSort={state.sort_by}
+                    currentDir={state.sort_dir}
+                    onSort={handleSort}
+                  />
+                  <SortableTh
+                    column="file"
+                    label="File"
+                    currentSort={state.sort_by}
+                    currentDir={state.sort_dir}
+                    onSort={handleSort}
+                  />
+                  <SortableTh
+                    column="line"
+                    label="Line"
+                    currentSort={state.sort_by}
+                    currentDir={state.sort_dir}
+                    onSort={handleSort}
+                  />
+                  <SortableTh
+                    column="language"
+                    label="Language"
+                    currentSort={state.sort_by}
+                    currentDir={state.sort_dir}
+                    onSort={handleSort}
+                  />
+                  <SortableTh
+                    column="status"
+                    label="Status"
+                    currentSort={state.sort_by}
+                    currentDir={state.sort_dir}
+                    onSort={handleSort}
+                  />
                 </tr>
               </thead>
               <tbody>
@@ -463,13 +560,17 @@ export function FindingsPage() {
                       />
                     </td>
                     <td>
-                      <span className={`badge badge-${f.severity.toLowerCase()}`}>
+                      <span
+                        className={`badge badge-${f.severity.toLowerCase()}`}
+                      >
                         {f.severity}
                       </span>
                     </td>
                     <td>
                       {f.confidence ? (
-                        <span className={`badge badge-conf-${f.confidence.toLowerCase()}`}>
+                        <span
+                          className={`badge badge-conf-${f.confidence.toLowerCase()}`}
+                        >
                           {f.confidence}
                         </span>
                       ) : (
@@ -484,7 +585,9 @@ export function FindingsPage() {
                     <td>{f.line}</td>
                     <td>{f.language || '-'}</td>
                     <td>
-                      <span className={`badge badge-triage-${f.triage_state || f.status}`}>
+                      <span
+                        className={`badge badge-triage-${f.triage_state || f.status}`}
+                      >
                         {formatTriageState(f.triage_state || f.status)}
                       </span>
                     </td>

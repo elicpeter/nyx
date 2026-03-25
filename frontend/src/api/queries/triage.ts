@@ -19,7 +19,9 @@ export interface TriageAuditParams {
   per_page?: number;
 }
 
-function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
+function buildQuery(
+  params: Record<string, string | number | boolean | undefined | null>,
+): string {
   const entries = Object.entries(params).filter(
     ([, v]) => v !== undefined && v !== null && v !== '',
   );
@@ -42,7 +44,10 @@ export function useTriageAudit(params: TriageAuditParams = {}) {
   return useQuery({
     queryKey: ['triage', 'audit', params],
     queryFn: ({ signal }) =>
-      apiGet<PaginatedAudit>(`/triage/audit${buildQuery({ ...params })}`, signal),
+      apiGet<PaginatedAudit>(
+        `/triage/audit${buildQuery({ ...params })}`,
+        signal,
+      ),
   });
 }
 
@@ -57,7 +62,6 @@ export function useSuppressions() {
 export function useSyncStatus() {
   return useQuery({
     queryKey: ['triage', 'sync-status'],
-    queryFn: ({ signal }) =>
-      apiGet<SyncStatus>('/triage/sync-status', signal),
+    queryFn: ({ signal }) => apiGet<SyncStatus>('/triage/sync-status', signal),
   });
 }

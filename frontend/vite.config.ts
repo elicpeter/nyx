@@ -27,7 +27,7 @@ export default defineConfig({
         entryFileNames: 'app.js',
         chunkFileNames: 'app-[name].js',
         assetFileNames: (assetInfo) => {
-          if (assetInfo.names?.some(n => n.endsWith('.css'))) {
+          if (assetInfo.names?.some((n) => n.endsWith('.css'))) {
             return 'style.css';
           }
           return '[name][extname]';

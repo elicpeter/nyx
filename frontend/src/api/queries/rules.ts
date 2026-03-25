@@ -12,8 +12,7 @@ export function useRules() {
 export function useRuleDetail(id: string) {
   return useQuery({
     queryKey: ['rules', id],
-    queryFn: ({ signal }) =>
-      apiGet<RuleDetailView>(`/rules/${id}`, signal),
+    queryFn: ({ signal }) => apiGet<RuleDetailView>(`/rules/${id}`, signal),
     enabled: !!id,
   });
 }

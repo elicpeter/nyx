@@ -4,14 +4,24 @@ import { useDebugSummaries } from '../../api/queries/debug';
 import type { FuncSummaryView } from '../../api/types';
 
 export function SummaryExplorerPage() {
-  const { file, fn_name } = useOutletContext<{ file: string | null; fn_name: string | null }>();
+  const { file, fn_name } = useOutletContext<{
+    file: string | null;
+    fn_name: string | null;
+  }>();
   const { data, isLoading, error } = useDebugSummaries(file, fn_name);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   if (isLoading) return <div className="loading">Loading summaries...</div>;
-  if (error) return <div className="error-state">Failed to load summaries. Have you run a scan?</div>;
+  if (error)
+    return (
+      <div className="error-state">
+        Failed to load summaries. Have you run a scan?
+      </div>
+    );
   if (!data || data.length === 0) {
-    return <div className="empty-state">No summaries found. Run a scan first.</div>;
+    return (
+      <div className="empty-state">No summaries found. Run a scan first.</div>
+    );
   }
 
   return (
@@ -69,17 +79,23 @@ function SummaryRow({
         <td>{summary.param_count}</td>
         <td>
           {summary.source_caps.map((c, i) => (
-            <span key={i} className="cap-badge cap-badge-source">{c}</span>
+            <span key={i} className="cap-badge cap-badge-source">
+              {c}
+            </span>
           ))}
         </td>
         <td>
           {summary.sanitizer_caps.map((c, i) => (
-            <span key={i} className="cap-badge cap-badge-sanitizer">{c}</span>
+            <span key={i} className="cap-badge cap-badge-sanitizer">
+              {c}
+            </span>
           ))}
         </td>
         <td>
           {summary.sink_caps.map((c, i) => (
-            <span key={i} className="cap-badge cap-badge-sink">{c}</span>
+            <span key={i} className="cap-badge cap-badge-sink">
+              {c}
+            </span>
           ))}
         </td>
         <td>{summary.propagates_taint ? 'Yes' : 'No'}</td>
@@ -90,24 +106,32 @@ function SummaryRow({
             <div className="summary-detail">
               <div className="debug-detail-row">
                 <span className="debug-detail-label">File</span>
-                <span className="debug-detail-value mono">{summary.file_path}</span>
+                <span className="debug-detail-value mono">
+                  {summary.file_path}
+                </span>
               </div>
               {summary.propagating_params.length > 0 && (
                 <div className="debug-detail-row">
                   <span className="debug-detail-label">Propagating params</span>
-                  <span className="debug-detail-value">{summary.propagating_params.join(', ')}</span>
+                  <span className="debug-detail-value">
+                    {summary.propagating_params.join(', ')}
+                  </span>
                 </div>
               )}
               {summary.tainted_sink_params.length > 0 && (
                 <div className="debug-detail-row">
                   <span className="debug-detail-label">Sink params</span>
-                  <span className="debug-detail-value">{summary.tainted_sink_params.join(', ')}</span>
+                  <span className="debug-detail-value">
+                    {summary.tainted_sink_params.join(', ')}
+                  </span>
                 </div>
               )}
               {summary.callees.length > 0 && (
                 <div className="debug-detail-row">
                   <span className="debug-detail-label">Callees</span>
-                  <span className="debug-detail-value mono">{summary.callees.join(', ')}</span>
+                  <span className="debug-detail-value mono">
+                    {summary.callees.join(', ')}
+                  </span>
                 </div>
               )}
               {summary.ssa_summary && (
@@ -118,18 +142,25 @@ function SummaryRow({
                       <span className="debug-detail-label">Source caps</span>
                       <span>
                         {summary.ssa_summary.source_caps.map((c, i) => (
-                          <span key={i} className="cap-badge cap-badge-source">{c}</span>
+                          <span key={i} className="cap-badge cap-badge-source">
+                            {c}
+                          </span>
                         ))}
                       </span>
                     </div>
                   )}
                   {summary.ssa_summary.param_to_return.length > 0 && (
                     <div className="debug-detail-row">
-                      <span className="debug-detail-label">Param-to-return</span>
+                      <span className="debug-detail-label">
+                        Param-to-return
+                      </span>
                       <span>
                         {summary.ssa_summary.param_to_return.map((p, i) => (
                           <span key={i} className="mono">
-                            p{p.param_index} → {p.transform}{i < summary.ssa_summary!.param_to_return.length - 1 ? ', ' : ''}
+                            p{p.param_index} → {p.transform}
+                            {i < summary.ssa_summary!.param_to_return.length - 1
+                              ? ', '
+                              : ''}
                           </span>
                         ))}
                       </span>
@@ -141,8 +172,14 @@ function SummaryRow({
                       <span>
                         {summary.ssa_summary.param_to_sink.map((p, i) => (
                           <span key={i}>
-                            p{p.param_index} → {p.sink_caps.map((c, j) => (
-                              <span key={j} className="cap-badge cap-badge-sink">{c}</span>
+                            p{p.param_index} →{' '}
+                            {p.sink_caps.map((c, j) => (
+                              <span
+                                key={j}
+                                className="cap-badge cap-badge-sink"
+                              >
+                                {c}
+                              </span>
                             ))}
                           </span>
                         ))}

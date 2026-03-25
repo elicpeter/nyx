@@ -19,7 +19,12 @@ export function OverviewPage() {
   }
 
   if (error) {
-    return <ErrorState title="Error loading overview" message={(error as Error).message} />;
+    return (
+      <ErrorState
+        title="Error loading overview"
+        message={(error as Error).message}
+      />
+    );
   }
 
   if (!overview) {
@@ -33,14 +38,6 @@ export function OverviewPage() {
         <OverviewIcon size={48} />
         <h2>Welcome to Nyx</h2>
         <p>Start your first scan to see security findings and analytics.</p>
-        <button
-          className="btn btn-primary"
-          onClick={() => {
-            // TODO: wire to openNewScanModal when modals are ported
-          }}
-        >
-          Start Scan
-        </button>
       </div>
     );
   }
@@ -48,7 +45,7 @@ export function OverviewPage() {
   // Data preparation
   const netDelta = overview.new_since_last - overview.fixed_since_last;
 
-  const sevItems = (['HIGH', 'MEDIUM', 'LOW'] as const).map(s => ({
+  const sevItems = (['HIGH', 'MEDIUM', 'LOW'] as const).map((s) => ({
     label: s.charAt(0) + s.slice(1).toLowerCase(),
     value: overview.by_severity[s] || 0,
     color: s === 'HIGH' ? '#e74c3c' : s === 'MEDIUM' ? '#e67e22' : '#3498db',
@@ -64,7 +61,10 @@ export function OverviewPage() {
     .slice(0, 8)
     .map(([k, v]) => ({ label: k, value: v, color: '#5856d6' }));
 
-  const trendData = (trends || []).map(t => ({ label: t.timestamp, value: t.total }));
+  const trendData = (trends || []).map((t) => ({
+    label: t.timestamp,
+    value: t.total,
+  }));
 
   return (
     <>
@@ -77,7 +77,8 @@ export function OverviewPage() {
         <div className="overview-fresh-banner">
           <strong>Scan completed</strong>
           <span>
-            {overview.total_findings} finding{overview.total_findings === 1 ? '' : 's'} detected
+            {overview.total_findings} finding
+            {overview.total_findings === 1 ? '' : 's'} detected
             {overview.latest_scan_duration_secs != null
               ? ` in ${overview.latest_scan_duration_secs.toFixed(1)}s`
               : ''}
@@ -86,7 +87,7 @@ export function OverviewPage() {
           <a
             href="/findings"
             className="nav-link-internal"
-            onClick={e => {
+            onClick={(e) => {
               e.preventDefault();
               navigate('/findings');
             }}
@@ -160,7 +161,7 @@ export function OverviewPage() {
             nameLabel="File"
             countLabel="Findings"
             truncate
-            onRowClick={item =>
+            onRowClick={(item) =>
               navigate(`/findings?search=${encodeURIComponent(item.name)}`)
             }
           />
@@ -186,7 +187,7 @@ export function OverviewPage() {
           <div className="card-header">Recent Scans</div>
           <RecentScansTable
             scans={overview.recent_scans}
-            onRowClick={scan => navigate(`/scans/${scan.id}`)}
+            onRowClick={(scan) => navigate(`/scans/${scan.id}`)}
           />
         </div>
       </div>
@@ -218,7 +219,13 @@ interface CompactTableProps {
   onRowClick?: (item: OverviewCount) => void;
 }
 
-function CompactTable({ items, nameLabel, countLabel, truncate, onRowClick }: CompactTableProps) {
+function CompactTable({
+  items,
+  nameLabel,
+  countLabel,
+  truncate,
+  onRowClick,
+}: CompactTableProps) {
   if (!items || items.length === 0) {
     return (
       <div className="empty-state" style={{ padding: 16 }}>
@@ -236,7 +243,7 @@ function CompactTable({ items, nameLabel, countLabel, truncate, onRowClick }: Co
         </tr>
       </thead>
       <tbody>
-        {items.map(item => {
+        {items.map((item) => {
           const displayName = truncate ? truncPath(item.name, 45) : item.name;
           return (
             <tr
@@ -280,7 +287,7 @@ function RecentScansTable({ scans, onRowClick }: RecentScansTableProps) {
         </tr>
       </thead>
       <tbody>
-        {scans.slice(0, 5).map(scan => (
+        {scans.slice(0, 5).map((scan) => (
           <tr
             key={scan.id}
             className="clickable"
@@ -321,7 +328,7 @@ function InsightCard({ insight }: InsightCardProps) {
         <a
           href={insight.action_url}
           className="nav-link-internal"
-          onClick={e => {
+          onClick={(e) => {
             e.preventDefault();
             navigate(insight.action_url!);
           }}

@@ -23,7 +23,11 @@ function truncPath(p?: string, max = 50): string {
   return '...' + p.slice(p.length - max + 3);
 }
 
-function ScanProgress({ data }: { data: NonNullable<ReturnType<typeof useSSE>['scanProgress']> }) {
+function ScanProgress({
+  data,
+}: {
+  data: NonNullable<ReturnType<typeof useSSE>['scanProgress']>;
+}) {
   const stages = ['discovering', 'parsing', 'analyzing', 'complete'] as const;
   const stageLabels: Record<string, string> = {
     discovering: 'Discovering',
@@ -31,7 +35,7 @@ function ScanProgress({ data }: { data: NonNullable<ReturnType<typeof useSSE>['s
     analyzing: 'Analyzing',
     complete: 'Complete',
   };
-  const currentIdx = stages.indexOf(data.stage as typeof stages[number]);
+  const currentIdx = stages.indexOf(data.stage as (typeof stages)[number]);
 
   const total = data.files_discovered || 1;
   const processed =
@@ -43,19 +47,24 @@ function ScanProgress({ data }: { data: NonNullable<ReturnType<typeof useSSE>['s
           ? total
           : 0;
   const pct = Math.min(100, (processed / total) * 100);
-  const elapsed = data.elapsed_ms ? (data.elapsed_ms / 1000).toFixed(1) + 's' : '-';
+  const elapsed = data.elapsed_ms
+    ? (data.elapsed_ms / 1000).toFixed(1) + 's'
+    : '-';
 
   return (
     <div className="scan-progress">
       <div className="scan-progress-header">
         <h3>Scan in Progress</h3>
-        <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+        <span
+          style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}
+        >
           {elapsed} elapsed
         </span>
       </div>
       <div className="stage-pipeline">
         {stages.map((s, i) => {
-          const cls = i < currentIdx ? 'done' : i === currentIdx ? 'active' : '';
+          const cls =
+            i < currentIdx ? 'done' : i === currentIdx ? 'active' : '';
           return (
             <div key={s} className={`stage-step ${cls}`}>
               <div className="stage-dot"></div>
@@ -74,7 +83,9 @@ function ScanProgress({ data }: { data: NonNullable<ReturnType<typeof useSSE>['s
         <span>{pct.toFixed(0)}%</span>
       </div>
       {data.current_file && (
-        <div className="progress-current-file">{truncPath(data.current_file, 80)}</div>
+        <div className="progress-current-file">
+          {truncPath(data.current_file, 80)}
+        </div>
       )}
     </div>
   );
@@ -97,22 +108,19 @@ export function ScansPage() {
     [scans],
   );
 
-  const handleCheckbox = useCallback(
-    (e: React.MouseEvent, scanId: string) => {
-      e.stopPropagation();
-      setSelectedScans((prev) => {
-        const next = new Set(prev);
-        if (next.has(scanId)) {
-          next.delete(scanId);
-        } else {
-          if (next.size >= 2) return prev;
-          next.add(scanId);
-        }
-        return next;
-      });
-    },
-    [],
-  );
+  const handleCheckbox = useCallback((e: React.MouseEvent, scanId: string) => {
+    e.stopPropagation();
+    setSelectedScans((prev) => {
+      const next = new Set(prev);
+      if (next.has(scanId)) {
+        next.delete(scanId);
+      } else {
+        if (next.size >= 2) return prev;
+        next.add(scanId);
+      }
+      return next;
+    });
+  }, []);
 
   const handleCompare = useCallback(() => {
     if (selectedScans.size !== 2) return;
@@ -120,7 +128,9 @@ export function ScansPage() {
     // Sort by started_at so left=older, right=newer
     const scanMap = new Map((scans || []).map((s) => [s.id, s]));
     ids.sort((a, b) =>
-      (scanMap.get(a)?.started_at || '').localeCompare(scanMap.get(b)?.started_at || ''),
+      (scanMap.get(a)?.started_at || '').localeCompare(
+        scanMap.get(b)?.started_at || '',
+      ),
     );
     navigate(`/scans/compare/${ids[0]}/${ids[1]}`);
   }, [selectedScans, scans, navigate]);
@@ -160,7 +170,10 @@ export function ScansPage() {
       {!scans || scans.length === 0 ? (
         <div className="empty-state">
           <h3>No scans yet</h3>
-          <p>Use the &quot;Start Scan&quot; button in the header to start your first scan.</p>
+          <p>
+            Use the &quot;Start Scan&quot; button in the header to start your
+            first scan.
+          </p>
         </div>
       ) : (
         <div className="table-wrap">
@@ -203,11 +216,18 @@ export function ScansPage() {
                       {s.status}
                     </span>
                   </td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>
+                  <td
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '0.82rem',
+                    }}
+                  >
                     {truncPath(s.scan_root)}
                   </td>
                   <td>
-                    {s.duration_secs != null ? s.duration_secs.toFixed(2) + 's' : '-'}
+                    {s.duration_secs != null
+                      ? s.duration_secs.toFixed(2) + 's'
+                      : '-'}
                   </td>
                   <td>{s.finding_count ?? '-'}</td>
                   <td>

@@ -1,7 +1,11 @@
 import { useState, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useFindings } from '../api/queries/findings';
-import { useTriageAudit, useSuppressions, useSyncStatus } from '../api/queries/triage';
+import {
+  useTriageAudit,
+  useSuppressions,
+  useSyncStatus,
+} from '../api/queries/triage';
 import {
   useBulkTriage,
   useDeleteSuppression,
@@ -155,18 +159,24 @@ function FindingsTable({
             {shown.map((f) => (
               <tr key={f.fingerprint}>
                 <td>
-                  <span className={`badge badge-triage-${f.triage_state || 'open'}`}>
+                  <span
+                    className={`badge badge-triage-${f.triage_state || 'open'}`}
+                  >
                     {stateLabel(f.triage_state || 'open')}
                   </span>
                 </td>
                 <td>
-                  <span className={`badge badge-${(f.severity || '').toLowerCase()}`}>
+                  <span
+                    className={`badge badge-${(f.severity || '').toLowerCase()}`}
+                  >
                     {f.severity || '-'}
                   </span>
                 </td>
                 <td>
                   {f.confidence ? (
-                    <span className={`badge badge-conf-${f.confidence.toLowerCase()}`}>
+                    <span
+                      className={`badge badge-conf-${f.confidence.toLowerCase()}`}
+                    >
                       {f.confidence}
                     </span>
                   ) : (
@@ -199,8 +209,8 @@ function FindingsTable({
       </div>
       {findings.length > 200 && (
         <p className="triage-truncation-note">
-          Showing first 200 of {findings.length} findings. Use the state cards above to narrow
-          down.
+          Showing first 200 of {findings.length} findings. Use the state cards
+          above to narrow down.
         </p>
       )}
     </>
@@ -221,8 +231,8 @@ function SuppressionRulesTab({
       <div className="empty-state">
         <h3>No suppression rules</h3>
         <p>
-          Suppress findings by pattern from the Findings page bulk actions, or from individual
-          finding detail pages.
+          Suppress findings by pattern from the Findings page bulk actions, or
+          from individual finding detail pages.
         </p>
       </div>
     );
@@ -251,12 +261,12 @@ function SuppressionRulesTab({
                 <code>{r.match_value}</code>
               </td>
               <td>
-                <span className={`badge badge-triage-${r.state}`}>{stateLabel(r.state)}</span>
+                <span className={`badge badge-triage-${r.state}`}>
+                  {stateLabel(r.state)}
+                </span>
               </td>
               <td>{r.note || '-'}</td>
-              <td
-                style={{ fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}
-              >
+              <td style={{ fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}>
                 {r.created_at ? r.created_at.substring(0, 10) : '-'}
               </td>
               <td>
@@ -283,7 +293,8 @@ function AuditLogTab({ entries }: { entries: AuditEntry[] }) {
       <div className="empty-state">
         <h3>No audit entries yet</h3>
         <p>
-          Every triage action will be logged here with a timestamp and state transition.
+          Every triage action will be logged here with a timestamp and state
+          transition.
         </p>
       </div>
     );
@@ -310,7 +321,9 @@ function AuditLogTab({ entries }: { entries: AuditEntry[] }) {
                   : '-'}
               </td>
               <td style={{ fontSize: 'var(--text-xs)' }}>
-                <code title={e.fingerprint}>{e.fingerprint.substring(0, 12)}</code>
+                <code title={e.fingerprint}>
+                  {e.fingerprint.substring(0, 12)}
+                </code>
               </td>
               <td>
                 <span className="badge">{e.action}</span>
@@ -342,7 +355,11 @@ export function TriagePage() {
   const [activeTab, setActiveTab] = useState<TriageTab>('findings');
 
   // Load all findings (matching vanilla JS approach)
-  const { data: findingsPage, isLoading: findingsLoading, error: findingsError } = useFindings({
+  const {
+    data: findingsPage,
+    isLoading: findingsLoading,
+    error: findingsError,
+  } = useFindings({
     per_page: 5000,
   });
   const { data: auditData } = useTriageAudit({ per_page: 100 });
@@ -359,45 +376,46 @@ export function TriagePage() {
   const suppressionRules = suppressionData?.rules || [];
 
   // Compute summary stats
-  const { stateCounts, totalCount, needsAttention, openBySev, topRules } = useMemo(() => {
-    const counts: Record<string, number> = {};
-    ALL_STATES.forEach((s) => (counts[s] = 0));
+  const { stateCounts, totalCount, needsAttention, openBySev, topRules } =
+    useMemo(() => {
+      const counts: Record<string, number> = {};
+      ALL_STATES.forEach((s) => (counts[s] = 0));
 
-    findings.forEach((f) => {
-      const ts = f.triage_state || 'open';
-      counts[ts] = (counts[ts] || 0) + 1;
-    });
-
-    const total = findings.length;
-    const attention = (counts['open'] || 0) + (counts['investigating'] || 0);
-
-    // Severity breakdown for open findings
-    const bySev: Record<string, number> = {};
-    ['High', 'Medium', 'Low'].forEach((sev) => {
-      bySev[sev] = findings.filter(
-        (f) => (f.triage_state || 'open') === 'open' && f.severity === sev,
-      ).length;
-    });
-
-    // Top rules among open findings
-    const ruleCounts: Record<string, number> = {};
-    findings
-      .filter((f) => (f.triage_state || 'open') === 'open')
-      .forEach((f) => {
-        ruleCounts[f.rule_id] = (ruleCounts[f.rule_id] || 0) + 1;
+      findings.forEach((f) => {
+        const ts = f.triage_state || 'open';
+        counts[ts] = (counts[ts] || 0) + 1;
       });
-    const top = Object.entries(ruleCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
 
-    return {
-      stateCounts: counts,
-      totalCount: total,
-      needsAttention: attention,
-      openBySev: bySev,
-      topRules: top,
-    };
-  }, [findings]);
+      const total = findings.length;
+      const attention = (counts['open'] || 0) + (counts['investigating'] || 0);
+
+      // Severity breakdown for open findings
+      const bySev: Record<string, number> = {};
+      ['High', 'Medium', 'Low'].forEach((sev) => {
+        bySev[sev] = findings.filter(
+          (f) => (f.triage_state || 'open') === 'open' && f.severity === sev,
+        ).length;
+      });
+
+      // Top rules among open findings
+      const ruleCounts: Record<string, number> = {};
+      findings
+        .filter((f) => (f.triage_state || 'open') === 'open')
+        .forEach((f) => {
+          ruleCounts[f.rule_id] = (ruleCounts[f.rule_id] || 0) + 1;
+        });
+      const top = Object.entries(ruleCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
+
+      return {
+        stateCounts: counts,
+        totalCount: total,
+        needsAttention: attention,
+        openBySev: bySev,
+        topRules: top,
+      };
+    }, [findings]);
 
   // Filter findings
   const filtered = useMemo(() => {
@@ -455,7 +473,12 @@ export function TriagePage() {
 
   if (findingsLoading) return <LoadingState message="Loading triage data..." />;
   if (findingsError) {
-    return <ErrorState title="Error loading triage data" message={findingsError.message} />;
+    return (
+      <ErrorState
+        title="Error loading triage data"
+        message={findingsError.message}
+      />
+    );
   }
 
   const tabs: { id: TriageTab; label: string; count: number }[] = [
@@ -482,7 +505,9 @@ export function TriagePage() {
             <span className="triage-open-label">Open by severity:</span>
             {['High', 'Medium', 'Low'].map((sev) => (
               <span key={sev} className="triage-sev-pill">
-                <span className={`badge badge-${sev.toLowerCase()}`}>{sev}</span>{' '}
+                <span className={`badge badge-${sev.toLowerCase()}`}>
+                  {sev}
+                </span>{' '}
                 {openBySev[sev]}
               </span>
             ))}
@@ -519,12 +544,13 @@ export function TriagePage() {
             syncStatus.sync_enabled ? (
               syncStatus.file_exists ? (
                 <span className="triage-sync-status">
-                  <span className="triage-sync-dot synced"></span> .nyx/triage.json (
-                  {syncStatus.decisions} decisions)
+                  <span className="triage-sync-dot synced"></span>{' '}
+                  .nyx/triage.json ({syncStatus.decisions} decisions)
                 </span>
               ) : (
                 <span className="triage-sync-status">
-                  <span className="triage-sync-dot unsynced"></span> No sync file
+                  <span className="triage-sync-dot unsynced"></span> No sync
+                  file
                 </span>
               )
             ) : (
@@ -568,7 +594,10 @@ export function TriagePage() {
         className="triage-tab-content"
         style={{ display: activeTab === 'rules' ? 'block' : 'none' }}
       >
-        <SuppressionRulesTab rules={suppressionRules} onDelete={handleDeleteRule} />
+        <SuppressionRulesTab
+          rules={suppressionRules}
+          onDelete={handleDeleteRule}
+        />
       </div>
 
       <div

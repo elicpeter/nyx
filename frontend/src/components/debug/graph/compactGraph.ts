@@ -1,7 +1,15 @@
 import type { GraphNode, GraphEdge } from './types';
 
 /** Node types that should never be collapsed into a compound block. */
-const CONTROL_TYPES = new Set(['Entry', 'Exit', 'If', 'Loop', 'Return', 'Break', 'Continue']);
+const CONTROL_TYPES = new Set([
+  'Entry',
+  'Exit',
+  'If',
+  'Loop',
+  'Return',
+  'Break',
+  'Continue',
+]);
 
 interface CompactResult {
   nodes: GraphNode[];
@@ -14,14 +22,17 @@ interface CompactResult {
  * Collapse straight-line sequences of non-control-flow nodes into compound blocks.
  * A sequence is a chain of nodes where each has exactly one Seq in-edge and one Seq out-edge.
  */
-export function compactGraph(nodes: GraphNode[], edges: GraphEdge[]): CompactResult {
+export function compactGraph(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+): CompactResult {
   if (nodes.length <= 3) {
     return { nodes, edges, expandedIds: new Map() };
   }
 
   // Build adjacency for Seq edges only
   const seqOut = new Map<number, number>(); // node -> single Seq successor
-  const seqIn = new Map<number, number>();  // node -> single Seq predecessor
+  const seqIn = new Map<number, number>(); // node -> single Seq predecessor
   const seqOutCount = new Map<number, number>();
   const seqInCount = new Map<number, number>();
 
@@ -57,8 +68,12 @@ export function compactGraph(nodes: GraphNode[], edges: GraphEdge[]): CompactRes
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
   for (const n of nodes) {
     if (CONTROL_TYPES.has(n.type)) continue;
-    if (totalInCount.get(n.id) === 1 && totalOutCount.get(n.id) === 1
-      && seqInCount.get(n.id) === 1 && seqOutCount.get(n.id) === 1) {
+    if (
+      totalInCount.get(n.id) === 1 &&
+      totalOutCount.get(n.id) === 1 &&
+      seqInCount.get(n.id) === 1 &&
+      seqOutCount.get(n.id) === 1
+    ) {
       chainable.add(n.id);
     }
   }
@@ -107,7 +122,8 @@ export function compactGraph(nodes: GraphNode[], edges: GraphEdge[]): CompactRes
     const maxLine = Math.max(
       ...chain.map((id) => nodeMap.get(id)!.line ?? 0).filter((l) => l > 0),
     );
-    const lineRange = minLine > 0 && maxLine > 0 ? `L${minLine}\u2013L${maxLine}` : '';
+    const lineRange =
+      minLine > 0 && maxLine > 0 ? `L${minLine}\u2013L${maxLine}` : '';
 
     const compoundId = nextId++;
     compoundNodes.push({
@@ -121,7 +137,9 @@ export function compactGraph(nodes: GraphNode[], edges: GraphEdge[]): CompactRes
   }
 
   // Rebuild node list
-  const newNodes = nodes.filter((n) => !removedIds.has(n.id)).concat(compoundNodes);
+  const newNodes = nodes
+    .filter((n) => !removedIds.has(n.id))
+    .concat(compoundNodes);
 
   // Rebuild edges: remap edges that reference removed nodes to compound nodes
   const removedToCompound = new Map<number, number>();
@@ -136,14 +154,19 @@ export function compactGraph(nodes: GraphNode[], edges: GraphEdge[]): CompactRes
   const newEdges: GraphEdge[] = [];
 
   for (const e of edges) {
-    let src = removedToCompound.get(e.source) ?? e.source;
-    let tgt = removedToCompound.get(e.target) ?? e.target;
+    const src = removedToCompound.get(e.source) ?? e.source;
+    const tgt = removedToCompound.get(e.target) ?? e.target;
 
     // Skip edges internal to a compound
-    if (src === tgt && removedIds.has(e.source) && removedIds.has(e.target)) continue;
+    if (src === tgt && removedIds.has(e.source) && removedIds.has(e.target))
+      continue;
     // Skip if both ends were removed to the same compound (internal edge)
-    if (removedToCompound.has(e.source) && removedToCompound.has(e.target)
-      && removedToCompound.get(e.source) === removedToCompound.get(e.target)) continue;
+    if (
+      removedToCompound.has(e.source) &&
+      removedToCompound.has(e.target) &&
+      removedToCompound.get(e.source) === removedToCompound.get(e.target)
+    )
+      continue;
 
     const key = `${src}-${tgt}-${e.type}`;
     if (edgeSet.has(key)) continue;

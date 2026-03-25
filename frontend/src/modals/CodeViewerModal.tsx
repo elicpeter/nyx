@@ -8,7 +8,11 @@ interface CodeViewerModalProps {
   finding: FindingView | null;
 }
 
-export function CodeViewerModal({ open, onClose, finding }: CodeViewerModalProps) {
+export function CodeViewerModal({
+  open,
+  onClose,
+  finding,
+}: CodeViewerModalProps) {
   if (!open || !finding) return null;
 
   return (

@@ -26,9 +26,7 @@ export function FunctionSelector({
         <label>Function</label>
         <select
           value={selectedFunction ?? ''}
-          onChange={(e) =>
-            onFunctionChange(e.target.value || null)
-          }
+          onChange={(e) => onFunctionChange(e.target.value || null)}
           disabled={!functions || functions.length === 0}
           className="function-selector-select"
         >
@@ -42,7 +40,8 @@ export function FunctionSelector({
           {functions?.map((fn: FunctionInfo) => (
             <option key={fn.name} value={fn.name}>
               {fn.name}({fn.param_count} params) — L{fn.line}
-              {fn.source_caps.length > 0 && ` [src: ${fn.source_caps.join(',')}]`}
+              {fn.source_caps.length > 0 &&
+                ` [src: ${fn.source_caps.join(',')}]`}
               {fn.sink_caps.length > 0 && ` [sink: ${fn.sink_caps.join(',')}]`}
             </option>
           ))}

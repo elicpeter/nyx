@@ -27,7 +27,8 @@ export function GraphRenderer({
 
   // Compact graph transformation
   const graphData = useMemo(() => {
-    if (!compact) return { nodes, edges, expandedIds: new Map<number, number[]>() };
+    if (!compact)
+      return { nodes, edges, expandedIds: new Map<number, number[]>() };
     return compactGraph(nodes, edges);
   }, [nodes, edges, compact]);
 
@@ -57,21 +58,27 @@ export function GraphRenderer({
     zoomPan.resetView(layout.width, layout.height);
   }, [zoomPan.resetView, layout.width, layout.height]);
 
-  const handleNodeClick = useCallback((id: number) => {
-    onNodeClick?.(id);
-    // Center on clicked node
-    const node = layout.nodes.find((n) => n.id === id);
-    if (node) {
-      zoomPan.centerOnNode(node.x, node.y);
-    }
-  }, [onNodeClick, layout.nodes, zoomPan.centerOnNode]);
+  const handleNodeClick = useCallback(
+    (id: number) => {
+      onNodeClick?.(id);
+      // Center on clicked node
+      const node = layout.nodes.find((n) => n.id === id);
+      if (node) {
+        zoomPan.centerOnNode(node.x, node.y);
+      }
+    },
+    [onNodeClick, layout.nodes, zoomPan.centerOnNode],
+  );
 
   if (nodes.length === 0) {
     return <div className="empty-state">No graph data</div>;
   }
 
   return (
-    <div className={`graph-renderer-container ${className ?? ''}`} ref={zoomPan.containerRef}>
+    <div
+      className={`graph-renderer-container ${className ?? ''}`}
+      ref={zoomPan.containerRef}
+    >
       <GraphToolbar
         onZoomIn={zoomPan.zoomIn}
         onZoomOut={zoomPan.zoomOut}
@@ -94,7 +101,9 @@ export function GraphRenderer({
         <defs>
           <EdgeMarkers />
         </defs>
-        <g transform={`translate(${zoomPan.state.x}, ${zoomPan.state.y}) scale(${zoomPan.state.scale})`}>
+        <g
+          transform={`translate(${zoomPan.state.x}, ${zoomPan.state.y}) scale(${zoomPan.state.scale})`}
+        >
           {/* Edges (rendered first, below nodes) */}
           {layout.edges.map((e, i) => (
             <EdgePath

@@ -31,7 +31,9 @@ export interface ScanFindingsParams {
   search?: string;
 }
 
-function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
+function buildQuery(
+  params: Record<string, string | number | boolean | undefined | null>,
+): string {
   const entries = Object.entries(params).filter(
     ([, v]) => v !== undefined && v !== null && v !== '',
   );

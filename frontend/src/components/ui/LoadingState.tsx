@@ -3,9 +3,5 @@ interface LoadingStateProps {
 }
 
 export function LoadingState({ message = 'Loading...' }: LoadingStateProps) {
-  return (
-    <div className="loading">
-      {message}
-    </div>
-  );
+  return <div className="loading">{message}</div>;
 }
