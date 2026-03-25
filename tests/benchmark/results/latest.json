@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-25T03:02:18Z",
+  "timestamp": "2026-03-25T05:54:59Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -148,16 +148,18 @@
       "vuln_class": "cmdi",
       "is_vulnerable": true,
       "outcome_file_level": "TP",
-      "outcome_rule_level": "FN",
-      "outcome_location_level": "FN",
-      "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "cfg-unguarded-sink"
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "c.cmdi.system",
+        "taint-unsanitised-flow (source 6:5)"
       ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "cfg-unguarded-sink"
+        "c.cmdi.system",
+        "taint-unsanitised-flow (source 6:5)"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -479,16 +481,18 @@
       "vuln_class": "cmdi",
       "is_vulnerable": true,
       "outcome_file_level": "TP",
-      "outcome_rule_level": "FN",
-      "outcome_location_level": "FN",
-      "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "cfg-unguarded-sink"
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "cpp.cmdi.system",
+        "taint-unsanitised-flow (source 7:5)"
       ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "cfg-unguarded-sink"
+        "cpp.cmdi.system",
+        "taint-unsanitised-flow (source 7:5)"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -4016,32 +4020,32 @@
     "f1": 0.9307692307692308
   },
   "aggregate_rule_level": {
-    "tp": 119,
+    "tp": 121,
     "fp": 18,
-    "fn_": 2,
+    "fn_": 0,
     "tn": 74,
-    "precision": 0.8686131386861314,
-    "recall": 0.9834710743801653,
-    "f1": 0.922480620155039
+    "precision": 0.8705035971223022,
+    "recall": 1.0,
+    "f1": 0.9307692307692308
   },
   "by_language": {
     "c": {
-      "tp": 11,
+      "tp": 12,
       "fp": 2,
-      "fn_": 1,
+      "fn_": 0,
       "tn": 6,
-      "precision": 0.8461538461538461,
-      "recall": 0.9166666666666666,
-      "f1": 0.8799999999999999
+      "precision": 0.8571428571428571,
+      "recall": 1.0,
+      "f1": 0.923076923076923
     },
     "cpp": {
-      "tp": 11,
+      "tp": 12,
       "fp": 3,
-      "fn_": 1,
+      "fn_": 0,
       "tn": 5,
-      "precision": 0.7857142857142857,
-      "recall": 0.9166666666666666,
-      "f1": 0.8461538461538461
+      "precision": 0.8,
+      "recall": 1.0,
+      "f1": 0.888888888888889
     },
     "go": {
       "tp": 16,
@@ -4118,13 +4122,13 @@
       "f1": 1.0
     },
     "cmdi": {
-      "tp": 30,
+      "tp": 32,
       "fp": 0,
-      "fn_": 2,
+      "fn_": 0,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9375,
-      "f1": 0.967741935483871
+      "recall": 1.0,
+      "f1": 1.0
     },
     "code_injection": {
       "tp": 8,
@@ -4201,31 +4205,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 84,
+      "tp": 86,
       "fp": 42,
-      "fn_": 37,
+      "fn_": 35,
       "tn": 50,
-      "precision": 0.6666666666666666,
-      "recall": 0.6942148760330579,
-      "f1": 0.680161943319838
+      "precision": 0.671875,
+      "recall": 0.7107438016528925,
+      "f1": 0.6907630522088354
     },
     ">=Low": {
-      "tp": 85,
+      "tp": 87,
       "fp": 47,
-      "fn_": 36,
+      "fn_": 34,
       "tn": 45,
-      "precision": 0.6439393939393939,
-      "recall": 0.7024793388429752,
-      "f1": 0.6719367588932806
+      "precision": 0.6492537313432836,
+      "recall": 0.71900826446281,
+      "f1": 0.6823529411764706
     },
     ">=Medium": {
-      "tp": 85,
+      "tp": 87,
       "fp": 47,
-      "fn_": 36,
+      "fn_": 34,
       "tn": 45,
-      "precision": 0.6439393939393939,
-      "recall": 0.7024793388429752,
-      "f1": 0.6719367588932806
+      "precision": 0.6492537313432836,
+      "recall": 0.71900826446281,
+      "f1": 0.6823529411764706
     }
   }
 }

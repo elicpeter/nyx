@@ -522,6 +522,17 @@ fn collect_var_defs(
             for ed in &cfg[node].extra_defines {
                 defs.entry(ed.clone()).or_default().insert(block_idx);
             }
+            // Implicit definitions for uninitialized declarations (e.g., C/C++
+            // `char buf[256]`).  The variable appears in uses but not defines
+            // because def_use() doesn't treat declarations without initializers
+            // as definitions.  Registering here ensures phi insertion at join points.
+            if cfg[node].defines.is_none()
+                && cfg[node].callee.is_none()
+                && cfg[node].kind == StmtKind::Seq
+                && cfg[node].uses.len() == 1
+            {
+                defs.entry(cfg[node].uses[0].clone()).or_default().insert(block_idx);
+            }
         }
     }
 
@@ -810,7 +821,23 @@ fn rename_variables(
             // Allocate SSA value
             let v = SsaValue(*next_value);
             *next_value += 1;
-            let var_name_for_ssa = if nop_nodes.contains(&node) { None } else { info.defines.clone() };
+            let var_name_for_ssa = if nop_nodes.contains(&node) {
+                None
+            } else if info.defines.is_some() {
+                info.defines.clone()
+            } else if info.kind == StmtKind::Seq
+                && info.callee.is_none()
+                && info.uses.len() == 1
+                && !var_stacks.contains_key(&info.uses[0])
+            {
+                // Implicit definition for uninitialized declarations (e.g.,
+                // C/C++ `char buf[256]`).  Creates a reaching definition so
+                // output-parameter sources like fgets() can taint the buffer
+                // and subsequent uses (e.g., system(buf)) see the tainted value.
+                Some(info.uses[0].clone())
+            } else {
+                None
+            };
             value_defs.push(ValueDef {
                 var_name: var_name_for_ssa.clone(),
                 cfg_node: node,
