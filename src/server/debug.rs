@@ -179,17 +179,10 @@ impl CfgGraphView {
         bytes: &[u8],
     ) -> Option<Self> {
         // Find the function's entry/exit in local summaries
-        let summary = summaries.values().find(|s| {
-            summaries
-                .iter()
-                .find(|(k, v)| std::ptr::eq(*v, *s) && k.name == func_name)
-                .is_some()
-        });
-
-        let summary = match summary {
-            Some(s) => s,
-            None => return None,
-        };
+        let summary = summaries
+            .iter()
+            .find(|(k, _)| k.name == func_name)
+            .map(|(_, s)| s)?;
 
         // Collect reachable nodes from the function entry
         let mut reachable = std::collections::HashSet::new();
@@ -366,7 +359,7 @@ fn op_view(op: &SsaOp) -> (String, Vec<String>) {
         }
         SsaOp::Source => ("Source".into(), vec![]),
         SsaOp::Const(text) => {
-            let ops = text.iter().map(|t| t.clone()).collect();
+            let ops = text.iter().cloned().collect();
             ("Const".into(), ops)
         }
         SsaOp::Param { index } => ("Param".into(), vec![format!("{}", index)]),

@@ -1,4 +1,6 @@
 pub mod index {
+    #![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
     use crate::commands::scan::Diag;
     use crate::errors::{NyxError, NyxResult};
     use crate::patterns::Severity;
@@ -914,7 +916,7 @@ pub mod index {
                     let timestamp = chrono::DateTime::parse_from_rfc3339(&ts_str)
                         .ok()?
                         .with_timezone(&chrono::Utc);
-                    let level = crate::server::scan_log::LogLevel::from_str(&level_str)?;
+                    let level = level_str.parse().ok()?;
                     Some(crate::server::scan_log::ScanLogEntry {
                         timestamp,
                         level,

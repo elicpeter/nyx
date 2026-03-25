@@ -1,4 +1,5 @@
 //! Symbolic value expression trees for Phase 18a.
+#![allow(clippy::collapsible_if)]
 
 use std::fmt;
 

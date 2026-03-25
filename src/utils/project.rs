@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use crate::errors::{NyxError, NyxResult};
 use std::fs;
 use std::path::{Path, PathBuf};

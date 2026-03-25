@@ -16,6 +16,8 @@
 //!   - Unknown/unproven indices fall back to Elements (conservative)
 //! - Analysis runs as a pre-pass in optimize_ssa(), like type_facts
 
+#![allow(clippy::collapsible_if, clippy::unnecessary_map_or)]
+
 use crate::cfg::Cfg;
 use crate::labels::Cap;
 use crate::ssa::ir::*;

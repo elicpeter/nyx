@@ -5,6 +5,7 @@
 //! trigger the vulnerability. Witnesses are best-effort: if the expression
 //! is not string-renderable or constraints are too complex, a generic
 //! description is produced instead.
+#![allow(clippy::needless_borrow)]
 
 use std::collections::HashSet;
 

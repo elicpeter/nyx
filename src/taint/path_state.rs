@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 // ─── PredicateKind ───────────────────────────────────────────────────────────
 
 /// Classification of what an if-condition tests.

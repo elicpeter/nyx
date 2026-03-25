@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if, clippy::too_many_arguments)]
+
 pub mod domain;
 pub mod path_state;
 pub mod ssa_transfer;

@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if, clippy::redundant_closure)]
+
 use crate::commands::scan::Diag;
 use crate::database::index::{Indexer, ScanRecord};
 use crate::server::app::AppState;

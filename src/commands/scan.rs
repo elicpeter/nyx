@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if, clippy::type_complexity)]
+
 pub(crate) use crate::ast::{
     analyse_file_fused, extract_all_summaries_from_bytes, extract_summaries_from_bytes,
     run_rules_on_bytes, run_rules_on_file,

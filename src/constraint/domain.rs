@@ -94,13 +94,12 @@ impl ConstValue {
             return Some(ConstValue::Bool(false));
         }
         // Quoted string
-        if (t.starts_with('"') && t.ends_with('"'))
-            || (t.starts_with('\'') && t.ends_with('\''))
-            || (t.starts_with('`') && t.ends_with('`'))
+        if t.len() >= 2
+            && ((t.starts_with('"') && t.ends_with('"'))
+                || (t.starts_with('\'') && t.ends_with('\''))
+                || (t.starts_with('`') && t.ends_with('`')))
         {
-            if t.len() >= 2 {
-                return Some(ConstValue::Str(t[1..t.len() - 1].to_string()));
-            }
+            return Some(ConstValue::Str(t[1..t.len() - 1].to_string()));
         }
         // Integer (including negative)
         if let Ok(i) = t.parse::<i64>() {
@@ -384,9 +383,7 @@ impl ValueFact {
     fn interval_empty(&self) -> bool {
         match (self.lo, self.hi) {
             (Some(lo), Some(hi)) => {
-                if self.lo_strict && self.hi_strict {
-                    lo >= hi
-                } else if self.lo_strict || self.hi_strict {
+                if self.lo_strict || self.hi_strict {
                     lo >= hi
                 } else {
                     lo > hi
@@ -679,10 +676,10 @@ impl UnionFind {
             Some(p) => {
                 let root = self.find(p);
                 // Path compression
-                if root != p {
-                    if let Some(entry) = self.parent.iter_mut().find(|(k, _)| *k == x) {
-                        entry.1 = root;
-                    }
+                if root != p
+                    && let Some(entry) = self.parent.iter_mut().find(|(k, _)| *k == x)
+                {
+                    entry.1 = root;
                 }
                 root
             }
@@ -749,6 +746,12 @@ impl UnionFind {
     /// Number of union operations performed.
     pub fn edge_count(&self) -> usize {
         self.edges
+    }
+}
+
+impl Default for UnionFind {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

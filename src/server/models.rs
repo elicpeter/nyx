@@ -506,7 +506,7 @@ pub fn overlay_triage_states(
 pub fn compute_portable_fingerprint(d: &Diag, scan_root: &Path) -> String {
     let rel_path = d
         .path
-        .strip_prefix(&scan_root.to_string_lossy().as_ref())
+        .strip_prefix(scan_root.to_string_lossy().as_ref())
         .unwrap_or(&d.path)
         .trim_start_matches('/');
     let sink_snippet = d

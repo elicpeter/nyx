@@ -1,3 +1,5 @@
+#![allow(clippy::only_used_in_recursion, clippy::type_complexity)]
+
 use crate::cfg::{Cfg, FuncSummaries, build_cfg, export_summaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
@@ -888,7 +890,7 @@ fn is_literal_node(node: tree_sitter::Node, bytes: &[u8]) -> bool {
             node.named_child_count() == 1
                 && node
                     .named_child(0)
-                    .map_or(false, |c| is_literal_node(c, bytes))
+                    .is_some_and(|c| is_literal_node(c, bytes))
         }
 
         // Unary minus on a number literal: `-42`
@@ -896,7 +898,7 @@ fn is_literal_node(node: tree_sitter::Node, bytes: &[u8]) -> bool {
             node.named_child_count() == 1
                 && node
                     .named_child(0)
-                    .map_or(false, |c| is_literal_node(c, bytes))
+                    .is_some_and(|c| is_literal_node(c, bytes))
         }
 
         // String concatenation of literals: `"a" + "b"` or `"a" . "b"`
@@ -904,7 +906,7 @@ fn is_literal_node(node: tree_sitter::Node, bytes: &[u8]) -> bool {
             node.named_child_count() >= 2
                 && (0..node.named_child_count() as u32).all(|i| {
                     node.named_child(i)
-                        .map_or(false, |c| is_literal_node(c, bytes))
+                        .is_some_and(|c| is_literal_node(c, bytes))
                 })
         }
 

@@ -23,19 +23,11 @@ struct ScopedKey {
 /// Two construction modes:
 /// - [`from_cfg`](Self::from_cfg): flat (unscoped) interning — used by taint/SSA pipeline
 /// - [`from_cfg_scoped`](Self::from_cfg_scoped): function-scoped interning — used by state analysis
+#[derive(Default)]
 pub struct SymbolInterner {
     to_id: HashMap<ScopedKey, SymbolId>,
     /// Clean variable names for user-facing resolution (not scoped keys).
     to_str: Vec<String>,
-}
-
-impl Default for SymbolInterner {
-    fn default() -> Self {
-        Self {
-            to_id: HashMap::new(),
-            to_str: Vec::new(),
-        }
-    }
 }
 
 impl SymbolInterner {

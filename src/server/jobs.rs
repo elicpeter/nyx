@@ -153,25 +153,25 @@ impl JobManager {
         });
 
         // Persist initial scan record to DB
-        if let Some(ref pool) = db_pool {
-            if let Ok(idx) = Indexer::from_pool("_scans", pool) {
-                let _ = idx.insert_scan(&ScanRecord {
-                    id: job_id.clone(),
-                    status: "running".to_string(),
-                    scan_root: scan_root.display().to_string(),
-                    started_at: Some(chrono::Utc::now().to_rfc3339()),
-                    finished_at: None,
-                    duration_secs: None,
-                    engine_version: Some(engine_version.clone()),
-                    languages: None,
-                    files_scanned: None,
-                    files_skipped: None,
-                    finding_count: None,
-                    findings_json: None,
-                    timing_json: None,
-                    error: None,
-                });
-            }
+        if let Some(ref pool) = db_pool
+            && let Ok(idx) = Indexer::from_pool("_scans", pool)
+        {
+            let _ = idx.insert_scan(&ScanRecord {
+                id: job_id.clone(),
+                status: "running".to_string(),
+                scan_root: scan_root.display().to_string(),
+                started_at: Some(chrono::Utc::now().to_rfc3339()),
+                finished_at: None,
+                duration_secs: None,
+                engine_version: Some(engine_version.clone()),
+                languages: None,
+                files_scanned: None,
+                files_skipped: None,
+                finding_count: None,
+                findings_json: None,
+                timing_json: None,
+                error: None,
+            });
         }
 
         // Spawn SSE progress emitter thread (polls every 500ms)
@@ -292,31 +292,31 @@ impl JobManager {
             }
 
             // Persist to DB (no lock held, can take time).
-            if let Some(ref pool) = db_pool {
-                if let Ok(idx) = Indexer::from_pool("_scans", pool) {
-                    let finished_str = finished_at.to_rfc3339();
-                    let _ = idx.update_scan(
-                        &jid,
-                        if finding_count.is_some() {
-                            "completed"
-                        } else {
-                            "failed"
-                        },
-                        Some(&finished_str),
-                        Some(elapsed),
-                        finding_count.map(|c| c as i64),
-                        findings_json.as_deref(),
-                        timing_json.as_deref(),
-                        error_str.as_deref(),
-                        Some(files_scanned as i64),
-                        langs_json.as_deref(),
-                    );
-                    let _ = idx.insert_scan_metrics(&jid, &metrics_snap);
-                    let final_logs = log_collector.drain();
-                    let all_logs: Vec<_> = logs.into_iter().chain(final_logs).collect();
-                    if !all_logs.is_empty() {
-                        let _ = idx.insert_scan_logs(&jid, &all_logs);
-                    }
+            if let Some(ref pool) = db_pool
+                && let Ok(idx) = Indexer::from_pool("_scans", pool)
+            {
+                let finished_str = finished_at.to_rfc3339();
+                let _ = idx.update_scan(
+                    &jid,
+                    if finding_count.is_some() {
+                        "completed"
+                    } else {
+                        "failed"
+                    },
+                    Some(&finished_str),
+                    Some(elapsed),
+                    finding_count.map(|c| c as i64),
+                    findings_json.as_deref(),
+                    timing_json.as_deref(),
+                    error_str.as_deref(),
+                    Some(files_scanned as i64),
+                    langs_json.as_deref(),
+                );
+                let _ = idx.insert_scan_metrics(&jid, &metrics_snap);
+                let final_logs = log_collector.drain();
+                let all_logs: Vec<_> = logs.into_iter().chain(final_logs).collect();
+                if !all_logs.is_empty() {
+                    let _ = idx.insert_scan_logs(&jid, &all_logs);
                 }
             }
         });
@@ -424,10 +424,10 @@ mod tests {
         // Wait for scan to complete (it's scanning an empty dir so should be fast).
         for _ in 0..100 {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            if let Some(j) = manager.get_job(&id1) {
-                if j.status != JobStatus::Running {
-                    break;
-                }
+            if let Some(j) = manager.get_job(&id1)
+                && j.status != JobStatus::Running
+            {
+                break;
             }
         }
 
@@ -437,10 +437,10 @@ mod tests {
 
         for _ in 0..100 {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            if let Some(j) = manager.get_job(&id2) {
-                if j.status != JobStatus::Running {
-                    break;
-                }
+            if let Some(j) = manager.get_job(&id2)
+                && j.status != JobStatus::Running
+            {
+                break;
             }
         }
 

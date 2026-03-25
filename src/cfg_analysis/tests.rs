@@ -669,13 +669,10 @@ fn taint_and_unguarded_sink_deduped() {
     let sink_node = cfg_graph
         .node_indices()
         .find(|&idx| {
-            matches!(
-                cfg_graph[idx]
-                    .labels
-                    .iter()
-                    .any(|l| matches!(l, crate::labels::DataLabel::Sink(_))),
-                true
-            )
+            cfg_graph[idx]
+                .labels
+                .iter()
+                .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
         })
         .expect("test code should have a sink node");
 

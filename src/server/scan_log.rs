@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::str::FromStr;
 use std::sync::Mutex;
 
 /// Severity level for a scan log entry.
@@ -21,13 +22,15 @@ impl std::fmt::Display for LogLevel {
     }
 }
 
-impl LogLevel {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for LogLevel {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "info" => Some(Self::Info),
-            "warn" => Some(Self::Warn),
-            "error" => Some(Self::Error),
-            _ => None,
+            "info" => Ok(Self::Info),
+            "warn" => Ok(Self::Warn),
+            "error" => Ok(Self::Error),
+            _ => Err(()),
         }
     }
 }
@@ -66,10 +69,10 @@ impl ScanLogCollector {
     }
 
     fn push(&self, entry: ScanLogEntry) {
-        if let Ok(mut entries) = self.entries.lock() {
-            if entries.len() < self.max_entries {
-                entries.push(entry);
-            }
+        if let Ok(mut entries) = self.entries.lock()
+            && entries.len() < self.max_entries
+        {
+            entries.push(entry);
         }
     }
 

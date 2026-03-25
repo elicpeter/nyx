@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use crate::commands::scan::Diag;
 use crate::database::index::{Indexer, ScanRecord};
 use crate::evidence::Confidence;

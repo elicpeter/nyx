@@ -121,7 +121,7 @@ pub fn export_triage(
             let portable_fp = compute_portable_fingerprint(d, scan_root);
             let rel_path = d
                 .path
-                .strip_prefix(&scan_root.to_string_lossy().as_ref())
+                .strip_prefix(scan_root.to_string_lossy().as_ref())
                 .unwrap_or(&d.path)
                 .trim_start_matches('/')
                 .to_string();

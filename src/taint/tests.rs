@@ -112,7 +112,7 @@ fn ssa_taint_through_branch_merge() {
         }"#;
     let findings = ssa_analyse_rust(src);
     assert!(
-        findings.len() >= 1,
+        !findings.is_empty(),
         "SSA: taint through branch should produce at least 1 finding"
     );
 }

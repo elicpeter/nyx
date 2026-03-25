@@ -1,3 +1,5 @@
+#![allow(clippy::if_same_then_else)]
+
 use std::collections::HashMap;
 
 use super::const_prop::ConstLattice;

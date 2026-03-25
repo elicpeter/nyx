@@ -15,6 +15,14 @@
 //!   - Full budget and cutoff controls (instructions, forks, solver checks, path states)
 //!   - Explicit recursion and SCC-aware policy
 //!   - Intra-callee forking with merge policies
+
+#![allow(
+    clippy::collapsible_if,
+    clippy::let_and_return,
+    clippy::new_without_default,
+    clippy::question_mark,
+    clippy::too_many_arguments
+)]
 //!   - Heap-aware cache keys and size limits
 //!   - Structured cutoff reasons for diagnostics
 

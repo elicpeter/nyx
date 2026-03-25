@@ -1,3 +1,14 @@
+#![allow(
+    clippy::collapsible_if,
+    clippy::if_same_then_else,
+    clippy::manual_flatten,
+    clippy::needless_range_loop,
+    clippy::only_used_in_recursion,
+    clippy::single_match,
+    clippy::too_many_arguments,
+    clippy::unnecessary_map_or
+)]
+
 use crate::abstract_interp::{self, AbstractState};
 use crate::callgraph::normalize_callee_name;
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo};

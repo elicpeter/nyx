@@ -1,3 +1,13 @@
+#![allow(
+    clippy::collapsible_if,
+    clippy::if_same_then_else,
+    clippy::needless_range_loop,
+    clippy::only_used_in_recursion,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::unnecessary_unwrap
+)]
+
 use crate::cfg::{Cfg, EdgeKind, StmtKind};
 use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::graph::NodeIndex;

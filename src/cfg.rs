@@ -1,3 +1,9 @@
+#![allow(
+    clippy::collapsible_if,
+    clippy::let_and_return,
+    clippy::unnecessary_map_or
+)]
+
 use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::prelude::*;
 use tracing::debug;

@@ -185,24 +185,24 @@ pub fn const_propagate(body: &SsaBody) -> ConstPropResult {
 
                     // Re-evaluate phis using this value
                     for phi in &block.phis {
-                        if let SsaOp::Phi(operands) = &phi.op {
-                            if operands.iter().any(|(_, v)| *v == val) {
-                                let old =
-                                    values.get(&phi.value).cloned().unwrap_or(ConstLattice::Top);
-                                let new_val =
-                                    eval_phi(operands, &values, &executable_edges, block_id);
-                                if new_val != old {
-                                    values.insert(phi.value, new_val);
-                                    ssa_worklist.push_back(phi.value);
-                                    changed = true;
-                                }
+                        if let SsaOp::Phi(operands) = &phi.op
+                            && operands.iter().any(|(_, v)| *v == val)
+                        {
+                            let old =
+                                values.get(&phi.value).cloned().unwrap_or(ConstLattice::Top);
+                            let new_val =
+                                eval_phi(operands, &values, &executable_edges, block_id);
+                            if new_val != old {
+                                values.insert(phi.value, new_val);
+                                ssa_worklist.push_back(phi.value);
+                                changed = true;
                             }
                         }
                     }
 
                     // Re-evaluate body instructions using this value
                     for inst in &block.body {
-                        if inst_uses(inst).iter().any(|v| *v == val) {
+                        if inst_uses(inst).contains(&val) {
                             let old = values
                                 .get(&inst.value)
                                 .cloned()

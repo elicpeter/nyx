@@ -126,7 +126,7 @@ impl BitFact {
         }
         // Only precise for singleton shift amounts
         match (shift.lo, shift.hi) {
-            (Some(lo), Some(hi)) if lo == hi && lo >= 0 && lo <= 63 => {
+            (Some(lo), Some(hi)) if lo == hi && (0..=63).contains(&lo) => {
                 let k = lo as u32;
                 Self {
                     // Known-zero bits shift up; low k bits are vacated (known zero)
@@ -150,7 +150,7 @@ impl BitFact {
             return Self::bottom();
         }
         match (shift.lo, shift.hi) {
-            (Some(lo), Some(hi)) if lo == hi && lo >= 0 && lo <= 63 => {
+            (Some(lo), Some(hi)) if lo == hi && (0..=63).contains(&lo) => {
                 let k = lo as u32;
                 let high_mask = if k == 0 { 0u64 } else { u64::MAX << (64 - k) };
 

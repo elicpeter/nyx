@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use super::dominators::{self, dominates};
 use super::rules;
 use super::{AnalysisContext, CfgAnalysis, CfgFinding, Confidence, is_entry_point_func};

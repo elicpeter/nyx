@@ -123,7 +123,7 @@ pub fn sort_key(diag: &Diag) -> impl Ord {
 /// Sort diagnostics in-place by descending attack-surface score, then by
 /// deterministic tie-breaker.  Populates `rank_score` on each `Diag`.
 pub fn rank_diags(diags: &mut [Diag]) {
-    let ranks: Vec<AttackRank> = diags.iter().map(|d| compute_attack_rank(d)).collect();
+    let ranks: Vec<AttackRank> = diags.iter().map(compute_attack_rank).collect();
     for (d, rank) in diags.iter_mut().zip(ranks.iter()) {
         d.rank_score = Some(rank.score);
         if !rank.components.is_empty() {

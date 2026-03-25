@@ -1292,7 +1292,7 @@ mod tests {
             frameworks: vec![DetectedFramework::Echo],
         };
         let rules = go::framework_rules(&ctx);
-        let extras: Vec<_> = rules.iter().map(|r| r.clone()).collect();
+        let extras = rules.to_vec();
 
         assert_eq!(
             classify("go", "c.String", Some(&extras)),
@@ -1320,7 +1320,7 @@ mod tests {
             frameworks: vec![DetectedFramework::Sinatra],
         };
         let rules = ruby::framework_rules(&ctx);
-        let extras: Vec<_> = rules.iter().map(|r| r.clone()).collect();
+        let extras = rules.to_vec();
 
         assert_eq!(
             classify("ruby", "erb", Some(&extras)),

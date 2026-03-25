@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use super::domain::{AuthLevel, ProductState, ResourceLifecycle};
 use super::engine::Transfer;
 use super::symbol::{SymbolId, SymbolInterner};

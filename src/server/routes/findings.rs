@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use crate::commands::scan::Diag;
 use crate::database::index::Indexer;
 use crate::server::app::AppState;
