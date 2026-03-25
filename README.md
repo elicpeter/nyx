@@ -465,8 +465,11 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full guidelines, including how to a
 
 ## License
 
-Nyx is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
+Nyx is licensed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)**.
 
-All modified versions must also be distributed under GPL-3.0.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
 See [LICENSE](./LICENSE) for full details.

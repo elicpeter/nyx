@@ -2892,6 +2892,7 @@ tr.selected td {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
+  flex-wrap: wrap;
 }
 .explorer-file-header-copy {
   display: flex;
@@ -2918,12 +2919,15 @@ tr.selected td {
   text-overflow: ellipsis;
 }
 .explorer-function-picker {
-  min-width: min(460px, 100%);
-  flex-shrink: 0;
+  min-width: 0;
+  width: min(460px, 100%);
+  max-width: 100%;
+  flex: 0 1 460px;
 }
 .explorer-function-picker .function-selector {
   padding: 0;
   flex-wrap: nowrap;
+  width: 100%;
 }
 .explorer-view-tabs {
   display: flex;
@@ -3436,6 +3440,7 @@ tr.selected td {
   gap: var(--space-3);
   align-items: center;
   padding: var(--space-2) 0;
+  min-width: 0;
 }
 .function-selector-path {
   display: flex;
@@ -3465,6 +3470,8 @@ tr.selected td {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
+  flex: 1 1 auto;
 }
 .function-selector-field label {
   font-size: var(--text-xs);
@@ -3475,12 +3482,26 @@ tr.selected td {
   flex-shrink: 0;
 }
 .function-selector-select {
-  min-width: 300px;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   padding: var(--space-1) var(--space-2);
   font-size: var(--text-sm);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
+}
+
+@media (max-width: 1200px) {
+  .explorer-file-header-top {
+    align-items: flex-start;
+  }
+
+  .explorer-file-header-copy,
+  .explorer-function-picker {
+    width: 100%;
+    flex-basis: 100%;
+  }
 }
 
 @media (max-width: 768px) {

@@ -1,25 +1,73 @@
 [licenses]
 allow = [
+    # --- Apache / MIT / BSD / permissive ---
     "Apache-2.0",
     "MIT",
     "MIT-0",
-    "Unicode-3.0",
-    "Unicode-DFS-2016",
-
     "BSD-2-Clause",
     "BSD-3-Clause",
-
     "ISC",
-
     "Zlib",
-    "bzip2-1.0.6",
+    "zlib-acknowledgement",
+    "BSL-1.0",
+    "NCSA",
+    "PostgreSQL",
+    "curl",
+    "BlueOak-1.0.0",
+    "X11",
+    "HPND",
+    "TCL",
+    "ICU",
+    "Info-ZIP",
 
+    # --- Unicode / data / specs ---
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+
+    # --- compression / libs ---
+    "bzip2-1.0.6",
+    "libpng",
+    "libpng-2.0",
+    "IJG",
+    "FTL",
+
+    # --- public domain style ---
     "CC0-1.0",
     "Unlicense",
+    "0BSD",
 
+    # --- weak copyleft (GPL-compatible) ---
     "MPL-2.0",
+    "LGPL-3.0",
+    "LGPL-3.0-only",
+    "LGPL-3.0-or-later",
+    "EPL-2.0",
 
+    # --- GPL family ---
     "GPL-3.0",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "GPL-2.0-or-later",
 
+    # --- Python / PSF ---
+    "PSF-2.0",
+    "Python-2.0",
+    "Python-2.0.1",
+    "Python-2.0.1+",
+
+    # --- Artistic / Perl ---
+    "Artistic-2.0",
+
+    # --- LLVM / clang ---
+    "Apache-2.0 WITH LLVM-exception",
+
+    # --- data / ML ---
     "CDLA-Permissive-2.0",
+
+    # --- fonts ---
+    "OFL-1.1",
+
+    # --- Creative Commons (code-safe ones) ---
+    "CC-BY-3.0",
+    "CC-BY-4.0",
 ]
