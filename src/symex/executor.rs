@@ -290,6 +290,7 @@ pub(super) fn explore_finding(
         points_to: pts,
         ssa,
         lang: ctx.lang,
+        const_values: ctx.const_values,
     });
     let heap_ctx_ref = heap_ctx.as_ref();
 

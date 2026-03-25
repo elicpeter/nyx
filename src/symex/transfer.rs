@@ -38,14 +38,16 @@ pub struct SymexSummaryCtx<'a> {
     pub type_facts: Option<&'a TypeFactResult>,
 }
 
-/// Context for field-sensitive heap operations during transfer (Phase 21).
+/// Context for field-sensitive heap operations during transfer (Phase 21/29).
 ///
 /// When provided, Assign and Call instructions attempt store/load operations
 /// through the symbolic heap using allocation-site identities from points-to.
+/// Phase 29: `const_values` enables per-index array slot resolution.
 pub struct SymexHeapCtx<'a> {
     pub points_to: &'a PointsToResult,
     pub ssa: &'a SsaBody,
     pub lang: Lang,
+    pub const_values: &'a std::collections::HashMap<SsaValue, ConstLattice>,
 }
 
 /// Result of resolving a callee symbolically via its summary.
@@ -187,7 +189,9 @@ pub fn transfer_inst(
                 }
             }
 
-            // Phase 21: Container store/load via symbolic heap.
+            // Phase 21/29: Container store/load via symbolic heap.
+            // Phase 29: resolve index_arg via const_values for per-index
+            // precision when the index is a known constant.
             if let Some(hctx) = heap_ctx {
                 if let Some(container_op) = classify_container_op(callee, hctx.lang) {
                     let recv_obj = receiver
@@ -196,12 +200,17 @@ pub fn transfer_inst(
                         .and_then(|pts| pts.iter().next().copied());
 
                     if let Some(obj_id) = recv_obj {
-                        let key = HeapKey {
-                            object: obj_id,
-                            field: FieldSlot::Elements,
-                        };
                         match container_op {
-                            ContainerOp::Store { ref value_args, .. } => {
+                            ContainerOp::Store { ref value_args, index_arg } => {
+                                let field = index_arg
+                                    .and_then(|pos| {
+                                        args.get(pos)
+                                            .and_then(|slot| slot.first())
+                                            .map(|&v| heap::resolve_index_slot(v, hctx.const_values))
+                                    })
+                                    .unwrap_or(FieldSlot::Elements);
+                                let key = HeapKey { object: obj_id, field };
+
                                 let val_sym = value_args
                                     .first()
                                     .and_then(|&idx| args.get(idx))
@@ -217,7 +226,16 @@ pub fn transfer_inst(
                                 state.heap_mut().store(key, val_sym, any_tainted);
                                 // Fall through to normal Call for return value
                             }
-                            ContainerOp::Load { .. } => {
+                            ContainerOp::Load { index_arg } => {
+                                let field = index_arg
+                                    .and_then(|pos| {
+                                        args.get(pos)
+                                            .and_then(|slot| slot.first())
+                                            .map(|&v| heap::resolve_index_slot(v, hctx.const_values))
+                                    })
+                                    .unwrap_or(FieldSlot::Elements);
+                                let key = HeapKey { object: obj_id, field };
+
                                 let loaded = state.heap().load(&key);
                                 if !matches!(loaded, SymbolicValue::Unknown) {
                                     state.set(inst.value, loaded);

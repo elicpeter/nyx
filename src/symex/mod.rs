@@ -222,6 +222,7 @@ fn linear_witness(
         points_to: pts,
         ssa: ctx.ssa,
         lang: ctx.lang,
+        const_values: ctx.const_values,
     });
 
     // Transfer each block in order

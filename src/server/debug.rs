@@ -1008,6 +1008,7 @@ pub fn analyse_function_symex(
         points_to: &opt.points_to,
         ssa,
         lang,
+        const_values: &opt.const_values,
     };
 
     // BFS over blocks from entry to cover all reachable blocks.
