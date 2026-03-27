@@ -1,0 +1,25 @@
+{
+  "description": "Taint flows through Python lambda parameter into os.system sink",
+  "tags": [
+    "taint",
+    "cmdi",
+    "lambda",
+    "python"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        6
+      ],
+      "evidence_contains": [],
+      "notes": "input() flows through lambda cmd parameter into os.system"
+    }
+  ]
+}

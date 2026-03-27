@@ -1072,6 +1072,12 @@ fn rename_variables(
             }
         } else {
             // More than 2 successors — use Goto to first (shouldn't happen in practice)
+            tracing::warn!(
+                block = block_idx,
+                num_succs = succs.len(),
+                "block has {} successors, collapsing to Goto(first) — paths may be lost",
+                succs.len()
+            );
             Terminator::Goto(BlockId(succs[0] as u32))
         };
 
@@ -1659,5 +1665,70 @@ mod tests {
             preds: smallvec::smallvec![],
             succs: smallvec::smallvec![BlockId(1)],
         }, block], &block_preds);
+    }
+
+    #[test]
+    fn three_successor_collapse_produces_goto() {
+        // Build a CFG where a single node has 3 successors (unusual but possible
+        // via manual graph construction). The lowering should collapse to Goto(first).
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let branch = cfg.add_node(make_node(StmtKind::If));
+        let s0 = cfg.add_node(make_node(StmtKind::Seq));
+        let s1 = cfg.add_node(make_node(StmtKind::Seq));
+        let s2 = cfg.add_node(make_node(StmtKind::Seq));
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, branch, EdgeKind::Seq);
+        cfg.add_edge(branch, s0, EdgeKind::True);
+        cfg.add_edge(branch, s1, EdgeKind::False);
+        cfg.add_edge(branch, s2, EdgeKind::Seq);
+        cfg.add_edge(s0, exit, EdgeKind::Seq);
+        cfg.add_edge(s1, exit, EdgeKind::Seq);
+        cfg.add_edge(s2, exit, EdgeKind::Seq);
+
+        // Should not panic — graceful fallback to Goto
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+        assert!(!ssa.blocks.is_empty());
+
+        // The block corresponding to the 3-successor node should have a Goto terminator
+        // (collapsed from 3 successors), not a Branch
+        let has_goto = ssa.blocks.iter().any(|b| matches!(b.terminator, Terminator::Goto(_)));
+        assert!(
+            has_goto,
+            "3-successor collapse should produce a Goto terminator"
+        );
+    }
+
+    #[test]
+    fn normal_two_successor_produces_branch() {
+        // Regression: normal 2-successor case should still produce Branch
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let if_node = cfg.add_node(make_node(StmtKind::If));
+        let t = cfg.add_node(NodeInfo {
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            ..make_node(StmtKind::Seq)
+        });
+        let f = cfg.add_node(NodeInfo {
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, if_node, EdgeKind::Seq);
+        cfg.add_edge(if_node, t, EdgeKind::True);
+        cfg.add_edge(if_node, f, EdgeKind::False);
+        cfg.add_edge(t, exit, EdgeKind::Seq);
+        cfg.add_edge(f, exit, EdgeKind::Seq);
+
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+        let has_branch = ssa.blocks.iter().any(|b| {
+            matches!(b.terminator, Terminator::Branch { .. })
+        });
+        assert!(
+            has_branch,
+            "normal 2-successor case must produce Branch, not Goto"
+        );
     }
 }

@@ -84,10 +84,13 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
         in_worklist.remove(&node);
         iterations += 1;
         if iterations > budget {
-            converged = !transfer.on_budget_exceeded();
-            if !converged {
+            let should_continue = transfer.on_budget_exceeded();
+            if !should_continue {
+                converged = false;
                 break;
             }
+            // Budget exceeded but transfer requested continuation — mark non-converged
+            converged = false;
         }
 
         let node_state = match states.get(&node) {
@@ -304,6 +307,135 @@ mod tests {
             exit_state.resource.get(sym_f),
             ResourceLifecycle::OPEN | ResourceLifecycle::CLOSED
         );
+    }
+
+    // ── Budget / on_budget_exceeded tests ──────────────────────────────────
+
+    /// Minimal lattice for budget tests.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct UnitState;
+
+    impl Lattice for UnitState {
+        fn bot() -> Self {
+            UnitState
+        }
+        fn join(&self, _other: &Self) -> Self {
+            UnitState
+        }
+        fn leq(&self, _other: &Self) -> bool {
+            true
+        }
+    }
+
+    /// Transfer that always bails on budget (returns false).
+    struct BailTransfer;
+
+    impl Transfer<UnitState> for BailTransfer {
+        type Event = ();
+
+        fn apply(
+            &self,
+            _node: NodeIndex,
+            _info: &NodeInfo,
+            _edge: Option<EdgeKind>,
+            state: UnitState,
+        ) -> (UnitState, Vec<()>) {
+            (state, vec![])
+        }
+
+        fn iteration_budget(&self) -> usize {
+            2 // very small budget
+        }
+
+        fn on_budget_exceeded(&self) -> bool {
+            false // bail
+        }
+    }
+
+    /// Transfer that continues on budget (returns true).
+    struct ContinueTransfer;
+
+    impl Transfer<UnitState> for ContinueTransfer {
+        type Event = ();
+
+        fn apply(
+            &self,
+            _node: NodeIndex,
+            _info: &NodeInfo,
+            _edge: Option<EdgeKind>,
+            state: UnitState,
+        ) -> (UnitState, Vec<()>) {
+            (state, vec![])
+        }
+
+        fn iteration_budget(&self) -> usize {
+            2
+        }
+
+        fn on_budget_exceeded(&self) -> bool {
+            true // keep going
+        }
+    }
+
+    fn make_chain_cfg() -> (Cfg, NodeIndex) {
+        // Entry → A → B → C → Exit (4 iterations for the worklist)
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let a = cfg.add_node(make_node(StmtKind::Seq));
+        let b = cfg.add_node(make_node(StmtKind::Seq));
+        let c = cfg.add_node(make_node(StmtKind::Seq));
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+        cfg.add_edge(entry, a, EdgeKind::Seq);
+        cfg.add_edge(a, b, EdgeKind::Seq);
+        cfg.add_edge(b, c, EdgeKind::Seq);
+        cfg.add_edge(c, exit, EdgeKind::Seq);
+        (cfg, entry)
+    }
+
+    #[test]
+    fn budget_exceeded_bail_stops_immediately_and_marks_non_converged() {
+        let (cfg, entry) = make_chain_cfg();
+        let result = run_forward(&cfg, entry, &BailTransfer, UnitState);
+
+        // Must NOT be converged when on_budget_exceeded returns false
+        assert!(!result.converged, "bail transfer must mark converged=false");
+    }
+
+    #[test]
+    fn budget_exceeded_continue_marks_non_converged() {
+        let (cfg, entry) = make_chain_cfg();
+        let result = run_forward(&cfg, entry, &ContinueTransfer, UnitState);
+
+        // Even when continuing past budget, converged must be false
+        assert!(
+            !result.converged,
+            "continue-past-budget must still mark converged=false"
+        );
+    }
+
+    #[test]
+    fn within_budget_marks_converged() {
+        // Use a generous budget so the analysis converges normally
+        struct GenerousTransfer;
+        impl Transfer<UnitState> for GenerousTransfer {
+            type Event = ();
+            fn apply(
+                &self,
+                _node: NodeIndex,
+                _info: &NodeInfo,
+                _edge: Option<EdgeKind>,
+                state: UnitState,
+            ) -> (UnitState, Vec<()>) {
+                (state, vec![])
+            }
+            fn iteration_budget(&self) -> usize {
+                100_000
+            }
+        }
+
+        let (cfg, entry) = make_chain_cfg();
+        let result = run_forward(&cfg, entry, &GenerousTransfer, UnitState);
+        assert!(result.converged, "within-budget analysis should converge");
     }
 
     #[test]

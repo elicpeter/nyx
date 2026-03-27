@@ -272,6 +272,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "with_clause"           => Kind::Block,
     "with_item"             => Kind::CallWrapper,
     "function_definition"   => Kind::Function,
+    "lambda"                => Kind::Function,
     "try_statement"         => Kind::Try,
     "except_clause"         => Kind::Block,
     "finally_clause"        => Kind::Block,
@@ -316,4 +317,28 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
     }
 
     rules
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KINDS;
+    use crate::labels::Kind;
+
+    #[test]
+    fn lambda_classified_as_function() {
+        assert_eq!(KINDS.get("lambda"), Some(&Kind::Function));
+    }
+
+    #[test]
+    fn function_definition_classified_as_function() {
+        assert_eq!(KINDS.get("function_definition"), Some(&Kind::Function));
+    }
+
+    #[test]
+    fn lambda_distinct_from_other_kinds() {
+        // Ensure lambda doesn't accidentally map to Block or Other
+        let kind = KINDS.get("lambda").unwrap();
+        assert_ne!(*kind, Kind::Block);
+        assert_ne!(*kind, Kind::Other);
+    }
 }

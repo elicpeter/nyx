@@ -73,11 +73,15 @@ fn is_dead(inst: &SsaInst, use_counts: &HashMap<SsaValue, usize>, cfg: &Cfg) -> 
         _ => {}
     }
 
-    // Never remove instructions whose CFG node has Sink labels
-    if cfg
-        .node_weight(inst.cfg_node)
-        .is_some_and(|info| info.taint.labels.iter().any(|l| matches!(l, DataLabel::Sink(_))))
-    {
+    // Never remove instructions whose CFG node has Sink, Source, or Sanitizer labels
+    if cfg.node_weight(inst.cfg_node).is_some_and(|info| {
+        info.taint.labels.iter().any(|l| {
+            matches!(
+                l,
+                DataLabel::Sink(_) | DataLabel::Source(_) | DataLabel::Sanitizer(_)
+            )
+        })
+    }) {
         return false;
     }
 
@@ -170,6 +174,172 @@ mod tests {
         assert_eq!(body.blocks[0].body.len(), 1);
         // Source survives
         assert!(matches!(body.blocks[0].body[0].op, SsaOp::Source));
+    }
+
+    #[test]
+    fn dead_sanitizer_label_preserved() {
+        // v0 has a Sanitizer label on its CFG node — must survive even if unused
+        use crate::labels::{Cap, DataLabel};
+
+        let mut cfg: Cfg = Graph::new();
+        let n0 = cfg.add_node(NodeInfo {
+            taint: crate::cfg::TaintMeta {
+                labels: smallvec::smallvec![DataLabel::Sanitizer(Cap::HTML_ESCAPE)],
+                ..Default::default()
+            },
+            ..make_cfg_node(StmtKind::Seq)
+        });
+
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::Assign(SmallVec::new()),
+                    cfg_node: n0,
+                    var_name: Some("sanitized".into()),
+                    span: (0, 5),
+                }],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![ValueDef {
+                var_name: Some("sanitized".into()),
+                cfg_node: n0,
+                block: BlockId(0),
+            }],
+            cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
+            exception_edges: vec![],
+        };
+
+        let removed = eliminate_dead_defs(&mut body, &cfg);
+        assert_eq!(removed, 0, "Sanitizer-labeled instruction must not be removed");
+        assert_eq!(body.blocks[0].body.len(), 1);
+    }
+
+    #[test]
+    fn dead_source_label_preserved() {
+        // v0 has a Source label on its CFG node — must survive even if unused
+        use crate::labels::{Cap, DataLabel};
+
+        let mut cfg: Cfg = Graph::new();
+        let n0 = cfg.add_node(NodeInfo {
+            taint: crate::cfg::TaintMeta {
+                labels: smallvec::smallvec![DataLabel::Source(Cap::all())],
+                ..Default::default()
+            },
+            ..make_cfg_node(StmtKind::Seq)
+        });
+
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::Assign(SmallVec::new()),
+                    cfg_node: n0,
+                    var_name: Some("src".into()),
+                    span: (0, 3),
+                }],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![ValueDef {
+                var_name: Some("src".into()),
+                cfg_node: n0,
+                block: BlockId(0),
+            }],
+            cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
+            exception_edges: vec![],
+        };
+
+        let removed = eliminate_dead_defs(&mut body, &cfg);
+        assert_eq!(removed, 0, "Source-labeled instruction must not be removed");
+    }
+
+    #[test]
+    fn dead_sink_label_still_preserved() {
+        // Regression: Sink-labeled dead instructions must still be kept
+        use crate::labels::{Cap, DataLabel};
+
+        let mut cfg: Cfg = Graph::new();
+        let n0 = cfg.add_node(NodeInfo {
+            taint: crate::cfg::TaintMeta {
+                labels: smallvec::smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+                ..Default::default()
+            },
+            ..make_cfg_node(StmtKind::Seq)
+        });
+
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::Assign(SmallVec::new()),
+                    cfg_node: n0,
+                    var_name: Some("q".into()),
+                    span: (0, 2),
+                }],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![ValueDef {
+                var_name: Some("q".into()),
+                cfg_node: n0,
+                block: BlockId(0),
+            }],
+            cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
+            exception_edges: vec![],
+        };
+
+        let removed = eliminate_dead_defs(&mut body, &cfg);
+        assert_eq!(removed, 0, "Sink-labeled instruction must not be removed");
+    }
+
+    #[test]
+    fn dead_unlabeled_assign_still_removed() {
+        // Negative test: unlabeled dead assignments must still be eliminated
+        let mut cfg: Cfg = Graph::new();
+        let n0 = cfg.add_node(make_cfg_node(StmtKind::Seq));
+
+        let mut body = SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::Assign(SmallVec::new()),
+                    cfg_node: n0,
+                    var_name: Some("dead".into()),
+                    span: (0, 4),
+                }],
+                terminator: Terminator::Return(None),
+                preds: SmallVec::new(),
+                succs: SmallVec::new(),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![ValueDef {
+                var_name: Some("dead".into()),
+                cfg_node: n0,
+                block: BlockId(0),
+            }],
+            cfg_node_map: [(n0, SsaValue(0))].into_iter().collect(),
+            exception_edges: vec![],
+        };
+
+        let removed = eliminate_dead_defs(&mut body, &cfg);
+        assert_eq!(removed, 1, "unlabeled dead assignment must be removed");
+        assert!(body.blocks[0].body.is_empty());
     }
 
     #[test]
