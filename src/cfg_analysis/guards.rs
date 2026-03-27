@@ -25,14 +25,14 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
         return true;
     }
     let sink_info = &ctx.cfg[sink];
-    let callee_desc = sink_info.callee.as_deref().unwrap_or("");
+    let callee_desc = sink_info.call.callee.as_deref().unwrap_or("");
     // Split callee description into parts and strip parenthesized arg portions.
     // e.g. `exec.Command("echo", "health-ok").Run` → ["exec", "Command", "Run"]
     let callee_parts: Vec<&str> = callee_desc
         .split(['.', ':'])
         .map(|p| p.split('(').next().unwrap_or(p))
         .collect();
-    let sink_func = sink_info.enclosing_func.as_deref();
+    let sink_func = sink_info.ast.enclosing_func.as_deref();
 
     // Collect parameter names for the enclosing function — parameters are not
     // user-controlled constants but they're not externally tainted either, so
@@ -40,11 +40,11 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let param_names: Vec<&str> = ctx
         .func_summaries
         .values()
-        .filter(|s| ctx.cfg[s.entry].enclosing_func.as_deref() == sink_func)
+        .filter(|s| ctx.cfg[s.entry].ast.enclosing_func.as_deref() == sink_func)
         .flat_map(|s| s.param_names.iter().map(|p| p.as_str()))
         .collect();
 
-    sink_info.uses.iter().all(|u| {
+    sink_info.taint.uses.iter().all(|u| {
         // Part of the callee name itself → constant
         // Check both individual parts and the full dotted callee path
         if callee_parts.contains(&u.as_str()) || u == callee_desc {
@@ -57,15 +57,15 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
         // One-hop trace: find the defining node in the same function
         for idx in ctx.cfg.node_indices() {
             let info = &ctx.cfg[idx];
-            if info.enclosing_func.as_deref() != sink_func {
+            if info.ast.enclosing_func.as_deref() != sink_func {
                 continue;
             }
-            if info.defines.as_deref() == Some(u.as_str()) {
+            if info.taint.defines.as_deref() == Some(u.as_str()) {
                 // If the defining node has no uses (pure constant) and is not
                 // a Source, the variable is constant.
-                if info.uses.is_empty()
+                if info.taint.uses.is_empty()
                     && !info
-                        .labels
+                        .taint.labels
                         .iter()
                         .any(|l| matches!(l, DataLabel::Source(_)))
                 {
@@ -143,7 +143,7 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
         if info.kind != StmtKind::Call {
             continue;
         }
-        if let Some(callee) = &info.callee {
+        if let Some(callee) = &info.call.callee {
             // Check config sanitizer rules first
             if let Some(cap) = match_config_sanitizer(callee, config_rules) {
                 result.push((idx, cap));
@@ -181,10 +181,10 @@ fn taint_confirms_sink(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
 /// Source node in the same function (via simple def-use chain).
 fn sink_arg_is_source_derived(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let sink_info = &ctx.cfg[sink];
-    let sink_func = sink_info.enclosing_func.as_deref();
+    let sink_func = sink_info.ast.enclosing_func.as_deref();
 
     // Collect all variables the sink reads
-    let sink_uses = &sink_info.uses;
+    let sink_uses = &sink_info.taint.uses;
     if sink_uses.is_empty() {
         return false;
     }
@@ -193,18 +193,18 @@ fn sink_arg_is_source_derived(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     // one of the variables the sink uses.
     for idx in ctx.cfg.node_indices() {
         let info = &ctx.cfg[idx];
-        if info.enclosing_func.as_deref() != sink_func {
+        if info.ast.enclosing_func.as_deref() != sink_func {
             continue;
         }
         if !info
-            .labels
+            .taint.labels
             .iter()
             .any(|l| matches!(l, DataLabel::Source(_)))
         {
             continue;
         }
         // Source node defines a variable that the sink reads → source-derived
-        if let Some(def) = &info.defines
+        if let Some(def) = &info.taint.defines
             && sink_uses.iter().any(|u| u == def)
         {
             return true;
@@ -217,9 +217,9 @@ fn sink_arg_is_source_derived(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
 /// (i.e. this function is a thin wrapper around the sink).
 fn sink_arg_is_parameter_only(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let sink_info = &ctx.cfg[sink];
-    let sink_func = sink_info.enclosing_func.as_deref();
+    let sink_func = sink_info.ast.enclosing_func.as_deref();
 
-    let sink_uses = &sink_info.uses;
+    let sink_uses = &sink_info.taint.uses;
     if sink_uses.is_empty() {
         // No identifiable arguments — could be a constant call like Command::new("ls")
         return true; // treat as non-dangerous (constant arg)
@@ -231,7 +231,7 @@ fn sink_arg_is_parameter_only(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
         .values()
         .filter(|s| {
             // Match by function entry being in the same function
-            ctx.cfg[s.entry].enclosing_func.as_deref() == sink_func
+            ctx.cfg[s.entry].ast.enclosing_func.as_deref() == sink_func
         })
         .flat_map(|s| s.param_names.iter().map(|p| p.as_str()))
         .collect();
@@ -247,7 +247,7 @@ fn sink_arg_is_parameter_only(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
 /// Check if the enclosing function qualifies as an entrypoint.
 fn sink_in_entrypoint(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let sink_info = &ctx.cfg[sink];
-    if let Some(func_name) = &sink_info.enclosing_func {
+    if let Some(func_name) = &sink_info.ast.enclosing_func {
         is_entry_point_func(func_name, ctx.lang)
     } else {
         false
@@ -268,7 +268,7 @@ impl CfgAnalysis for UnguardedSink {
 
         for sink in &sink_nodes {
             let sink_info = &ctx.cfg[*sink];
-            let sink_caps = sink_info.labels.iter().fold(Cap::empty(), |acc, l| {
+            let sink_caps = sink_info.taint.labels.iter().fold(Cap::empty(), |acc, l| {
                 if let DataLabel::Sink(caps) = l {
                     acc | *caps
                 } else {
@@ -279,12 +279,12 @@ impl CfgAnalysis for UnguardedSink {
                 continue;
             }
 
-            let sink_func = sink_info.enclosing_func.as_deref();
+            let sink_func = sink_info.ast.enclosing_func.as_deref();
 
             // Check: does any applicable guard dominate this sink?
             // Guards must be in the same function to be relevant.
             let is_guarded = guard_nodes.iter().any(|(guard_idx, guard_caps)| {
-                let guard_func = ctx.cfg[*guard_idx].enclosing_func.as_deref();
+                let guard_func = ctx.cfg[*guard_idx].ast.enclosing_func.as_deref();
                 (*guard_caps & sink_caps) != Cap::empty()
                     && guard_func == sink_func
                     && dominates(&doms, *guard_idx, *sink)
@@ -292,8 +292,8 @@ impl CfgAnalysis for UnguardedSink {
 
             // Also check if an inline sanitizer dominates this sink (same function).
             let has_sanitizer = ctx.cfg.node_indices().any(|idx| {
-                let node_func = ctx.cfg[idx].enclosing_func.as_deref();
-                ctx.cfg[idx].labels.iter().any(|l| {
+                let node_func = ctx.cfg[idx].ast.enclosing_func.as_deref();
+                ctx.cfg[idx].taint.labels.iter().any(|l| {
                     if let DataLabel::Sanitizer(san_caps) = l {
                         (*san_caps & sink_caps) != Cap::empty()
                             && node_func == sink_func
@@ -322,7 +322,7 @@ impl CfgAnalysis for UnguardedSink {
                 continue;
             }
 
-            let callee_desc = sink_info.callee.as_deref().unwrap_or("(unknown sink)");
+            let callee_desc = sink_info.call.callee.as_deref().unwrap_or("(unknown sink)");
 
             // ── Severity classification ───────────────────────────────
             //
@@ -367,7 +367,7 @@ impl CfgAnalysis for UnguardedSink {
                 title: "Unguarded sink".to_string(),
                 severity,
                 confidence,
-                span: sink_info.span,
+                span: sink_info.ast.span,
                 message: format!("Sink `{callee_desc}` has no dominating guard or sanitizer"),
                 evidence: vec![*sink],
                 score: None,

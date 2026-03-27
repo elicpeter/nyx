@@ -85,8 +85,8 @@ fn lower_to_ssa_inner(
         let in_scope = |node: NodeIndex| -> bool {
             let info = &cfg[node];
             match scope {
-                None => info.enclosing_func.is_none(),
-                Some(name) => info.enclosing_func.as_deref() == Some(name),
+                None => info.ast.enclosing_func.is_none(),
+                Some(name) => info.ast.enclosing_func.as_deref() == Some(name),
             }
         };
         reachable
@@ -217,8 +217,8 @@ fn collect_reachable(
         }
         let info = &cfg[node];
         match scope {
-            None => info.enclosing_func.is_none(),
-            Some(name) => info.enclosing_func.as_deref() == Some(name),
+            None => info.ast.enclosing_func.is_none(),
+            Some(name) => info.ast.enclosing_func.as_deref() == Some(name),
         }
     };
 
@@ -477,7 +477,7 @@ fn identify_external_uses(
     let mut used: HashSet<String> = HashSet::new();
     for nodes in blocks_nodes {
         for &node in nodes {
-            for u in &cfg[node].uses {
+            for u in &cfg[node].taint.uses {
                 used.insert(u.clone());
             }
         }
@@ -531,7 +531,7 @@ fn collect_var_defs(
             if nop_nodes.contains(&node) {
                 continue;
             }
-            if let Some(ref d) = cfg[node].defines {
+            if let Some(ref d) = cfg[node].taint.defines {
                 defs.entry(d.clone()).or_default().insert(block_idx);
                 // Register parent prefixes for synthetic base updates on field writes.
                 // E.g. `obj.data` also registers `obj` so phi insertion works correctly.
@@ -542,19 +542,19 @@ fn collect_var_defs(
                 }
             }
             // Register extra defines from destructuring patterns.
-            for ed in &cfg[node].extra_defines {
+            for ed in &cfg[node].taint.extra_defines {
                 defs.entry(ed.clone()).or_default().insert(block_idx);
             }
             // Implicit definitions for uninitialized declarations (e.g., C/C++
             // `char buf[256]`).  The variable appears in uses but not defines
             // because def_use() doesn't treat declarations without initializers
             // as definitions.  Registering here ensures phi insertion at join points.
-            if cfg[node].defines.is_none()
-                && cfg[node].callee.is_none()
+            if cfg[node].taint.defines.is_none()
+                && cfg[node].call.callee.is_none()
                 && cfg[node].kind == StmtKind::Seq
-                && cfg[node].uses.len() == 1
+                && cfg[node].taint.uses.len() == 1
             {
-                defs.entry(cfg[node].uses[0].clone())
+                defs.entry(cfg[node].taint.uses[0].clone())
                     .or_default()
                     .insert(block_idx);
             }
@@ -668,7 +668,7 @@ fn rename_variables(
                 op: SsaOp::Phi(SmallVec::new()),
                 cfg_node,
                 var_name: Some(var.clone()),
-                span: cfg[cfg_node].span,
+                span: cfg[cfg_node].ast.span,
             });
         }
     }
@@ -712,17 +712,17 @@ fn rename_variables(
         for &node in &blocks_nodes[block_idx] {
             let info = &cfg[node];
 
-            // Helper: build Call args from arg_uses, falling back to info.uses
+            // Helper: build Call args from arg_uses, falling back to info.taint.uses
             let build_call_args = |info: &crate::cfg::NodeInfo,
                                    var_stacks: &HashMap<String, Vec<SsaValue>>|
              -> (Vec<SmallVec<[SsaValue; 2]>>, Option<SsaValue>) {
                 let receiver = info
-                    .receiver
+                    .call.receiver
                     .as_ref()
                     .and_then(|r| var_stacks.get(r).and_then(|s| s.last().copied()));
-                let args = if !info.arg_uses.is_empty() {
+                let args = if !info.call.arg_uses.is_empty() {
                     let mut args: Vec<SmallVec<[SsaValue; 2]>> = info
-                        .arg_uses
+                        .call.arg_uses
                         .iter()
                         .map(|arg_idents| {
                             arg_idents
@@ -735,15 +735,15 @@ fn rename_variables(
                         .collect();
                     // For chained calls (e.g. fetch(url).then(fn)), arg_uses only
                     // captures the final call's args. Variables used by intermediate
-                    // calls (like `url` in fetch) are in info.uses but not arg_uses.
+                    // calls (like `url` in fetch) are in info.taint.uses but not arg_uses.
                     // Add them as an extra group so sink detection can see them.
                     let arg_uses_flat: HashSet<&str> = info
-                        .arg_uses
+                        .call.arg_uses
                         .iter()
                         .flat_map(|g| g.iter().map(|s| s.as_str()))
                         .collect();
                     let implicit: SmallVec<[SsaValue; 2]> = info
-                        .uses
+                        .taint.uses
                         .iter()
                         .filter(|u| !arg_uses_flat.contains(u.as_str()))
                         .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
@@ -755,7 +755,7 @@ fn rename_variables(
                 } else {
                     // Fallback: treat all uses as a single argument group
                     let all_uses: SmallVec<[SsaValue; 2]> = info
-                        .uses
+                        .taint.uses
                         .iter()
                         .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
                         .collect();
@@ -776,27 +776,27 @@ fn rename_variables(
             } else if info.catch_param {
                 SsaOp::CatchParam
             } else if info
-                .labels
+                .taint.labels
                 .iter()
                 .any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
-                && info.callee.is_none()
+                && info.call.callee.is_none()
             {
                 // Pure source (e.g. $_GET, env var) — no callee, so no args to track.
                 // Source-labeled calls (e.g. file_get_contents) fall through to Call
                 // so argument taint and sink detection still work.
                 SsaOp::Source
-            } else if info.callee.is_some() {
-                let callee = info.callee.as_deref().unwrap_or("").to_string();
+            } else if info.call.callee.is_some() {
+                let callee = info.call.callee.as_deref().unwrap_or("").to_string();
                 let (args, receiver) = build_call_args(info, var_stacks);
                 SsaOp::Call {
                     callee,
                     args,
                     receiver,
                 }
-            } else if info.defines.is_some()
-                && info.uses.is_empty()
+            } else if info.taint.defines.is_some()
+                && info.taint.uses.is_empty()
                 && !info
-                    .labels
+                    .taint.labels
                     .iter()
                     .any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
             {
@@ -805,10 +805,10 @@ fn rename_variables(
                 // assignment.  SSA rename allocates a fresh SsaValue, so
                 // downstream references see this new (untainted) value — the
                 // prior tainted definition is implicitly dead.
-                SsaOp::Const(info.const_text.clone())
-            } else if info.defines.is_some() {
+                SsaOp::Const(info.taint.const_text.clone())
+            } else if info.taint.defines.is_some() {
                 let mut uses: SmallVec<[SsaValue; 4]> = info
-                    .uses
+                    .taint.uses
                     .iter()
                     .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
                     .collect();
@@ -826,7 +826,7 @@ fn rename_variables(
                         op: SsaOp::Const(Some(const_val.to_string())),
                         cfg_node: node,
                         var_name: None,
-                        span: info.span,
+                        span: info.ast.span,
                     };
                     ssa_blocks[block_idx].body.push(const_inst);
                     value_defs.push(ValueDef {
@@ -848,8 +848,8 @@ fn rename_variables(
                     | StmtKind::Return
             ) {
                 SsaOp::Nop
-            } else if info.callee.is_some() {
-                let callee = info.callee.as_deref().unwrap_or("").to_string();
+            } else if info.call.callee.is_some() {
+                let callee = info.call.callee.as_deref().unwrap_or("").to_string();
                 let (args, receiver) = build_call_args(info, var_stacks);
                 SsaOp::Call {
                     callee,
@@ -865,18 +865,18 @@ fn rename_variables(
             *next_value += 1;
             let var_name_for_ssa = if nop_nodes.contains(&node) {
                 None
-            } else if info.defines.is_some() {
-                info.defines.clone()
+            } else if info.taint.defines.is_some() {
+                info.taint.defines.clone()
             } else if info.kind == StmtKind::Seq
-                && info.callee.is_none()
-                && info.uses.len() == 1
-                && !var_stacks.contains_key(&info.uses[0])
+                && info.call.callee.is_none()
+                && info.taint.uses.len() == 1
+                && !var_stacks.contains_key(&info.taint.uses[0])
             {
                 // Implicit definition for uninitialized declarations (e.g.,
                 // C/C++ `char buf[256]`).  Creates a reaching definition so
                 // output-parameter sources like fgets() can taint the buffer
                 // and subsequent uses (e.g., system(buf)) see the tainted value.
-                Some(info.uses[0].clone())
+                Some(info.taint.uses[0].clone())
             } else {
                 None
             };
@@ -894,7 +894,7 @@ fn rename_variables(
             cfg_node_map.insert(node, v);
 
             // Clone op for potential extra_defines before moving into SsaInst
-            let primary_op_for_extras = if info.extra_defines.is_empty() {
+            let primary_op_for_extras = if info.taint.extra_defines.is_empty() {
                 None
             } else {
                 Some(op.clone())
@@ -904,7 +904,7 @@ fn rename_variables(
                 op,
                 cfg_node: node,
                 var_name: var_name_for_ssa.clone(),
-                span: info.span,
+                span: info.ast.span,
             });
 
             // Synthetic base update: when a dotted path is defined (e.g. `obj.data`),
@@ -914,7 +914,7 @@ fn rename_variables(
             // overwrites properly kill taint: if obj.data is re-assigned to a
             // constant, the base `obj` no longer carries that field's taint.
             if !nop_nodes.contains(&node) {
-                if let Some(ref d) = info.defines {
+                if let Some(ref d) = info.taint.defines {
                     let mut current = d.as_str();
                     let mut child_value = v;
                     while let Some(dot_pos) = current.rfind('.') {
@@ -937,7 +937,7 @@ fn rename_variables(
                             op: SsaOp::Assign(synth_uses),
                             cfg_node: node,
                             var_name: Some(parent.to_string()),
-                            span: info.span,
+                            span: info.ast.span,
                         });
                         child_value = synth_v;
                         current = parent;
@@ -948,7 +948,7 @@ fn rename_variables(
             // Emit extra SSA instructions for destructuring bindings.
             // Each extra define inherits the same op (Source/Call/Assign) as the primary.
             if let Some(ref primary_op) = primary_op_for_extras {
-                for extra_def in &info.extra_defines {
+                for extra_def in &info.taint.extra_defines {
                     let ev = SsaValue(*next_value);
                     *next_value += 1;
                     value_defs.push(ValueDef {
@@ -962,7 +962,7 @@ fn rename_variables(
                         op: primary_op.clone(),
                         cfg_node: node,
                         var_name: Some(extra_def.clone()),
-                        span: info.span,
+                        span: info.ast.span,
                     });
                 }
             }
@@ -979,7 +979,7 @@ fn rename_variables(
             // often follows Return in the same block.
             let has_const_return = blocks_nodes[block_idx].iter().any(|&n| {
                 let info = &cfg[n];
-                info.kind == StmtKind::Return && info.uses.is_empty()
+                info.kind == StmtKind::Return && info.taint.uses.is_empty()
             });
 
             if has_const_return {
@@ -1001,7 +1001,7 @@ fn rename_variables(
                     op: SsaOp::Const(None),
                     cfg_node: last_node,
                     var_name: None,
-                    span: last_info.span,
+                    span: last_info.ast.span,
                 });
                 Terminator::Return(Some(const_v))
             } else {
@@ -1263,37 +1263,13 @@ fn debug_assert_phi_operand_counts(ssa_blocks: &[SsaBlock], block_preds: &[Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cfg::{EdgeKind, NodeInfo, StmtKind};
+    use crate::cfg::{EdgeKind, NodeInfo, StmtKind, TaintMeta};
     use petgraph::Graph;
-    use smallvec::SmallVec;
 
     fn make_node(kind: StmtKind) -> NodeInfo {
         NodeInfo {
             kind,
-            span: (0, 0),
-            labels: SmallVec::new(),
-            defines: None,
-            extra_defines: vec![],
-            uses: vec![],
-            callee: None,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            ..Default::default()
         }
     }
 
@@ -1303,12 +1279,11 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let n1 = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let n2 = cfg.add_node(NodeInfo {
-            defines: Some("y".into()),
-            uses: vec!["x".into()],
+            taint: TaintMeta { defines: Some("y".into()), uses: vec!["x".into()], ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1333,16 +1308,16 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let def_x = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let if_node = cfg.add_node(make_node(StmtKind::If));
         let true_node = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let false_node = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let join = cfg.add_node(make_node(StmtKind::Seq));
@@ -1384,13 +1359,12 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let def_x = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let loop_header = cfg.add_node(make_node(StmtKind::Loop));
         let body = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
-            uses: vec!["x".into()],
+            taint: TaintMeta { defines: Some("x".into()), uses: vec!["x".into()], ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1424,15 +1398,15 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let n1 = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let n2 = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let n3 = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1474,12 +1448,11 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let a = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let b = cfg.add_node(NodeInfo {
-            defines: Some("y".into()),
-            uses: vec!["x".into()],
+            taint: TaintMeta { defines: Some("y".into()), uses: vec!["x".into()], ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1499,16 +1472,16 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let def_x = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let if_node = cfg.add_node(make_node(StmtKind::If));
         let true_node = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let false_node = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let join = cfg.add_node(make_node(StmtKind::Seq));
@@ -1549,13 +1522,12 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let def_x = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let loop_h = cfg.add_node(make_node(StmtKind::Loop));
         let body = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
-            uses: vec!["x".into()],
+            taint: TaintMeta { defines: Some("x".into()), uses: vec!["x".into()], ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1578,12 +1550,12 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let body = cfg.add_node(NodeInfo {
-            defines: Some("x".into()),
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let catch = cfg.add_node(NodeInfo {
             catch_param: true,
-            defines: Some("e".into()),
+            taint: TaintMeta { defines: Some("e".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1606,15 +1578,15 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let if_node = cfg.add_node(make_node(StmtKind::If));
         let t = cfg.add_node(NodeInfo {
-            defines: Some("v".into()),
+            taint: TaintMeta { defines: Some("v".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let f = cfg.add_node(NodeInfo {
-            defines: Some("v".into()),
+            taint: TaintMeta { defines: Some("v".into()), ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let join = cfg.add_node(NodeInfo {
-            uses: vec!["v".into()],
+            taint: TaintMeta { uses: vec!["v".into()], ..Default::default() },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));

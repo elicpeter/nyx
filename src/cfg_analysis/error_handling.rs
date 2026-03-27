@@ -89,7 +89,7 @@ fn find_post_if_sinks(cfg: &crate::cfg::Cfg, if_node: NodeIndex) -> Vec<NodeInde
         }
 
         let info = &cfg[current];
-        if is_sink(info) || (info.kind == StmtKind::Call && info.callee.is_some()) {
+        if is_sink(info) || (info.kind == StmtKind::Call && info.call.callee.is_some()) {
             sinks_after.push(current);
         }
 
@@ -122,7 +122,7 @@ impl CfgAnalysis for IncompleteErrorHandling {
                 continue;
             }
 
-            let mentions_err = info.uses.iter().any(|u| {
+            let mentions_err = info.taint.uses.iter().any(|u| {
                 let lower = u.to_ascii_lowercase();
                 lower == "err" || lower == "error" || lower.contains("err")
             });
@@ -146,7 +146,7 @@ impl CfgAnalysis for IncompleteErrorHandling {
                     title: "Error check without return".to_string(),
                     severity: Severity::Medium,
                     confidence: Confidence::Medium,
-                    span: info.span,
+                    span: info.ast.span,
                     message: "Error check does not terminate on error; \
                               execution falls through to dangerous operations"
                         .to_string(),

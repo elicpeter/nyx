@@ -108,10 +108,10 @@ impl SymbolInterner {
     pub fn from_cfg(cfg: &Cfg) -> Self {
         let mut interner = Self::new();
         for (_idx, info) in cfg.node_references() {
-            if let Some(ref d) = info.defines {
+            if let Some(ref d) = info.taint.defines {
                 interner.intern(d);
             }
-            for u in &info.uses {
+            for u in &info.taint.uses {
                 interner.intern(u);
             }
         }
@@ -127,11 +127,11 @@ impl SymbolInterner {
     pub fn from_cfg_scoped(cfg: &Cfg) -> Self {
         let mut interner = Self::new();
         for (_idx, info) in cfg.node_references() {
-            let scope = info.enclosing_func.as_deref();
-            if let Some(ref d) = info.defines {
+            let scope = info.ast.enclosing_func.as_deref();
+            if let Some(ref d) = info.taint.defines {
                 interner.intern_scoped(scope, d);
             }
-            for u in &info.uses {
+            for u in &info.taint.uses {
                 interner.intern_scoped(scope, u);
             }
         }

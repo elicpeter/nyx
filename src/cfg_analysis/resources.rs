@@ -22,7 +22,7 @@ fn find_acquire_nodes(
             if info.kind != StmtKind::Call {
                 return false;
             }
-            if let Some(callee) = &info.callee {
+            if let Some(callee) = &info.call.callee {
                 let callee_lower = callee.to_ascii_lowercase();
                 // Check exclusions first — if the callee matches an exclude
                 // pattern, it is NOT an acquire even if it also matches an
@@ -54,7 +54,7 @@ fn find_release_nodes(ctx: &AnalysisContext, release_patterns: &[&str]) -> Vec<N
             if info.kind != StmtKind::Call {
                 return false;
             }
-            if let Some(callee) = &info.callee {
+            if let Some(callee) = &info.call.callee {
                 let callee_lower = callee.to_ascii_lowercase();
                 release_patterns.iter().any(|p| {
                     let pl = p.to_ascii_lowercase();
@@ -137,7 +137,7 @@ fn all_paths_pass_through(
 /// If the variable is transferred, there is no leak — the receiving struct is
 /// responsible for the lifetime.
 fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
-    let acquired_var = match &ctx.cfg[acquire].defines {
+    let acquired_var = match &ctx.cfg[acquire].taint.defines {
         Some(v) => v.clone(),
         None => return false,
     };
@@ -155,12 +155,12 @@ fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
 
     while let Some(node) = queue.pop_front() {
         let info = &ctx.cfg[node];
-        let (start, end) = info.span;
+        let (start, end) = info.ast.span;
 
         // Check the source text at this node's span for the acquired variable
         // appearing in a struct-field store context.
-        let references_var = info.uses.iter().any(|u| u == &acquired_var)
-            || info.defines.as_ref().is_some_and(|d| d == &acquired_var);
+        let references_var = info.taint.uses.iter().any(|u| u == &acquired_var)
+            || info.taint.defines.as_ref().is_some_and(|d| d == &acquired_var);
 
         if references_var && start < end && end <= ctx.source_bytes.len() {
             let span_text = &ctx.source_bytes[start..end];
@@ -177,7 +177,7 @@ fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
         // If the variable is truly redefined (not a field write), stop
         // following this path. A true redefinition is when `defines` matches
         // but the span doesn't contain `->` or `.field =` patterns.
-        if info.defines.as_ref().is_some_and(|d| d == &acquired_var) {
+        if info.taint.defines.as_ref().is_some_and(|d| d == &acquired_var) {
             let is_field_write = if start < end && end <= ctx.source_bytes.len() {
                 let span_text = &ctx.source_bytes[start..end];
                 span_text.windows(2).any(|w| w == b"->") || has_dot_field_assignment(span_text)
@@ -242,7 +242,7 @@ fn is_consumed_by_owner(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
         "make_response",
     ];
 
-    let acquired_var = match &ctx.cfg[acquire].defines {
+    let acquired_var = match &ctx.cfg[acquire].taint.defines {
         Some(v) => v.clone(),
         None => return false,
     };
@@ -261,19 +261,19 @@ fn is_consumed_by_owner(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
 
         // Check Call nodes with callee that matches a consuming sink
         if info.kind == StmtKind::Call
-            && let Some(callee) = &info.callee
+            && let Some(callee) = &info.call.callee
         {
             let callee_lower = callee.to_ascii_lowercase();
             let is_consuming = CONSUMING_SINKS.iter().any(|s| callee_lower.ends_with(s));
-            if is_consuming && info.uses.iter().any(|u| u == &acquired_var) {
+            if is_consuming && info.taint.uses.iter().any(|u| u == &acquired_var) {
                 return true;
             }
         }
 
         // Also check the span text for consuming calls — handles cases where
         // the call is embedded in a return statement (e.g. `return FileResponse(f)`)
-        if info.uses.iter().any(|u| u == &acquired_var) {
-            let (start, end) = info.span;
+        if info.taint.uses.iter().any(|u| u == &acquired_var) {
+            let (start, end) = info.ast.span;
             if start < end && end <= ctx.source_bytes.len() {
                 let span_lower: Vec<u8> = ctx.source_bytes[start..end]
                     .iter()
@@ -302,7 +302,7 @@ fn is_consumed_by_owner(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
 /// exists on the acquired variable in the CFG.  If only the constructor
 /// (e.g. `threading.Lock()`) is observed without acquire, skip the finding.
 fn has_explicit_lock_acquire(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
-    let acquired_var = match &ctx.cfg[acquire].defines {
+    let acquired_var = match &ctx.cfg[acquire].taint.defines {
         Some(v) => v.clone(),
         None => return false,
     };
@@ -312,12 +312,12 @@ fn has_explicit_lock_acquire(ctx: &AnalysisContext, acquire: NodeIndex) -> bool 
         if info.kind != StmtKind::Call {
             continue;
         }
-        if let Some(callee) = &info.callee {
+        if let Some(callee) = &info.call.callee {
             let callee_lower = callee.to_ascii_lowercase();
             let is_lock_call = callee_lower.ends_with(".acquire")
                 || callee_lower.ends_with(".lock")
                 || callee_lower == "pthread_mutex_lock";
-            if is_lock_call && info.uses.iter().any(|u| u == &acquired_var) {
+            if is_lock_call && info.taint.uses.iter().any(|u| u == &acquired_var) {
                 return true;
             }
         }
@@ -352,9 +352,9 @@ impl CfgAnalysis for ResourceMisuse {
                 }
                 // Suppress resources with a deferred release (Go `defer f.Close()`).
                 // Defer guarantees cleanup on all exit paths including early returns.
-                if let Some(acquired_var) = ctx.cfg[acquire].defines.as_deref() {
+                if let Some(acquired_var) = ctx.cfg[acquire].taint.defines.as_deref() {
                     let has_deferred_release = release_nodes.iter().any(|&r| {
-                        ctx.cfg[r].in_defer && ctx.cfg[r].uses.iter().any(|u| u == acquired_var)
+                        ctx.cfg[r].in_defer && ctx.cfg[r].taint.uses.iter().any(|u| u == acquired_var)
                     });
                     if has_deferred_release {
                         continue;
@@ -369,7 +369,7 @@ impl CfgAnalysis for ResourceMisuse {
                         continue;
                     }
                     let info = &ctx.cfg[acquire];
-                    let callee_desc = info.callee.as_deref().unwrap_or("(acquire)");
+                    let callee_desc = info.call.callee.as_deref().unwrap_or("(acquire)");
 
                     findings.push(CfgFinding {
                         rule_id: if pair.resource_name == "mutex" {
@@ -380,7 +380,7 @@ impl CfgAnalysis for ResourceMisuse {
                         title: format!("{} may leak", pair.resource_name),
                         severity: Severity::Medium,
                         confidence: Confidence::Medium,
-                        span: info.span,
+                        span: info.ast.span,
                         message: format!(
                             "`{callee_desc}` acquires {} but not all exit paths \
                              release it",

@@ -70,21 +70,21 @@ fn build_taint_diag(
     path: &Path,
     src: &[u8],
 ) -> Diag {
-    let sink_byte = cfg_graph[finding.sink].span.0;
+    let sink_byte = cfg_graph[finding.sink].ast.span.0;
     let sink_point = byte_offset_to_point(tree, sink_byte);
     // For cross-body origins, prefer the preserved source_span over
     // indexing into the (possibly different) body's graph.
     let source_byte = finding.source_span
-        .unwrap_or_else(|| cfg_graph[finding.source].span.0);
+        .unwrap_or_else(|| cfg_graph[finding.source].ast.span.0);
     let source_point = byte_offset_to_point(tree, source_byte);
 
     let source_callee = cfg_graph[finding.source]
-        .callee
+        .call.callee
         .as_deref()
         .map(sanitize_desc)
         .unwrap_or_else(|| "(unknown)".into());
     let sink_callee = cfg_graph[finding.sink]
-        .callee
+        .call.callee
         .as_deref()
         .map(sanitize_desc)
         .unwrap_or_else(|| "(unknown)".into());
@@ -126,10 +126,10 @@ fn build_taint_diag(
         .iter()
         .enumerate()
         .map(|(i, raw)| {
-            let point = byte_offset_to_point(tree, cfg_graph[raw.cfg_node].span.0);
-            let snippet = extract_line_snippet(src, cfg_graph[raw.cfg_node].span.0);
-            let callee = cfg_graph[raw.cfg_node].callee.clone();
-            let function = cfg_graph[raw.cfg_node].enclosing_func.clone();
+            let point = byte_offset_to_point(tree, cfg_graph[raw.cfg_node].ast.span.0);
+            let snippet = extract_line_snippet(src, cfg_graph[raw.cfg_node].ast.span.0);
+            let callee = cfg_graph[raw.cfg_node].call.callee.clone();
+            let function = cfg_graph[raw.cfg_node].ast.enclosing_func.clone();
             FlowStep {
                 step: (i + 1) as u32,
                 kind: raw.op_kind.clone(),
@@ -1050,24 +1050,24 @@ impl TaintSuppressionCtx {
                 let info = &body.graph[idx];
                 let mut has_source = false;
                 let mut has_sink = false;
-                for label in &info.labels {
+                for label in &info.taint.labels {
                     match label {
                         DataLabel::Source(_) => has_source = true,
                         DataLabel::Sink(_) => has_sink = true,
                         _ => {}
                     }
                 }
-                let byte = info.span.0;
+                let byte = info.ast.span.0;
                 let point = byte_offset_to_point(tree, byte);
                 let line = point.row + 1;
                 if has_source {
                     source_lines_by_func
-                        .entry(info.enclosing_func.clone())
+                        .entry(info.ast.enclosing_func.clone())
                         .or_default()
                         .insert(line);
                 }
                 if has_sink {
-                    sink_func_at_line.insert(line, info.enclosing_func.clone());
+                    sink_func_at_line.insert(line, info.ast.enclosing_func.clone());
                 }
             }
         }

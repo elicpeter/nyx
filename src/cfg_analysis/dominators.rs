@@ -40,7 +40,7 @@ pub fn find_sink_nodes(cfg: &Cfg) -> Vec<NodeIndex> {
     cfg.node_indices()
         .filter(|&idx| {
             cfg[idx]
-                .labels
+                .taint.labels
                 .iter()
                 .any(|l| matches!(l, DataLabel::Sink(_)))
         })
@@ -107,7 +107,7 @@ pub fn find_call_nodes_matching(cfg: &Cfg, matchers: &[&str]) -> Vec<NodeIndex> 
             if cfg[idx].kind != StmtKind::Call {
                 return false;
             }
-            if let Some(callee) = &cfg[idx].callee {
+            if let Some(callee) = &cfg[idx].call.callee {
                 let callee_lower = callee.to_ascii_lowercase();
                 matchers.iter().any(|m| {
                     let ml = m.to_ascii_lowercase();

@@ -27,7 +27,7 @@ pub fn copy_propagate(body: &mut SsaBody, cfg: &Cfg) -> (usize, HashMap<SsaValue
                     let info = &cfg[inst.cfg_node];
                     // Skip if the node has labels — sanitizers, sources, sinks
                     // have semantic meaning that must be preserved.
-                    if info.labels.is_empty() {
+                    if info.taint.labels.is_empty() {
                         replace_map.insert(inst.value, src);
                     }
                 }
@@ -123,33 +123,7 @@ mod tests {
     use smallvec::SmallVec;
 
     fn make_cfg_node(kind: StmtKind) -> NodeInfo {
-        NodeInfo {
-            kind,
-            span: (0, 0),
-            labels: SmallVec::new(),
-            defines: None,
-            extra_defines: vec![],
-            uses: vec![],
-            callee: None,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
-        }
+        NodeInfo { kind, ..Default::default() }
     }
 
     #[test]

@@ -688,7 +688,7 @@ fn taint_and_unguarded_sink_deduped() {
         .node_indices()
         .find(|&idx| {
             cfg_graph[idx]
-                .labels
+                .taint.labels
                 .iter()
                 .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
         })
@@ -859,8 +859,8 @@ fn js_throw_terminates_block() {
         .node_indices()
         .filter(|&idx| {
             cfg[idx].kind == crate::cfg::StmtKind::Return
-                && cfg[idx].span.0 > 0
-                && src[cfg[idx].span.0..].starts_with(b"throw")
+                && cfg[idx].ast.span.0 > 0
+                && src[cfg[idx].ast.span.0..].starts_with(b"throw")
         })
         .collect();
 
@@ -873,7 +873,7 @@ fn js_throw_terminates_block() {
     let reachable = crate::cfg_analysis::dominators::reachable_set(cfg, entry);
     let eval_nodes: Vec<_> = cfg
         .node_indices()
-        .filter(|&idx| cfg[idx].callee.as_deref().is_some_and(|c| c == "eval"))
+        .filter(|&idx| cfg[idx].call.callee.as_deref().is_some_and(|c| c == "eval"))
         .collect();
 
     // eval might not even be in the CFG, or if it is, it should be unreachable
@@ -913,7 +913,7 @@ fn configured_terminator_stops_flow() {
     // eval should be unreachable since process.exit is a terminator
     let eval_nodes: Vec<_> = cfg
         .node_indices()
-        .filter(|&idx| cfg[idx].callee.as_deref().is_some_and(|c| c == "eval"))
+        .filter(|&idx| cfg[idx].call.callee.as_deref().is_some_and(|c| c == "eval"))
         .collect();
 
     if !eval_nodes.is_empty() {
@@ -945,7 +945,7 @@ fn location_href_assignment_is_sink() {
 
     let has_sink = cfg.node_indices().any(|idx| {
         cfg[idx]
-            .labels
+            .taint.labels
             .iter()
             .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
     });
@@ -969,7 +969,7 @@ fn a_href_assignment_is_not_sink() {
 
     let has_sink = cfg.node_indices().any(|idx| {
         cfg[idx]
-            .labels
+            .taint.labels
             .iter()
             .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
     });

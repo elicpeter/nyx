@@ -167,7 +167,7 @@ impl DefaultTransfer<'_> {
     /// functions resolve to distinct IDs.
     fn get_sym(&self, info: &NodeInfo, name: &str) -> Option<SymbolId> {
         self.interner
-            .get_scoped(info.enclosing_func.as_deref(), name)
+            .get_scoped(info.ast.enclosing_func.as_deref(), name)
     }
 
     fn apply_call(
@@ -177,7 +177,7 @@ impl DefaultTransfer<'_> {
         state: &mut ProductState,
         events: &mut Vec<TransferEvent>,
     ) {
-        let callee = match &info.callee {
+        let callee = match &info.call.callee {
             Some(c) => c.to_ascii_lowercase(),
             None => return,
         };
@@ -193,7 +193,7 @@ impl DefaultTransfer<'_> {
 
             if is_acquire
                 && !is_excluded
-                && let Some(ref def) = info.defines
+                && let Some(ref def) = info.taint.defines
                 && let Some(sym) = self.get_sym(info, def)
             {
                 state.resource.set(sym, ResourceLifecycle::OPEN);
@@ -216,7 +216,7 @@ impl DefaultTransfer<'_> {
                 if info.in_defer {
                     continue;
                 }
-                for used in &info.uses {
+                for used in &info.taint.uses {
                     if let Some(sym) = self.get_sym(info, used) {
                         if released.contains(&sym) {
                             continue;
@@ -246,10 +246,10 @@ impl DefaultTransfer<'_> {
         //   3. The method suffix matches a ResourceMethodSummary
         //   4. For Release: the receiver was previously acquired by the same class group
         if !direct_acquire && !direct_release && callee.contains('.') {
-            // Extract receiver: prefer explicit NodeInfo.receiver, fall back
+            // Extract receiver: prefer explicit NodeInfo.call.receiver, fall back
             // to everything before the last `.` in the callee string.
             let recv_from_callee: Option<String>;
-            let recv_name: Option<&str> = if let Some(ref r) = info.receiver {
+            let recv_name: Option<&str> = if let Some(ref r) = info.call.receiver {
                 Some(r.as_str())
             } else {
                 recv_from_callee = callee.rsplit_once('.').map(|(prefix, _)| {
@@ -294,7 +294,7 @@ impl DefaultTransfer<'_> {
         for pair in self.resource_pairs {
             if pair.use_patterns.iter().any(|p| callee_matches(&callee, p)) {
                 use_checked = true;
-                for used in &info.uses {
+                for used in &info.taint.uses {
                     if let Some(sym) = self.get_sym(info, used) {
                         if state.resource.get(sym) == ResourceLifecycle::CLOSED {
                             events.push(TransferEvent {
@@ -312,7 +312,7 @@ impl DefaultTransfer<'_> {
                 .iter()
                 .any(|p| callee_matches(&callee, p));
             if is_use {
-                for used in &info.uses {
+                for used in &info.taint.uses {
                     if let Some(sym) = self.get_sym(info, used) {
                         if state.resource.get(sym) == ResourceLifecycle::CLOSED {
                             events.push(TransferEvent {
@@ -347,7 +347,7 @@ impl DefaultTransfer<'_> {
 
         // ── Validation call (guard) ──────────────────────────────────────
         if is_guard_like(&callee) {
-            for used in &info.uses {
+            for used in &info.taint.uses {
                 if let Some(sym) = self.get_sym(info, used) {
                     state.auth.validated.insert(sym);
                 }
@@ -425,11 +425,11 @@ impl DefaultTransfer<'_> {
     fn apply_assignment(&self, _node_idx: NodeIndex, info: &NodeInfo, state: &mut ProductState) {
         // Ownership transfer: if `defines` reassigns a tracked resource
         // variable from a `uses` variable, transfer the lifecycle.
-        if let Some(ref def) = info.defines
+        if let Some(ref def) = info.taint.defines
             && let Some(def_sym) = self.get_sym(info, def)
         {
             // If the RHS is a tracked resource, transfer its state
-            for used in &info.uses {
+            for used in &info.taint.uses {
                 if let Some(use_sym) = self.get_sym(info, used) {
                     let lc = state.resource.get(use_sym);
                     if lc.contains(ResourceLifecycle::OPEN) {
@@ -552,6 +552,7 @@ fn condition_contains_auth_token(cond: &str, matcher: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cfg::{AstMeta, CallMeta, TaintMeta};
     #[test]
     fn callee_matches_exact() {
         assert!(callee_matches("fopen", "fopen"));
@@ -604,30 +605,10 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            span: (0, 10),
-            labels: smallvec::SmallVec::new(),
-            defines: Some("f".into()),
-            extra_defines: vec![],
-            uses: vec![],
-            callee: Some("fopen".into()),
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            ast: AstMeta { span: (0, 10), ..Default::default() },
+            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
+            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            ..Default::default()
         };
 
         let (state, events) =
@@ -653,30 +634,10 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            span: (10, 20),
-            labels: smallvec::SmallVec::new(),
-            defines: None,
-            extra_defines: vec![],
-            uses: vec!["f".into()],
-            callee: Some("fclose".into()),
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            ast: AstMeta { span: (10, 20), ..Default::default() },
+            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
+            call: CallMeta { callee: Some("fclose".into()), ..Default::default() },
+            ..Default::default()
         };
 
         let (state, events) = transfer.apply(NodeIndex::new(1), &info, None, state);
@@ -701,30 +662,10 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            span: (20, 30),
-            labels: smallvec::SmallVec::new(),
-            defines: None,
-            extra_defines: vec![],
-            uses: vec!["f".into()],
-            callee: Some("fclose".into()),
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            ast: AstMeta { span: (20, 30), ..Default::default() },
+            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
+            call: CallMeta { callee: Some("fclose".into()), ..Default::default() },
+            ..Default::default()
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(2), &info, None, state);
@@ -750,30 +691,10 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            span: (30, 40),
-            labels: smallvec::SmallVec::new(),
-            defines: None,
-            extra_defines: vec![],
-            uses: vec!["f".into()],
-            callee: Some("fread".into()),
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            ast: AstMeta { span: (30, 40), ..Default::default() },
+            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
+            call: CallMeta { callee: Some("fread".into()), ..Default::default() },
+            ..Default::default()
         };
 
         let (_state, events) = transfer.apply(NodeIndex::new(3), &info, None, state);

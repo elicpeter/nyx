@@ -996,7 +996,7 @@ fn detect_internal_sinks(
                 .map(|m| m.labels.as_slice())
                 .unwrap_or(&[])
         } else {
-            &cfg[inst.cfg_node].labels
+            &cfg[inst.cfg_node].taint.labels
         };
         for label in labels {
             if let DataLabel::Sink(cap) = label {

@@ -87,7 +87,7 @@ pub fn build_resource_method_summaries(
             ) {
                 continue;
             }
-            let callee = match &info.callee {
+            let callee = match &info.call.callee {
                 Some(c) => c.to_ascii_lowercase(),
                 None => continue,
             };
@@ -97,7 +97,7 @@ pub fn build_resource_method_summaries(
                         method_name: method_name.clone(),
                         effect: transfer::ResourceEffect::Acquire,
                         class_group,
-                        original_span: info.span,
+                        original_span: info.ast.span,
                     });
                 }
                 if pair.release.iter().any(|r| transfer::callee_matches_pub(&callee, r)) {
@@ -105,7 +105,7 @@ pub fn build_resource_method_summaries(
                         method_name: method_name.clone(),
                         effect: transfer::ResourceEffect::Release,
                         class_group,
-                        original_span: info.span,
+                        original_span: info.ast.span,
                     });
                 }
             }

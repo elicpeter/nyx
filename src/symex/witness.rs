@@ -61,7 +61,7 @@ pub fn extract_witness(
 
     // 4. Extract sink callee name
     let sink_callee = if finding.sink.index() < cfg.node_count() {
-        cfg[finding.sink].callee.as_deref().unwrap_or("sink")
+        cfg[finding.sink].call.callee.as_deref().unwrap_or("sink")
     } else {
         "sink"
     };
@@ -161,7 +161,7 @@ fn sink_cap(finding: &Finding, cfg: &Cfg) -> Cap {
     }
     let info = &cfg[finding.sink];
     let mut caps = Cap::empty();
-    for lbl in &info.labels {
+    for lbl in &info.taint.labels {
         if let DataLabel::Sink(bits) = *lbl {
             caps |= bits;
         }
@@ -508,30 +508,9 @@ mod tests {
     ) -> crate::cfg::NodeInfo {
         crate::cfg::NodeInfo {
             kind: StmtKind::Seq,
-            span: (0, 0),
-            labels,
-            defines: None,
-            extra_defines: Vec::new(),
-            uses: Vec::new(),
-            callee,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            const_text: None,
-            condition_vars: Vec::new(),
-            condition_text: None,
-            condition_negated: false,
-            arg_uses: Vec::new(),
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            call: crate::cfg::CallMeta { callee, ..Default::default() },
+            taint: crate::cfg::TaintMeta { labels, ..Default::default() },
+            ..Default::default()
         }
     }
 

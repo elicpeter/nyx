@@ -79,7 +79,7 @@ pub fn run_all(ctx: &AnalysisContext) -> Vec<CfgFinding> {
     let taint_spans: HashSet<(usize, usize)> = ctx
         .taint_findings
         .iter()
-        .map(|f| ctx.cfg[f.sink].span)
+        .map(|f| ctx.cfg[f.sink].ast.span)
         .collect();
 
     findings.retain(|f| {
@@ -123,7 +123,7 @@ pub(crate) fn is_guard_call(
     if info.kind != StmtKind::Call {
         return false;
     }
-    if let Some(callee) = &info.callee {
+    if let Some(callee) = &info.call.callee {
         // Check config sanitizer rules
         if let Some(extras) = analysis_rules {
             let callee_lower = callee.to_ascii_lowercase();
@@ -168,7 +168,7 @@ pub(crate) fn is_auth_call(info: &NodeInfo, lang: Lang) -> bool {
     if info.kind != StmtKind::Call {
         return false;
     }
-    if let Some(callee) = &info.callee {
+    if let Some(callee) = &info.call.callee {
         let auth_rules = rules::auth_rules(lang);
         let callee_lower = callee.to_ascii_lowercase();
         for rule in auth_rules {
@@ -209,5 +209,5 @@ pub(crate) fn is_entry_point_func(func_name: &str, lang: Lang) -> bool {
 
 /// Helper: check if a node is a sink.
 pub(crate) fn is_sink(info: &NodeInfo) -> bool {
-    info.labels.iter().any(|l| matches!(l, DataLabel::Sink(_)))
+    info.taint.labels.iter().any(|l| matches!(l, DataLabel::Sink(_)))
 }

@@ -144,14 +144,14 @@ impl CfgGraphView {
             .map(|(idx, info)| CfgNodeView {
                 id: idx.index(),
                 kind: stmt_kind_str(info.kind),
-                span: info.span,
-                line: byte_offset_to_line(bytes, info.span.0),
-                defines: info.defines.clone(),
-                uses: info.uses.clone(),
-                callee: info.callee.clone(),
-                labels: info.labels.iter().map(label_str).collect(),
+                span: info.ast.span,
+                line: byte_offset_to_line(bytes, info.ast.span.0),
+                defines: info.taint.defines.clone(),
+                uses: info.taint.uses.clone(),
+                callee: info.call.callee.clone(),
+                labels: info.taint.labels.iter().map(label_str).collect(),
                 condition_text: info.condition_text.clone(),
-                enclosing_func: info.enclosing_func.clone(),
+                enclosing_func: info.ast.enclosing_func.clone(),
             })
             .collect();
 
@@ -875,7 +875,7 @@ pub fn function_list(analysis: &FileAnalysis) -> Vec<FunctionInfo> {
             name: key.name.clone(),
             namespace: key.namespace.clone(),
             param_count: summary.param_count,
-            line: byte_offset_to_line(&analysis.bytes, analysis.cfg()[summary.entry].span.0),
+            line: byte_offset_to_line(&analysis.bytes, analysis.cfg()[summary.entry].ast.span.0),
             source_caps: cap_names(summary.source_caps),
             sanitizer_caps: cap_names(summary.sanitizer_caps),
             sink_caps: cap_names(summary.sink_caps),

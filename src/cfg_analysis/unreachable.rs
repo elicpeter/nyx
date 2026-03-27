@@ -20,7 +20,7 @@ fn event_handler_callbacks(ctx: &AnalysisContext) -> HashSet<String> {
         if info.kind != StmtKind::Call {
             continue;
         }
-        if let Some(callee) = &info.callee {
+        if let Some(callee) = &info.call.callee {
             let callee_lower = callee.to_ascii_lowercase();
             let is_handler = handlers
                 .iter()
@@ -28,7 +28,7 @@ fn event_handler_callbacks(ctx: &AnalysisContext) -> HashSet<String> {
             if is_handler {
                 // The callback function is typically used within the call — any function
                 // that appears as `uses` of this call node is a potential callback.
-                for u in &info.uses {
+                for u in &info.taint.uses {
                     callbacks.insert(u.clone());
                 }
             }
@@ -60,7 +60,7 @@ impl CfgAnalysis for UnreachableCode {
             }
 
             // Suppress findings for nodes inside event handler callbacks
-            if let Some(func_name) = &info.enclosing_func
+            if let Some(func_name) = &info.ast.enclosing_func
                 && handler_callbacks.contains(func_name)
             {
                 continue;
@@ -68,10 +68,10 @@ impl CfgAnalysis for UnreachableCode {
 
             // Check labels in priority order: Sink > Sanitizer > Source
             let label_classification =
-                if info.labels.iter().any(|l| matches!(l, DataLabel::Sink(_))) {
+                if info.taint.labels.iter().any(|l| matches!(l, DataLabel::Sink(_))) {
                     Some(("cfg-unreachable-sink", "Unreachable sink", Severity::Medium))
                 } else if info
-                    .labels
+                    .taint.labels
                     .iter()
                     .any(|l| matches!(l, DataLabel::Sanitizer(_)))
                 {
@@ -81,7 +81,7 @@ impl CfgAnalysis for UnreachableCode {
                         Severity::Medium,
                     ))
                 } else if info
-                    .labels
+                    .taint.labels
                     .iter()
                     .any(|l| matches!(l, DataLabel::Source(_)))
                 {
@@ -112,14 +112,14 @@ impl CfgAnalysis for UnreachableCode {
                 }
             };
 
-            let callee_desc = info.callee.as_deref().unwrap_or("(unknown)");
+            let callee_desc = info.call.callee.as_deref().unwrap_or("(unknown)");
 
             findings.push(CfgFinding {
                 rule_id: rule_id.to_string(),
                 title: title.to_string(),
                 severity,
                 confidence: Confidence::High,
-                span: info.span,
+                span: info.ast.span,
                 message: format!("{title}: `{callee_desc}` is unreachable and will never execute"),
                 evidence: vec![idx],
                 score: None,

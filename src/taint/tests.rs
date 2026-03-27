@@ -3534,10 +3534,10 @@ fn catch_param_source_node_has_callee() {
     for f in &findings {
         let source_info = &the_cfg[f.source];
         assert!(
-            source_info.callee.is_some(),
+            source_info.call.callee.is_some(),
             "catch-param source node must have a callee for reporting, got None"
         );
-        let callee = source_info.callee.as_deref().unwrap();
+        let callee = source_info.call.callee.as_deref().unwrap();
         assert!(
             callee.contains("catch"),
             "catch-param callee should contain 'catch', got {:?}",
@@ -3577,10 +3577,10 @@ fn taint_origin_preserved_through_assignment() {
     // The source should point to the env::var call, not the intermediate assignments
     let source_info = &the_cfg[f.source];
     assert!(
-        source_info.callee.is_some(),
+        source_info.call.callee.is_some(),
         "source node should have callee after propagation through assignments"
     );
-    let callee = source_info.callee.as_deref().unwrap();
+    let callee = source_info.call.callee.as_deref().unwrap();
     assert!(
         callee.contains("env") || callee.contains("var"),
         "source callee should reference env::var, got {:?}",
@@ -3622,7 +3622,7 @@ fn taint_origin_preserved_through_branch_merge() {
     for f in &findings {
         let source_info = &the_cfg[f.source];
         assert!(
-            source_info.callee.is_some(),
+            source_info.call.callee.is_some(),
             "source callee must not be None after branch merge"
         );
     }

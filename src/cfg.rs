@@ -21,10 +21,11 @@ use std::collections::{HashMap, HashSet};
 /// -------------------------------------------------------------------------
 ///  Public AST‑to‑CFG data structures
 /// -------------------------------------------------------------------------
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum StmtKind {
     Entry,
     Exit,
+    #[default]
     Seq,
     If,
     Loop,
@@ -74,39 +75,65 @@ pub enum BinOp {
     GtEq,
 }
 
-#[derive(Debug, Clone)]
-pub struct NodeInfo {
-    pub kind: StmtKind,
-    pub span: (usize, usize), // byte offsets in the original file
-    pub labels: SmallVec<[DataLabel; 2]>, // taint classifications (multi-label)
-    pub defines: Option<String>, // variable written by this stmt
-    /// Additional variable definitions from destructuring patterns.
-    /// E.g. `const { a, b, c } = source()` → defines="a", extra_defines=["b", "c"].
-    pub extra_defines: Vec<String>,
-    pub uses: Vec<String>, // variables read
+/// Call-related metadata for CFG nodes.
+#[derive(Debug, Clone, Default)]
+pub struct CallMeta {
     pub callee: Option<String>,
+    /// When `find_classifiable_inner_call` overrides the primary callee
+    /// (e.g. `parts.add(req.getParameter("input"))` → callee becomes
+    /// "req.getParameter"), this field preserves the original outer callee
+    /// ("parts.add") so container propagation can still recognise it.
+    pub outer_callee: Option<String>,
+    /// Per-function call ordinal (0-based, only meaningful for Call nodes).
+    pub call_ordinal: u32,
+    /// Per-argument identifiers for Call nodes. Each inner Vec holds the
+    /// identifiers from one argument expression, in parameter-position order.
+    /// Empty for non-call nodes or when argument boundaries can't be determined.
+    pub arg_uses: Vec<Vec<String>>,
     /// For `CallMethod` nodes: the receiver identifier (e.g. `tainted` in
     /// `tainted.foo()`).  `None` for non-method calls or complex receivers
     /// (member expressions, call expressions, etc.).
     pub receiver: Option<String>,
+    /// For gated sinks: which argument positions carry the tainted payload.
+    /// When `Some`, only variables from these `arg_uses` positions are checked
+    /// for taint.  `None` = all arguments are payload (default).
+    pub sink_payload_args: Option<Vec<usize>>,
+}
+
+/// Taint-classification and variable-flow metadata.
+#[derive(Debug, Clone, Default)]
+pub struct TaintMeta {
+    pub labels: SmallVec<[DataLabel; 2]>, // taint classifications (multi-label)
+    /// Raw text of a constant/literal RHS when this node defines a variable
+    /// from a syntactic literal with no uses. Used by SSA constant propagation.
+    pub const_text: Option<String>,
+    pub defines: Option<String>, // variable written by this stmt
+    pub uses: Vec<String>, // variables read
+    /// Additional variable definitions from destructuring patterns.
+    /// E.g. `const { a, b, c } = source()` → defines="a", extra_defines=["b", "c"].
+    pub extra_defines: Vec<String>,
+}
+
+/// AST origin/location metadata.
+#[derive(Debug, Clone, Default)]
+pub struct AstMeta {
+    pub span: (usize, usize), // byte offsets in the original file
     /// Name of the enclosing function (set during CFG construction).
     pub enclosing_func: Option<String>,
-    /// Per-function call ordinal (0-based, only meaningful for Call nodes).
-    pub call_ordinal: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NodeInfo {
+    pub kind: StmtKind,
+    pub call: CallMeta,
+    pub taint: TaintMeta,
+    pub ast: AstMeta,
     /// For If nodes: raw condition text (truncated to 256 chars). None for non-If nodes.
     pub condition_text: Option<String>,
     /// For If nodes: identifiers referenced in the condition (sorted, deduped, max 8).
     pub condition_vars: Vec<String>,
     /// For If nodes: whether the condition has a leading negation (`!` / `not`).
     pub condition_negated: bool,
-    /// Per-argument identifiers for Call nodes. Each inner Vec holds the
-    /// identifiers from one argument expression, in parameter-position order.
-    /// Empty for non-call nodes or when argument boundaries can't be determined.
-    pub arg_uses: Vec<Vec<String>>,
-    /// For gated sinks: which argument positions carry the tainted payload.
-    /// When `Some`, only variables from these `arg_uses` positions are checked
-    /// for taint.  `None` = all arguments are payload (default).
-    pub sink_payload_args: Option<Vec<usize>>,
     /// True when this is a Call node whose argument list contains only
     /// syntactic literal values (strings, numbers, booleans, null/nil,
     /// arrays/lists/tuples of literals). Also true for zero-argument calls
@@ -122,19 +149,11 @@ pub struct NodeInfo {
     /// The taint transfer function uses this to conservatively taint the
     /// caught exception variable.
     pub catch_param: bool,
-    /// Raw text of a constant/literal RHS when this node defines a variable
-    /// from a syntactic literal with no uses. Used by SSA constant propagation.
-    pub const_text: Option<String>,
     /// For Call nodes: the callee name of the call expression wrapping each
     /// argument (per-position, matching arg_uses). For Assignment sink nodes:
     /// the RHS call callee at position 0 (if the RHS is a call expression).
     /// Used by SSA sink detection for interprocedural sanitizer resolution.
     pub arg_callees: Vec<Option<String>>,
-    /// When `find_classifiable_inner_call` overrides the primary callee
-    /// (e.g. `parts.add(req.getParameter("input"))` → callee becomes
-    /// "req.getParameter"), this field preserves the original outer callee
-    /// ("parts.add") so container propagation can still recognise it.
-    pub outer_callee: Option<String>,
     /// For cast/type-assertion expressions: the target type name extracted
     /// from the AST.  E.g. `(String) x` → `"String"`, `x as number` → `"number"`,
     /// `x.(io.Reader)` → `"io.Reader"`.  Used by type-flow constraint solving
@@ -271,30 +290,11 @@ fn make_empty_node_info(
 ) -> NodeInfo {
     NodeInfo {
         kind,
-        span,
-        labels: SmallVec::new(),
-        defines: None,
-        extra_defines: vec![],
-        uses: Vec::new(),
-        callee: None,
-        receiver: None,
-        enclosing_func: enclosing_func.map(|s| s.to_owned()),
-        call_ordinal: 0,
-        condition_text: None,
-        condition_vars: Vec::new(),
-        condition_negated: false,
-        arg_uses: Vec::new(),
-        sink_payload_args: None,
-        all_args_literal: false,
-        catch_param: false,
-        const_text: None,
-        arg_callees: Vec::new(),
-        outer_callee: None,
-        cast_target_type: None,
-        bin_op: None,
-        bin_op_const: None,
-        managed_resource: false,
-        in_defer: false,
+        ast: AstMeta {
+            span,
+            enclosing_func: enclosing_func.map(|s| s.to_owned()),
+        },
+        ..Default::default()
     }
 }
 
@@ -865,30 +865,14 @@ fn push_condition_node<'a>(
     let span = (cond_ast.start_byte(), cond_ast.end_byte());
     g.add_node(NodeInfo {
         kind: StmtKind::If,
-        span,
-        labels: SmallVec::new(),
-        defines: None,
-        extra_defines: vec![],
-        uses: Vec::new(),
-        callee: None,
-        receiver: None,
-        enclosing_func: enclosing_func.map(|s| s.to_string()),
-        call_ordinal: 0,
+        ast: AstMeta {
+            span,
+            enclosing_func: enclosing_func.map(|s| s.to_string()),
+        },
         condition_text: text,
         condition_vars: vars,
         condition_negated: negated,
-        arg_uses: Vec::new(),
-        sink_payload_args: None,
-        all_args_literal: false,
-        catch_param: false,
-        const_text: None,
-        arg_callees: Vec::new(),
-        outer_callee: None,
-        cast_target_type: None,
-        bin_op: None,
-        bin_op_const: None,
-        managed_resource: false,
-        in_defer: false,
+        ..Default::default()
     })
 }
 
@@ -2258,25 +2242,31 @@ fn push_node<'a>(
 
     let idx = g.add_node(NodeInfo {
         kind,
-        span,
-        labels,
-        defines,
-        extra_defines,
-        uses,
-        callee,
-        receiver,
-        enclosing_func: enclosing_func.map(|s| s.to_string()),
-        call_ordinal,
+        call: CallMeta {
+            callee,
+            outer_callee,
+            call_ordinal,
+            arg_uses,
+            receiver,
+            sink_payload_args,
+        },
+        taint: TaintMeta {
+            labels,
+            const_text,
+            defines,
+            uses,
+            extra_defines,
+        },
+        ast: AstMeta {
+            span,
+            enclosing_func: enclosing_func.map(|s| s.to_string()),
+        },
         condition_text,
         condition_vars,
         condition_negated,
-        arg_uses,
-        sink_payload_args,
         all_args_literal,
         catch_param: false,
-        const_text,
         arg_callees,
-        outer_callee,
         cast_target_type,
         bin_op: extract_bin_op(ast, lang),
         bin_op_const: extract_bin_op_const(ast, lang, code),
@@ -2291,7 +2281,7 @@ fn push_node<'a>(
         kind,
         text,
         span,
-        g[idx].labels
+        g[idx].taint.labels
     );
     idx
 }
@@ -2541,30 +2531,20 @@ fn build_begin_rescue<'a>(
         let catch_preds = if let Some(ref name) = param_name {
             let synth = g.add_node(NodeInfo {
                 kind: StmtKind::Seq,
-                span: (rescue_node.start_byte(), rescue_node.start_byte()),
-                labels: SmallVec::new(),
-                defines: Some(name.clone()),
-                extra_defines: vec![],
-                uses: Vec::new(),
-                callee: Some(format!("catch({name})")),
-                receiver: None,
-                enclosing_func: enclosing_func.map(|s| s.to_string()),
-                call_ordinal: 0,
-                condition_text: None,
-                condition_vars: Vec::new(),
-                condition_negated: false,
-                arg_uses: Vec::new(),
-                sink_payload_args: None,
-                all_args_literal: false,
+                ast: AstMeta {
+                    span: (rescue_node.start_byte(), rescue_node.start_byte()),
+                    enclosing_func: enclosing_func.map(|s| s.to_string()),
+                },
+                taint: TaintMeta {
+                    defines: Some(name.clone()),
+                    ..Default::default()
+                },
+                call: CallMeta {
+                    callee: Some(format!("catch({name})")),
+                    ..Default::default()
+                },
                 catch_param: true,
-                const_text: None,
-                arg_callees: Vec::new(),
-                outer_callee: None,
-                cast_target_type: None,
-                bin_op: None,
-                bin_op_const: None,
-                managed_resource: false,
-                in_defer: false,
+                ..Default::default()
             });
 
             // Wire exception edges from every exception source → synthetic node
@@ -2816,7 +2796,7 @@ fn build_try<'a>(
         // Java try-with-resources guarantees AutoCloseable.close() is called.
         for raw in first_resource_idx..g.node_count() {
             let idx = NodeIndex::new(raw);
-            if g[idx].kind == StmtKind::Call && g[idx].defines.is_some() {
+            if g[idx].kind == StmtKind::Call && g[idx].taint.defines.is_some() {
                 g[idx].managed_resource = true;
             }
         }
@@ -2878,30 +2858,20 @@ fn build_try<'a>(
             let catch_preds = if let Some(ref name) = param_name {
                 let synth = g.add_node(NodeInfo {
                     kind: StmtKind::Seq,
-                    span: (catch_node.start_byte(), catch_node.start_byte()),
-                    labels: SmallVec::new(),
-                    defines: Some(name.clone()),
-                    extra_defines: vec![],
-                    uses: Vec::new(),
-                    callee: Some(format!("catch({name})")),
-                    receiver: None,
-                    enclosing_func: enclosing_func.map(|s| s.to_string()),
-                    call_ordinal: 0,
-                    condition_text: None,
-                    condition_vars: Vec::new(),
-                    condition_negated: false,
-                    arg_uses: Vec::new(),
-                    sink_payload_args: None,
-                    all_args_literal: false,
+                    ast: AstMeta {
+                        span: (catch_node.start_byte(), catch_node.start_byte()),
+                        enclosing_func: enclosing_func.map(|s| s.to_string()),
+                    },
+                    taint: TaintMeta {
+                        defines: Some(name.clone()),
+                        ..Default::default()
+                    },
+                    call: CallMeta {
+                        callee: Some(format!("catch({name})")),
+                        ..Default::default()
+                    },
                     catch_param: true,
-                    const_text: None,
-                    arg_callees: Vec::new(),
-                    outer_callee: None,
-                    cast_target_type: None,
-                    bin_op: None,
-                    bin_op_const: None,
-                    managed_resource: false,
-                    in_defer: false,
+                    ..Default::default()
                 });
 
                 // Wire exception edges from every exception source → synthetic node
@@ -3180,30 +3150,11 @@ fn build_sub<'a>(
                 // for the false path.
                 let pass = g.add_node(NodeInfo {
                     kind: StmtKind::Seq,
-                    span: (ast.end_byte(), ast.end_byte()),
-                    labels: SmallVec::new(),
-                    defines: None,
-                    extra_defines: vec![],
-                    uses: Vec::new(),
-                    callee: None,
-                    receiver: None,
-                    enclosing_func: enclosing_func.map(|s| s.to_string()),
-                    call_ordinal: 0,
-                    condition_text: None,
-                    condition_vars: Vec::new(),
-                    condition_negated: false,
-                    arg_uses: Vec::new(),
-                    sink_payload_args: None,
-                    all_args_literal: false,
-                    catch_param: false,
-                    const_text: None,
-                    arg_callees: Vec::new(),
-                    outer_callee: None,
-                    cast_target_type: None,
-                    bin_op: None,
-                    bin_op_const: None,
-                    managed_resource: false,
-                    in_defer: false,
+                    ast: AstMeta {
+                        span: (ast.end_byte(), ast.end_byte()),
+                        enclosing_func: enclosing_func.map(|s| s.to_string()),
+                    },
+                    ..Default::default()
                 });
                 connect_all(g, else_preds, pass, else_edge);
                 vec![pass]
@@ -3743,18 +3694,18 @@ fn build_sub<'a>(
 
             for idx in fn_graph.node_indices() {
                 let info = &fn_graph[idx];
-                if let Some(callee) = &info.callee
+                if let Some(callee) = &info.call.callee
                     && !callees.contains(callee)
                 {
                     callees.push(callee.clone());
                 }
-                for lbl in &info.labels {
+                for lbl in &info.taint.labels {
                     match *lbl {
                         DataLabel::Source(bits) => fn_src_bits |= bits,
                         DataLabel::Sanitizer(bits) => fn_sani_bits |= bits,
                         DataLabel::Sink(bits) => {
                             fn_sink_bits |= bits;
-                            for u in &info.uses {
+                            for u in &info.taint.uses {
                                 if let Some(pos) = param_names.iter().position(|p| p == u)
                                     && !tainted_sink_params.contains(&pos)
                                 {
@@ -3765,20 +3716,20 @@ fn build_sub<'a>(
                     }
                 }
                 let mut in_bits = Cap::empty();
-                for u in &info.uses {
+                for u in &info.taint.uses {
                     if let Some(b) = var_taint.get(u) {
                         in_bits |= *b;
                     }
                 }
                 let mut out_bits = in_bits;
-                for lab in &info.labels {
+                for lab in &info.taint.labels {
                     match *lab {
                         DataLabel::Source(bits) => out_bits |= bits,
                         DataLabel::Sanitizer(bits) => out_bits &= !bits,
                         DataLabel::Sink(_) => {}
                     }
                 }
-                if let Some(def) = &info.defines {
+                if let Some(def) = &info.taint.defines {
                     if out_bits.is_empty() {
                         var_taint.remove(def);
                     } else {
@@ -3805,7 +3756,7 @@ fn build_sub<'a>(
                     let mut flows = false;
                     for &idx in node_bits.keys() {
                         if fn_graph[idx].kind == StmtKind::Return {
-                            for u in &fn_graph[idx].uses {
+                            for u in &fn_graph[idx].taint.uses {
                                 if u == pname {
                                     flows = true;
                                 }
@@ -3821,12 +3772,12 @@ fn build_sub<'a>(
                     if !flows {
                         for &exit_pred in &body_exits {
                             let info = &fn_graph[exit_pred];
-                            for u in &info.uses {
+                            for u in &info.taint.uses {
                                 if u == pname {
                                     flows = true;
                                 }
                             }
-                            if let Some(def) = &info.defines
+                            if let Some(def) = &info.taint.defines
                                 && def == pname
                             {
                                 flows = true;
@@ -3957,7 +3908,7 @@ fn build_sub<'a>(
             // Only mark if this is actually an acquisition (Call + defines).
             if ast.kind() == "with_item"
                 && g[node].kind == StmtKind::Call
-                && g[node].defines.is_some()
+                && g[node].taint.defines.is_some()
             {
                 g[node].managed_resource = true;
             }
@@ -3966,7 +3917,7 @@ fn build_sub<'a>(
 
             // If the callee is a configured terminator, treat as a dead end
             if kind == StmtKind::Call
-                && let Some(callee) = &g[node].callee
+                && let Some(callee) = &g[node].call.callee
                 && is_configured_terminator(callee, analysis_rules)
             {
                 return Vec::new();
@@ -4018,7 +3969,7 @@ fn build_sub<'a>(
             connect_all(g, preds, n, EdgeKind::Seq);
 
             // If the callee is a configured terminator, treat as a dead end
-            if let Some(callee) = &g[n].callee
+            if let Some(callee) = &g[n].call.callee
                 && is_configured_terminator(callee, analysis_rules)
             {
                 return Vec::new();
@@ -4431,7 +4382,7 @@ mod cfg_tests {
             "Expected exactly one catch_param node"
         );
         let cp = &cfg[catch_param_nodes[0]];
-        assert_eq!(cp.defines.as_deref(), Some("e"));
+        assert_eq!(cp.taint.defines.as_deref(), Some("e"));
         assert_eq!(cp.kind, StmtKind::Seq);
 
         // Exception edges should target the synthetic node
@@ -4456,7 +4407,7 @@ mod cfg_tests {
             1,
             "Expected exactly one catch_param node in Java"
         );
-        assert_eq!(cfg[catch_param_nodes[0]].defines.as_deref(), Some("e"));
+        assert_eq!(cfg[catch_param_nodes[0]].taint.defines.as_deref(), Some("e"));
     }
 
     #[test]
@@ -4509,7 +4460,7 @@ mod cfg_tests {
             "Expected exactly one catch_param node in Ruby rescue"
         );
         let cp = &cfg[catch_param_nodes[0]];
-        assert_eq!(cp.defines.as_deref(), Some("e"));
+        assert_eq!(cp.taint.defines.as_deref(), Some("e"));
         assert_eq!(cp.kind, StmtKind::Seq);
 
         // Exception edges should target the synthetic node
@@ -4591,7 +4542,7 @@ mod cfg_tests {
             1,
             "implicit begin rescue should have one catch_param node"
         );
-        assert_eq!(cfg[catch_param_nodes[0]].defines.as_deref(), Some("e"));
+        assert_eq!(cfg[catch_param_nodes[0]].taint.defines.as_deref(), Some("e"));
     }
 
     #[test]
@@ -4610,7 +4561,7 @@ mod cfg_tests {
 
         // Both should define "e"
         for &cp in &catch_param_nodes {
-            assert_eq!(cfg[cp].defines.as_deref(), Some("e"));
+            assert_eq!(cfg[cp].taint.defines.as_deref(), Some("e"));
         }
 
         // Exception edges should target both synthetic nodes
@@ -5080,19 +5031,283 @@ mod cfg_tests {
         // Find the node whose callee is "safe_wrapper"
         let body = &file_cfg.bodies[1]; // function body
         let has_safe = body.graph.node_weights().any(|info| {
-            info.callee.as_deref() == Some("safe_wrapper")
+            info.call.callee.as_deref() == Some("safe_wrapper")
         });
         assert!(has_safe, "expected a node with callee 'safe_wrapper'");
 
         // The outer body should NOT have a node with callee "eval" attributed
         // to the outer expression — eval lives inside the nested function body.
         let outer_eval = body.graph.node_weights().any(|info| {
-            info.callee.as_deref() == Some("eval") && info.enclosing_func.is_none()
+            info.call.callee.as_deref() == Some("eval") && info.ast.enclosing_func.is_none()
         });
         assert!(
             !outer_eval,
             "eval should not appear as a callee in the outer scope from a nested function"
         );
+    }
+
+    // ── NodeInfo sub-struct refactor tests ──────────────────────────────
+
+    #[test]
+    fn nodeinfo_default_is_valid() {
+        let n = NodeInfo::default();
+        assert_eq!(n.kind, StmtKind::Seq);
+        assert!(n.call.callee.is_none());
+        assert!(n.call.outer_callee.is_none());
+        assert_eq!(n.call.call_ordinal, 0);
+        assert!(n.call.arg_uses.is_empty());
+        assert!(n.call.receiver.is_none());
+        assert!(n.call.sink_payload_args.is_none());
+        assert!(n.taint.labels.is_empty());
+        assert!(n.taint.const_text.is_none());
+        assert!(n.taint.defines.is_none());
+        assert!(n.taint.uses.is_empty());
+        assert!(n.taint.extra_defines.is_empty());
+        assert_eq!(n.ast.span, (0, 0));
+        assert!(n.ast.enclosing_func.is_none());
+        assert!(!n.all_args_literal);
+        assert!(!n.catch_param);
+        assert!(n.condition_text.is_none());
+        assert!(n.condition_vars.is_empty());
+        assert!(!n.condition_negated);
+        assert!(n.arg_callees.is_empty());
+        assert!(n.cast_target_type.is_none());
+        assert!(n.bin_op.is_none());
+        assert!(n.bin_op_const.is_none());
+        assert!(!n.managed_resource);
+        assert!(!n.in_defer);
+    }
+
+    #[test]
+    fn callmeta_default() {
+        let c = CallMeta::default();
+        assert!(c.callee.is_none());
+        assert!(c.outer_callee.is_none());
+        assert_eq!(c.call_ordinal, 0);
+        assert!(c.arg_uses.is_empty());
+        assert!(c.receiver.is_none());
+        assert!(c.sink_payload_args.is_none());
+    }
+
+    #[test]
+    fn taintmeta_default() {
+        let t = TaintMeta::default();
+        assert!(t.labels.is_empty());
+        assert!(t.const_text.is_none());
+        assert!(t.defines.is_none());
+        assert!(t.uses.is_empty());
+        assert!(t.extra_defines.is_empty());
+    }
+
+    #[test]
+    fn astmeta_default() {
+        let a = AstMeta::default();
+        assert_eq!(a.span, (0, 0));
+        assert!(a.enclosing_func.is_none());
+    }
+
+    #[test]
+    fn synthetic_catch_param_node_structure() {
+        let n = NodeInfo {
+            kind: StmtKind::Seq,
+            ast: AstMeta {
+                span: (100, 100),
+                enclosing_func: Some("handle_request".into()),
+            },
+            taint: TaintMeta {
+                defines: Some("e".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("catch(e)".into()),
+                ..Default::default()
+            },
+            catch_param: true,
+            ..Default::default()
+        };
+        assert_eq!(n.kind, StmtKind::Seq);
+        assert_eq!(n.ast.span, (100, 100));
+        assert_eq!(n.ast.enclosing_func.as_deref(), Some("handle_request"));
+        assert_eq!(n.taint.defines.as_deref(), Some("e"));
+        assert_eq!(n.call.callee.as_deref(), Some("catch(e)"));
+        assert!(n.catch_param);
+        assert!(n.taint.labels.is_empty());
+        assert!(n.call.arg_uses.is_empty());
+    }
+
+    #[test]
+    fn synthetic_passthrough_node_structure() {
+        let n = NodeInfo {
+            kind: StmtKind::Seq,
+            ast: AstMeta {
+                span: (50, 50),
+                enclosing_func: Some("main".into()),
+            },
+            ..Default::default()
+        };
+        assert_eq!(n.kind, StmtKind::Seq);
+        assert_eq!(n.ast.span, (50, 50));
+        assert!(n.taint.defines.is_none());
+        assert!(n.call.callee.is_none());
+        assert!(!n.catch_param);
+    }
+
+    #[test]
+    fn normal_call_node_structure() {
+        let n = NodeInfo {
+            kind: StmtKind::Call,
+            call: CallMeta {
+                callee: Some("eval".into()),
+                receiver: Some("window".into()),
+                call_ordinal: 3,
+                arg_uses: vec![vec!["x".into()], vec!["y".into()]],
+                sink_payload_args: Some(vec![0]),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                labels: {
+                    let mut v = SmallVec::new();
+                    v.push(crate::labels::DataLabel::Sink(crate::labels::Cap::CODE_EXEC));
+                    v
+                },
+                defines: Some("result".into()),
+                uses: vec!["x".into(), "y".into()],
+                ..Default::default()
+            },
+            ast: AstMeta {
+                span: (10, 50),
+                enclosing_func: Some("handler".into()),
+            },
+            ..Default::default()
+        };
+        assert_eq!(n.call.callee.as_deref(), Some("eval"));
+        assert_eq!(n.call.receiver.as_deref(), Some("window"));
+        assert_eq!(n.call.call_ordinal, 3);
+        assert_eq!(n.call.arg_uses.len(), 2);
+        assert_eq!(n.call.sink_payload_args.as_deref(), Some(&[0usize][..]));
+        assert_eq!(n.taint.labels.len(), 1);
+        assert_eq!(n.taint.defines.as_deref(), Some("result"));
+        assert_eq!(n.taint.uses, vec!["x", "y"]);
+        assert_eq!(n.ast.span, (10, 50));
+        assert_eq!(n.ast.enclosing_func.as_deref(), Some("handler"));
+    }
+
+    #[test]
+    fn condition_node_preserves_fields() {
+        let n = NodeInfo {
+            kind: StmtKind::If,
+            ast: AstMeta {
+                span: (0, 20),
+                enclosing_func: None,
+            },
+            condition_text: Some("x > 0".into()),
+            condition_vars: vec!["x".into()],
+            condition_negated: true,
+            ..Default::default()
+        };
+        assert_eq!(n.kind, StmtKind::If);
+        assert_eq!(n.condition_text.as_deref(), Some("x > 0"));
+        assert_eq!(n.condition_vars, vec!["x"]);
+        assert!(n.condition_negated);
+    }
+
+    #[test]
+    fn clone_preserves_all_sub_structs() {
+        let original = NodeInfo {
+            kind: StmtKind::Call,
+            call: CallMeta {
+                callee: Some("foo".into()),
+                outer_callee: Some("bar".into()),
+                call_ordinal: 5,
+                arg_uses: vec![vec!["a".into()]],
+                receiver: Some("obj".into()),
+                sink_payload_args: Some(vec![1, 2]),
+            },
+            taint: TaintMeta {
+                labels: {
+                    let mut v = SmallVec::new();
+                    v.push(crate::labels::DataLabel::Source(crate::labels::Cap::all()));
+                    v
+                },
+                const_text: Some("42".into()),
+                defines: Some("r".into()),
+                uses: vec!["a".into(), "b".into()],
+                extra_defines: vec!["c".into()],
+            },
+            ast: AstMeta {
+                span: (10, 100),
+                enclosing_func: Some("main".into()),
+            },
+            all_args_literal: true,
+            catch_param: true,
+            ..Default::default()
+        };
+        let cloned = original.clone();
+        assert_eq!(cloned.call.callee, original.call.callee);
+        assert_eq!(cloned.call.outer_callee, original.call.outer_callee);
+        assert_eq!(cloned.call.call_ordinal, original.call.call_ordinal);
+        assert_eq!(cloned.call.arg_uses, original.call.arg_uses);
+        assert_eq!(cloned.call.receiver, original.call.receiver);
+        assert_eq!(cloned.call.sink_payload_args, original.call.sink_payload_args);
+        assert_eq!(cloned.taint.labels.len(), original.taint.labels.len());
+        assert_eq!(cloned.taint.const_text, original.taint.const_text);
+        assert_eq!(cloned.taint.defines, original.taint.defines);
+        assert_eq!(cloned.taint.uses, original.taint.uses);
+        assert_eq!(cloned.taint.extra_defines, original.taint.extra_defines);
+        assert_eq!(cloned.ast.span, original.ast.span);
+        assert_eq!(cloned.ast.enclosing_func, original.ast.enclosing_func);
+        assert_eq!(cloned.all_args_literal, original.all_args_literal);
+        assert_eq!(cloned.catch_param, original.catch_param);
+    }
+
+    #[test]
+    fn cfg_output_equivalence_js_catch() {
+        // This test verifies that the refactored NodeInfo produces the same
+        // CFG structure as before for a JS try/catch.
+        let src = b"function f() { try { foo(x); } catch(e) { bar(e); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        let body = file_cfg.first_body();
+
+        // Verify catch-param node exists with correct nested field access
+        let catch_params: Vec<_> = body
+            .graph
+            .node_weights()
+            .filter(|n| n.catch_param)
+            .collect();
+        assert_eq!(catch_params.len(), 1);
+        assert_eq!(catch_params[0].taint.defines.as_deref(), Some("e"));
+        assert!(catch_params[0].call.callee.as_deref().unwrap().starts_with("catch("));
+    }
+
+    #[test]
+    fn cfg_output_equivalence_condition_chain() {
+        // Verify If nodes use the correct sub-struct paths
+        let src = b"function f(x) { if (x > 0) { sink(x); } }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let if_nodes: Vec<_> = cfg
+            .node_weights()
+            .filter(|n| n.kind == StmtKind::If)
+            .collect();
+        assert!(!if_nodes.is_empty());
+        // Condition text and vars should be on the If node directly
+        let if_node = if_nodes[0];
+        assert!(if_node.condition_text.is_some() || !if_node.condition_vars.is_empty());
+        // Labels should be empty on If nodes (they're structural)
+        assert!(if_node.taint.labels.is_empty());
+    }
+
+    #[test]
+    fn make_empty_node_info_uses_sub_structs() {
+        let n = make_empty_node_info(StmtKind::Entry, (0, 100), Some("test_func"));
+        assert_eq!(n.kind, StmtKind::Entry);
+        assert_eq!(n.ast.span, (0, 100));
+        assert_eq!(n.ast.enclosing_func.as_deref(), Some("test_func"));
+        assert!(n.call.callee.is_none());
+        assert!(n.taint.defines.is_none());
+        assert!(n.taint.uses.is_empty());
     }
 
 }

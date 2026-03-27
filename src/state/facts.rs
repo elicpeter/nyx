@@ -32,10 +32,10 @@ fn is_terminal_function_exit(
     info: &crate::cfg::NodeInfo,
     cfg: &Cfg,
 ) -> bool {
-    info.enclosing_func.is_some()
+    info.ast.enclosing_func.is_some()
         && !cfg
             .neighbors_directed(idx, petgraph::Direction::Outgoing)
-            .any(|succ| cfg[succ].enclosing_func == info.enclosing_func)
+            .any(|succ| cfg[succ].ast.enclosing_func == info.ast.enclosing_func)
 }
 
 /// A finding produced by state analysis.
@@ -75,7 +75,7 @@ pub fn extract_findings(
                 findings.push(StateFinding {
                     rule_id: "state-use-after-close".into(),
                     severity: Severity::High,
-                    span: info.span,
+                    span: info.ast.span,
                     message: format!("variable `{var_name}` used after close"),
                     machine: "resource",
                     subject: Some(var_name.to_string()),
@@ -87,7 +87,7 @@ pub fn extract_findings(
                 findings.push(StateFinding {
                     rule_id: "state-double-close".into(),
                     severity: Severity::Medium,
-                    span: info.span,
+                    span: info.ast.span,
                     message: format!("variable `{var_name}` closed twice"),
                     machine: "resource",
                     subject: Some(var_name.to_string()),
@@ -109,7 +109,7 @@ pub fn extract_findings(
             .filter(|(_, ni)| {
                 ni.in_defer
                     && ni.kind == StmtKind::Call
-                    && ni.callee.as_ref().is_some_and(|c| {
+                    && ni.call.callee.as_ref().is_some_and(|c| {
                         let cl = c.to_ascii_lowercase();
                         pairs.iter().any(|p| {
                             p.release.iter().any(|r| {
@@ -124,8 +124,8 @@ pub fn extract_findings(
                     })
             })
             .flat_map(|(_, ni)| {
-                let scope = ni.enclosing_func.clone();
-                ni.uses
+                let scope = ni.ast.enclosing_func.clone();
+                ni.taint.uses
                     .iter()
                     .filter_map(move |v| interner.get_scoped(scope.as_deref(), v))
             })
@@ -134,7 +134,7 @@ pub fn extract_findings(
 
     for (idx, info) in cfg.node_references() {
         // File-level Exit (program termination, no enclosing function).
-        let is_file_exit = info.kind == StmtKind::Exit && info.enclosing_func.is_none();
+        let is_file_exit = info.kind == StmtKind::Exit && info.ast.enclosing_func.is_none();
         // Terminal function exit — the convergence node where all paths join.
         // Return nodes are intermediate and carry only path-specific state;
         // only the terminal exit carries the complete merged lifecycle.
@@ -152,7 +152,7 @@ pub fn extract_findings(
             }
             let var_name = interner.resolve(sym);
             let scope = if is_func_terminal {
-                info.enclosing_func.as_deref()
+                info.ast.enclosing_func.as_deref()
             } else {
                 None
             };
@@ -165,7 +165,7 @@ pub fn extract_findings(
             // (the first global match instead of the correct function-local one).
             if is_file_exit {
                 if let Some(acq) = acquire_node {
-                    if cfg[acq].enclosing_func.is_some() {
+                    if cfg[acq].ast.enclosing_func.is_some() {
                         continue;
                     }
                 }
@@ -190,7 +190,7 @@ pub fn extract_findings(
             // Prefer direct acquire node span; fall back to proxy span
             // from ResourceMethodSummary (cross-body resource tracking).
             let acquire_span = acquire_node
-                .map(|n| cfg[n].span)
+                .map(|n| cfg[n].ast.span)
                 .or_else(|| state.proxy_acquire_spans.get(&sym).copied());
 
             // Suppress/downgrade leaks for variables returned from the
@@ -199,7 +199,7 @@ pub fn extract_findings(
             // Mixed cases (some paths return, some leak) are downgraded
             // to state-resource-leak-possible.
             if is_func_terminal {
-                let scope = info.enclosing_func.as_deref();
+                let scope = info.ast.enclosing_func.as_deref();
                 let mut returned_open = 0u32;
                 let mut non_returned_open = 0u32;
                 for pred in cfg.neighbors_directed(idx, petgraph::Direction::Incoming) {
@@ -219,7 +219,7 @@ pub fn extract_findings(
                     // fallthrough) with OPEN resources represent genuine leaks.
                     let returns_var = cfg[pred].kind == StmtKind::Return
                         && cfg[pred]
-                            .uses
+                            .taint.uses
                             .iter()
                             .any(|u| interner.get_scoped(scope, u) == Some(sym));
                     if returns_var {
@@ -236,7 +236,7 @@ pub fn extract_findings(
                     findings.push(StateFinding {
                         rule_id: "state-resource-leak-possible".into(),
                         severity: Severity::Low,
-                        span: acquire_span.unwrap_or(info.span),
+                        span: acquire_span.unwrap_or(info.ast.span),
                         message: format!("resource `{var_name}` may not be closed on all paths"),
                         machine: "resource",
                         subject: Some(var_name.to_string()),
@@ -255,7 +255,7 @@ pub fn extract_findings(
                 findings.push(StateFinding {
                     rule_id: "state-resource-leak".into(),
                     severity: Severity::Medium,
-                    span: acquire_span.unwrap_or(info.span),
+                    span: acquire_span.unwrap_or(info.ast.span),
                     message: format!("resource `{var_name}` is never closed"),
                     machine: "resource",
                     subject: Some(var_name.to_string()),
@@ -267,7 +267,7 @@ pub fn extract_findings(
                 findings.push(StateFinding {
                     rule_id: "state-resource-leak-possible".into(),
                     severity: Severity::Low,
-                    span: acquire_span.unwrap_or(info.span),
+                    span: acquire_span.unwrap_or(info.ast.span),
                     message: format!("resource `{var_name}` may not be closed on all paths"),
                     machine: "resource",
                     subject: Some(var_name.to_string()),
@@ -305,10 +305,10 @@ pub fn extract_findings(
             // in the CFG (these could throw and bypass the release)
             let has_intervening_calls = cfg.node_references().any(|(_, ni)| {
                 ni.kind == StmtKind::Call
-                    && ni.enclosing_func == info.enclosing_func
-                    && ni.callee.is_some()
+                    && ni.ast.enclosing_func == info.ast.enclosing_func
+                    && ni.call.callee.is_some()
                     // Not the acquire or release proxy itself
-                    && !state.proxy_acquire_spans.values().any(|s| *s == ni.span)
+                    && !state.proxy_acquire_spans.values().any(|s| *s == ni.ast.span)
             });
             if has_intervening_calls {
                 let var_name = interner.resolve(sym);
@@ -316,7 +316,7 @@ pub fn extract_findings(
                 findings.push(StateFinding {
                     rule_id: "state-resource-leak-possible".into(),
                     severity: Severity::Low,
-                    span: acquire_span.unwrap_or(info.span),
+                    span: acquire_span.unwrap_or(info.ast.span),
                     message: format!(
                         "resource `{var_name}` may not be closed on all paths"
                     ),
@@ -334,7 +334,7 @@ pub fn extract_findings(
     // Check if any function is a web entrypoint
     let has_web_entrypoint = enable_auth
         && cfg.node_references().any(|(_, info)| {
-            if let Some(ref func_name) = info.enclosing_func {
+            if let Some(ref func_name) = info.ast.enclosing_func {
                 is_web_entrypoint_simple(func_name, lang, func_summaries, cfg)
             } else {
                 false
@@ -350,11 +350,11 @@ pub fn extract_findings(
                 continue;
             };
             if state.auth.auth_level == AuthLevel::Unauthed {
-                let callee_desc = sanitize_desc(info.callee.as_deref().unwrap_or("(sensitive op)"));
+                let callee_desc = sanitize_desc(info.call.callee.as_deref().unwrap_or("(sensitive op)"));
                 findings.push(StateFinding {
                     rule_id: "state-unauthed-access".into(),
                     severity: Severity::High,
-                    span: info.span,
+                    span: info.ast.span,
                     message: format!(
                         "sensitive operation `{callee_desc}` reached without authentication"
                     ),
@@ -387,8 +387,8 @@ fn find_acquire_node(
     if let Some(func) = enclosing_func {
         for (idx, info) in cfg.node_references() {
             if info.kind == StmtKind::Call
-                && info.enclosing_func.as_deref() == Some(func)
-                && info.defines.as_deref() == Some(var_name)
+                && info.ast.enclosing_func.as_deref() == Some(func)
+                && info.taint.defines.as_deref() == Some(var_name)
             {
                 return Some(idx);
             }
@@ -396,7 +396,7 @@ fn find_acquire_node(
     }
     // Fallback: first global match (for file-level Exit or top-level code).
     for (idx, info) in cfg.node_references() {
-        if info.kind == StmtKind::Call && info.defines.as_deref() == Some(var_name) {
+        if info.kind == StmtKind::Call && info.taint.defines.as_deref() == Some(var_name) {
             return Some(idx);
         }
     }
@@ -405,7 +405,7 @@ fn find_acquire_node(
 
 /// Check if a node is a privileged sink (shell execution or file I/O).
 fn is_privileged_sink(info: &crate::cfg::NodeInfo) -> bool {
-    info.labels.iter().any(|l| {
+    info.taint.labels.iter().any(|l| {
         if let DataLabel::Sink(caps) = l {
             caps.intersects(Cap::SHELL_ESCAPE | Cap::FILE_IO)
         } else {
@@ -465,7 +465,7 @@ fn is_web_entrypoint_simple(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cfg::{EdgeKind, NodeInfo};
+    use crate::cfg::{AstMeta, CallMeta, EdgeKind, NodeInfo, TaintMeta};
     use crate::cfg_analysis::rules;
     use crate::state::domain::ProductState;
     use crate::state::engine;
@@ -475,33 +475,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn make_node(kind: StmtKind) -> NodeInfo {
-        NodeInfo {
-            kind,
-            span: (0, 0),
-            labels: smallvec::SmallVec::new(),
-            defines: None,
-            extra_defines: vec![],
-            uses: vec![],
-            callee: None,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
-        }
+        NodeInfo { kind, ..Default::default() }
     }
 
     #[test]
@@ -511,10 +485,10 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            span: (10, 20),
-            defines: Some("f".into()),
-            callee: Some("fopen".into()),
-            ..make_node(StmtKind::Call)
+            ast: AstMeta { span: (10, 20), ..Default::default() },
+            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
+            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            ..Default::default()
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
 
@@ -544,15 +518,15 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            defines: Some("f".into()),
-            callee: Some("fopen".into()),
-            ..make_node(StmtKind::Call)
+            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
+            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            ..Default::default()
         });
         let close_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            uses: vec!["f".into()],
-            callee: Some("fclose".into()),
-            ..make_node(StmtKind::Call)
+            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
+            call: CallMeta { callee: Some("fclose".into()), ..Default::default() },
+            ..Default::default()
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
 
@@ -576,8 +550,9 @@ mod tests {
 
     fn make_func_node(kind: StmtKind, func: &str) -> NodeInfo {
         NodeInfo {
-            enclosing_func: Some(func.to_string()),
-            ..make_node(kind)
+            kind,
+            ast: AstMeta { enclosing_func: Some(func.to_string()), ..Default::default() },
+            ..Default::default()
         }
     }
 
@@ -589,16 +564,16 @@ mod tests {
         let entry = cfg.add_node(make_func_node(StmtKind::Entry, "f"));
         let call = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            callee: Some("fopen".into()),
-            defines: Some("x".into()),
-            enclosing_func: Some("f".into()),
-            ..make_node(StmtKind::Call)
+            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            ast: AstMeta { enclosing_func: Some("f".into()), ..Default::default() },
+            ..Default::default()
         });
         let ret = cfg.add_node(NodeInfo {
             kind: StmtKind::Return,
-            uses: vec!["x".into()],
-            enclosing_func: Some("f".into()),
-            ..make_node(StmtKind::Return)
+            taint: TaintMeta { uses: vec!["x".into()], ..Default::default() },
+            ast: AstMeta { enclosing_func: Some("f".into()), ..Default::default() },
+            ..Default::default()
         });
         let exit = cfg.add_node(make_func_node(StmtKind::Exit, "f"));
 
@@ -634,17 +609,16 @@ mod tests {
         let entry = cfg.add_node(make_func_node(StmtKind::Entry, func));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            span: (10, 20),
-            defines: Some("f".into()),
-            callee: Some("fopen".into()),
-            enclosing_func: Some(func.into()),
-            ..make_node(StmtKind::Call)
+            ast: AstMeta { span: (10, 20), enclosing_func: Some(func.into()) },
+            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
+            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            ..Default::default()
         });
         let ret = cfg.add_node(NodeInfo {
             kind: StmtKind::Return,
-            uses: vec!["f".into()],
-            enclosing_func: Some(func.into()),
-            ..make_node(StmtKind::Return)
+            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
+            ast: AstMeta { enclosing_func: Some(func.into()), ..Default::default() },
+            ..Default::default()
         });
         let exit = cfg.add_node(make_func_node(StmtKind::Exit, func));
 
@@ -680,16 +654,15 @@ mod tests {
         let entry = cfg.add_node(make_func_node(StmtKind::Entry, func));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            span: (10, 20),
-            defines: Some("f".into()),
-            callee: Some("fopen".into()),
-            enclosing_func: Some(func.into()),
-            ..make_node(StmtKind::Call)
+            ast: AstMeta { span: (10, 20), enclosing_func: Some(func.into()) },
+            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
+            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            ..Default::default()
         });
         let ret = cfg.add_node(NodeInfo {
             kind: StmtKind::Return,
-            enclosing_func: Some(func.into()),
-            ..make_node(StmtKind::Return)
+            ast: AstMeta { enclosing_func: Some(func.into()), ..Default::default() },
+            ..Default::default()
         });
         let exit = cfg.add_node(make_func_node(StmtKind::Exit, func));
 

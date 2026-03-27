@@ -459,7 +459,7 @@ pub fn populate_node_meta(body: &mut CalleeSsaBody, cfg: &crate::cfg::Cfg) -> bo
                 idx,
                 CrossFileNodeMeta {
                     bin_op: info.bin_op,
-                    labels: info.labels.clone(),
+                    labels: info.taint.labels.clone(),
                 },
             );
         }
@@ -627,7 +627,9 @@ fn run_ssa_taint_internal(
 
     // Phase 1: fixed-point iteration
     let mut worklist: VecDeque<usize> = VecDeque::new();
+    let mut in_worklist: HashSet<usize> = HashSet::new();
     worklist.push_back(ssa.entry.0 as usize);
+    in_worklist.insert(ssa.entry.0 as usize);
 
     // Initialize orphan blocks (no predecessors, not entry) with initial state.
     // This handles catch blocks that are disconnected after exception edge stripping.
@@ -635,6 +637,7 @@ fn run_ssa_taint_internal(
         if bid != ssa.entry.0 as usize && block.preds.is_empty() {
             block_states[bid] = Some(SsaTaintState::initial());
             worklist.push_back(bid);
+            in_worklist.insert(bid);
         }
     }
     if !ssa.exception_edges.is_empty() {
@@ -647,6 +650,7 @@ fn run_ssa_taint_internal(
     const BUDGET: usize = 100_000;
 
     while let Some(bid) = worklist.pop_front() {
+        in_worklist.remove(&bid);
         iterations += 1;
         if iterations > BUDGET {
             tracing::warn!("SSA taint: worklist budget exceeded");
@@ -706,7 +710,7 @@ fn run_ssa_taint_internal(
 
             if changed {
                 block_states[succ_idx] = Some(new_succ_state);
-                if !worklist.contains(&succ_idx) {
+                if in_worklist.insert(succ_idx) {
                     worklist.push_back(succ_idx);
                 }
             }
@@ -736,7 +740,7 @@ fn run_ssa_taint_internal(
 
             if changed {
                 block_states[catch_idx] = Some(new_catch_state);
-                if !worklist.contains(&catch_idx) {
+                if in_worklist.insert(catch_idx) {
                     worklist.push_back(catch_idx);
                 }
             }
@@ -840,7 +844,7 @@ pub fn extract_ssa_exit_state(
         for origin in taint.origins.iter_mut() {
             if origin.source_span.is_none() {
                 if let Some(info) = cfg.node_weight(origin.node) {
-                    origin.source_span = Some(info.span);
+                    origin.source_span = Some(info.ast.span);
                 }
             }
         }
@@ -1667,13 +1671,13 @@ fn transfer_inst(
         SsaOp::Source => {
             // Apply source labels from NodeInfo
             let mut source_caps = Cap::empty();
-            for lbl in &info.labels {
+            for lbl in &info.taint.labels {
                 if let DataLabel::Source(bits) = lbl {
                     source_caps |= *bits;
                 }
             }
             if !source_caps.is_empty() {
-                let callee = info.callee.as_deref().unwrap_or("");
+                let callee = info.call.callee.as_deref().unwrap_or("");
                 let source_kind = crate::labels::infer_source_kind(source_caps, callee);
                 let origin = TaintOrigin {
                     node: inst.cfg_node,
@@ -1716,10 +1720,10 @@ fn transfer_inst(
             let mut return_bits = Cap::empty();
             let mut return_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
-            for lbl in &info.labels {
+            for lbl in &info.taint.labels {
                 if let DataLabel::Source(bits) = lbl {
                     return_bits |= *bits;
-                    let callee_str = info.callee.as_deref().unwrap_or("");
+                    let callee_str = info.call.callee.as_deref().unwrap_or("");
                     let source_kind = crate::labels::infer_source_kind(*bits, callee_str);
                     let origin = TaintOrigin {
                         node: inst.cfg_node,
@@ -1758,7 +1762,7 @@ fn transfer_inst(
 
             // Check for sanitizer labels
             let mut sanitizer_bits = Cap::empty();
-            for lbl in &info.labels {
+            for lbl in &info.taint.labels {
                 if let DataLabel::Sanitizer(bits) = lbl {
                     sanitizer_bits |= *bits;
                 }
@@ -1768,9 +1772,9 @@ fn transfer_inst(
             // labels are present. Labels take precedence for source caps, but
             // summary propagation and sanitizer behaviour must still apply
             // (matches legacy `apply_call()` semantics).
-            let caller_func = info.enclosing_func.as_deref().unwrap_or("");
+            let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
             let has_source_label = info
-                .labels
+                .taint.labels
                 .iter()
                 .any(|l| matches!(l, DataLabel::Source(_)));
 
@@ -1806,7 +1810,7 @@ fn transfer_inst(
             let mut resolved_container_store: Vec<(usize, usize)> = Vec::new();
 
             // Resolve callee summary (used for both taint propagation and container fields)
-            let callee_summary = resolve_callee(transfer, callee, caller_func, info.call_ordinal);
+            let callee_summary = resolve_callee(transfer, callee, caller_func, info.call.call_ordinal);
 
             // Capture container fields and return type regardless of whether
             // inline analysis handled the call
@@ -1835,9 +1839,9 @@ fn transfer_inst(
             // the outer_callee preserves the original. Resolve it too for
             // container fields that depend on the wrapping function's summary.
             if resolved_container_store.is_empty() {
-                if let Some(ref oc) = info.outer_callee {
+                if let Some(ref oc) = info.call.outer_callee {
                     if let Some(ref resolved) =
-                        resolve_callee(transfer, oc, caller_func, info.call_ordinal)
+                        resolve_callee(transfer, oc, caller_func, info.call.call_ordinal)
                     {
                         if resolved_container_to_return.is_empty() {
                             resolved_container_to_return =
@@ -1869,7 +1873,7 @@ fn transfer_inst(
                 // Propagation: ALWAYS apply
                 if resolved.propagates_taint {
                     // Only use positional filtering when original arg_uses is populated
-                    let effective_params = if info.arg_uses.is_empty() {
+                    let effective_params = if info.call.arg_uses.is_empty() {
                         &[] as &[usize]
                     } else {
                         &resolved.propagating_params
@@ -1894,7 +1898,7 @@ fn transfer_inst(
             // failed and explicit labels are absent, try constructing a type-qualified
             // callee name from the receiver's inferred type (e.g., client.send →
             // HttpClient.send when client is typed as HttpClient).
-            if !resolved_callee && info.labels.is_empty() {
+            if !resolved_callee && info.taint.labels.is_empty() {
                 if let Some(rv) = receiver {
                     if transfer.type_facts.is_some() || state.path_env.is_some() {
                         let tq_labels = resolve_type_qualified_labels(
@@ -1957,7 +1961,7 @@ fn transfer_inst(
                     inst, info, args, receiver, state, transfer, callee, ssa,
                 );
                 if !container_handled {
-                    if let Some(ref oc) = info.outer_callee {
+                    if let Some(ref oc) = info.call.outer_callee {
                         container_handled = try_container_propagation(
                             inst, info, args, receiver, state, transfer, oc, ssa,
                         );
@@ -1968,7 +1972,7 @@ fn transfer_inst(
                     // where req.query.item triggers a Source label on the call), merge
                     // the source taint into the container receiver too.
                     if !return_bits.is_empty() {
-                        let recv_callee = info.outer_callee.as_deref().unwrap_or(callee);
+                        let recv_callee = info.call.outer_callee.as_deref().unwrap_or(callee);
                         if let Some(container_val) =
                             find_container_receiver(recv_callee, receiver, args, ssa, transfer.lang)
                         {
@@ -2175,9 +2179,9 @@ fn transfer_inst(
             // container identity return, the return value is independent of its
             // arguments — clear return_bits.
             if !return_bits.is_empty() && has_source_label {
-                if let Some(ref oc) = info.outer_callee {
+                if let Some(ref oc) = info.call.outer_callee {
                     if let Some(ref oc_sum) =
-                        resolve_callee(transfer, oc, caller_func, info.call_ordinal)
+                        resolve_callee(transfer, oc, caller_func, info.call.call_ordinal)
                     {
                         if !oc_sum.propagates_taint && oc_sum.source_caps.is_empty() {
                             // Outer callee blocks taint: no param→return flow,
@@ -2207,7 +2211,7 @@ fn transfer_inst(
         SsaOp::Assign(uses) => {
             // Check for sanitizer labels
             let mut sanitizer_bits = Cap::empty();
-            for lbl in &info.labels {
+            for lbl in &info.taint.labels {
                 if let DataLabel::Sanitizer(bits) = lbl {
                     sanitizer_bits |= *bits;
                 }
@@ -2251,10 +2255,10 @@ fn transfer_inst(
             }
 
             // Check for source labels
-            for lbl in &info.labels {
+            for lbl in &info.taint.labels {
                 if let DataLabel::Source(bits) = lbl {
                     combined_caps |= *bits;
-                    let callee_str = info.callee.as_deref().unwrap_or("");
+                    let callee_str = info.call.callee.as_deref().unwrap_or("");
                     let source_kind = crate::labels::infer_source_kind(*bits, callee_str);
                     let origin = TaintOrigin {
                         node: inst.cfg_node,
@@ -2843,10 +2847,10 @@ fn collect_block_events(
         if sink_caps.is_empty() {
             // Callback pattern: check if callee has source_to_callback and the
             // actual callback argument has a matching param_to_sink.
-            if let SsaOp::Call { callee, args, .. } = &inst.op {
-                let caller_func = info.enclosing_func.as_deref().unwrap_or("");
+            if let SsaOp::Call { callee, args: _, .. } = &inst.op {
+                let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
                 if let Some(resolved) =
-                    resolve_callee(transfer, callee, caller_func, info.call_ordinal)
+                    resolve_callee(transfer, callee, caller_func, info.call.call_ordinal)
                 {
                     for &(cb_idx, src_caps) in &resolved.source_to_callback {
                         let cb_name = info.arg_callees.get(cb_idx).and_then(|ac| ac.as_ref());
@@ -2946,7 +2950,7 @@ fn collect_block_events(
         // sink sensitivity so tainted data stripped by the inner call isn't flagged.
         for maybe_callee in &info.arg_callees {
             if let Some(inner_callee) = maybe_callee {
-                let caller_func = info.enclosing_func.as_deref().unwrap_or("");
+                let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
                 if let Some(resolved) = resolve_callee(transfer, inner_callee, caller_func, 0) {
                     sink_caps &= !resolved.sanitizer_caps;
                 } else {
@@ -3155,14 +3159,14 @@ fn try_curl_url_propagation(
     args: &[SmallVec<[SsaValue; 2]>],
     state: &mut SsaTaintState,
 ) -> bool {
-    if info.defines.is_some() {
+    if info.taint.defines.is_some() {
         return false;
     }
-    let callee = match info.callee.as_deref() {
+    let callee = match info.call.callee.as_deref() {
         Some(c) if c.ends_with("curl_easy_setopt") => c,
         _ => return false,
     };
-    if !info.uses.iter().any(|u| u == "CURLOPT_URL") {
+    if !info.taint.uses.iter().any(|u| u == "CURLOPT_URL") {
         return false;
     }
     // Identify handle and URL SSA values from args.
@@ -3194,7 +3198,7 @@ fn try_curl_url_propagation(
             }
         }
     }
-    // Also check info.uses for identifiers that aren't callee, handle, or CURLOPT_URL
+    // Also check info.taint.uses for identifiers that aren't callee, handle, or CURLOPT_URL
     // in case arg_uses was empty and SSA lowering put all uses into a single group
     if url_caps.is_empty() {
         // Fallback: look at all used SSA values except handle
@@ -3561,7 +3565,7 @@ struct SinkInfo {
 }
 
 fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
-    let label_sink_caps = info.labels.iter().fold(Cap::empty(), |acc, lbl| {
+    let label_sink_caps = info.taint.labels.iter().fold(Cap::empty(), |acc, lbl| {
         if let DataLabel::Sink(caps) = lbl {
             acc | *caps
         } else {
@@ -3575,10 +3579,10 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
         };
     }
 
-    let caller_func = info.enclosing_func.as_deref().unwrap_or("");
-    info.callee
+    let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
+    info.call.callee
         .as_ref()
-        .and_then(|c| resolve_callee(transfer, c, caller_func, info.call_ordinal))
+        .and_then(|c| resolve_callee(transfer, c, caller_func, info.call.call_ordinal))
         .filter(|r| !r.sink_caps.is_empty())
         .map(|r| SinkInfo {
             caps: r.sink_caps,
@@ -3623,7 +3627,7 @@ fn collect_tainted_sink_values(
     let used_values = inst_use_values(inst);
 
     // Priority 1: gated sink filtering (CFG-level sink_payload_args)
-    if let Some(ref positions) = info.sink_payload_args {
+    if let Some(ref positions) = info.call.sink_payload_args {
         if let SsaOp::Call { args, receiver, .. } = &inst.op {
             let offset = if receiver.is_some() { 1 } else { 0 };
             for &pos in positions {
@@ -4730,7 +4734,7 @@ fn reconstruct_flow_path(
     // 1. Add sink step
     steps.push(FlowStepRaw {
         cfg_node: sink_node,
-        var_name: cfg.node_weight(sink_node).and_then(|n| n.callee.clone()),
+        var_name: cfg.node_weight(sink_node).and_then(|n| n.call.callee.clone()),
         op_kind: FlowStepKind::Sink,
     });
 
@@ -5503,7 +5507,7 @@ pub(crate) fn extract_container_flow_summary(
 #[cfg(test)]
 mod cross_file_tests {
     use super::*;
-    use crate::cfg::{BinOp, EdgeKind, NodeInfo, StmtKind};
+    use crate::cfg::{AstMeta, BinOp, CallMeta, EdgeKind, NodeInfo, StmtKind, TaintMeta};
     use crate::labels::DataLabel;
     use crate::ssa::ir::*;
     use petgraph::prelude::*;
@@ -5513,57 +5517,24 @@ mod cross_file_tests {
         let mut cfg = Graph::new();
         let n0 = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            span: (0, 10),
-            labels: smallvec![DataLabel::Source(crate::labels::Cap::all())],
-            defines: Some("x".into()),
-            extra_defines: vec![],
-            uses: vec![],
-            callee: None,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: vec![],
-            outer_callee: None,
-            cast_target_type: None,
+            ast: AstMeta { span: (0, 10), ..Default::default() },
+            taint: TaintMeta {
+                labels: smallvec![DataLabel::Source(crate::labels::Cap::all())],
+                defines: Some("x".into()),
+                ..Default::default()
+            },
+            call: CallMeta::default(),
             bin_op: Some(BinOp::Add),
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            ..Default::default()
         });
         let n1 = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            span: (10, 20),
-            labels: smallvec![],
-            defines: Some("y".into()),
-            extra_defines: vec![],
-            uses: vec![],
-            callee: None,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: vec![],
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            ast: AstMeta { span: (10, 20), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("y".into()),
+                ..Default::default()
+            },
+            ..Default::default()
         });
         cfg.add_edge(n0, n1, EdgeKind::Seq);
         cfg
@@ -5875,5 +5846,161 @@ mod binding_key_tests {
         let filtered = filter_seed_to_toplevel(&seed, &toplevel);
         assert_eq!(filtered.len(), 1);
         assert!(filtered.contains_key(&BindingKey::new("x")));
+    }
+}
+
+#[cfg(test)]
+mod worklist_tests {
+    use std::collections::{HashSet, VecDeque};
+
+    /// Simulate the O(1) worklist membership pattern from run_ssa_taint_internal.
+    /// Verifies that the HashSet stays in sync with the VecDeque.
+    fn worklist_push(wl: &mut VecDeque<usize>, in_wl: &mut HashSet<usize>, idx: usize) -> bool {
+        if in_wl.insert(idx) {
+            wl.push_back(idx);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn worklist_pop(wl: &mut VecDeque<usize>, in_wl: &mut HashSet<usize>) -> Option<usize> {
+        let val = wl.pop_front()?;
+        in_wl.remove(&val);
+        Some(val)
+    }
+
+    #[test]
+    fn duplicate_enqueue_produces_single_entry() {
+        let mut wl = VecDeque::new();
+        let mut in_wl = HashSet::new();
+        assert!(worklist_push(&mut wl, &mut in_wl, 0));
+        assert!(!worklist_push(&mut wl, &mut in_wl, 0)); // duplicate
+        assert_eq!(wl.len(), 1);
+        assert_eq!(in_wl.len(), 1);
+    }
+
+    #[test]
+    fn pop_removes_from_set() {
+        let mut wl = VecDeque::new();
+        let mut in_wl = HashSet::new();
+        worklist_push(&mut wl, &mut in_wl, 5);
+        worklist_push(&mut wl, &mut in_wl, 10);
+        let val = worklist_pop(&mut wl, &mut in_wl);
+        assert_eq!(val, Some(5));
+        assert!(!in_wl.contains(&5));
+        assert!(in_wl.contains(&10));
+    }
+
+    #[test]
+    fn re_enqueue_after_pop() {
+        let mut wl = VecDeque::new();
+        let mut in_wl = HashSet::new();
+        worklist_push(&mut wl, &mut in_wl, 0);
+        let _ = worklist_pop(&mut wl, &mut in_wl);
+        // After popping, we should be able to re-enqueue
+        assert!(worklist_push(&mut wl, &mut in_wl, 0));
+        assert_eq!(wl.len(), 1);
+    }
+
+    #[test]
+    fn empty_worklist() {
+        let mut wl: VecDeque<usize> = VecDeque::new();
+        let mut in_wl: HashSet<usize> = HashSet::new();
+        assert_eq!(worklist_pop(&mut wl, &mut in_wl), None);
+        assert!(in_wl.is_empty());
+    }
+
+    #[test]
+    fn self_loop_pattern() {
+        // Simulate a block that re-enqueues itself
+        let mut wl = VecDeque::new();
+        let mut in_wl = HashSet::new();
+        worklist_push(&mut wl, &mut in_wl, 0);
+
+        let block = worklist_pop(&mut wl, &mut in_wl).unwrap();
+        assert_eq!(block, 0);
+        // Re-enqueue self (simulating state change)
+        worklist_push(&mut wl, &mut in_wl, 0);
+        // Also enqueue successor
+        worklist_push(&mut wl, &mut in_wl, 1);
+        assert_eq!(wl.len(), 2);
+    }
+
+    #[test]
+    fn cycle_with_repeated_discovery() {
+        // Simulate cycle: 0→1→2→0 with multiple state propagations
+        let mut wl = VecDeque::new();
+        let mut in_wl = HashSet::new();
+        worklist_push(&mut wl, &mut in_wl, 0);
+
+        let mut iterations = 0;
+        while let Some(block) = worklist_pop(&mut wl, &mut in_wl) {
+            iterations += 1;
+            if iterations > 10 {
+                break; // safety net
+            }
+            let succ = (block + 1) % 3;
+            // Only re-enqueue if "state changed" (simulate with iteration limit)
+            if iterations < 6 {
+                worklist_push(&mut wl, &mut in_wl, succ);
+            }
+        }
+        assert!(iterations <= 10, "worklist should terminate");
+        assert!(wl.is_empty());
+        assert!(in_wl.is_empty());
+    }
+
+    #[test]
+    fn dense_successors_no_duplicates() {
+        // Many successors, some repeated — old O(n) contains() would be slow here
+        let mut wl = VecDeque::new();
+        let mut in_wl = HashSet::new();
+
+        // Seed with one node
+        worklist_push(&mut wl, &mut in_wl, 0);
+        let _ = worklist_pop(&mut wl, &mut in_wl);
+
+        // Try to add 100 successors, with many duplicates
+        let mut total_enqueued = 0;
+        for i in 0..100 {
+            let succ = i % 10; // only 10 unique blocks
+            if worklist_push(&mut wl, &mut in_wl, succ) {
+                total_enqueued += 1;
+            }
+        }
+        assert_eq!(total_enqueued, 10); // only 10 unique blocks enqueued
+        assert_eq!(wl.len(), 10);
+        assert_eq!(in_wl.len(), 10);
+    }
+
+    #[test]
+    fn set_and_deque_stay_in_sync_throughout() {
+        let mut wl = VecDeque::new();
+        let mut in_wl = HashSet::new();
+
+        // Push, pop, re-push cycle
+        for i in 0..20 {
+            worklist_push(&mut wl, &mut in_wl, i);
+        }
+        assert_eq!(wl.len(), in_wl.len());
+
+        for _ in 0..10 {
+            worklist_pop(&mut wl, &mut in_wl);
+        }
+        assert_eq!(wl.len(), in_wl.len());
+        assert_eq!(wl.len(), 10);
+
+        // Re-push some previously popped
+        for i in 0..5 {
+            worklist_push(&mut wl, &mut in_wl, i);
+        }
+        assert_eq!(wl.len(), in_wl.len());
+        assert_eq!(wl.len(), 15);
+
+        // Drain completely
+        while worklist_pop(&mut wl, &mut in_wl).is_some() {}
+        assert!(wl.is_empty());
+        assert!(in_wl.is_empty());
     }
 }

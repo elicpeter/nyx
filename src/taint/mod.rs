@@ -57,7 +57,7 @@ pub struct Finding {
     /// Symbolic constraint analysis verdict, if attempted.
     pub symbolic: Option<crate::evidence::SymbolicVerdict>,
     /// Original source byte span, preserved when origin was remapped across
-    /// body boundaries.  `None` for intra-body findings (use `cfg[source].span`).
+    /// body boundaries.  `None` for intra-body findings (use `cfg[source].ast.span`).
     pub source_span: Option<usize>,
 }
 
@@ -344,10 +344,10 @@ fn analyse_multi_body(
         let toplevel_keys: HashSet<ssa_transfer::BindingKey> = {
             let mut keys = HashSet::new();
             for (_idx, info) in top_cfg.node_references() {
-                if let Some(ref d) = info.defines {
+                if let Some(ref d) = info.taint.defines {
                     keys.insert(ssa_transfer::BindingKey::new(d.as_str()));
                 }
-                for u in &info.uses {
+                for u in &info.taint.uses {
                     keys.insert(ssa_transfer::BindingKey::new(u.as_str()));
                 }
             }
@@ -421,7 +421,7 @@ fn find_function_entries(cfg: &Cfg) -> Vec<(String, NodeIndex)> {
     let mut entries = Vec::new();
 
     for (idx, info) in cfg.node_references() {
-        if let Some(ref func_name) = info.enclosing_func
+        if let Some(ref func_name) = info.ast.enclosing_func
             && seen.insert(func_name.clone())
         {
             entries.push((func_name.clone(), idx));

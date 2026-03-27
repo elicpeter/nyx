@@ -76,7 +76,7 @@ fn is_dead(inst: &SsaInst, use_counts: &HashMap<SsaValue, usize>, cfg: &Cfg) -> 
     // Never remove instructions whose CFG node has Sink labels
     if cfg
         .node_weight(inst.cfg_node)
-        .is_some_and(|info| info.labels.iter().any(|l| matches!(l, DataLabel::Sink(_))))
+        .is_some_and(|info| info.taint.labels.iter().any(|l| matches!(l, DataLabel::Sink(_))))
     {
         return false;
     }
@@ -113,33 +113,7 @@ mod tests {
     use smallvec::SmallVec;
 
     fn make_cfg_node(kind: StmtKind) -> NodeInfo {
-        NodeInfo {
-            kind,
-            span: (0, 0),
-            labels: SmallVec::new(),
-            defines: None,
-            extra_defines: vec![],
-            uses: vec![],
-            callee: None,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            condition_text: None,
-            condition_vars: vec![],
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
-        }
+        NodeInfo { kind, ..Default::default() }
     }
 
     #[test]

@@ -620,30 +620,9 @@ mod tests {
     fn make_cond_info(text: &str, vars: &[&str]) -> NodeInfo {
         NodeInfo {
             kind: StmtKind::If,
-            span: (0, 0),
-            labels: SmallVec::new(),
-            defines: None,
-            extra_defines: vec![],
-            uses: vec![],
-            callee: None,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
             condition_text: Some(text.to_string()),
-            condition_vars: vars.iter().map(|s| s.to_string()).collect(),
-            condition_negated: false,
-            arg_uses: vec![],
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            const_text: None,
-            arg_callees: vec![],
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            condition_vars: vars.iter().map(|v| v.to_string()).collect(),
+            ..Default::default()
         }
     }
 

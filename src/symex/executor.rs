@@ -1386,30 +1386,7 @@ mod tests {
         let mut cfg_graph = Cfg::new();
         let _c = cfg_graph.add_node(crate::cfg::NodeInfo {
             kind: crate::cfg::StmtKind::Seq,
-            span: (0, 0),
-            labels: smallvec::SmallVec::new(),
-            defines: None,
-            extra_defines: Vec::new(),
-            uses: Vec::new(),
-            callee: None,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            const_text: None,
-            condition_vars: Vec::new(),
-            condition_text: None,
-            condition_negated: false,
-            arg_uses: Vec::new(),
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            ..Default::default()
         });
 
         let ssa = SsaBody {
@@ -1548,30 +1525,7 @@ mod tests {
         let mut cfg_graph = Cfg::new();
         cfg_graph.add_node(crate::cfg::NodeInfo {
             kind: crate::cfg::StmtKind::Seq,
-            span: (0, 0),
-            labels: smallvec::SmallVec::new(),
-            defines: None,
-            extra_defines: Vec::new(),
-            uses: Vec::new(),
-            callee: None,
-            receiver: None,
-            enclosing_func: None,
-            call_ordinal: 0,
-            const_text: None,
-            condition_vars: Vec::new(),
-            condition_text: None,
-            condition_negated: false,
-            arg_uses: Vec::new(),
-            sink_payload_args: None,
-            all_args_literal: false,
-            catch_param: false,
-            arg_callees: Vec::new(),
-            outer_callee: None,
-            cast_target_type: None,
-            bin_op: None,
-            bin_op_const: None,
-            managed_resource: false,
-            in_defer: false,
+            ..Default::default()
         });
 
         let ssa = SsaBody {
