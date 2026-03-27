@@ -456,6 +456,12 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                     _ => None,
                 };
             }
+            Kind::Function => {
+                // Do not descend into nested function/lambda bodies —
+                // they are separate scopes and should not contribute
+                // callee identifiers to the parent expression.
+                continue;
+            }
             _ => {
                 // Recurse into children (handles nested declarators)
                 if let Some(found) = first_call_ident(c, lang, code) {
@@ -4991,6 +4997,101 @@ mod cfg_tests {
             3,
             "Expected 3 If nodes for `a || b && c`, got {}",
             ifs.len()
+        );
+    }
+
+    // ── first_call_ident tests ──────────────────────────────────────────
+
+    /// Helper: parse source with a given language, return the root tree-sitter node.
+    fn parse_tree(src: &[u8], ts_lang: Language) -> tree_sitter::Tree {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&ts_lang).unwrap();
+        parser.parse(src, None).unwrap()
+    }
+
+    #[test]
+    fn first_call_ident_skips_lambda_body() {
+        // `process(lambda: eval(dangerous))` — Python-style.
+        // first_call_ident should return "process", not "eval".
+        let src = b"process(lambda: eval(dangerous))";
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let tree = parse_tree(src, ts_lang);
+        let root = tree.root_node();
+        let result = first_call_ident(root, "python", src);
+        assert_eq!(result.as_deref(), Some("process"));
+    }
+
+    #[test]
+    fn first_call_ident_skips_arrow_function_body() {
+        // `process(() => eval(dangerous))` — JS arrow function in argument.
+        let src = b"process(() => eval(dangerous))";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let tree = parse_tree(src, ts_lang);
+        let root = tree.root_node();
+        let result = first_call_ident(root, "javascript", src);
+        assert_eq!(result.as_deref(), Some("process"));
+    }
+
+    #[test]
+    fn first_call_ident_skips_named_function_in_arg() {
+        // `process(function inner() { eval(dangerous); })` — named function expression in arg.
+        let src = b"process(function inner() { eval(dangerous); })";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let tree = parse_tree(src, ts_lang);
+        let root = tree.root_node();
+        let result = first_call_ident(root, "javascript", src);
+        assert_eq!(result.as_deref(), Some("process"));
+    }
+
+    #[test]
+    fn first_call_ident_normal_nested_call() {
+        // `outer(inner(x))` — inner is NOT behind a function boundary, should be reachable.
+        let src = b"outer(inner(x))";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let tree = parse_tree(src, ts_lang);
+        let root = tree.root_node();
+        let result = first_call_ident(root, "javascript", src);
+        // first_call_ident returns the first call it encounters (outer)
+        assert_eq!(result.as_deref(), Some("outer"));
+    }
+
+    #[test]
+    fn first_call_ident_finds_call_not_blocked_by_function() {
+        // Ensure a call at the same level as a function literal is still found.
+        // `[function() {}, actual_call()]` — array with function and call.
+        let src = b"[function() {}, actual_call()]";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let tree = parse_tree(src, ts_lang);
+        let root = tree.root_node();
+        let result = first_call_ident(root, "javascript", src);
+        assert_eq!(result.as_deref(), Some("actual_call"));
+    }
+
+    // ── Callee classification with nested function regression ───────────
+
+    #[test]
+    fn callee_not_resolved_from_nested_function_arg() {
+        // `safe_wrapper(function() { eval(user_input); })` — the CFG for the
+        // outer call should resolve the callee as "safe_wrapper", never "eval".
+        let src = b"function f() { safe_wrapper(function() { eval(user_input); }); }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+
+        // Find the node whose callee is "safe_wrapper"
+        let body = &file_cfg.bodies[1]; // function body
+        let has_safe = body.graph.node_weights().any(|info| {
+            info.callee.as_deref() == Some("safe_wrapper")
+        });
+        assert!(has_safe, "expected a node with callee 'safe_wrapper'");
+
+        // The outer body should NOT have a node with callee "eval" attributed
+        // to the outer expression — eval lives inside the nested function body.
+        let outer_eval = body.graph.node_weights().any(|info| {
+            info.callee.as_deref() == Some("eval") && info.enclosing_func.is_none()
+        });
+        assert!(
+            !outer_eval,
+            "eval should not appear as a callee in the outer scope from a nested function"
         );
     }
 

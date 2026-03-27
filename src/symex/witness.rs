@@ -172,7 +172,9 @@ fn sink_cap(finding: &Finding, cfg: &Cfg) -> Cap {
 /// Select a witness payload string based on the vulnerability class.
 fn witness_payload(cap: Cap) -> &'static str {
     // Check bits in priority order (most specific first)
-    if cap.intersects(Cap::CODE_EXEC) || cap.intersects(Cap::HTML_ESCAPE) {
+    if cap.intersects(Cap::CODE_EXEC) {
+        "require('child_process').execSync('id')"
+    } else if cap.intersects(Cap::HTML_ESCAPE) {
         "<script>alert('xss')</script>"
     } else if cap.intersects(Cap::SQL_QUERY) {
         "' OR 1=1 --"
@@ -594,7 +596,7 @@ mod tests {
     fn test_witness_payload_per_cap() {
         assert_eq!(
             witness_payload(Cap::CODE_EXEC),
-            "<script>alert('xss')</script>"
+            "require('child_process').execSync('id')"
         );
         assert_eq!(witness_payload(Cap::SQL_QUERY), "' OR 1=1 --");
         assert_eq!(witness_payload(Cap::SHELL_ESCAPE), "$(id)");
@@ -608,6 +610,63 @@ mod tests {
             "malicious_serialized_object"
         );
         assert_eq!(witness_payload(Cap::CRYPTO), "TAINTED"); // fallback
+    }
+
+    #[test]
+    fn test_witness_payload_code_exec_separate_from_xss() {
+        // CODE_EXEC must return a code-execution payload, not an XSS one.
+        let code_exec = witness_payload(Cap::CODE_EXEC);
+        assert!(
+            code_exec.contains("child_process"),
+            "CODE_EXEC payload should be code-execution, got: {code_exec}"
+        );
+        assert!(
+            !code_exec.contains("script"),
+            "CODE_EXEC payload must not be an XSS payload"
+        );
+
+        // HTML_ESCAPE still gets the XSS payload.
+        let xss = witness_payload(Cap::HTML_ESCAPE);
+        assert!(
+            xss.contains("script"),
+            "HTML_ESCAPE payload should be XSS, got: {xss}"
+        );
+    }
+
+    #[test]
+    fn test_witness_payload_combined_caps_prefers_code_exec() {
+        // When both CODE_EXEC and HTML_ESCAPE are present, CODE_EXEC wins.
+        let combined = Cap::CODE_EXEC | Cap::HTML_ESCAPE;
+        let payload = witness_payload(combined);
+        assert_eq!(
+            payload,
+            "require('child_process').execSync('id')",
+            "CODE_EXEC should take priority over HTML_ESCAPE"
+        );
+    }
+
+    #[test]
+    fn test_witness_payload_unrelated_caps_unchanged() {
+        // Verify that unrelated caps are not affected by the CODE_EXEC split.
+        assert_eq!(witness_payload(Cap::SQL_QUERY), "' OR 1=1 --");
+        assert_eq!(witness_payload(Cap::SHELL_ESCAPE), "$(id)");
+        assert_eq!(witness_payload(Cap::FILE_IO), "../../etc/passwd");
+        assert_eq!(
+            witness_payload(Cap::SSRF),
+            "http://169.254.169.254/metadata"
+        );
+        assert_eq!(
+            witness_payload(Cap::DESERIALIZE),
+            "malicious_serialized_object"
+        );
+
+        // Combined caps that don't include CODE_EXEC or HTML_ESCAPE
+        let sql_file = Cap::SQL_QUERY | Cap::FILE_IO;
+        assert_eq!(
+            witness_payload(sql_file),
+            "' OR 1=1 --",
+            "SQL_QUERY should take priority over FILE_IO"
+        );
     }
 
     #[test]
