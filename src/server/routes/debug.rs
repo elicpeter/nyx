@@ -140,6 +140,9 @@ async fn get_taint(
 
     // Try to load global summaries from DB for cross-file context
     let global = load_global_summaries(&state);
+    let cross_file_context = global.as_ref().map_or(false, |g| !g.is_empty());
+    let ssa_summaries_available =
+        global.as_ref().map_or(false, |g| !g.snapshot_ssa().is_empty());
 
     let (events, _entry_states, exit_states) = debug::analyse_function_taint(
         &ssa,
@@ -156,6 +159,8 @@ async fn get_taint(
         &events,
         &exit_states,
         &ssa,
+        cross_file_context,
+        ssa_summaries_available,
     )))
 }
 
@@ -333,6 +338,183 @@ mod tests {
     use crate::summary::FuncSummary;
     use crate::summary::ssa_summary::SsaFuncSummary;
     use crate::symbol::{FuncKey, Lang};
+
+    /// Helper: create a DB pool with persisted summaries for a JS helper function.
+    fn setup_db_with_summaries(
+        dir: &std::path::Path,
+        scan_root: &std::path::Path,
+    ) -> std::sync::Arc<r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>> {
+        std::fs::create_dir_all(scan_root.join("src")).unwrap();
+        let file_path = scan_root.join("src/helper.js");
+        std::fs::write(
+            &file_path,
+            "function getInput() { return process.env.USER_INPUT; }\nmodule.exports = { getInput };",
+        )
+        .unwrap();
+
+        let db_path = dir.join("test.sqlite");
+        let pool = Indexer::init(&db_path).unwrap();
+        let mut indexer =
+            Indexer::from_pool(scan_root.file_name().unwrap().to_str().unwrap(), &pool).unwrap();
+
+        indexer
+            .replace_summaries_for_file(
+                &file_path,
+                b"hash",
+                &[FuncSummary {
+                    name: "getInput".into(),
+                    file_path: file_path.to_string_lossy().into_owned(),
+                    lang: "javascript".into(),
+                    param_count: 0,
+                    param_names: vec![],
+                    source_caps: Cap::all().bits(),
+                    sanitizer_caps: 0,
+                    sink_caps: 0,
+                    propagating_params: vec![],
+                    propagates_taint: false,
+                    tainted_sink_params: vec![],
+                    callees: vec![],
+                }],
+            )
+            .unwrap();
+        indexer
+            .replace_ssa_summaries_for_file(
+                &file_path,
+                b"hash",
+                &[(
+                    "getInput".into(),
+                    0,
+                    "javascript".into(),
+                    "src/helper.js".into(),
+                    SsaFuncSummary {
+                        param_to_return: vec![],
+                        param_to_sink: vec![],
+                        source_caps: Cap::all(),
+                        param_to_sink_param: vec![],
+                        param_container_to_return: vec![],
+                        param_to_container_store: vec![],
+                        return_type: None,
+                        return_abstract: None,
+                        source_to_callback: vec![],
+                    },
+                )],
+            )
+            .unwrap();
+
+        pool
+    }
+
+    #[test]
+    fn taint_route_reports_cross_file_context_when_summaries_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan_root = dir.path().join("myproject");
+        let pool = setup_db_with_summaries(dir.path(), &scan_root);
+
+        let global = load_global_summaries_from_pool(&scan_root, &pool)
+            .expect("should load summaries");
+
+        let cross_file_context = !global.is_empty();
+        let ssa_summaries_available = !global.snapshot_ssa().is_empty();
+
+        assert!(
+            cross_file_context,
+            "cross_file_context should be true when DB has persisted summaries"
+        );
+        assert!(
+            ssa_summaries_available,
+            "ssa_summaries_available should be true when DB has SSA summaries"
+        );
+    }
+
+    #[test]
+    fn taint_route_reports_no_cross_file_context_when_db_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan_root = dir.path().join("emptyproject");
+        std::fs::create_dir_all(&scan_root).unwrap();
+
+        let db_path = dir.path().join("empty.sqlite");
+        let pool = Indexer::init(&db_path).unwrap();
+        let _indexer = Indexer::from_pool("emptyproject", &pool).unwrap();
+
+        let global = load_global_summaries_from_pool(&scan_root, &pool);
+
+        let cross_file_context = global.as_ref().map_or(false, |g| !g.is_empty());
+        let ssa_summaries_available =
+            global.as_ref().map_or(false, |g| !g.snapshot_ssa().is_empty());
+
+        assert!(
+            !cross_file_context,
+            "cross_file_context should be false when DB has no summaries"
+        );
+        assert!(
+            !ssa_summaries_available,
+            "ssa_summaries_available should be false when DB has no SSA summaries"
+        );
+    }
+
+    #[test]
+    fn taint_view_includes_context_flags_with_no_summaries() {
+        // Simulate the debug view construction with no cross-file context
+        let view = TaintAnalysisView::from_results(&[], &[], &crate::ssa::ir::SsaBody {
+            blocks: vec![],
+            entry: crate::ssa::ir::BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        }, false, false);
+
+        assert!(!view.cross_file_context);
+        assert!(!view.ssa_summaries_available);
+    }
+
+    #[test]
+    fn taint_view_includes_context_flags_with_summaries() {
+        let view = TaintAnalysisView::from_results(&[], &[], &crate::ssa::ir::SsaBody {
+            blocks: vec![],
+            entry: crate::ssa::ir::BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        }, true, true);
+
+        assert!(view.cross_file_context);
+        assert!(view.ssa_summaries_available);
+    }
+
+    #[test]
+    fn taint_view_serializes_context_fields() {
+        let view = TaintAnalysisView::from_results(&[], &[], &crate::ssa::ir::SsaBody {
+            blocks: vec![],
+            entry: crate::ssa::ir::BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        }, true, false);
+
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["cross_file_context"], true);
+        assert_eq!(json["ssa_summaries_available"], false);
+    }
+
+    #[test]
+    fn load_global_summaries_graceful_on_malformed_db() {
+        // A DB with no tables at all should not crash, just return None
+        let dir = tempfile::tempdir().unwrap();
+        let scan_root = dir.path().join("badproject");
+        std::fs::create_dir_all(&scan_root).unwrap();
+
+        let db_path = dir.path().join("bad.sqlite");
+        // Create a raw SQLite file without our schema
+        let manager = r2d2_sqlite::SqliteConnectionManager::file(&db_path);
+        let pool = r2d2::Pool::builder().max_size(1).build(manager).unwrap();
+
+        let result = load_global_summaries_from_pool(&scan_root, &pool);
+        // Should return None gracefully, not panic
+        assert!(
+            result.is_none(),
+            "malformed DB should return None, not crash"
+        );
+    }
 
     #[test]
     fn load_global_summaries_uses_scan_root_project_and_normalized_namespace() {

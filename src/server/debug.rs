@@ -378,6 +378,10 @@ pub struct TaintEventView {
 pub struct TaintAnalysisView {
     pub block_states: Vec<TaintBlockStateView>,
     pub events: Vec<TaintEventView>,
+    /// Whether cross-file global summaries were available from DB.
+    pub cross_file_context: bool,
+    /// Whether SSA-level summaries were loaded (subset of cross-file context).
+    pub ssa_summaries_available: bool,
 }
 
 impl TaintAnalysisView {
@@ -385,6 +389,8 @@ impl TaintAnalysisView {
         events: &[SsaTaintEvent],
         block_states: &[Option<SsaTaintState>],
         ssa: &SsaBody,
+        cross_file_context: bool,
+        ssa_summaries_available: bool,
     ) -> Self {
         let block_states_view: Vec<TaintBlockStateView> = block_states
             .iter()
@@ -435,6 +441,8 @@ impl TaintAnalysisView {
         TaintAnalysisView {
             block_states: block_states_view,
             events: events_view,
+            cross_file_context,
+            ssa_summaries_available,
         }
     }
 }
@@ -1123,13 +1131,115 @@ function demo() {
             "exit-state debug view should show tainted SSA values even for single-block functions"
         );
 
-        let view = TaintAnalysisView::from_results(&events, &exit_states, &ssa);
+        let view = TaintAnalysisView::from_results(&events, &exit_states, &ssa, false, false);
         assert!(
             view.block_states
                 .iter()
                 .any(|state| !state.values.is_empty()),
             "serialized debug taint view should expose the populated exit states"
         );
+    }
+
+    #[test]
+    fn taint_view_without_global_summaries_marks_no_cross_file_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("local.js");
+        std::fs::write(
+            &path,
+            r#"
+function sink() {
+  const x = process.env.SECRET;
+  eval(x);
+}
+"#,
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let analysis = analyse_file(&path, &config).expect("file should analyse");
+        let (ssa, opt) =
+            analyse_function_ssa(&analysis, "sink").expect("function should lower to SSA");
+        let body = analysis.file_cfg.bodies.iter()
+            .find(|b| b.meta.name.as_deref() == Some("sink"))
+            .expect("should find sink function body");
+        let (events, _entry_states, exit_states) = analyse_function_taint(
+            &ssa,
+            &body.graph,
+            analysis.lang,
+            analysis.summaries(),
+            None, // no global summaries
+            &opt,
+        );
+
+        let view = TaintAnalysisView::from_results(&events, &exit_states, &ssa, false, false);
+        assert!(!view.cross_file_context);
+        assert!(!view.ssa_summaries_available);
+        // The local analysis should still find the taint event
+        assert!(!view.events.is_empty(), "local taint should still find events");
+    }
+
+    #[test]
+    fn taint_view_with_global_summaries_marks_cross_file_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("consumer.js");
+        std::fs::write(
+            &path,
+            r#"
+function consume() {
+  const x = process.env.SECRET;
+  eval(x);
+}
+"#,
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let analysis = analyse_file(&path, &config).expect("file should analyse");
+        let (ssa, opt) =
+            analyse_function_ssa(&analysis, "consume").expect("function should lower to SSA");
+        let body = analysis.file_cfg.bodies.iter()
+            .find(|b| b.meta.name.as_deref() == Some("consume"))
+            .expect("should find consume function body");
+
+        // Create non-empty global summaries to simulate having run a scan
+        let mut global = crate::summary::GlobalSummaries::default();
+        let key = crate::symbol::FuncKey {
+            lang: crate::symbol::Lang::JavaScript,
+            namespace: "src/helper.js".into(),
+            name: "getInput".into(),
+            arity: Some(0),
+        };
+        global.insert_ssa(
+            key,
+            crate::summary::ssa_summary::SsaFuncSummary {
+                param_to_return: vec![],
+                param_to_sink: vec![],
+                source_caps: crate::labels::Cap::all(),
+                param_to_sink_param: vec![],
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+                source_to_callback: vec![],
+            },
+        );
+
+        let cross_file = !global.is_empty();
+        let ssa_avail = !global.snapshot_ssa().is_empty();
+
+        let (events, _entry_states, exit_states) = analyse_function_taint(
+            &ssa,
+            &body.graph,
+            analysis.lang,
+            analysis.summaries(),
+            Some(&global),
+            &opt,
+        );
+
+        let view =
+            TaintAnalysisView::from_results(&events, &exit_states, &ssa, cross_file, ssa_avail);
+        assert!(view.cross_file_context);
+        assert!(view.ssa_summaries_available);
     }
 
     #[test]

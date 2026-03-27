@@ -167,6 +167,13 @@ fn lower_to_ssa_inner(
             .collect();
     }
 
+    // 7b. Debug assertions: verify structural invariants
+    #[cfg(debug_assertions)]
+    {
+        debug_assert_bfs_ordering(&block_preds);
+        debug_assert_phi_operand_counts(&ssa_blocks, &block_preds);
+    }
+
     // 8. Map exception edges from CFG node indices to SSA block IDs
     let exception_edges: Vec<(BlockId, BlockId)> = raw_exception_edges
         .iter()
@@ -1209,6 +1216,50 @@ fn rename_variables(
     (ssa_blocks, value_defs, cfg_node_map)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Debug invariant checkers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Verify BFS block ordering: every non-entry, non-orphan block must have at
+/// least one predecessor with a smaller block ID.
+#[cfg(debug_assertions)]
+fn debug_assert_bfs_ordering(block_preds: &[Vec<usize>]) {
+    for (i, preds) in block_preds.iter().enumerate() {
+        if i == 0 {
+            continue; // entry block
+        }
+        if preds.is_empty() {
+            continue; // orphan block (e.g. catch block reached via exception edge)
+        }
+        let has_forward_pred = preds.iter().any(|&p| p < i);
+        debug_assert!(
+            has_forward_pred,
+            "Block {} has no forward predecessor — BFS ordering violated. Preds: {:?}",
+            i, preds
+        );
+    }
+}
+
+/// Verify phi operand counts: each phi must have at most as many operands as
+/// the block has predecessors.
+#[cfg(debug_assertions)]
+fn debug_assert_phi_operand_counts(ssa_blocks: &[SsaBlock], block_preds: &[Vec<usize>]) {
+    for (i, block) in ssa_blocks.iter().enumerate() {
+        for phi in &block.phis {
+            if let SsaOp::Phi(ref operands) = phi.op {
+                debug_assert!(
+                    operands.len() <= block_preds[i].len(),
+                    "Block {} phi v{} has {} operands but block has {} predecessors",
+                    i,
+                    phi.value.0,
+                    operands.len(),
+                    block_preds[i].len()
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1413,5 +1464,228 @@ mod tests {
         let cfg: Cfg = Graph::new();
         let result = lower_to_ssa(&cfg, NodeIndex::new(0), None, true);
         assert!(result.is_err());
+    }
+
+    // ── BFS ordering and phi invariant tests ─────────────────────────────
+
+    #[test]
+    fn bfs_ordering_holds_for_linear_cfg() {
+        // Entry → A → B → Exit — all blocks should satisfy BFS ordering
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let a = cfg.add_node(NodeInfo {
+            defines: Some("x".into()),
+            ..make_node(StmtKind::Seq)
+        });
+        let b = cfg.add_node(NodeInfo {
+            defines: Some("y".into()),
+            uses: vec!["x".into()],
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, a, EdgeKind::Seq);
+        cfg.add_edge(a, b, EdgeKind::Seq);
+        cfg.add_edge(b, exit, EdgeKind::Seq);
+
+        // This exercises the debug_assert_bfs_ordering in debug builds
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+        assert!(!ssa.blocks.is_empty());
+    }
+
+    #[test]
+    fn bfs_ordering_holds_for_diamond_cfg() {
+        // Entry → If → [True] [False] → Join → Exit
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let def_x = cfg.add_node(NodeInfo {
+            defines: Some("x".into()),
+            ..make_node(StmtKind::Seq)
+        });
+        let if_node = cfg.add_node(make_node(StmtKind::If));
+        let true_node = cfg.add_node(NodeInfo {
+            defines: Some("x".into()),
+            ..make_node(StmtKind::Seq)
+        });
+        let false_node = cfg.add_node(NodeInfo {
+            defines: Some("x".into()),
+            ..make_node(StmtKind::Seq)
+        });
+        let join = cfg.add_node(make_node(StmtKind::Seq));
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, def_x, EdgeKind::Seq);
+        cfg.add_edge(def_x, if_node, EdgeKind::Seq);
+        cfg.add_edge(if_node, true_node, EdgeKind::True);
+        cfg.add_edge(if_node, false_node, EdgeKind::False);
+        cfg.add_edge(true_node, join, EdgeKind::Seq);
+        cfg.add_edge(false_node, join, EdgeKind::Seq);
+        cfg.add_edge(join, exit, EdgeKind::Seq);
+
+        // Exercises both BFS ordering and phi operand count assertions
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+        // The join block should have a phi with exactly 2 operands (== 2 preds)
+        let phi_block = ssa.blocks.iter().find(|b| !b.phis.is_empty());
+        if let Some(block) = phi_block {
+            assert_eq!(
+                block.preds.len(),
+                2,
+                "join block should have 2 predecessors"
+            );
+            for phi in &block.phis {
+                if let SsaOp::Phi(ref ops) = phi.op {
+                    assert!(
+                        ops.len() <= block.preds.len(),
+                        "phi operands should not exceed predecessor count"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bfs_ordering_holds_for_loop_with_back_edge() {
+        // Entry → x=0 → Loop → body(x=x+1) → [Back→Loop] → Exit
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let def_x = cfg.add_node(NodeInfo {
+            defines: Some("x".into()),
+            ..make_node(StmtKind::Seq)
+        });
+        let loop_h = cfg.add_node(make_node(StmtKind::Loop));
+        let body = cfg.add_node(NodeInfo {
+            defines: Some("x".into()),
+            uses: vec!["x".into()],
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, def_x, EdgeKind::Seq);
+        cfg.add_edge(def_x, loop_h, EdgeKind::Seq);
+        cfg.add_edge(loop_h, body, EdgeKind::True);
+        cfg.add_edge(body, loop_h, EdgeKind::Back);
+        cfg.add_edge(loop_h, exit, EdgeKind::False);
+
+        // Exercises BFS ordering with back edges and phi on loop header
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+        assert!(!ssa.blocks.is_empty());
+    }
+
+    #[test]
+    fn orphan_catch_block_does_not_violate_bfs_ordering() {
+        // Entry → body → Exit, with an exception edge body → catch → Exit
+        // The catch block becomes an orphan (no normal-flow predecessors)
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let body = cfg.add_node(NodeInfo {
+            defines: Some("x".into()),
+            ..make_node(StmtKind::Seq)
+        });
+        let catch = cfg.add_node(NodeInfo {
+            catch_param: true,
+            defines: Some("e".into()),
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, body, EdgeKind::Seq);
+        cfg.add_edge(body, exit, EdgeKind::Seq);
+        cfg.add_edge(body, catch, EdgeKind::Exception);
+        cfg.add_edge(catch, exit, EdgeKind::Seq);
+
+        // The catch block is reached via exception edge (stripped from normal flow)
+        // so it may appear as an orphan. The BFS assertion should skip it.
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+        assert!(!ssa.blocks.is_empty());
+    }
+
+    #[test]
+    fn phi_operand_count_equals_pred_count_in_diamond() {
+        // Specific test: phi operands == predecessor count (not just <=)
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let if_node = cfg.add_node(make_node(StmtKind::If));
+        let t = cfg.add_node(NodeInfo {
+            defines: Some("v".into()),
+            ..make_node(StmtKind::Seq)
+        });
+        let f = cfg.add_node(NodeInfo {
+            defines: Some("v".into()),
+            ..make_node(StmtKind::Seq)
+        });
+        let join = cfg.add_node(NodeInfo {
+            uses: vec!["v".into()],
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, if_node, EdgeKind::Seq);
+        cfg.add_edge(if_node, t, EdgeKind::True);
+        cfg.add_edge(if_node, f, EdgeKind::False);
+        cfg.add_edge(t, join, EdgeKind::Seq);
+        cfg.add_edge(f, join, EdgeKind::Seq);
+        cfg.add_edge(join, exit, EdgeKind::Seq);
+
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+        let phi_block = ssa
+            .blocks
+            .iter()
+            .find(|b| !b.phis.is_empty())
+            .expect("should have a phi block");
+
+        for phi in &phi_block.phis {
+            if let SsaOp::Phi(ref ops) = phi.op {
+                assert_eq!(
+                    ops.len(),
+                    phi_block.preds.len(),
+                    "phi operand count should equal predecessor count in a clean diamond"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bfs_assertion_helper_accepts_valid_orderings() {
+        // Direct unit test of the assertion helper with valid input
+        let block_preds = vec![
+            vec![],      // block 0: entry (no preds)
+            vec![0],     // block 1: pred is block 0 (forward)
+            vec![0, 1],  // block 2: both forward preds
+            vec![],      // block 3: orphan (no preds)
+            vec![2],     // block 4: forward pred
+        ];
+        // Should not panic
+        debug_assert_bfs_ordering(&block_preds);
+    }
+
+    #[test]
+    fn phi_assertion_helper_accepts_valid_shapes() {
+        // Direct test with a phi that has fewer operands than preds
+        // (can happen when a variable is only defined on some paths)
+        let dummy_node = NodeIndex::new(0);
+        let block = SsaBlock {
+            id: BlockId(1),
+            phis: vec![SsaInst {
+                value: SsaValue(0),
+                op: SsaOp::Phi(smallvec::smallvec![(BlockId(0), SsaValue(1))]),
+                cfg_node: dummy_node,
+                var_name: Some("x".into()),
+                span: (0, 0),
+            }],
+            body: vec![],
+            terminator: Terminator::Unreachable,
+            preds: smallvec::smallvec![BlockId(0), BlockId(2)],
+            succs: smallvec::smallvec![],
+        };
+        let block_preds = vec![vec![], vec![0, 2]];
+        // 1 operand <= 2 preds — should not panic
+        debug_assert_phi_operand_counts(&[SsaBlock {
+            id: BlockId(0),
+            phis: vec![],
+            body: vec![],
+            terminator: Terminator::Goto(BlockId(1)),
+            preds: smallvec::smallvec![],
+            succs: smallvec::smallvec![BlockId(1)],
+        }, block], &block_preds);
     }
 }
