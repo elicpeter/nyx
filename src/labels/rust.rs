@@ -14,6 +14,11 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Source(Cap::all()),
         case_sensitive: false,
     },
+    LabelRule {
+        matchers: &["fs::read_to_string", "fs::read"],
+        label: DataLabel::Source(Cap::all()),
+        case_sensitive: false,
+    },
     // ───────── Sanitizers ──────────
     LabelRule {
         matchers: &["html_escape::encode_safe", "sanitize_", "sanitize_html"],
@@ -86,7 +91,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "match_arm"            => Kind::Block,
     "unsafe_block"         => Kind::Block,
     "function_item"        => Kind::Function,
-    "closure_expression"   => Kind::Block,
+    "closure_expression"   => Kind::Function,
     "async_block"          => Kind::Block,
     "impl_item"            => Kind::Block,
     "trait_item"           => Kind::Block,
@@ -99,6 +104,12 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "let_declaration"        => Kind::CallWrapper,
     "expression_statement"   => Kind::CallWrapper,
     "assignment_expression"  => Kind::Assignment,
+
+    // struct expressions — recurse so env::var() calls inside field
+    // initialisers produce Source-labelled CFG nodes (needed for summaries).
+    "struct_expression"       => Kind::Block,
+    "field_initializer_list"  => Kind::Block,
+    "field_initializer"       => Kind::CallWrapper,
 
     // trivia
     "line_comment"     => Kind::Trivia,

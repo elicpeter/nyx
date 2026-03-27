@@ -1589,6 +1589,7 @@ fn ssa_summaries_round_trip() {
                 param_to_container_store: vec![],
                 return_type: None,
                 return_abstract: None,
+                source_to_callback: vec![],
             },
         ),
         (
@@ -1605,6 +1606,7 @@ fn ssa_summaries_round_trip() {
                 param_to_container_store: vec![],
                 return_type: None,
                 return_abstract: None,
+                source_to_callback: vec![],
             },
         ),
     ];
@@ -1669,6 +1671,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             param_to_container_store: vec![],
             return_type: None,
             return_abstract: None,
+            source_to_callback: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1)
@@ -1690,6 +1693,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             param_to_container_store: vec![],
             return_type: None,
             return_abstract: None,
+            source_to_callback: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2)
@@ -1732,6 +1736,7 @@ fn clear_drops_ssa_summaries_table() {
             param_to_container_store: vec![],
             return_type: None,
             return_abstract: None,
+            source_to_callback: vec![],
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
@@ -1797,6 +1802,7 @@ fn make_test_callee_body(num_blocks: usize, param_count: usize) -> crate::taint:
         },
         param_count,
         node_meta: std::collections::HashMap::new(),
+        body_graph: None,
     }
 }
 

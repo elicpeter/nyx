@@ -723,6 +723,7 @@ mod tests {
         TaintOrigin {
             node: NodeIndex::new(idx as usize),
             source_kind: SourceKind::UserInput,
+            source_span: None,
         }
     }
 

@@ -100,8 +100,7 @@ async fn get_cfg(
     let analysis = debug::analyse_file(&path, &config)?;
 
     let view = CfgGraphView::from_cfg_function(
-        &analysis.cfg,
-        &analysis.summaries,
+        &analysis.file_cfg,
         &q.function,
         &analysis.bytes,
     )
@@ -144,9 +143,9 @@ async fn get_taint(
 
     let (events, _entry_states, exit_states) = debug::analyse_function_taint(
         &ssa,
-        &analysis.cfg,
+        analysis.cfg(),
         analysis.lang,
-        &analysis.summaries,
+        analysis.summaries(),
         global.as_ref(),
         &opt,
     );
@@ -178,9 +177,9 @@ async fn get_abstract_interp(
 
     let (_events, block_states, _exit_states) = debug::analyse_function_taint(
         &ssa,
-        &analysis.cfg,
+        analysis.cfg(),
         analysis.lang,
-        &analysis.summaries,
+        analysis.summaries(),
         global.as_ref(),
         &opt,
     );
@@ -280,7 +279,7 @@ async fn get_symex(
     let global = load_global_summaries(&state);
 
     let sym_state =
-        debug::analyse_function_symex(&ssa, &analysis.cfg, analysis.lang, &opt, global.as_ref());
+        debug::analyse_function_symex(&ssa, analysis.cfg(), analysis.lang, &opt, global.as_ref());
 
     Ok(Json(SymexView::from_symbolic_state(&sym_state, &ssa)))
 }
@@ -385,6 +384,7 @@ mod tests {
                         param_to_container_store: vec![],
                         return_type: None,
                         return_abstract: None,
+                        source_to_callback: vec![],
                     },
                 )],
             )

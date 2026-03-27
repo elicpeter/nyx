@@ -25,7 +25,7 @@
       "must_match": true,
       "line_range": [7, 7],
       "evidence_contains": [],
-      "notes": "TP: fs.openSync resource at line 7 has a possible leak path when exceptions bypass close()"
+      "notes": "TP: fs.openSync resource at line 7 has a possible leak path when exceptions bypass close() [per-body: sensitivity change]"
     }
   ]
 }

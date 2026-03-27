@@ -18,6 +18,11 @@ pub struct VarTaint {
 pub struct TaintOrigin {
     pub node: NodeIndex,
     pub source_kind: SourceKind,
+    /// Original source byte span, preserved when origin is remapped across
+    /// body boundaries.  `None` for intra-body origins (span can be looked
+    /// up from `cfg[node].span`).  `Some` for cross-body origins where
+    /// `node` has been remapped to a body-local anchor.
+    pub source_span: Option<(usize, usize)>,
 }
 
 /// Compact bitset for up to 64 variables (indexed by SymbolId ordinal).

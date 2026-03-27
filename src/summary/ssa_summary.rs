@@ -52,4 +52,9 @@ pub struct SsaFuncSummary {
     /// abstract state for cross-procedural interval/string analysis.
     #[serde(default)]
     pub return_abstract: Option<AbstractValue>,
+    /// Internal source taint flows to a call of parameter N with these caps.
+    /// Detects callback patterns like `fn apply(f: F) { let x = source(); f(x); }`
+    /// where the function invokes a callback parameter with tainted data.
+    #[serde(default)]
+    pub source_to_callback: Vec<(usize, Cap)>,
 }

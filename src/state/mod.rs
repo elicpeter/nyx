@@ -28,42 +28,88 @@ pub fn run_state_analysis(
     func_summaries: &FuncSummaries,
     _global_summaries: Option<&GlobalSummaries>,
     enable_auth: bool,
+    resource_method_summaries: &[transfer::ResourceMethodSummary],
 ) -> Vec<StateFinding> {
     let _span = tracing::debug_span!("run_state_analysis").entered();
 
-    // 1. Build symbol interner from CFG
-    //
-    // Safety: SymbolInterner, ProductState, and DataflowResult are all
-    // built fresh per call.  No resource state leaks across analyses.
-    // Variables from unreachable functions may be interned but are never
-    // set in ResourceDomainState (the forward engine only reaches nodes
-    // connected from `entry`).
     let interner = SymbolInterner::from_cfg_scoped(cfg);
 
-    // Guarded degradation: cap tracked variables
     if interner.len() > MAX_TRACKED_VARS {
         tracing::warn!(
             symbols = interner.len(),
             max = MAX_TRACKED_VARS,
             "state analysis: too many variables, capping tracking"
         );
-        // Still run — the interner has all symbols, but transfer will only
-        // track the first MAX_TRACKED_VARS due to HashMap insertion order.
-        // This is conservative but safe.
     }
 
-    // 2. Construct transfer function
     let resource_pairs = rules::resource_pairs(lang);
     let transfer = DefaultTransfer {
         lang,
         resource_pairs,
         interner: &interner,
+        resource_method_summaries,
     };
 
-    // 3. Run forward dataflow engine
     let initial = ProductState::initial();
     let result = engine::run_forward(cfg, entry, &transfer, initial);
 
-    // 4. Extract findings
     facts::extract_findings(&result, cfg, &interner, lang, func_summaries, enable_auth)
+}
+
+/// Build resource method summaries by pre-scanning all method bodies for known
+/// resource acquire/release operations. Only creates summaries for methods whose
+/// bodies actually contain matching operations — never infers from names alone.
+pub fn build_resource_method_summaries(
+    bodies: &[crate::cfg::BodyCfg],
+    lang: Lang,
+) -> Vec<transfer::ResourceMethodSummary> {
+    use petgraph::visit::IntoNodeReferences;
+
+    let resource_pairs = rules::resource_pairs(lang);
+    let mut summaries = Vec::new();
+
+    for body in bodies {
+        let method_name = match &body.meta.name {
+            Some(name) => name.clone(),
+            None => continue,
+        };
+        let class_group = match body.meta.parent_body_id {
+            Some(pid) => pid,
+            None => continue, // top-level functions are not class methods
+        };
+
+        for (_, info) in body.graph.node_references() {
+            // Check both Call and Seq (Assignment) nodes — resource operations
+            // can appear as RHS of assignments (e.g., `this.fd = fs.openSync(...)`).
+            if !matches!(
+                info.kind,
+                crate::cfg::StmtKind::Call | crate::cfg::StmtKind::Seq
+            ) {
+                continue;
+            }
+            let callee = match &info.callee {
+                Some(c) => c.to_ascii_lowercase(),
+                None => continue,
+            };
+            for pair in resource_pairs {
+                if pair.acquire.iter().any(|a| transfer::callee_matches_pub(&callee, a)) {
+                    summaries.push(transfer::ResourceMethodSummary {
+                        method_name: method_name.clone(),
+                        effect: transfer::ResourceEffect::Acquire,
+                        class_group,
+                        original_span: info.span,
+                    });
+                }
+                if pair.release.iter().any(|r| transfer::callee_matches_pub(&callee, r)) {
+                    summaries.push(transfer::ResourceMethodSummary {
+                        method_name: method_name.clone(),
+                        effect: transfer::ResourceEffect::Release,
+                        class_group,
+                        original_span: info.span,
+                    });
+                }
+            }
+        }
+    }
+    summaries
 }

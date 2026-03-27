@@ -165,6 +165,14 @@ impl Lattice for AuthDomainState {
 pub struct ProductState {
     pub resource: ResourceDomainState,
     pub auth: AuthDomainState,
+    /// Maps receiver symbol → class group (BodyId) for proxy resource tracking.
+    /// Populated when a proxy acquire fires; checked during proxy release to
+    /// ensure the same class context.
+    pub receiver_class_group: HashMap<SymbolId, crate::cfg::BodyId>,
+    /// Maps receiver symbol → original acquire span for proxy resources.
+    /// Used by `extract_findings` to attribute leaks to the original resource
+    /// operation (e.g., fs.openSync at line 7) rather than the proxy call.
+    pub proxy_acquire_spans: HashMap<SymbolId, (usize, usize)>,
 }
 
 impl ProductState {
@@ -172,6 +180,8 @@ impl ProductState {
         Self {
             resource: ResourceDomainState::new(),
             auth: AuthDomainState::new(),
+            receiver_class_group: HashMap::new(),
+            proxy_acquire_spans: HashMap::new(),
         }
     }
 }
@@ -181,13 +191,22 @@ impl Lattice for ProductState {
         Self {
             resource: ResourceDomainState::bot(),
             auth: AuthDomainState::bot(),
+            receiver_class_group: HashMap::new(),
+            proxy_acquire_spans: HashMap::new(),
         }
     }
 
     fn join(&self, other: &Self) -> Self {
+        // Merge proxy tracking: union of mappings
+        let mut class_group = self.receiver_class_group.clone();
+        class_group.extend(other.receiver_class_group.iter());
+        let mut proxy_spans = self.proxy_acquire_spans.clone();
+        proxy_spans.extend(other.proxy_acquire_spans.iter());
         Self {
             resource: self.resource.join(&other.resource),
             auth: self.auth.join(&other.auth),
+            receiver_class_group: class_group,
+            proxy_acquire_spans: proxy_spans,
         }
     }
 

@@ -541,6 +541,7 @@ mod tests {
             None,
         ));
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n,
             source: NodeIndex::new(0),
             path: vec![],
@@ -552,6 +553,7 @@ mod tests {
             uses_summary: false,
             flow_steps: vec![],
             symbolic: None,
+            source_span: None,
         };
         assert_eq!(sink_cap(&finding, &cfg), Cap::SQL_QUERY);
     }
@@ -568,6 +570,7 @@ mod tests {
             None,
         ));
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n,
             source: NodeIndex::new(0),
             path: vec![],
@@ -579,6 +582,7 @@ mod tests {
             uses_summary: false,
             flow_steps: vec![],
             symbolic: None,
+            source_span: None,
         };
         let cap = sink_cap(&finding, &cfg);
         assert!(cap.contains(Cap::SQL_QUERY));
@@ -685,6 +689,7 @@ mod tests {
         };
 
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: sink_node,
             source: source_node,
             path: vec![source_node, sink_node],
@@ -707,6 +712,7 @@ mod tests {
                 },
             ],
             symbolic: None,
+            source_span: None,
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -730,6 +736,7 @@ mod tests {
         };
         let cfg = Cfg::new();
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: sink_node,
             source: NodeIndex::new(0),
             path: vec![],
@@ -741,6 +748,7 @@ mod tests {
             uses_summary: false,
             flow_steps: vec![],
             symbolic: None,
+            source_span: None,
         };
 
         assert!(extract_witness(&state, &finding, &ssa, &cfg).is_none());
@@ -781,6 +789,7 @@ mod tests {
         };
 
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: sink_node,
             source: source_node,
             path: vec![source_node, sink_node],
@@ -796,6 +805,7 @@ mod tests {
                 op_kind: crate::evidence::FlowStepKind::Source,
             }],
             symbolic: None,
+            source_span: None,
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -833,6 +843,7 @@ mod tests {
         };
 
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: sink_node,
             source: source_node,
             path: vec![source_node, sink_node],
@@ -848,6 +859,7 @@ mod tests {
                 op_kind: crate::evidence::FlowStepKind::Source,
             }],
             symbolic: None,
+            source_span: None,
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);

@@ -4,17 +4,17 @@ pub mod domain;
 pub mod path_state;
 pub mod ssa_transfer;
 
-use crate::cfg::{Cfg, FuncSummaries};
+use crate::cfg::{BodyCfg, BodyId, Cfg, FileCfg, FuncSummaries};
 use crate::interop::InteropEdge;
 use crate::labels::SourceKind;
 use crate::state::engine::MAX_TRACKED_VARS;
-use crate::state::symbol::{SymbolId, SymbolInterner};
+use crate::state::symbol::SymbolInterner;
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
 use path_state::PredicateKind;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::IntoNodeReferences;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// A raw flow step at CFG level (before line/col resolution).
 #[derive(Debug, Clone)]
@@ -27,6 +27,8 @@ pub struct FlowStepRaw {
 /// A detected taint finding with both source and sink locations.
 #[derive(Debug, Clone)]
 pub struct Finding {
+    /// Identifies which body's graph the NodeIndex values reference.
+    pub body_id: BodyId,
     /// The CFG node where tainted data reaches a dangerous operation.
     pub sink: NodeIndex,
     /// The CFG node where taint originated (may be Entry if source is
@@ -54,16 +56,19 @@ pub struct Finding {
     pub flow_steps: Vec<FlowStepRaw>,
     /// Symbolic constraint analysis verdict, if attempted.
     pub symbolic: Option<crate::evidence::SymbolicVerdict>,
+    /// Original source byte span, preserved when origin was remapped across
+    /// body boundaries.  `None` for intra-body findings (use `cfg[source].span`).
+    pub source_span: Option<usize>,
 }
 
-/// Run taint analysis on a single file's CFG.
+/// Run taint analysis on all bodies in a file.
 ///
-/// Uses SSA-based forward dataflow analysis for all 10 languages.
-/// For JS/TS: uses a two-level solve to prevent cross-function taint
-/// leakage while preserving global-to-function flows.
+/// Uses a unified multi-body analysis for all languages:
+/// 1. Lexical containment propagation: parent body exit state seeds child bodies.
+/// 2. JS/TS iterative convergence: functions that modify globals can feed taint
+///    back to other functions (up to `MAX_JS_ITERATIONS` rounds).
 pub fn analyse_file(
-    cfg: &Cfg,
-    entry: NodeIndex,
+    file_cfg: &FileCfg,
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
     caller_lang: Lang,
@@ -73,21 +78,9 @@ pub fn analyse_file(
 ) -> Vec<Finding> {
     let _span = tracing::debug_span!("taint_analyse_file").entered();
 
-    // 1. Build symbol interner from CFG
-    let interner = SymbolInterner::from_cfg(cfg);
-
-    if interner.len() > MAX_TRACKED_VARS {
-        tracing::warn!(
-            symbols = interner.len(),
-            max = MAX_TRACKED_VARS,
-            "taint analysis: too many variables, some will be ignored"
-        );
-    }
-
-    // 2a. Lower all functions: produce both SSA summaries and cached bodies
-    let (ssa_summaries, callee_bodies) = lower_all_functions(
-        cfg,
-        &interner,
+    // 1. Lower all function bodies: produce SSA summaries + cached bodies.
+    let (ssa_summaries, callee_bodies) = lower_all_functions_from_bodies(
+        file_cfg,
         caller_lang,
         caller_namespace,
         local_summaries,
@@ -99,7 +92,7 @@ pub fn analyse_file(
         Some(&ssa_summaries)
     };
 
-    // 2b. Context-sensitive inline analysis setup
+    // 2. Context-sensitive inline analysis setup
     let context_sensitive = std::env::var("NYX_CONTEXT_SENSITIVE")
         .map(|v| v != "0" && v != "false")
         .unwrap_or(true);
@@ -115,114 +108,309 @@ pub fn analyse_file(
         None
     };
 
-    // 2c. Run SSA analysis (two-level for JS/TS, single-pass for others)
-    let mut findings = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
-        match analyse_ssa_js_two_level(
-            cfg,
-            entry,
-            &interner,
-            caller_lang,
-            caller_namespace,
-            local_summaries,
-            global_summaries,
-            interop_edges,
-            ssa_sums_ref,
-            extra_labels,
-            callee_bodies_ref,
-            inline_cache_ref,
-        ) {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::warn!("SSA JS two-level lowering failed: {e}");
-                Vec::new()
-            }
-        }
+    // 3. Unified multi-body analysis with lexical containment propagation.
+    let max_iterations = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
+        3
     } else {
-        match crate::ssa::lower_to_ssa(cfg, entry, None, true) {
-            Ok(mut ssa_body) => {
-                let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg, Some(caller_lang));
-                tracing::debug!(
-                    blocks = ssa_body.blocks.len(),
-                    values = ssa_body.num_values(),
-                    branches_pruned = opt.branches_pruned,
-                    copies_eliminated = opt.copies_eliminated,
-                    dead_defs = opt.dead_defs_removed,
-                    "SSA lowering + optimization succeeded"
-                );
-                let dynamic_pts = std::cell::RefCell::new(std::collections::HashMap::new());
-                let ssa_transfer = ssa_transfer::SsaTaintTransfer {
-                    lang: caller_lang,
-                    namespace: caller_namespace,
-                    interner: &interner,
-                    local_summaries,
-                    global_summaries,
-                    interop_edges,
-                    global_seed: None,
-                    const_values: Some(&opt.const_values),
-                    type_facts: Some(&opt.type_facts),
-                    ssa_summaries: ssa_sums_ref,
-                    extra_labels,
-                    base_aliases: Some(&opt.alias_result),
-                    callee_bodies: callee_bodies_ref,
-                    inline_cache: inline_cache_ref,
-                    context_depth: 0,
-                    callback_bindings: None,
-                    points_to: Some(&opt.points_to),
-                    dynamic_pts: Some(&dynamic_pts),
-                };
-                let events = ssa_transfer::run_ssa_taint(&ssa_body, cfg, &ssa_transfer);
-                let mut f = ssa_transfer::ssa_events_to_findings(&events, &ssa_body, cfg);
-                if crate::symex::is_enabled() {
-                    let symex_ctx = crate::symex::SymexContext {
-                        ssa: &ssa_body,
-                        cfg,
-                        const_values: &opt.const_values,
-                        type_facts: &opt.type_facts,
-                        global_summaries,
-                        lang: caller_lang,
-                        namespace: caller_namespace,
-                        points_to: Some(&opt.points_to),
-                        callee_bodies: callee_bodies_ref,
-                        scc_membership: None,
-                        cross_file_bodies: global_summaries,
-                    };
-                    crate::symex::annotate_findings(&mut f, &symex_ctx);
-                }
-                f
-            }
-            Err(e) => {
-                tracing::warn!("SSA lowering failed: {e}");
-                Vec::new()
-            }
-        }
+        1
     };
+    let mut all_findings = analyse_multi_body(
+        file_cfg,
+        caller_lang,
+        caller_namespace,
+        local_summaries,
+        global_summaries,
+        interop_edges,
+        extra_labels,
+        ssa_sums_ref,
+        callee_bodies_ref,
+        inline_cache_ref,
+        max_iterations,
+    );
 
-    // 3. Deduplicate findings by (sink, source), prefer path_validated=true
-    findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
-    findings.dedup_by_key(|f| (f.sink, f.source));
+    // 4. Deduplicate findings by (body_id, sink, source), prefer path_validated=true
+    all_findings.sort_by_key(|f| {
+        (f.body_id.0, f.sink.index(), f.source.index(), !f.path_validated)
+    });
+    all_findings.dedup_by_key(|f| (f.body_id, f.sink, f.source));
 
-    findings
+    all_findings
 }
 
-/// Collect SymbolIds of variables defined or used at top-level scope.
-/// These are the "global" variables eligible to flow between functions.
-fn collect_toplevel_symbols(cfg: &Cfg, interner: &SymbolInterner) -> HashSet<SymbolId> {
-    let mut ids = HashSet::new();
-    for (_idx, info) in cfg.node_references() {
-        if info.enclosing_func.is_none() {
-            if let Some(ref d) = info.defines {
-                if let Some(sym) = interner.get(d) {
-                    ids.insert(sym);
+/// Compute containment-topological order: parent bodies before children.
+///
+/// Uses BFS from roots (bodies with no parent), ensuring a body is always
+/// processed after its parent — required for lexical seed propagation.
+/// Returns indices into `file_cfg.bodies` in processing order.
+fn containment_order(bodies: &[BodyCfg]) -> Vec<usize> {
+    let mut children: HashMap<BodyId, Vec<usize>> = HashMap::new();
+    let mut roots: Vec<usize> = Vec::new();
+    for (i, body) in bodies.iter().enumerate() {
+        match body.meta.parent_body_id {
+            Some(parent) => children.entry(parent).or_default().push(i),
+            None => roots.push(i),
+        }
+    }
+    let mut order = Vec::with_capacity(bodies.len());
+    let mut queue: VecDeque<usize> = roots.into();
+    while let Some(idx) = queue.pop_front() {
+        order.push(idx);
+        if let Some(kids) = children.get(&bodies[idx].meta.id) {
+            queue.extend(kids);
+        }
+    }
+    order
+}
+
+/// Analyse a single body with an optional parent seed.
+///
+/// Shared logic extracted from `analyse_multi_body` to avoid deep nesting.
+fn analyse_body_with_seed(
+    body: &BodyCfg,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    interop_edges: &[InteropEdge],
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
+    ssa_summaries: Option<
+        &std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
+    >,
+    callee_bodies: Option<&std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>>,
+    inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
+    seed: Option<&HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>,
+) -> (Vec<Finding>, Option<HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>) {
+    let cfg = &body.graph;
+    let entry = body.entry;
+    let body_id = body.meta.id;
+
+    let interner = SymbolInterner::from_cfg(cfg);
+    if interner.len() > MAX_TRACKED_VARS {
+        tracing::warn!(
+            symbols = interner.len(),
+            max = MAX_TRACKED_VARS,
+            "taint analysis: too many variables, some will be ignored"
+        );
+    }
+
+    // Per-body graphs contain only the body's own nodes.
+    // For non-toplevel bodies, use lower_to_ssa_with_params with scope to
+    // create SsaOp::Param ops for external/captured variables and formal
+    // parameters — required for global_seed to inject taint from the parent.
+    // Top-level bodies use lower_to_ssa with scope_all=true (no Param ops).
+    let is_toplevel = body.meta.parent_body_id.is_none();
+    // JS/TS function bodies always use scoped lowering to create Param ops
+    // for captured variables (globals that flow via seed between bodies).
+    // Other languages: scoped lowering only when the parent seed is non-empty,
+    // i.e. the parent body actually has taint to propagate.  Without a seed,
+    // Param ops would just introduce unused SSA values.
+    let has_nonempty_seed = seed.map_or(false, |s| !s.is_empty());
+    let use_scoped_lowering = !is_toplevel
+        && (matches!(lang, Lang::JavaScript | Lang::TypeScript) || has_nonempty_seed);
+    let ssa_result = if use_scoped_lowering {
+        let func_name = body.meta.name.clone()
+            .unwrap_or_else(|| format!("<anon@{}>", body.meta.span.0));
+        crate::ssa::lower_to_ssa_with_params(
+            cfg, entry, Some(&func_name), false, &body.meta.params,
+        )
+    } else {
+        crate::ssa::lower_to_ssa(cfg, entry, None, true)
+    };
+
+    match ssa_result {
+        Ok(mut ssa_body) => {
+            let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg, Some(lang));
+            let dynamic_pts = std::cell::RefCell::new(std::collections::HashMap::new());
+            let transfer = ssa_transfer::SsaTaintTransfer {
+                lang,
+                namespace,
+                interner: &interner,
+                local_summaries,
+                global_summaries,
+                interop_edges,
+                global_seed: seed,
+                const_values: Some(&opt.const_values),
+                type_facts: Some(&opt.type_facts),
+                ssa_summaries,
+                extra_labels,
+                base_aliases: Some(&opt.alias_result),
+                callee_bodies,
+                inline_cache,
+                context_depth: 0,
+                callback_bindings: None,
+                points_to: Some(&opt.points_to),
+                dynamic_pts: Some(&dynamic_pts),
+            };
+            let (events, block_states) =
+                ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);
+            let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa_body, cfg);
+            for f in &mut findings {
+                f.body_id = body_id;
+            }
+            if crate::symex::is_enabled() {
+                let symex_ctx = crate::symex::SymexContext {
+                    ssa: &ssa_body,
+                    cfg,
+                    const_values: &opt.const_values,
+                    type_facts: &opt.type_facts,
+                    global_summaries,
+                    lang,
+                    namespace,
+                    points_to: Some(&opt.points_to),
+                    callee_bodies,
+                    scc_membership: None,
+                    cross_file_bodies: global_summaries,
+                };
+                crate::symex::annotate_findings(&mut findings, &symex_ctx);
+            }
+            // Extract exit state for seeding child bodies.
+            let exit_state = ssa_transfer::extract_ssa_exit_state(
+                &block_states,
+                &ssa_body,
+                cfg,
+                &transfer,
+            );
+            (findings, Some(exit_state))
+        }
+        Err(_) => (Vec::new(), None),
+    }
+}
+
+/// Unified multi-body taint analysis with lexical containment propagation.
+///
+/// Pass 1: process all bodies in containment-topological order (parent before
+/// child), seeding each child body with its parent's exit state.
+///
+/// Pass 2 (JS/TS only, `max_iterations > 1`): iterative convergence for
+/// functions that modify global state, feeding taint back to other functions.
+fn analyse_multi_body(
+    file_cfg: &FileCfg,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+    interop_edges: &[InteropEdge],
+    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
+    ssa_summaries: Option<
+        &std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
+    >,
+    callee_bodies: Option<&std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>>,
+    inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
+    max_iterations: usize,
+) -> Vec<Finding> {
+    let order = containment_order(&file_cfg.bodies);
+    let mut all_findings: Vec<Finding> = Vec::new();
+
+    // Exit states per body, used to seed children.
+    let mut body_exit_states: HashMap<
+        BodyId,
+        HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>,
+    > = HashMap::new();
+
+    // ── Pass 1: lexical containment propagation ──────────────────────
+    for &idx in &order {
+        let body = &file_cfg.bodies[idx];
+        // Determine seed from parent body's exit state.
+        let parent_seed = body.meta.parent_body_id
+            .and_then(|pid| body_exit_states.get(&pid));
+
+        let (findings, exit_state) = analyse_body_with_seed(
+            body, lang, namespace, local_summaries, global_summaries,
+            interop_edges, extra_labels, ssa_summaries, callee_bodies,
+            inline_cache, parent_seed,
+        );
+        tracing::debug!(
+            body_id = body.meta.id.0,
+            body_name = ?body.meta.name,
+            findings = findings.len(),
+            graph_nodes = body.graph.node_count(),
+            has_seed = parent_seed.is_some(),
+            "analyse_multi_body: body analysed"
+        );
+        all_findings.extend(findings);
+        if let Some(es) = exit_state {
+            body_exit_states.insert(body.meta.id, es);
+        }
+    }
+
+    // ── Pass 2: JS/TS iterative convergence ──────────────────────────
+    // Only for JS/TS: functions that modify global variables can feed taint
+    // back to other functions.  Iterate until the top-level seed stabilises.
+    if max_iterations > 1 {
+        let top = file_cfg.toplevel();
+        let top_cfg = &top.graph;
+
+        // Collect top-level binding keys for seed filtering.
+        let toplevel_keys: HashSet<ssa_transfer::BindingKey> = {
+            let mut keys = HashSet::new();
+            for (_idx, info) in top_cfg.node_references() {
+                if let Some(ref d) = info.defines {
+                    keys.insert(ssa_transfer::BindingKey::new(d.as_str()));
+                }
+                for u in &info.uses {
+                    keys.insert(ssa_transfer::BindingKey::new(u.as_str()));
                 }
             }
-            for u in &info.uses {
-                if let Some(sym) = interner.get(u) {
-                    ids.insert(sym);
+            keys
+        };
+
+        // Initial seed is the top-level exit state.
+        let mut current_seed = body_exit_states
+            .get(&BodyId(0))
+            .cloned()
+            .unwrap_or_default();
+
+        for _round in 0..max_iterations.saturating_sub(1) {
+            // Combine function body exits filtered to top-level scope.
+            let mut combined_exit = current_seed.clone();
+            for &idx in &order {
+                let body = &file_cfg.bodies[idx];
+                if body.meta.parent_body_id.is_none() {
+                    continue; // skip top-level itself
+                }
+                if let Some(es) = body_exit_states.get(&body.meta.id) {
+                    let filtered = ssa_transfer::filter_seed_to_toplevel(es, &toplevel_keys);
+                    combined_exit = ssa_transfer::join_seed_maps(&combined_exit, &filtered);
+                }
+            }
+
+            // Converged: seed didn't change.
+            if combined_exit == current_seed {
+                break;
+            }
+            current_seed = combined_exit;
+
+            // Re-run non-toplevel bodies with updated seed.
+            // Replace non-toplevel findings (the new round has more complete
+            // taint context and symex annotations).
+            body_exit_states.insert(BodyId(0), current_seed.clone());
+            // Remove stale non-toplevel findings from previous rounds.
+            all_findings.retain(|f| {
+                file_cfg.bodies.get(f.body_id.0 as usize)
+                    .map_or(true, |b| b.meta.parent_body_id.is_none())
+            });
+            for &idx in &order {
+                let body = &file_cfg.bodies[idx];
+                if body.meta.parent_body_id.is_none() {
+                    continue; // don't re-run top-level
+                }
+                let parent_seed = body.meta.parent_body_id
+                    .and_then(|pid| body_exit_states.get(&pid));
+
+                let (findings, exit_state) = analyse_body_with_seed(
+                    body, lang, namespace, local_summaries, global_summaries,
+                    interop_edges, extra_labels, ssa_summaries, callee_bodies,
+                    inline_cache, parent_seed,
+                );
+                all_findings.extend(findings);
+                if let Some(es) = exit_state {
+                    body_exit_states.insert(body.meta.id, es);
                 }
             }
         }
     }
-    ids
+
+    all_findings
 }
 
 /// Find function entry nodes: (func_name, entry_node) pairs.
@@ -413,6 +601,7 @@ fn lower_all_functions(
                 opt,
                 param_count,
                 node_meta: std::collections::HashMap::new(),
+                body_graph: None,
             },
         );
     }
@@ -422,6 +611,98 @@ fn lower_all_functions(
             count = summaries.len(),
             bodies = bodies.len(),
             "lower_all_functions: produced summaries + cached bodies"
+        );
+    }
+
+    (summaries, bodies)
+}
+
+/// Lower all function bodies from `FileCfg` to produce SSA summaries + cached
+/// bodies.  Each body's own graph is used directly — no scope filtering needed.
+fn lower_all_functions_from_bodies(
+    file_cfg: &FileCfg,
+    lang: Lang,
+    namespace: &str,
+    local_summaries: &FuncSummaries,
+    global_summaries: Option<&GlobalSummaries>,
+) -> (
+    std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
+    std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>,
+) {
+    let mut summaries = std::collections::HashMap::new();
+    let mut bodies = std::collections::HashMap::new();
+
+    for body in file_cfg.function_bodies() {
+        let func_name = body.meta.name.clone()
+            .unwrap_or_else(|| format!("<anon@{}>", body.meta.span.0));
+
+        let interner = SymbolInterner::from_cfg(&body.graph);
+        let formal_params = &body.meta.params;
+        let mut func_ssa = match crate::ssa::lower_to_ssa_with_params(
+            &body.graph,
+            body.entry,
+            Some(&func_name),
+            false,
+            formal_params,
+        ) {
+            Ok(ssa) => ssa,
+            Err(_) => continue,
+        };
+
+        let param_count = if !formal_params.is_empty() {
+            formal_params.len()
+        } else {
+            func_ssa
+                .blocks
+                .iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
+                .count()
+        };
+
+        if param_count > 0 {
+            let summary = ssa_transfer::extract_ssa_func_summary(
+                &func_ssa,
+                &body.graph,
+                local_summaries,
+                global_summaries,
+                lang,
+                namespace,
+                &interner,
+                param_count,
+            );
+
+            if !summary.param_to_return.is_empty()
+                || !summary.param_to_sink.is_empty()
+                || !summary.source_caps.is_empty()
+                || !summary.param_container_to_return.is_empty()
+                || !summary.param_to_container_store.is_empty()
+                || summary.return_abstract.is_some()
+                || !summary.source_to_callback.is_empty()
+            {
+                summaries.insert(func_name.clone(), summary);
+            }
+        }
+
+        let opt = crate::ssa::optimize_ssa(&mut func_ssa, &body.graph, Some(lang));
+
+        bodies.insert(
+            func_name,
+            ssa_transfer::CalleeSsaBody {
+                ssa: func_ssa,
+                opt,
+                param_count,
+                node_meta: std::collections::HashMap::new(),
+                body_graph: Some(body.graph.clone()),
+            },
+        );
+    }
+
+    if !summaries.is_empty() {
+        tracing::debug!(
+            count = summaries.len(),
+            bodies = bodies.len(),
+            "lower_all_functions_from_bodies: produced summaries + cached bodies"
         );
     }
 
@@ -474,189 +755,6 @@ pub(crate) fn extract_ssa_artifacts(
     }
 
     (summaries, eligible_bodies)
-}
-
-/// JS/TS two-level SSA solve: top-level scope + per-function, with global seed.
-///
-/// Level 1: Solve top-level code (scope=None, nop for function bodies).
-/// Level 2: For each function, solve seeded with top-level taint. After all
-/// functions, join their exit states (filtered to globals) back into the seed.
-/// If the seed changed, re-run. Cap at 3 rounds.
-fn analyse_ssa_js_two_level(
-    cfg: &Cfg,
-    entry: NodeIndex,
-    interner: &SymbolInterner,
-    lang: Lang,
-    namespace: &str,
-    local_summaries: &FuncSummaries,
-    global_summaries: Option<&GlobalSummaries>,
-    interop_edges: &[InteropEdge],
-    ssa_summaries: Option<
-        &std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
-    >,
-    extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
-    callee_bodies: Option<&std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>>,
-    inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
-) -> Result<Vec<Finding>, crate::ssa::ir::SsaError> {
-    const MAX_ITERATIONS: usize = 3;
-
-    // Level 1: top-level SSA (scope=None, nop for function bodies)
-    let mut toplevel_ssa = crate::ssa::lower_to_ssa_scoped_nop(cfg, entry, None)?;
-    let toplevel_opt = crate::ssa::optimize_ssa(&mut toplevel_ssa, cfg, Some(lang));
-    tracing::debug!(
-        blocks = toplevel_ssa.blocks.len(),
-        values = toplevel_ssa.num_values(),
-        branches_pruned = toplevel_opt.branches_pruned,
-        "SSA JS two-level: top-level lowering + optimization"
-    );
-    let dynamic_pts = std::cell::RefCell::new(std::collections::HashMap::new());
-    let toplevel_transfer = ssa_transfer::SsaTaintTransfer {
-        lang,
-        namespace,
-        interner,
-        local_summaries,
-        global_summaries,
-        interop_edges,
-        global_seed: None,
-        const_values: Some(&toplevel_opt.const_values),
-        type_facts: Some(&toplevel_opt.type_facts),
-        ssa_summaries,
-        extra_labels,
-        base_aliases: Some(&toplevel_opt.alias_result),
-        callee_bodies,
-        inline_cache,
-        context_depth: 0,
-        callback_bindings: None,
-        points_to: Some(&toplevel_opt.points_to),
-        dynamic_pts: Some(&dynamic_pts),
-    };
-    let (toplevel_events, toplevel_block_states) =
-        ssa_transfer::run_ssa_taint_full(&toplevel_ssa, cfg, &toplevel_transfer);
-    let toplevel_seed = ssa_transfer::extract_ssa_exit_state(
-        &toplevel_block_states,
-        &toplevel_ssa,
-        cfg,
-        &toplevel_transfer,
-        interner,
-    );
-    tracing::debug!(
-        events = toplevel_events.len(),
-        seed_entries = toplevel_seed.len(),
-        "SSA JS two-level: top-level result"
-    );
-
-    // Collect top-level findings
-    let mut all_findings =
-        ssa_transfer::ssa_events_to_findings(&toplevel_events, &toplevel_ssa, cfg);
-    if crate::symex::is_enabled() {
-        let symex_ctx = crate::symex::SymexContext {
-            ssa: &toplevel_ssa,
-            cfg,
-            const_values: &toplevel_opt.const_values,
-            type_facts: &toplevel_opt.type_facts,
-            global_summaries,
-            lang,
-            namespace,
-            points_to: Some(&toplevel_opt.points_to),
-            callee_bodies,
-            scc_membership: None,
-            cross_file_bodies: global_summaries,
-        };
-        crate::symex::annotate_findings(&mut all_findings, &symex_ctx);
-    }
-
-    let func_entries = find_function_entries(cfg);
-    let toplevel_syms = collect_toplevel_symbols(cfg, interner);
-
-    // Iterative Level 2: per-function solve until seed stabilises
-    let mut current_seed = toplevel_seed.clone();
-
-    for _round in 0..MAX_ITERATIONS {
-        let mut round_findings: Vec<Finding> = Vec::new();
-        let mut combined_exit = toplevel_seed.clone();
-
-        for (func_name, func_entry) in &func_entries {
-            let formal_params = lookup_formal_params(local_summaries, func_name);
-            let mut func_ssa = match crate::ssa::lower_to_ssa_with_params(
-                cfg,
-                *func_entry,
-                Some(func_name),
-                false,
-                &formal_params,
-            ) {
-                Ok(ssa) => ssa,
-                Err(_) => continue, // empty function → skip
-            };
-            let func_opt = crate::ssa::optimize_ssa(&mut func_ssa, cfg, Some(lang));
-            let func_dynamic_pts = std::cell::RefCell::new(std::collections::HashMap::new());
-            let func_transfer = ssa_transfer::SsaTaintTransfer {
-                lang,
-                namespace,
-                interner,
-                local_summaries,
-                global_summaries,
-                interop_edges,
-                global_seed: Some(&current_seed),
-                const_values: Some(&func_opt.const_values),
-                type_facts: Some(&func_opt.type_facts),
-                ssa_summaries,
-                extra_labels,
-                base_aliases: Some(&func_opt.alias_result),
-                callee_bodies,
-                inline_cache,
-                context_depth: 0,
-                callback_bindings: None,
-                points_to: Some(&func_opt.points_to),
-                dynamic_pts: Some(&func_dynamic_pts),
-            };
-            let (func_events, func_block_states) =
-                ssa_transfer::run_ssa_taint_full(&func_ssa, cfg, &func_transfer);
-            let mut func_findings =
-                ssa_transfer::ssa_events_to_findings(&func_events, &func_ssa, cfg);
-            if crate::symex::is_enabled() {
-                let symex_ctx = crate::symex::SymexContext {
-                    ssa: &func_ssa,
-                    cfg,
-                    const_values: &func_opt.const_values,
-                    type_facts: &func_opt.type_facts,
-                    global_summaries,
-                    lang,
-                    namespace,
-                    points_to: Some(&func_opt.points_to),
-                    callee_bodies,
-                    scc_membership: None,
-                    cross_file_bodies: global_summaries,
-                };
-                crate::symex::annotate_findings(&mut func_findings, &symex_ctx);
-            }
-            round_findings.extend(func_findings);
-
-            // Extract exit state, filter to globals, join into combined
-            let func_exit = ssa_transfer::extract_ssa_exit_state(
-                &func_block_states,
-                &func_ssa,
-                cfg,
-                &func_transfer,
-                interner,
-            );
-            let filtered = ssa_transfer::filter_seed_to_toplevel(&func_exit, &toplevel_syms);
-            combined_exit = ssa_transfer::join_seed_maps(&combined_exit, &filtered);
-        }
-
-        all_findings.extend(round_findings);
-
-        // Converged: seed didn't change
-        if combined_exit == current_seed {
-            break;
-        }
-        current_seed = combined_exit;
-    }
-
-    // Dedup findings
-    all_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
-    all_findings.dedup_by_key(|f| (f.sink, f.source));
-
-    Ok(all_findings)
 }
 
 #[cfg(test)]

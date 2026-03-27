@@ -190,6 +190,134 @@ pub struct LocalFuncSummary {
 pub type Cfg = Graph<NodeInfo, EdgeKind>;
 pub type FuncSummaries = HashMap<FuncKey, LocalFuncSummary>;
 
+/// -------------------------------------------------------------------------
+///  Per-body CFG types
+/// -------------------------------------------------------------------------
+
+/// Opaque identifier for an executable body within a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BodyId(pub u32);
+
+/// Identifies the kind of executable body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyKind {
+    TopLevel,
+    NamedFunction,
+    AnonymousFunction,
+}
+
+/// Metadata for a single executable body.
+#[derive(Debug, Clone)]
+pub struct BodyMeta {
+    pub id: BodyId,
+    pub kind: BodyKind,
+    pub name: Option<String>,
+    pub params: Vec<String>,
+    pub param_count: usize,
+    pub span: (usize, usize),
+    pub parent_body_id: Option<BodyId>,
+}
+
+/// A single executable body's CFG plus metadata.
+#[derive(Debug)]
+pub struct BodyCfg {
+    pub meta: BodyMeta,
+    pub graph: Cfg,
+    pub entry: NodeIndex,
+    pub exit: NodeIndex,
+}
+
+/// All CFGs for a file.
+#[derive(Debug)]
+pub struct FileCfg {
+    pub bodies: Vec<BodyCfg>,
+    pub summaries: FuncSummaries,
+}
+
+impl FileCfg {
+    /// The top-level / module body (always `BodyId(0)`).
+    pub fn toplevel(&self) -> &BodyCfg {
+        &self.bodies[0]
+    }
+    /// Look up a body by its `BodyId`.
+    pub fn body(&self, id: BodyId) -> &BodyCfg {
+        &self.bodies[id.0 as usize]
+    }
+    /// All non-top-level bodies (functions, closures, callbacks).
+    pub fn function_bodies(&self) -> &[BodyCfg] {
+        &self.bodies[1..]
+    }
+    /// The first function body, or top-level if no functions exist.
+    /// Useful for tests where source is wrapped in a single function.
+    pub fn first_body(&self) -> &BodyCfg {
+        if self.bodies.len() > 1 {
+            &self.bodies[1]
+        } else {
+            &self.bodies[0]
+        }
+    }
+    /// Total CFG node count across all bodies.
+    pub fn total_node_count(&self) -> usize {
+        self.bodies.iter().map(|b| b.graph.node_count()).sum()
+    }
+}
+
+/// Create a `NodeInfo` with only kind, span, and enclosing_func set.
+/// All other fields are empty/default.
+fn make_empty_node_info(
+    kind: StmtKind,
+    span: (usize, usize),
+    enclosing_func: Option<&str>,
+) -> NodeInfo {
+    NodeInfo {
+        kind,
+        span,
+        labels: SmallVec::new(),
+        defines: None,
+        extra_defines: vec![],
+        uses: Vec::new(),
+        callee: None,
+        receiver: None,
+        enclosing_func: enclosing_func.map(|s| s.to_owned()),
+        call_ordinal: 0,
+        condition_text: None,
+        condition_vars: Vec::new(),
+        condition_negated: false,
+        arg_uses: Vec::new(),
+        sink_payload_args: None,
+        all_args_literal: false,
+        catch_param: false,
+        const_text: None,
+        arg_callees: Vec::new(),
+        outer_callee: None,
+        cast_target_type: None,
+        bin_op: None,
+        bin_op_const: None,
+        managed_resource: false,
+        in_defer: false,
+    }
+}
+
+/// Create a fresh body-level `Cfg` with synthetic Entry and Exit nodes.
+fn create_body_graph(
+    span_start: usize,
+    span_end: usize,
+    enclosing_func: Option<&str>,
+) -> (Cfg, NodeIndex, NodeIndex) {
+    let mut g: Cfg = Graph::with_capacity(32, 64);
+    let entry = g.add_node(make_empty_node_info(
+        StmtKind::Entry,
+        (span_start, span_start),
+        enclosing_func,
+    ));
+    let exit = g.add_node(make_empty_node_info(
+        StmtKind::Exit,
+        (span_end, span_end),
+        enclosing_func,
+    ));
+    (g, entry, exit)
+}
+
 // -------------------------------------------------------------------------
 //                      Utility helpers
 // -------------------------------------------------------------------------
@@ -349,6 +477,12 @@ fn find_classifiable_inner_call<'a>(
 ) -> Option<(String, DataLabel)> {
     let mut cursor = n.walk();
     for c in n.children(&mut cursor) {
+        // Do not descend into Kind::Function nodes — they will be extracted
+        // as separate BodyCfg entries and should not contribute inner callees
+        // to the parent expression.
+        if lookup(lang, c.kind()) == Kind::Function {
+            continue;
+        }
         match lookup(lang, c.kind()) {
             Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
                 let ident = match lookup(lang, c.kind()) {
@@ -1171,6 +1305,14 @@ fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> 
         return Some("delete".to_string());
     }
     match lookup(lang, n.kind()) {
+        Kind::Function => {
+            // Function/closure expression passed as argument — return the same
+            // `<anon@byte>` name used by build_sub so callback_bindings and
+            // source_to_callback can match it to the extracted BodyCfg.
+            n.child_by_field_name("name")
+                .and_then(|nm| text_of(nm, code))
+                .or_else(|| Some(format!("<anon@{}>", n.start_byte())))
+        }
         Kind::CallFn => n
             .child_by_field_name("function")
             .or_else(|| n.child_by_field_name("method"))
@@ -2198,6 +2340,14 @@ fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> V
             }
             continue;
         }
+
+        // Bare identifier children — e.g. Rust untyped closure params `|cmd|`
+        // where the child is an `identifier` node, not a `parameter` wrapper.
+        if child.kind() == "identifier" {
+            if let Some(txt) = text_of(child, code) {
+                names.push(txt);
+            }
+        }
     }
     names
 }
@@ -2315,6 +2465,9 @@ fn build_begin_rescue<'a>(
     break_targets: &mut Vec<NodeIndex>,
     continue_targets: &mut Vec<NodeIndex>,
     throw_targets: &mut Vec<NodeIndex>,
+    bodies: &mut Vec<BodyCfg>,
+    next_body_id: &mut u32,
+    current_body_id: BodyId,
 ) -> Vec<NodeIndex> {
     // 1. Partition children into body / rescue / else / ensure
     let mut body_children: Vec<Node<'a>> = Vec::new();
@@ -2354,6 +2507,9 @@ fn build_begin_rescue<'a>(
             break_targets,
             continue_targets,
             &mut try_throw_targets,
+            bodies,
+            next_body_id,
+            current_body_id,
         );
     }
     let try_exits = frontier;
@@ -2435,6 +2591,9 @@ fn build_begin_rescue<'a>(
                 break_targets,
                 continue_targets,
                 throw_targets,
+                bodies,
+                next_body_id,
+                current_body_id,
             )
         } else {
             // No body field — build rescue node itself as a block.
@@ -2462,6 +2621,9 @@ fn build_begin_rescue<'a>(
                             break_targets,
                             continue_targets,
                             throw_targets,
+                            bodies,
+                            next_body_id,
+                            current_body_id,
                         );
                     }
                 }
@@ -2500,6 +2662,9 @@ fn build_begin_rescue<'a>(
             break_targets,
             continue_targets,
             throw_targets,
+            bodies,
+            next_body_id,
+            current_body_id,
         )
     } else {
         try_exits
@@ -2528,6 +2693,9 @@ fn build_begin_rescue<'a>(
             break_targets,
             continue_targets,
             throw_targets,
+            bodies,
+            next_body_id,
+            current_body_id,
         )
     } else {
         // No ensure: return normal exits + catch exits
@@ -2556,6 +2724,9 @@ fn build_try<'a>(
     break_targets: &mut Vec<NodeIndex>,
     continue_targets: &mut Vec<NodeIndex>,
     throw_targets: &mut Vec<NodeIndex>,
+    bodies: &mut Vec<BodyCfg>,
+    next_body_id: &mut u32,
+    current_body_id: BodyId,
 ) -> Vec<NodeIndex> {
     // Ruby begin/rescue/ensure: no "body" field, has "rescue" or "ensure" children.
     // Delegate to the dedicated handler.
@@ -2579,6 +2750,9 @@ fn build_try<'a>(
                 break_targets,
                 continue_targets,
                 throw_targets,
+                bodies,
+                next_body_id,
+                current_body_id,
             );
         }
     }
@@ -2628,6 +2802,9 @@ fn build_try<'a>(
             break_targets,
             continue_targets,
             throw_targets,
+            bodies,
+            next_body_id,
+            current_body_id,
         );
         // Mark actual resource acquisition nodes (Call + defines) as managed.
         // Java try-with-resources guarantees AutoCloseable.close() is called.
@@ -2660,6 +2837,9 @@ fn build_try<'a>(
             break_targets,
             continue_targets,
             &mut try_throw_targets,
+            bodies,
+            next_body_id,
+            current_body_id,
         )
     } else {
         try_preds
@@ -2745,6 +2925,9 @@ fn build_try<'a>(
                 break_targets,
                 continue_targets,
                 throw_targets,
+                bodies,
+                next_body_id,
+                current_body_id,
             );
 
             // If no param name, wire exception edges to the first catch body node
@@ -2788,6 +2971,9 @@ fn build_try<'a>(
             break_targets,
             continue_targets,
             throw_targets,
+            bodies,
+            next_body_id,
+            current_body_id,
         );
         finally_exits
     } else {
@@ -2817,6 +3003,9 @@ fn build_sub<'a>(
     break_targets: &mut Vec<NodeIndex>,
     continue_targets: &mut Vec<NodeIndex>,
     throw_targets: &mut Vec<NodeIndex>,
+    bodies: &mut Vec<BodyCfg>,
+    next_body_id: &mut u32,
+    current_body_id: BodyId,
 ) -> Vec<NodeIndex> {
     match lookup(lang, ast.kind()) {
         // ─────────────────────────────────────────────────────────────────
@@ -2938,6 +3127,9 @@ fn build_sub<'a>(
                     break_targets,
                     continue_targets,
                     throw_targets,
+                    bodies,
+                    next_body_id,
+                    current_body_id,
                 );
                 // Add True/False edge from condition exit(s) to first node of then-branch.
                 if then_first_node.index() < g.node_count() {
@@ -2967,6 +3159,9 @@ fn build_sub<'a>(
                     break_targets,
                     continue_targets,
                     throw_targets,
+                    bodies,
+                    next_body_id,
+                    current_body_id,
                 );
                 if else_first_node.index() < g.node_count() {
                     connect_all(g, else_preds, else_first_node, else_edge);
@@ -3046,6 +3241,9 @@ fn build_sub<'a>(
                 &mut loop_breaks,
                 &mut loop_continues,
                 throw_targets,
+                bodies,
+                next_body_id,
+                current_body_id,
             );
 
             // Back-edge from every linear exit to header
@@ -3140,6 +3338,9 @@ fn build_sub<'a>(
                     &mut loop_breaks,
                     &mut loop_continues,
                     throw_targets,
+                    bodies,
+                    next_body_id,
+                    current_body_id,
                 );
                 // Add True edges from condition chain to body
                 if body_first.index() < g.node_count() {
@@ -3173,6 +3374,9 @@ fn build_sub<'a>(
                     &mut loop_breaks,
                     &mut loop_continues,
                     throw_targets,
+                    bodies,
+                    next_body_id,
+                    current_body_id,
                 );
 
                 // Back‑edge for every linear exit → header.
@@ -3296,6 +3500,9 @@ fn build_sub<'a>(
             break_targets,
             continue_targets,
             throw_targets,
+            bodies,
+            next_body_id,
+            current_body_id,
         ),
         Kind::Break => {
             let brk = push_node(
@@ -3353,31 +3560,23 @@ fn build_sub<'a>(
                         break_targets,
                         continue_targets,
                         throw_targets,
+                        bodies,
+                        next_body_id,
+                        current_body_id,
                     );
                 }
             }
 
             let mut cursor = ast.walk();
             let mut frontier = preds.to_vec();
-            // Track the last frontier before a function emptied it — used to
-            // keep subsequent functions reachable.
+            // With per-body CFGs, function definitions become placeholder
+            // nodes that always have exactly one exit.  The frontier never
+            // empties due to a function's internal return.  We still keep a
+            // last-live fallback for preprocessor dangling-else edge cases.
             let mut last_live_frontier = preds.to_vec();
             let mut prev_was_preproc = false;
             for child in ast.children(&mut cursor) {
-                let child_is_fn = lookup(lang, child.kind()) == Kind::Function;
-
-                // At module / source-file level, each function definition is an
-                // independent entry point — it must always be reachable from the
-                // file-level predecessors.  Without this, a preceding function
-                // that ends with `return` (frontier = []) would leave subsequent
-                // functions disconnected from the graph.
-                //
-                // Similarly, when a preprocessor block (`#ifdef ... #endif`)
-                // contains an `if/else` whose else branch is on the other side
-                // of the `#endif`, tree-sitter parses a dangling else that
-                // empties the frontier.  The code after the preproc block should
-                // remain reachable.
-                let child_preds = if frontier.is_empty() && (child_is_fn || prev_was_preproc) {
+                let child_preds = if frontier.is_empty() && prev_was_preproc {
                     last_live_frontier.clone()
                 } else {
                     frontier.clone()
@@ -3402,6 +3601,9 @@ fn build_sub<'a>(
                     break_targets,
                     continue_targets,
                     throw_targets,
+                    bodies,
+                    next_body_id,
+                    current_body_id,
                 );
 
                 // Mark only Call nodes inside the defer as deferred releases.
@@ -3426,60 +3628,50 @@ fn build_sub<'a>(
 
         // Function item – create a header and dive into its body
         Kind::Function => {
-            // 1) create a header node for this fn
-            // Try "name" first (most languages), then "declarator" (C/C++)
+            // ── 1) Extract function name ──────────────────────────────────────
             let fn_name = ast
                 .child_by_field_name("name")
                 .or_else(|| ast.child_by_field_name("declarator"))
                 .and_then(|n| {
-                    // For C/C++ function_declarator, extract just the identifier
                     let mut tmp = Vec::new();
                     collect_idents(n, code, &mut tmp);
                     tmp.into_iter().next()
                 })
                 .unwrap_or_else(|| format!("<anon@{}>", ast.start_byte()));
-            let entry_idx = push_node(
-                g,
-                StmtKind::Seq,
-                ast,
-                lang,
-                code,
-                Some(&fn_name),
-                0,
-                analysis_rules,
-            );
-            connect_all(g, preds, entry_idx, EdgeKind::Seq);
 
-            // 1b) extract parameter names
+            let is_anon = fn_name.starts_with("<anon@");
             let param_names = extract_param_names(ast, lang, code);
             let param_count = param_names.len();
 
-            // 2) build its body with a fresh call ordinal counter for this function scope
-            // Snapshot the current node count so we can iterate only over nodes
-            // created within this function (avoids O(N²) scan of the full graph).
-            let fn_first_node: NodeIndex = NodeIndex::new(g.node_count());
-            let body = ast.child_by_field_name("body").unwrap_or_else(|| {
-                // Some function expressions (e.g. JS anonymous `function(…) { … }`)
-                // don't have a named "body" field — find the first block child.
+            // ── 2) Create a separate body graph for this function ─────────────
+            let (mut fn_graph, fn_entry, fn_exit) =
+                create_body_graph(ast.start_byte(), ast.end_byte(), Some(&fn_name));
+
+            let body_ast = ast.child_by_field_name("body").unwrap_or_else(|| {
                 let mut c = ast.walk();
                 ast.children(&mut c)
                     .find(|n| matches!(lookup(lang, n.kind()), Kind::Block | Kind::SourceFile))
                     .unwrap_or_else(|| {
                         panic!(
-                            "fn w/o body: kind={} text='{}'",
+                            "fn w/o body: kind={} text=’{}’",
                             ast.kind(),
                             text_of(ast, code).unwrap_or_default()
                         )
                     })
             });
+
+            // Allocate a BodyId for this function
+            let fn_body_id = BodyId(*next_body_id);
+            *next_body_id += 1;
+
             let mut fn_call_ordinal: u32 = 0;
             let mut fn_breaks = Vec::new();
             let mut fn_continues = Vec::new();
             let mut fn_throws = Vec::new();
             let body_exits = build_sub(
-                body,
-                &[entry_idx],
-                g,
+                body_ast,
+                &[fn_entry],
+                &mut fn_graph,
                 lang,
                 code,
                 summaries,
@@ -3490,16 +3682,26 @@ fn build_sub<'a>(
                 &mut fn_breaks,
                 &mut fn_continues,
                 &mut fn_throws,
+                bodies,
+                next_body_id,
+                fn_body_id,
             );
 
-            // ───── 3) light-weight dataflow ──────────────────────────────────────
-            //
-            // Sweep every node inside this function’s span.  Track:
-            //  • which cap bits each variable carries (var_taint)
-            //  • independent source / sanitizer / sink caps for the function
-            //  • which params flow to sinks (tainted_sink_params)
-            //  • whether any param reaches a return value (propagates_taint)
-            //  • all callees
+            // ── 3) Wire exits to Exit node ────────────────────────────────────
+            for &b in &body_exits {
+                connect_all(&mut fn_graph, &[b], fn_exit, EdgeKind::Seq);
+            }
+            // Wire internal Return nodes to Exit (returns target this body’s exit)
+            for idx in fn_graph.node_indices().collect::<Vec<_>>() {
+                if fn_graph[idx].kind == StmtKind::Return
+                    && idx != fn_exit
+                    && !fn_graph.contains_edge(idx, fn_exit)
+                {
+                    connect_all(&mut fn_graph, &[idx], fn_exit, EdgeKind::Seq);
+                }
+            }
+
+            // ── 4) Light-weight dataflow on the body graph ────────────────────
             let mut var_taint = HashMap::<String, Cap>::new();
             let mut node_bits = HashMap::<NodeIndex, Cap>::new();
             let mut fn_src_bits = Cap::empty();
@@ -3508,28 +3710,19 @@ fn build_sub<'a>(
             let mut callees = Vec::<String>::new();
             let mut tainted_sink_params: Vec<usize> = Vec::new();
 
-            // Iterate only over nodes created within this function scope
-            // (entry_idx .. current end) instead of the entire graph.
-            let fn_node_range = entry_idx.index()..g.node_count();
-            for raw in fn_node_range {
-                let idx = NodeIndex::new(raw);
-                let info = &g[idx];
-
-                // collect callee names
+            for idx in fn_graph.node_indices() {
+                let info = &fn_graph[idx];
                 if let Some(callee) = &info.callee
                     && !callees.contains(callee)
                 {
                     callees.push(callee.clone());
                 }
-
-                // record explicit label caps (all three independently)
                 for lbl in &info.labels {
                     match *lbl {
                         DataLabel::Source(bits) => fn_src_bits |= bits,
                         DataLabel::Sanitizer(bits) => fn_sani_bits |= bits,
                         DataLabel::Sink(bits) => {
                             fn_sink_bits |= bits;
-                            // check whether any param flows to this sink
                             for u in &info.uses {
                                 if let Some(pos) = param_names.iter().position(|p| p == u)
                                     && !tainted_sink_params.contains(&pos)
@@ -3540,26 +3733,20 @@ fn build_sub<'a>(
                         }
                     }
                 }
-
-                //  a) incoming taint from any vars we read
                 let mut in_bits = Cap::empty();
                 for u in &info.uses {
                     if let Some(b) = var_taint.get(u) {
                         in_bits |= *b;
                     }
                 }
-
-                //  b) apply this node’s own label
                 let mut out_bits = in_bits;
                 for lab in &info.labels {
                     match *lab {
                         DataLabel::Source(bits) => out_bits |= bits,
                         DataLabel::Sanitizer(bits) => out_bits &= !bits,
-                        DataLabel::Sink(_) => { /* no-op */ }
+                        DataLabel::Sink(_) => {}
                     }
                 }
-
-                //  c) write it back to the var we define (if any)
                 if let Some(def) = &info.defines {
                     if out_bits.is_empty() {
                         var_taint.remove(def);
@@ -3567,44 +3754,30 @@ fn build_sub<'a>(
                         var_taint.insert(def.clone(), out_bits);
                     }
                 }
-
-                //  d) stash it for later
                 node_bits.insert(idx, out_bits);
             }
-
-            // fold in explicit returns
             for (&idx, &bits) in &node_bits {
-                if g[idx].kind == StmtKind::Return {
+                if fn_graph[idx].kind == StmtKind::Return {
                     fn_src_bits |= bits;
                 }
             }
-
-            // implicit returns via fall-through exits
             for &pred in &body_exits {
                 if let Some(&bits) = node_bits.get(&pred) {
                     fn_src_bits |= bits;
                 }
             }
 
-            // ───── propagating_params ────────────────────────────────────────────
-            //
-            // Per-parameter propagation: for each parameter, check whether it
-            // reaches a return value (explicit or implicit) while still carrying
-            // taint bits.  Records the 0-based index of each propagating param.
+            // ── propagating_params ────────────────────────────────────────────
             let propagating_params = {
                 let mut params = Vec::new();
-
                 for (i, pname) in param_names.iter().enumerate() {
                     let mut flows = false;
-
-                    // check explicit returns
                     for &idx in node_bits.keys() {
-                        if g[idx].kind == StmtKind::Return {
-                            for u in &g[idx].uses {
+                        if fn_graph[idx].kind == StmtKind::Return {
+                            for u in &fn_graph[idx].uses {
                                 if u == pname {
                                     flows = true;
                                 }
-                                // check if the var was derived from this param
                                 if let Some(bits) = var_taint.get(u)
                                     && !bits.is_empty()
                                     && var_taint.contains_key(pname)
@@ -3614,11 +3787,9 @@ fn build_sub<'a>(
                             }
                         }
                     }
-
-                    // check implicit returns (fall-through body exits)
                     if !flows {
                         for &exit_pred in &body_exits {
-                            let info = &g[exit_pred];
+                            let info = &fn_graph[exit_pred];
                             for u in &info.uses {
                                 if u == pname {
                                     flows = true;
@@ -3631,7 +3802,6 @@ fn build_sub<'a>(
                             }
                         }
                     }
-
                     if flows {
                         params.push(i);
                     }
@@ -3642,58 +3812,7 @@ fn build_sub<'a>(
             tainted_sink_params.sort_unstable();
             tainted_sink_params.dedup();
 
-            /* ───── 4) synthesise an explicit exit-node and wire it up ──────────── */
-            let exit_idx = g.add_node(NodeInfo {
-                kind: StmtKind::Return,
-                span: (ast.start_byte(), ast.end_byte()),
-                labels: SmallVec::new(),
-                defines: None,
-                extra_defines: vec![],
-                uses: Vec::new(),
-                callee: None,
-                receiver: None,
-                enclosing_func: Some(fn_name.clone()),
-                call_ordinal: 0,
-                condition_text: None,
-                condition_vars: Vec::new(),
-                condition_negated: false,
-                arg_uses: Vec::new(),
-                sink_payload_args: None,
-                all_args_literal: false,
-                catch_param: false,
-                const_text: None,
-                arg_callees: Vec::new(),
-                outer_callee: None,
-                cast_target_type: None,
-                bin_op: None,
-                bin_op_const: None,
-                managed_resource: false,
-                in_defer: false,
-            });
-            // Wire body exits (fall-through) to the exit node.
-            for &b in &body_exits {
-                connect_all(g, &[b], exit_idx, EdgeKind::Seq);
-            }
-            // Also wire any Return nodes inside the function to the exit
-            // node.  `build_sub` for Kind::Return returns Vec::new() (no
-            // exits), so those nodes are dead-ends in the graph.  Without
-            // this edge, the synthetic exit node is unreachable whenever
-            // the function body ends with a `return` statement, which
-            // disconnects all subsequent functions at the module level.
-            //
-            // Only scan nodes created within this function scope.
-            for raw in fn_first_node.index()..g.node_count() {
-                let idx = NodeIndex::new(raw);
-                let info = &g[idx];
-                if info.kind == StmtKind::Return
-                    && idx != exit_idx
-                    && !g.contains_edge(idx, exit_idx)
-                {
-                    connect_all(g, &[idx], exit_idx, EdgeKind::Seq);
-                }
-            }
-
-            /* ───── 5) store the rich summary ──────────────────────────────────── */
+            // ── 5) Store summary (entry/exit are body-local) ──────────────────
             let key = FuncKey {
                 lang: Lang::from_slug(lang).unwrap_or(Lang::Rust),
                 namespace: file_path.to_owned(),
@@ -3703,20 +3822,49 @@ fn build_sub<'a>(
             summaries.insert(
                 key,
                 LocalFuncSummary {
-                    entry: entry_idx,
-                    exit: exit_idx,
+                    entry: fn_entry,
+                    exit: fn_exit,
                     source_caps: fn_src_bits,
                     sanitizer_caps: fn_sani_bits,
                     sink_caps: fn_sink_bits,
                     param_count,
-                    param_names,
+                    param_names: param_names.clone(),
                     propagating_params,
                     tainted_sink_params,
                     callees,
                 },
             );
 
-            vec![exit_idx]
+            // ── 6) Push BodyCfg ───────────────────────────────────────────────
+            bodies.push(BodyCfg {
+                meta: BodyMeta {
+                    id: fn_body_id,
+                    kind: if is_anon {
+                        BodyKind::AnonymousFunction
+                    } else {
+                        BodyKind::NamedFunction
+                    },
+                    name: if is_anon { None } else { Some(fn_name.clone()) },
+                    params: param_names,
+                    param_count,
+                    span: (ast.start_byte(), ast.end_byte()),
+                    parent_body_id: Some(current_body_id),
+                },
+                graph: fn_graph,
+                entry: fn_entry,
+                exit: fn_exit,
+            });
+
+            // ── 7) Insert placeholder in parent graph ─────────────────────────
+            // Declaration-marker only: no defines, uses, callee, or labels.
+            let placeholder = g.add_node(make_empty_node_info(
+                StmtKind::Seq,
+                (ast.start_byte(), ast.end_byte()),
+                enclosing_func,
+            ));
+            connect_all(g, preds, placeholder, EdgeKind::Seq);
+
+            vec![placeholder]
         }
 
         // Statements that **may** contain a call ---------------------------------
@@ -3743,6 +3891,9 @@ fn build_sub<'a>(
                     break_targets,
                     continue_targets,
                     throw_targets,
+                    bodies,
+                    next_body_id,
+                    current_body_id,
                 );
             }
 
@@ -3809,6 +3960,9 @@ fn build_sub<'a>(
                     break_targets,
                     continue_targets,
                     throw_targets,
+                    bodies,
+                    next_body_id,
+                    current_body_id,
                 );
             }
 
@@ -3839,7 +3993,8 @@ fn build_sub<'a>(
                 return Vec::new();
             }
 
-            // Recurse into any function expressions nested in arguments
+            // Recurse into any function expressions nested in arguments.
+            // Each nested function hits Kind::Function and becomes a separate body.
             let nested = collect_nested_function_nodes(ast, lang);
             for func_node in nested {
                 build_sub(
@@ -3856,6 +4011,9 @@ fn build_sub<'a>(
                     break_targets,
                     continue_targets,
                     throw_targets,
+                    bodies,
+                    next_body_id,
+                    current_body_id,
                 );
             }
 
@@ -3931,65 +4089,16 @@ pub(crate) fn build_cfg<'a>(
     lang: &str,
     file_path: &str,
     analysis_rules: Option<&LangAnalysisRules>,
-) -> (Cfg, NodeIndex, FuncSummaries) {
+) -> FileCfg {
     debug!(target: "cfg", "Building CFG for {:?}", tree.root_node());
 
-    let mut g: Cfg = Graph::with_capacity(128, 256);
+    // Create the top-level body graph (BodyId(0)).
+    let (mut g, entry, exit) = create_body_graph(0, code.len(), None);
+
     let mut summaries = FuncSummaries::new();
-    let entry = g.add_node(NodeInfo {
-        kind: StmtKind::Entry,
-        span: (0, 0),
-        labels: SmallVec::new(),
-        defines: None,
-        extra_defines: vec![],
-        uses: Vec::new(),
-        callee: None,
-        receiver: None,
-        enclosing_func: None,
-        call_ordinal: 0,
-        condition_text: None,
-        condition_vars: Vec::new(),
-        condition_negated: false,
-        arg_uses: Vec::new(),
-        sink_payload_args: None,
-        all_args_literal: false,
-        catch_param: false,
-        const_text: None,
-        arg_callees: Vec::new(),
-        outer_callee: None,
-        cast_target_type: None,
-        bin_op: None,
-        bin_op_const: None,
-        managed_resource: false,
-        in_defer: false,
-    });
-    let exit = g.add_node(NodeInfo {
-        kind: StmtKind::Exit,
-        span: (code.len(), code.len()),
-        labels: SmallVec::new(),
-        defines: None,
-        extra_defines: vec![],
-        uses: Vec::new(),
-        callee: None,
-        receiver: None,
-        enclosing_func: None,
-        call_ordinal: 0,
-        condition_text: None,
-        condition_vars: Vec::new(),
-        condition_negated: false,
-        arg_uses: Vec::new(),
-        sink_payload_args: None,
-        all_args_literal: false,
-        catch_param: false,
-        const_text: None,
-        arg_callees: Vec::new(),
-        outer_callee: None,
-        cast_target_type: None,
-        bin_op: None,
-        bin_op_const: None,
-        managed_resource: false,
-        in_defer: false,
-    });
+    let mut bodies: Vec<BodyCfg> = Vec::new();
+    // BodyId(0) is reserved for top-level; function bodies start at 1.
+    let mut next_body_id: u32 = 1;
 
     // Build the body below the synthetic ENTRY.
     let mut top_ordinal: u32 = 0;
@@ -4010,6 +4119,9 @@ pub(crate) fn build_cfg<'a>(
         &mut top_breaks,
         &mut top_continues,
         &mut top_throws,
+        &mut bodies,
+        &mut next_body_id,
+        BodyId(0),
     );
     debug!(target: "cfg", "exits: {:?}", exits);
     // Wire every real exit to our synthetic EXIT node.
@@ -4017,14 +4129,12 @@ pub(crate) fn build_cfg<'a>(
         connect_all(&mut g, &[e], exit, EdgeKind::Seq);
     }
 
-    debug!(target: "cfg", "CFG DONE — nodes: {}, edges: {}", g.node_count(), g.edge_count());
+    debug!(target: "cfg", "CFG DONE — top-level nodes: {}, bodies: {}", g.node_count(), bodies.len() + 1);
 
     if cfg!(debug_assertions) {
-        // List every node
         for idx in g.node_indices() {
             debug!(target: "cfg", "  node {:>3}: {:?}", idx.index(), g[idx]);
         }
-        // List every edge
         for e in g.edge_references() {
             debug!(
                 target: "cfg",
@@ -4034,8 +4144,6 @@ pub(crate) fn build_cfg<'a>(
                 e.weight()
             );
         }
-
-        // Reachability check
         let mut reachable: HashSet<NodeIndex> = Default::default();
         let mut bfs = Bfs::new(&g, entry);
         while let Some(nx) = bfs.next(&g) {
@@ -4054,13 +4162,32 @@ pub(crate) fn build_cfg<'a>(
                 .collect();
             debug!(target: "cfg", "‼︎ unreachable nodes: {:?}", unreachable);
         }
-
-        // (Optional) Dominator tree sanity check
         let doms: Dominators<_> = simple_fast(&g, entry);
         debug!(target: "cfg", "dominator tree computed (len = {:?})", doms);
     }
 
-    (g, entry, summaries)
+    // Insert top-level body at position 0.
+    let toplevel = BodyCfg {
+        meta: BodyMeta {
+            id: BodyId(0),
+            kind: BodyKind::TopLevel,
+            name: None,
+            params: Vec::new(),
+            param_count: 0,
+            span: (0, code.len()),
+            parent_body_id: None,
+        },
+        graph: g,
+        entry,
+        exit,
+    };
+    bodies.insert(0, toplevel);
+    // Sort by BodyId so that bodies[i].meta.id == BodyId(i).
+    // Nested functions are pushed before their parents during build_sub,
+    // so the Vec may be out of order before this sort.
+    bodies.sort_by_key(|b| b.meta.id);
+
+    FileCfg { bodies, summaries }
 }
 
 /// Convert the graph‑local `FuncSummaries` into serialisable [`FuncSummary`]
@@ -4112,11 +4239,22 @@ mod cfg_tests {
     use tree_sitter::Language;
 
     fn parse_and_build(src: &[u8], lang_str: &str, ts_lang: Language) -> (Cfg, NodeIndex) {
+        let file_cfg = parse_to_file_cfg(src, lang_str, ts_lang);
+        // If there's a function body, return it (most tests wrap code in a function).
+        // Otherwise return the top-level body.
+        let body = if file_cfg.bodies.len() > 1 {
+            &file_cfg.bodies[1]
+        } else {
+            &file_cfg.bodies[0]
+        };
+        (body.graph.clone(), body.entry)
+    }
+
+    fn parse_to_file_cfg(src: &[u8], lang_str: &str, ts_lang: Language) -> FileCfg {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(&ts_lang).unwrap();
         let tree = parser.parse(src, None).unwrap();
-        let (cfg, entry, _) = build_cfg(&tree, src, lang_str, "test.js", None);
-        (cfg, entry)
+        build_cfg(&tree, src, lang_str, "test.js", None)
     }
 
     #[test]
@@ -4830,4 +4968,5 @@ mod cfg_tests {
             ifs.len()
         );
     }
+
 }

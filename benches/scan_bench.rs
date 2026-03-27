@@ -137,19 +137,20 @@ fn bench_state_analysis_only(c: &mut Criterion) {
     cfg.scanner.enable_state_analysis = true;
 
     // Parse and build CFG once (outside benchmark loop)
-    let (cfg_graph, entry, summaries, lang) = nyx_scanner::ast::build_cfg_for_file(&fixture, &cfg)
+    let (file_cfg, lang) = nyx_scanner::ast::build_cfg_for_file(&fixture, &cfg)
         .expect("build cfg")
         .expect("supported language");
     let source_bytes = std::fs::read(&fixture).expect("read fixture");
+    let top = file_cfg.toplevel();
 
     c.bench_function("state_analysis_only", |b| {
         b.iter(|| {
             nyx_scanner::state::run_state_analysis(
-                &cfg_graph,
-                entry,
+                &top.graph,
+                top.entry,
                 lang,
                 &source_bytes,
-                &summaries,
+                &file_cfg.summaries,
                 None,
                 true,
             )

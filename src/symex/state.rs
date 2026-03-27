@@ -325,6 +325,7 @@ mod tests {
 
         let node = petgraph::graph::NodeIndex::new(10);
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: node,
             source: petgraph::graph::NodeIndex::new(0),
             path: vec![],
@@ -336,6 +337,7 @@ mod tests {
             uses_summary: false,
             flow_steps: vec![],
             symbolic: None,
+            source_span: None,
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -355,6 +357,7 @@ mod tests {
 
         let node = petgraph::graph::NodeIndex::new(10);
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: node,
             source: petgraph::graph::NodeIndex::new(0),
             path: vec![],
@@ -366,6 +369,7 @@ mod tests {
             uses_summary: false,
             flow_steps: vec![],
             symbolic: None,
+            source_span: None,
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -382,6 +386,7 @@ mod tests {
     fn get_sink_witness_unmapped_node_returns_none() {
         let state = SymbolicState::new();
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: petgraph::graph::NodeIndex::new(99), // not in cfg_node_map
             source: petgraph::graph::NodeIndex::new(0),
             path: vec![],
@@ -393,6 +398,7 @@ mod tests {
             uses_summary: false,
             flow_steps: vec![],
             symbolic: None,
+            source_span: None,
         };
         let ssa = SsaBody {
             blocks: vec![],

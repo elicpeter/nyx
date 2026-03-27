@@ -14,15 +14,18 @@ fn parse_and_analyse<A: CfgAnalysis>(
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: None,
@@ -36,15 +39,18 @@ fn parse_and_run_all(src: &[u8], lang_str: &str, ts_lang: Language) -> Vec<CfgFi
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: None,
@@ -63,15 +69,18 @@ fn parse_and_run_all_with_taint(
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings,
         analysis_rules: None,
@@ -150,10 +159,12 @@ fn unreachable_detects_orphaned_nodes() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
     // All nodes in linear code should be reachable
-    let reachable = dominators::reachable_set(&cfg, entry);
+    let reachable = dominators::reachable_set(cfg, entry);
     assert_eq!(
         reachable.len(),
         cfg.node_count(),
@@ -475,9 +486,11 @@ fn reachable_set_contains_all_connected_nodes() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let reachable = dominators::reachable_set(&cfg, entry);
+    let reachable = dominators::reachable_set(cfg, entry);
 
     // All nodes in a simple straight-line function should be reachable
     assert_eq!(
@@ -499,9 +512,10 @@ fn find_exit_node_exists() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, _, _) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
 
-    let exit = dominators::find_exit_node(&cfg);
+    let exit = dominators::find_exit_node(cfg);
     assert!(exit.is_some(), "Should find an exit node");
 }
 
@@ -518,10 +532,12 @@ fn shortest_distance_basic() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let exit = dominators::find_exit_node(&cfg).unwrap();
-    let dist = dominators::shortest_distance(&cfg, entry, exit);
+    let exit = dominators::find_exit_node(cfg).unwrap();
+    let dist = dominators::shortest_distance(cfg, entry, exit);
     assert!(dist.is_some(), "Should find a path from entry to exit");
     assert!(dist.unwrap() > 0, "Distance should be positive");
 }
@@ -662,7 +678,9 @@ fn taint_and_unguarded_sink_deduped() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg_graph, entry, _summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg_graph = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
     let _lang = Lang::from_slug("rust").unwrap();
 
     // Find a sink node to create a synthetic taint finding
@@ -677,6 +695,7 @@ fn taint_and_unguarded_sink_deduped() {
         .expect("test code should have a sink node");
 
     let fake_taint = vec![taint::Finding {
+        body_id: crate::cfg::BodyId(0),
         sink: sink_node,
         source: entry,
         path: vec![entry, sink_node],
@@ -688,6 +707,7 @@ fn taint_and_unguarded_sink_deduped() {
         uses_summary: false,
         flow_steps: vec![],
         symbolic: None,
+        source_span: None,
     }];
 
     let findings = parse_and_run_all_with_taint(
@@ -830,7 +850,9 @@ fn js_throw_terminates_block() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "javascript", "test.js", None);
+    let file_cfg = build_cfg(&tree, src, "javascript", "test.js", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
     // Verify throw creates a Return-kind node
     let throw_nodes: Vec<_> = cfg
@@ -848,7 +870,7 @@ fn js_throw_terminates_block() {
     );
 
     // eval after throw should be unreachable
-    let reachable = crate::cfg_analysis::dominators::reachable_set(&cfg, entry);
+    let reachable = crate::cfg_analysis::dominators::reachable_set(cfg, entry);
     let eval_nodes: Vec<_> = cfg
         .node_indices()
         .filter(|&idx| cfg[idx].callee.as_deref().is_some_and(|c| c == "eval"))
@@ -882,9 +904,11 @@ fn configured_terminator_stops_flow() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "javascript", "test.js", Some(&rules));
+    let file_cfg = build_cfg(&tree, src, "javascript", "test.js", Some(&rules));
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let reachable = crate::cfg_analysis::dominators::reachable_set(&cfg, entry);
+    let reachable = crate::cfg_analysis::dominators::reachable_set(cfg, entry);
 
     // eval should be unreachable since process.exit is a terminator
     let eval_nodes: Vec<_> = cfg
@@ -916,7 +940,8 @@ fn location_href_assignment_is_sink() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, _entry, _summaries) = build_cfg(&tree, src, "javascript", "test.js", None);
+    let file_cfg = build_cfg(&tree, src, "javascript", "test.js", None);
+    let cfg = &file_cfg.first_body().graph;
 
     let has_sink = cfg.node_indices().any(|idx| {
         cfg[idx]
@@ -939,7 +964,8 @@ fn a_href_assignment_is_not_sink() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, _entry, _summaries) = build_cfg(&tree, src, "javascript", "test.js", None);
+    let file_cfg = build_cfg(&tree, src, "javascript", "test.js", None);
+    let cfg = &file_cfg.first_body().graph;
 
     let has_sink = cfg.node_indices().any(|idx| {
         cfg[idx]
@@ -983,15 +1009,18 @@ fn config_sanitizer_suppresses_unguarded_sink() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, lang_str, "test.rs", Some(&rules));
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", Some(&rules));
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug(lang_str).unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: Some(&rules),
@@ -1330,9 +1359,11 @@ void process() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "c", "test.c", None);
+    let file_cfg = build_cfg(&tree, src, "c", "test.c", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let reachable = dominators::reachable_set(&cfg, entry);
+    let reachable = dominators::reachable_set(cfg, entry);
 
     // All nodes should be reachable — the preproc recovery should prevent
     // the dangling-else from orphaning downstream code.
@@ -1363,9 +1394,11 @@ void process() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, _) = build_cfg(&tree, src, "c", "test.c", None);
+    let file_cfg = build_cfg(&tree, src, "c", "test.c", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
 
-    let reachable = dominators::reachable_set(&cfg, entry);
+    let reachable = dominators::reachable_set(cfg, entry);
 
     // All nodes should be reachable — break exits the loop and post-loop
     // code (free(x)) should be connected.
@@ -1451,15 +1484,18 @@ fn cfg_only_no_taint_produces_low_severity() {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
     let lang = Lang::from_slug("rust").unwrap();
     let ctx = AnalysisContext {
-        cfg: &cfg,
+        cfg,
         entry,
         lang,
         file_path: "test.rs",
         source_bytes: src,
-        func_summaries: &summaries,
+        func_summaries: summaries,
         global_summaries: None,
         taint_findings: &[],
         analysis_rules: None,

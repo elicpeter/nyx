@@ -1078,6 +1078,7 @@ mod tests {
     /// Build a minimal Finding with source at n0 and sink at n1.
     fn make_finding(n0: NodeIndex, n1: NodeIndex) -> Finding {
         Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n1,
             source: n0,
             path: vec![n0, n1],
@@ -1100,6 +1101,7 @@ mod tests {
                 },
             ],
             symbolic: None,
+            source_span: None,
         }
     }
 
@@ -1470,6 +1472,7 @@ mod tests {
 
         // Finding path goes through B0 → B1 → B3
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n3,
             source: n0,
             path: vec![n0, n1, n3],
@@ -1497,6 +1500,7 @@ mod tests {
                 },
             ],
             symbolic: None,
+            source_span: None,
         };
 
         let ctx = super::SymexContext {
@@ -1628,6 +1632,7 @@ mod tests {
         };
 
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n3,
             source: n0,
             path: vec![n0, n1, n3],
@@ -1655,6 +1660,7 @@ mod tests {
                 },
             ],
             symbolic: None,
+            source_span: None,
         };
 
         let ctx = super::SymexContext {
@@ -1898,6 +1904,7 @@ mod tests {
         };
 
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n3,
             source: n0,
             path: vec![n0, n1, n3],
@@ -1920,6 +1927,7 @@ mod tests {
                 },
             ],
             symbolic: None,
+            source_span: None,
         };
 
         let cfg_graph = crate::cfg::Cfg::new();

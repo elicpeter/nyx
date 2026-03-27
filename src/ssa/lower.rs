@@ -124,6 +124,7 @@ fn lower_to_ssa_inner(
     //     and inject synthetic Param defs at entry block so rename can find them.
     //     When formal_params is supplied, reorder so formal params come first in
     //     declaration order — this makes Param indices correspond to call-site positions.
+    //
     let external_vars = if scope.is_some() && !scope_all && !scope_nop {
         let raw = identify_external_uses(cfg, &blocks_nodes, &var_defs);
         reorder_external_vars(raw, formal_params)

@@ -115,8 +115,9 @@ pub fn extract_findings(
         // into the synthesised exit and carry only path-specific state.
         // The synthesised exit is the one Return node that does NOT have an
         // outgoing edge to another Return in the same function.
-        let is_exit = info.kind == StmtKind::Exit;
-        let is_func_exit = info.kind == StmtKind::Return && info.enclosing_func.is_some();
+        let is_exit = info.kind == StmtKind::Exit && info.enclosing_func.is_none();
+        let is_func_exit = (info.kind == StmtKind::Return || info.kind == StmtKind::Exit)
+            && info.enclosing_func.is_some();
         if !is_exit && !is_func_exit {
             continue;
         }
@@ -177,7 +178,11 @@ pub fn extract_findings(
                 continue;
             }
 
-            let acquire_span = acquire_node.map(|n| cfg[n].span);
+            // Prefer direct acquire node span; fall back to proxy span
+            // from ResourceMethodSummary (cross-body resource tracking).
+            let acquire_span = acquire_node
+                .map(|n| cfg[n].span)
+                .or_else(|| state.proxy_acquire_spans.get(&sym).copied());
 
             // Suppress/downgrade leaks for variables returned from the
             // function (factory pattern).  Only suppress when ALL
@@ -252,6 +257,59 @@ pub fn extract_findings(
                     severity: Severity::Low,
                     span: acquire_span.unwrap_or(info.span),
                     message: format!("resource `{var_name}` may not be closed on all paths"),
+                    machine: "resource",
+                    subject: Some(var_name.to_string()),
+                    from_state: "open",
+                    to_state: "possibly_leaked",
+                });
+            }
+        }
+    }
+
+    // ── 2b. Proxy-acquired possible leaks (exception-path heuristic) ────
+    // In JS/TS, any call can throw. If a proxy-acquired resource is fully
+    // CLOSED at function exit (no OPEN paths), check whether there are
+    // intervening calls between the proxy acquire and release nodes that
+    // could throw and bypass the release. If so, emit a possible leak.
+    for (idx, info) in cfg.node_references() {
+        let is_func_exit = (info.kind == StmtKind::Return || info.kind == StmtKind::Exit)
+            && info.enclosing_func.is_some();
+        if !is_func_exit {
+            continue;
+        }
+        let Some(state) = result.states.get(&idx) else {
+            continue;
+        };
+        for (&sym, &lifecycle) in &state.resource.vars {
+            // Only for proxy-acquired resources that are fully CLOSED at exit
+            if !state.proxy_acquire_spans.contains_key(&sym) {
+                continue;
+            }
+            if lifecycle.contains(ResourceLifecycle::OPEN) {
+                continue; // Already handled by the normal leak detection above
+            }
+            if !lifecycle.contains(ResourceLifecycle::CLOSED) {
+                continue;
+            }
+            // Check if there are intervening Call nodes between acquire and release
+            // in the CFG (these could throw and bypass the release)
+            let has_intervening_calls = cfg.node_references().any(|(_, ni)| {
+                ni.kind == StmtKind::Call
+                    && ni.enclosing_func == info.enclosing_func
+                    && ni.callee.is_some()
+                    // Not the acquire or release proxy itself
+                    && !state.proxy_acquire_spans.values().any(|s| *s == ni.span)
+            });
+            if has_intervening_calls {
+                let var_name = interner.resolve(sym);
+                let acquire_span = state.proxy_acquire_spans.get(&sym).copied();
+                findings.push(StateFinding {
+                    rule_id: "state-resource-leak-possible".into(),
+                    severity: Severity::Low,
+                    span: acquire_span.unwrap_or(info.span),
+                    message: format!(
+                        "resource `{var_name}` may not be closed on all paths"
+                    ),
                     machine: "resource",
                     subject: Some(var_name.to_string()),
                     from_state: "open",
@@ -458,6 +516,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -496,6 +555,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());

@@ -257,6 +257,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());
@@ -314,6 +315,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let result = run_forward(&cfg, entry, &transfer, ProductState::initial());

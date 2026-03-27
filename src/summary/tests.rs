@@ -401,6 +401,7 @@ fn ssa_summary_serde_round_trip_identity() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -421,6 +422,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -438,6 +440,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -459,6 +462,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -484,6 +488,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
     gs.insert_ssa(key.clone(), v1.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v1));
@@ -498,6 +503,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
     gs.insert_ssa(key.clone(), v2.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v2));
@@ -530,6 +536,7 @@ fn global_summaries_merge_with_ssa_entries() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
     let sum_b = SsaFuncSummary {
         param_to_return: vec![],
@@ -540,6 +547,7 @@ fn global_summaries_merge_with_ssa_entries() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
 
     gs1.insert_ssa(key_a.clone(), sum_a.clone());
@@ -573,6 +581,7 @@ fn global_summaries_is_empty_considers_ssa() {
             param_to_container_store: vec![],
             return_type: None,
             return_abstract: None,
+            source_to_callback: vec![],
         },
     );
 
@@ -590,6 +599,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -622,6 +632,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
         param_to_container_store: vec![(1, 0)],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -663,6 +674,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
             string: StringFact::top(),
             bits: BitFact::top(),
         }),
+        source_to_callback: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -745,6 +757,7 @@ fn make_callee_body(num_blocks: usize, param_count: usize) -> crate::taint::ssa_
         },
         param_count,
         node_meta: std::collections::HashMap::new(),
+        body_graph: None,
     }
 }
 
@@ -1111,6 +1124,7 @@ fn global_summaries_resolve_body_requires_body_present() {
         param_to_container_store: vec![],
         return_type: None,
         return_abstract: None,
+        source_to_callback: vec![],
     });
     // Don't insert body
 

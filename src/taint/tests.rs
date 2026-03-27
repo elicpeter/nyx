@@ -1,5 +1,5 @@
 use super::*;
-use crate::cfg::FuncSummaries;
+use crate::cfg::FileCfg;
 use crate::interop::InteropEdge;
 use crate::labels::Cap;
 use crate::symbol::FuncKey;
@@ -7,6 +7,7 @@ use crate::symbol::FuncKey;
 // ── SSA-specific taint tests ─────────────────────────────────────────────
 
 /// Helper: run SSA taint analysis on Rust source.
+/// Uses the first function body if one exists, otherwise top-level.
 fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
     use crate::cfg::build_cfg;
     use crate::state::symbol::SymbolInterner;
@@ -17,16 +18,24 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         .unwrap();
     let tree = parser.parse(src, None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let interner = SymbolInterner::from_cfg(&cfg);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let body = if file_cfg.bodies.len() > 1 {
+        &file_cfg.bodies[1]
+    } else {
+        file_cfg.first_body()
+    };
+    let cfg = &body.graph;
+    let entry = body.entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(cfg);
     let ssa =
-        crate::ssa::lower_to_ssa(&cfg, entry, None, true).expect("SSA lowering should succeed");
+        crate::ssa::lower_to_ssa(cfg, entry, None, true).expect("SSA lowering should succeed");
 
     let transfer = ssa_transfer::SsaTaintTransfer {
         lang: Lang::Rust,
         namespace: "test.rs",
         interner: &interner,
-        local_summaries: &summaries,
+        local_summaries: summaries,
         global_summaries: None,
         interop_edges: &[],
         global_seed: None,
@@ -42,8 +51,8 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         points_to: None,
         dynamic_pts: None,
     };
-    let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &transfer);
-    let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
+    let events = ssa_transfer::run_ssa_taint(&ssa, cfg, &transfer);
+    let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, cfg);
     findings.sort_by_key(|f| (f.sink.index(), f.source.index()));
     findings.dedup_by_key(|f| (f.sink, f.source));
     findings
@@ -170,11 +179,11 @@ fn env_to_arg_is_flagged() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -208,11 +217,11 @@ fn taint_through_if_else() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -246,11 +255,11 @@ fn taint_through_while_loop() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -281,11 +290,11 @@ fn taint_killed_by_matching_sanitizer() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -319,11 +328,11 @@ fn wrong_sanitizer_preserves_taint() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -357,11 +366,11 @@ fn taint_breaks_out_of_loop() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -395,11 +404,11 @@ fn test_two_sources_one_sanitised() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -437,11 +446,11 @@ fn test_two_sources_wrong_sanitiser_both_flagged() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -474,11 +483,11 @@ fn test_should_not_panic_on_empty_function() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -501,7 +510,8 @@ fn cross_file_source_resolved_via_global_summaries() {
             Command::new("sh").arg(x).status().unwrap();
         }"#;
 
-    let (cfg, entry, local_summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
 
     // Build global summaries as if file A exported get_dangerous
     let mut global = GlobalSummaries::new();
@@ -530,9 +540,8 @@ fn cross_file_source_resolved_via_global_summaries() {
     );
 
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local_summaries,
+        &file_cfg,
+        local_summaries,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -555,7 +564,8 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
             Command::new("sh").arg(clean).status().unwrap();
         }"#;
 
-    let (cfg, entry, local_summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
     let key = FuncKey {
@@ -583,9 +593,8 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
     );
 
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local_summaries,
+        &file_cfg,
+        local_summaries,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -602,8 +611,8 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
 //  Shared test helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Parse Rust source bytes → (cfg, entry, local_summaries)
-fn parse_rust(src: &[u8]) -> (Cfg, NodeIndex, FuncSummaries) {
+/// Parse Rust source bytes → FileCfg
+fn parse_rust(src: &[u8]) -> FileCfg {
     use crate::cfg::build_cfg;
     use tree_sitter::Language;
     let mut parser = tree_sitter::Parser::new();
@@ -617,8 +626,8 @@ fn parse_rust(src: &[u8]) -> (Cfg, NodeIndex, FuncSummaries) {
 /// Parse Rust source bytes, build CFG, and export cross-file summaries.
 fn extract_summaries_from_bytes(src: &[u8], path: &str) -> Vec<crate::summary::FuncSummary> {
     use crate::cfg::export_summaries;
-    let (_, _, local) = parse_rust(src);
-    export_summaries(&local, path, "rust")
+    let file_cfg = parse_rust(src);
+    export_summaries(&file_cfg.summaries, path, "rust")
 }
 
 #[test]
@@ -633,7 +642,8 @@ fn cross_file_sink_resolved_via_global_summaries() {
             dangerous_exec(x);
         }"#;
 
-    let (cfg, entry, local_summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
 
     let mut global = GlobalSummaries::new();
     let key = FuncKey {
@@ -661,9 +671,8 @@ fn cross_file_sink_resolved_via_global_summaries() {
     );
 
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local_summaries,
+        &file_cfg,
+        local_summaries,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -701,11 +710,11 @@ fn multi_file_source_to_sink_detected() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -750,11 +759,11 @@ fn multi_file_sanitizer_neutralises_cross_file_source() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -797,11 +806,11 @@ fn multi_file_wrong_sanitizer_preserves_taint() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -840,11 +849,11 @@ fn multi_file_sink_in_another_file() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -895,11 +904,11 @@ fn multi_file_passthrough_preserves_taint() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -945,11 +954,11 @@ fn multi_file_chain_source_sanitize_sink_across_files() {
     let summaries = extract_summaries_from_bytes(lib_src, "lib.rs");
     let global = merge_summaries(summaries, None);
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -983,11 +992,11 @@ fn sanitizer_strips_only_matching_bits() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -1017,11 +1026,11 @@ fn multiple_sanitizers_strip_all_bits() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -1046,11 +1055,11 @@ fn taint_through_variable_reassignment() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -1076,11 +1085,11 @@ fn untainted_variable_at_sink_is_safe() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -1137,11 +1146,11 @@ fn local_summary_takes_precedence_over_global() {
         },
     );
 
-    let (cfg, entry, local) = parse_rust(caller_src);
+    let file_cfg = parse_rust(caller_src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -1166,12 +1175,12 @@ fn empty_global_summaries_same_as_none() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
 
     let findings_none = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -1180,9 +1189,8 @@ fn empty_global_summaries_same_as_none() {
     );
     let empty = GlobalSummaries::new();
     let findings_empty = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         Some(&empty),
         Lang::Rust,
         "test.rs",
@@ -1209,11 +1217,11 @@ fn taint_not_introduced_by_non_source_function() {
         }
     "#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -1267,11 +1275,11 @@ fn source_and_sink_on_same_function() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -1351,11 +1359,11 @@ fn multiple_cross_file_sources_one_sanitised() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -1374,12 +1382,12 @@ fn multiple_cross_file_sources_one_sanitised() {
 //  Multi-language helpers and tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Parse source bytes for any supported language → (cfg, entry, local_summaries)
+/// Parse source bytes for any supported language → FileCfg
 fn parse_lang(
     src: &[u8],
     slug: &str,
     ts_lang: tree_sitter::Language,
-) -> (Cfg, NodeIndex, FuncSummaries) {
+) -> FileCfg {
     use crate::cfg::build_cfg;
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
@@ -1404,11 +1412,11 @@ fn parse_lang(
 fn js_source_to_sink() {
     let src = b"function main() {\n  let x = document.location();\n  eval(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -1426,11 +1434,11 @@ fn js_source_to_sink() {
 fn ts_source_to_sink() {
     let src = b"function main() {\n  let x = document.location();\n  eval(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
-    let (cfg, entry, summaries) = parse_lang(src, "typescript", lang);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::TypeScript,
         "test.ts",
@@ -1448,11 +1456,11 @@ fn ts_source_to_sink() {
 fn python_source_to_sink() {
     let src = b"def main():\n    x = os.getenv(\"SECRET\")\n    os.system(x)\n";
     let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "python", lang);
+    let file_cfg = parse_lang(src, "python", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Python,
         "test.py",
@@ -1471,11 +1479,11 @@ fn go_source_to_sink() {
     let src =
         b"package main\n\nfunc main() {\n\tx := os.Getenv(\"SECRET\")\n\texec.Command(x)\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "go", lang);
+    let file_cfg = parse_lang(src, "go", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Go,
         "test.go",
@@ -1493,11 +1501,11 @@ fn go_source_to_sink() {
 fn java_source_to_sink() {
     let src = b"class Main {\n  void main() {\n    String x = System.getenv(\"SECRET\");\n    Runtime.exec(x);\n  }\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "java", lang);
+    let file_cfg = parse_lang(src, "java", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Java,
         "test.java",
@@ -1515,8 +1523,9 @@ fn java_source_to_sink() {
 fn c_source_to_sink() {
     let src = b"void main() {\n  char* x = getenv(\"SECRET\");\n  system(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[], None);
+    let file_cfg = parse_lang(src, "c", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1528,11 +1537,11 @@ fn c_source_to_sink() {
 fn cpp_source_to_sink() {
     let src = b"void main() {\n  char* x = getenv(\"SECRET\");\n  system(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "cpp", lang);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Cpp,
         "test.cpp",
@@ -1551,11 +1560,11 @@ fn php_source_to_sink() {
     let src =
         b"<?php\nfunction main() {\n  $x = file_get_contents(\"secret\");\n  system($x);\n}\n?>";
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
-    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Php,
         "test.php",
@@ -1575,11 +1584,11 @@ fn php_echo_xss() {
     // Tainted data flowing through echo should be detected as an XSS sink.
     let src = b"<?php\n$name = $_GET['name'];\necho \"<h1>Hello \" . $name . \"</h1>\";\n";
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
-    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Php,
         "test.php",
@@ -1598,11 +1607,11 @@ fn php_echo_simple_var() {
     // Simple `echo $var;` with a tainted variable.
     let src = b"<?php\n$x = $_POST['data'];\necho $x;\n";
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
-    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Php,
         "test.php",
@@ -1621,11 +1630,11 @@ fn php_echo_safe_literal() {
     // `echo "hello";` with no tainted data should produce no finding.
     let src = b"<?php\necho \"hello world\";\n";
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
-    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Php,
         "test.php",
@@ -1643,11 +1652,11 @@ fn php_echo_safe_literal() {
 fn ruby_source_to_sink() {
     let src = b"def main\n  x = gets()\n  system(x)\nend\n";
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "ruby", lang);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Ruby,
         "test.rb",
@@ -1677,8 +1686,9 @@ fn extract_lang_summaries(
     path: &str,
 ) -> Vec<crate::summary::FuncSummary> {
     use crate::cfg::export_summaries;
-    let (_, _, local) = parse_lang(src, slug, ts_lang);
-    export_summaries(&local, path, slug)
+    let file_cfg = parse_lang(src, slug, ts_lang);
+    let local = &file_cfg.summaries;
+    export_summaries(local, path, slug)
 }
 
 // ── Scenario 1: Python source function → JavaScript sink via interop ─────
@@ -1695,13 +1705,13 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
     // JavaScript file calls get_input() and passes to eval()
     let js_src = b"function main() {\n  let x = get_input();\n  eval(x);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
 
     // Without interop: no cross-lang resolution
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
@@ -1727,9 +1737,8 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
         },
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
@@ -1757,13 +1766,13 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
 
     let py_src = b"def main():\n    x = fetch_env()\n    os.system(x)\n";
     let py_lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(py_src, "python", py_lang);
+    let file_cfg = parse_lang(py_src, "python", py_lang);
+    let local = &file_cfg.summaries;
 
     // Without interop: no findings
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Python,
         "main.py",
@@ -1789,9 +1798,8 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
         },
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Python,
         "main.py",
@@ -1819,7 +1827,8 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
     // JS: source → Rust sanitizer → shell sink
     let js_src = b"function main() {\n  let x = document.location();\n  let y = clean_shell(x);\n  eval(y);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -1837,9 +1846,8 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
         },
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
@@ -1868,7 +1876,8 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
 
     let java_src = b"class Main {\n  void main() {\n    String x = System.getenv(\"INPUT\");\n    run_cmd(x);\n  }\n}\n";
     let java_lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(java_src, "java", java_lang);
+    let file_cfg = parse_lang(java_src, "java", java_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -1886,9 +1895,8 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
         },
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Java,
         "Main.java",
@@ -1929,7 +1937,8 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
     // Go caller: source → sanitizer → sink (all cross-language)
     let go_src = b"package main\n\nfunc main() {\n\tx := get_secret()\n\ty := make_safe(x)\n\trun_dangerous(y)\n}\n";
     let go_lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(go_src, "go", go_lang);
+    let file_cfg = parse_lang(go_src, "go", go_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![
         InteropEdge {
@@ -1979,9 +1988,8 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
         },
     ];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Go,
         "main.go",
@@ -2015,7 +2023,8 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
     // Go caller: source → sink directly (no sanitizer)
     let go_src = b"package main\n\nfunc main() {\n\tx := get_secret()\n\trun_dangerous(x)\n}\n";
     let go_lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(go_src, "go", go_lang);
+    let file_cfg = parse_lang(go_src, "go", go_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![
         InteropEdge {
@@ -2050,9 +2059,8 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
         },
     ];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Go,
         "main.go",
@@ -2145,7 +2153,8 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
 
     let js_src = b"function main() {\n  let x = document.location();\n  let y = transform(x);\n  eval(y);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -2158,9 +2167,8 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
         to: key,
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
@@ -2199,7 +2207,8 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
 
     let go_src = b"package main\n\nfunc main() {\n\tx := read_input()\n\texec.Command(x)\n}\n";
     let go_lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(go_src, "go", go_lang);
+    let file_cfg = parse_lang(go_src, "go", go_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -2217,9 +2226,8 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
         },
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Go,
         "main.go",
@@ -2263,7 +2271,8 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
     // JS: source → Python HTML sanitizer → shell sink
     let js_src = b"function main() {\n  let x = document.location();\n  let y = html_clean(x);\n  eval(y);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![InteropEdge {
         from: CallSiteKey {
@@ -2276,9 +2285,8 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
         to: key,
     }];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
@@ -2368,7 +2376,8 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
     // Go caller: dangerous_query() → run_query()
     let go_src = b"package main\n\nfunc main() {\n\tq := dangerous_query()\n\trun_query(q)\n}\n";
     let go_lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(go_src, "go", go_lang);
+    let file_cfg = parse_lang(go_src, "go", go_lang);
+    let local = &file_cfg.summaries;
 
     let edges = vec![
         InteropEdge {
@@ -2403,9 +2412,8 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
         },
     ];
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Go,
         "main.go",
@@ -2462,11 +2470,11 @@ fn ambiguous_resolution_returns_none() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "c.rs",
@@ -2544,12 +2552,12 @@ fn exact_namespace_match_wins() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     // caller_namespace = "test.rs" matches the source version
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -2608,11 +2616,11 @@ fn interop_edge_wrong_caller_lang_no_match() {
 
     let js_src = b"function main() {\n  let x = get_data();\n  eval(x);\n}\n";
     let js_lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, local) = parse_lang(js_src, "javascript", js_lang);
+    let file_cfg = parse_lang(js_src, "javascript", js_lang);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::JavaScript,
         "main.js",
@@ -2646,8 +2654,9 @@ fn return_call_recognized_as_source() {
         .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
-    let (_, _, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
-    let exported = export_summaries(&summaries, "test.rs", "rust");
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let exported = export_summaries(summaries, "test.rs", "rust");
 
     let foo = exported
         .iter()
@@ -2688,11 +2697,11 @@ fn validate_and_early_return() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -2729,11 +2738,11 @@ fn validate_in_if_else_path_validated() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -2767,11 +2776,11 @@ fn sink_on_failed_validation_branch() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -2811,11 +2820,11 @@ fn contradictory_null_check_pruned() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -2858,11 +2867,11 @@ fn sanitize_one_branch_no_regression() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -2918,11 +2927,11 @@ fn path_state_budget_graceful() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -2961,11 +2970,11 @@ fn unknown_predicate_not_pruned() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -3005,11 +3014,11 @@ fn multi_var_predicate_not_pruned() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -3037,8 +3046,9 @@ fn c_curl_handle_ssrf() {
         curl_easy_setopt(curl, CURLOPT_URL, url);\n  \
         curl_easy_perform(curl);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[], None);
+    let file_cfg = parse_lang(src, "c", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
     assert!(
         !findings.is_empty(),
         "C: getenv -> curl_easy_setopt -> curl_easy_perform should produce SSRF finding"
@@ -3052,8 +3062,9 @@ fn c_curl_handle_no_taint() {
         curl_easy_setopt(curl, CURLOPT_URL, \"https://example.com\");\n  \
         curl_easy_perform(curl);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[], None);
+    let file_cfg = parse_lang(src, "c", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
     assert!(
         findings.is_empty(),
         "C: hardcoded URL in curl_easy_setopt should not produce finding"
@@ -3101,11 +3112,11 @@ fn per_arg_propagation_tainted_param_propagates() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -3158,11 +3169,11 @@ fn per_arg_propagation_safe_at_propagating_position() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -3216,11 +3227,11 @@ fn per_arg_propagation_legacy_backward_compat() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -3273,11 +3284,11 @@ fn per_arg_propagation_both_params_propagate() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -3330,11 +3341,11 @@ fn per_arg_propagation_literal_first_arg() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -3388,11 +3399,11 @@ fn per_arg_propagation_nested_expr_arg() {
         }
     "#;
 
-    let (cfg, entry, local) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let local = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &local,
+        &file_cfg,
+        local,
         Some(&global),
         Lang::Rust,
         "test.rs",
@@ -3410,11 +3421,11 @@ fn per_arg_propagation_nested_expr_arg() {
 fn js_cross_function_global_taint() {
     let src = b"let x = \"safe\";\nfunction leak() { x = document.location(); }\nfunction use_it() { eval(x); }\nleak();\nuse_it();\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -3431,11 +3442,11 @@ fn js_cross_function_global_taint() {
 fn js_two_level_converges_no_mutation() {
     let src = b"let x = document.location();\nfunction f() { eval(x); }\nf();\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -3464,11 +3475,11 @@ fn catch_param_to_sink_has_caught_exception_source_kind() {
     ";
 
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -3503,11 +3514,12 @@ fn catch_param_source_node_has_callee() {
     ";
 
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -3520,7 +3532,7 @@ fn catch_param_source_node_has_callee() {
         "catch param to fetch should produce a finding"
     );
     for f in &findings {
-        let source_info = &cfg[f.source];
+        let source_info = &the_cfg[f.source];
         assert!(
             source_info.callee.is_some(),
             "catch-param source node must have a callee for reporting, got None"
@@ -3547,11 +3559,12 @@ fn taint_origin_preserved_through_assignment() {
             Command::new("sh").arg(z).status().unwrap();
         }"#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -3562,7 +3575,7 @@ fn taint_origin_preserved_through_assignment() {
     assert_eq!(findings.len(), 1);
     let f = &findings[0];
     // The source should point to the env::var call, not the intermediate assignments
-    let source_info = &cfg[f.source];
+    let source_info = &the_cfg[f.source];
     assert!(
         source_info.callee.is_some(),
         "source node should have callee after propagation through assignments"
@@ -3592,11 +3605,12 @@ fn taint_origin_preserved_through_branch_merge() {
             Command::new("sh").arg(y).status().unwrap();
         }"#;
 
-    let (cfg, entry, summaries) = parse_rust(src);
+    let file_cfg = parse_rust(src);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -3606,7 +3620,7 @@ fn taint_origin_preserved_through_branch_merge() {
 
     assert!(!findings.is_empty());
     for f in &findings {
-        let source_info = &cfg[f.source];
+        let source_info = &the_cfg[f.source];
         assert!(
             source_info.callee.is_some(),
             "source callee must not be None after branch merge"
@@ -3629,13 +3643,13 @@ fn assert_ssa_integration(src: &[u8]) {
         .set_language(&tree_sitter::Language::from(tree_sitter_rust::LANGUAGE))
         .unwrap();
     let tree = parser.parse(src, None).unwrap();
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
 
-    // High-level path
+    // High-level path (per-body analysis)
     let high_level = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -3643,15 +3657,22 @@ fn assert_ssa_integration(src: &[u8]) {
         None,
     );
 
-    // Direct SSA path
-    let interner = SymbolInterner::from_cfg(&cfg);
+    // Direct SSA path — use the first function body (fn main), not top-level
+    let body = if file_cfg.bodies.len() > 1 {
+        &file_cfg.bodies[1]
+    } else {
+        file_cfg.first_body()
+    };
+    let the_cfg = &body.graph;
+    let entry = body.entry;
+    let interner = SymbolInterner::from_cfg(the_cfg);
     let ssa =
-        crate::ssa::lower_to_ssa(&cfg, entry, None, true).expect("SSA lowering should succeed");
+        crate::ssa::lower_to_ssa(the_cfg, entry, None, true).expect("SSA lowering should succeed");
     let ssa_xfer = ssa_transfer::SsaTaintTransfer {
         lang: Lang::Rust,
         namespace: "test.rs",
         interner: &interner,
-        local_summaries: &summaries,
+        local_summaries: summaries,
         global_summaries: None,
         interop_edges: &[],
         global_seed: None,
@@ -3667,8 +3688,8 @@ fn assert_ssa_integration(src: &[u8]) {
         points_to: None,
         dynamic_pts: None,
     };
-    let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
-    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
+    let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
     ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
     ssa_findings.dedup_by_key(|f| (f.sink, f.source));
 
@@ -3763,12 +3784,14 @@ fn integ_php_echo_simple_var() {
     use crate::state::symbol::SymbolInterner;
     let src = b"<?php\n$x = $_POST['data'];\necho $x;\n";
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
-    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let file_cfg = parse_lang(src, "php", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
 
     let high_level = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Php,
         "test.php",
@@ -3776,13 +3799,13 @@ fn integ_php_echo_simple_var() {
         None,
     );
 
-    let interner = SymbolInterner::from_cfg(&cfg);
-    let ssa = crate::ssa::lower_to_ssa(&cfg, entry, None, true).expect("SSA lowering");
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let ssa = crate::ssa::lower_to_ssa(the_cfg, entry, None, true).expect("SSA lowering");
     let ssa_xfer = ssa_transfer::SsaTaintTransfer {
         lang: Lang::Php,
         namespace: "test.php",
         interner: &interner,
-        local_summaries: &summaries,
+        local_summaries: summaries,
         global_summaries: None,
         interop_edges: &[],
         global_seed: None,
@@ -3798,8 +3821,8 @@ fn integ_php_echo_simple_var() {
         points_to: None,
         dynamic_pts: None,
     };
-    let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
-    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
+    let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
     ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
     ssa_findings.dedup_by_key(|f| (f.sink, f.source));
 
@@ -3826,17 +3849,20 @@ fn integ_c_curl_handle_ssrf() {
         curl_easy_setopt(curl, CURLOPT_URL, url);\n  \
         curl_easy_perform(curl);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
+    let file_cfg = parse_lang(src, "c", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
 
-    let high_level = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[], None);
+    let high_level = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
 
-    let interner = SymbolInterner::from_cfg(&cfg);
-    let ssa = crate::ssa::lower_to_ssa(&cfg, entry, None, true).expect("SSA lowering");
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let ssa = crate::ssa::lower_to_ssa(the_cfg, entry, None, true).expect("SSA lowering");
     let ssa_xfer = ssa_transfer::SsaTaintTransfer {
         lang: Lang::C,
         namespace: "test.c",
         interner: &interner,
-        local_summaries: &summaries,
+        local_summaries: summaries,
         global_summaries: None,
         interop_edges: &[],
         global_seed: None,
@@ -3852,8 +3878,8 @@ fn integ_c_curl_handle_ssrf() {
         points_to: None,
         dynamic_pts: None,
     };
-    let events = ssa_transfer::run_ssa_taint(&ssa, &cfg, &ssa_xfer);
-    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, &cfg);
+    let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
+    let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
     ssa_findings.sort_by_key(|f| (f.sink.index(), f.source.index(), !f.path_validated));
     ssa_findings.dedup_by_key(|f| (f.sink, f.source));
 
@@ -3891,13 +3917,13 @@ fn ssa_js_two_level_global_to_function() {
     // Top-level source → function sink via global seed
     let src = b"let x = document.location();\nfunction f() { eval(x); }\nf();\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
 
     // SSA is now the default path for JS/TS
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -3916,13 +3942,13 @@ fn ssa_js_two_level_function_isolation() {
     let src =
         b"function a() { let x = document.location(); }\nfunction b() { eval(x); }\na();\nb();\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
 
     // SSA is now the default path for JS/TS
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -3940,13 +3966,13 @@ fn ssa_js_two_level_convergence() {
     // Function writes back to global, 2nd round picks it up
     let src = b"let x = 'safe';\nfunction leak() { x = document.location(); }\nfunction use_it() { eval(x); }\nleak();\nuse_it();\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
 
     // SSA is now the default path for JS/TS
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -3965,12 +3991,12 @@ fn ssa_js_two_level_convergence() {
 fn ssa_js_chained_call_taint() {
     let src = b"var express = require('express');\nvar app = express();\n\napp.get('/proxy', function(req, res) {\n    var url = req.query.url;\n    fetch(url).then(function(response) {\n        return response.text();\n    }).then(function(body) {\n        res.send(body);\n    });\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
 
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -3990,11 +4016,11 @@ fn ssa_field_write_to_sink() {
     // obj.data = source; sink(obj.data) → finding
     let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    res.send(obj.data);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4012,11 +4038,11 @@ fn ssa_field_overwrite_kills_taint() {
     // obj.data = source; obj.data = "safe"; sink(obj.data) → no finding
     let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    obj.data = \"safe\";\n    res.send(obj.data);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4034,11 +4060,11 @@ fn ssa_field_different_bases_no_alias() {
     // a.tainted = source; sink(b.safe) → no finding (different base objects, different fields)
     let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var a = {};\n    var b = {};\n    a.tainted = req.query.input;\n    res.send(b.safe);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4056,11 +4082,11 @@ fn ssa_python_attribute_taint() {
     // config.cmd = os.getenv("CMD"); os.system(config.cmd) → finding
     let src = b"import os\n\nclass Config:\n    pass\n\nconfig = Config()\nconfig.cmd = os.getenv(\"CMD\")\nos.system(config.cmd)\n";
     let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "python", lang);
+    let file_cfg = parse_lang(src, "python", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Python,
         "test.py",
@@ -4080,11 +4106,11 @@ fn ssa_field_safe_overwrite_no_fp() {
     // obj = tainted source; obj.safe = "constant"; sink(obj.safe) → NO finding
     let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = req.query;\n    obj.safe = \"constant\";\n    res.send(obj.safe);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4103,11 +4129,11 @@ fn ssa_field_tainted_field_still_fires() {
     // obj.data = source; sink(obj.data) → finding (dotted path IS tainted, no suppression)
     let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    res.send(obj.data);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4125,11 +4151,11 @@ fn ssa_field_base_sink_no_suppression() {
     // obj.data = source; sink(obj) → finding (no dotted path at sink, no suppression)
     let src = b"var express = require('express');\nvar app = express();\napp.get('/f', function(req, res) {\n    var obj = {};\n    obj.data = req.query.input;\n    res.send(obj);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4154,20 +4180,23 @@ fn ssa_summary_identity_propagation() {
         fn passthrough(x: String) -> String {
             x
         }"#;
-    let (cfg, _entry, summaries) = parse_lang(
+    let file_cfg = parse_lang(
         src,
         "rust",
         tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
     );
-    let interner = SymbolInterner::from_cfg(&cfg);
-    let func_entries = super::find_function_entries(&cfg);
+    let the_cfg = &file_cfg.first_body().graph;
+    let _entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
     assert!(
         !func_entries.is_empty(),
         "should find at least one function entry"
     );
 
     for (func_name, func_entry) in &func_entries {
-        let func_ssa = crate::ssa::lower_to_ssa(&cfg, *func_entry, Some(func_name), false);
+        let func_ssa = crate::ssa::lower_to_ssa(the_cfg, *func_entry, Some(func_name), false);
         if let Ok(ssa) = func_ssa {
             let param_count = ssa
                 .blocks
@@ -4181,8 +4210,8 @@ fn ssa_summary_identity_propagation() {
 
             let summary = ssa_transfer::extract_ssa_func_summary(
                 &ssa,
-                &cfg,
-                &summaries,
+                the_cfg,
+                summaries,
                 None,
                 Lang::Rust,
                 "test.rs",
@@ -4215,16 +4244,19 @@ fn ssa_summary_sanitizer_strips_bits() {
         fn sanitize_input(x: String) -> String {
             html_escape::encode_safe(&x)
         }"#;
-    let (cfg, _entry, summaries) = parse_lang(
+    let file_cfg = parse_lang(
         src,
         "rust",
         tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
     );
-    let interner = SymbolInterner::from_cfg(&cfg);
-    let func_entries = super::find_function_entries(&cfg);
+    let the_cfg = &file_cfg.first_body().graph;
+    let _entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
 
     for (func_name, func_entry) in &func_entries {
-        let func_ssa = crate::ssa::lower_to_ssa(&cfg, *func_entry, Some(func_name), false);
+        let func_ssa = crate::ssa::lower_to_ssa(the_cfg, *func_entry, Some(func_name), false);
         if let Ok(ssa) = func_ssa {
             let param_count = ssa
                 .blocks
@@ -4238,8 +4270,8 @@ fn ssa_summary_sanitizer_strips_bits() {
 
             let summary = ssa_transfer::extract_ssa_func_summary(
                 &ssa,
-                &cfg,
-                &summaries,
+                the_cfg,
+                summaries,
                 None,
                 Lang::Rust,
                 "test.rs",
@@ -4268,16 +4300,19 @@ fn ssa_summary_source_adds_bits() {
         fn read_config() -> String {
             env::var("CONFIG").unwrap()
         }"#;
-    let (cfg, _entry, summaries) = parse_lang(
+    let file_cfg = parse_lang(
         src,
         "rust",
         tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
     );
-    let interner = SymbolInterner::from_cfg(&cfg);
-    let func_entries = super::find_function_entries(&cfg);
+    let the_cfg = &file_cfg.first_body().graph;
+    let _entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
 
     for (func_name, func_entry) in &func_entries {
-        let func_ssa = crate::ssa::lower_to_ssa(&cfg, *func_entry, Some(func_name), false);
+        let func_ssa = crate::ssa::lower_to_ssa(the_cfg, *func_entry, Some(func_name), false);
         if let Ok(ssa) = func_ssa {
             let param_count = ssa
                 .blocks
@@ -4288,8 +4323,8 @@ fn ssa_summary_source_adds_bits() {
 
             let summary = ssa_transfer::extract_ssa_func_summary(
                 &ssa,
-                &cfg,
-                &summaries,
+                the_cfg,
+                summaries,
                 None,
                 Lang::Rust,
                 "test.rs",
@@ -4315,16 +4350,19 @@ fn ssa_summary_param_to_sink() {
         fn run_cmd(cmd: String) {
             Command::new("sh").arg(cmd).status().unwrap();
         }"#;
-    let (cfg, _entry, summaries) = parse_lang(
+    let file_cfg = parse_lang(
         src,
         "rust",
         tree_sitter::Language::from(tree_sitter_rust::LANGUAGE),
     );
-    let interner = SymbolInterner::from_cfg(&cfg);
-    let func_entries = super::find_function_entries(&cfg);
+    let the_cfg = &file_cfg.first_body().graph;
+    let _entry = file_cfg.first_body().entry;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
+    let func_entries = super::find_function_entries(the_cfg);
 
     for (func_name, func_entry) in &func_entries {
-        let func_ssa = crate::ssa::lower_to_ssa(&cfg, *func_entry, Some(func_name), false);
+        let func_ssa = crate::ssa::lower_to_ssa(the_cfg, *func_entry, Some(func_name), false);
         if let Ok(ssa) = func_ssa {
             let param_count = ssa
                 .blocks
@@ -4338,8 +4376,8 @@ fn ssa_summary_param_to_sink() {
 
             let summary = ssa_transfer::extract_ssa_func_summary(
                 &ssa,
-                &cfg,
-                &summaries,
+                the_cfg,
+                summaries,
                 None,
                 Lang::Rust,
                 "test.rs",
@@ -4360,11 +4398,12 @@ fn ssa_cross_function_taint_with_sanitizer_wrapper() {
     // The SSA summary should capture the sanitizer's StripBits, reducing taint at call site
     let src = b"var express = require('express');\nvar app = express();\n\nfunction cleanHtml(input) {\n    return DOMPurify.sanitize(input);\n}\n\napp.get('/safe', function(req, res) {\n    var name = req.query.name;\n    var safe = cleanHtml(name);\n    res.send(safe);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4382,13 +4421,13 @@ fn ssa_cross_function_taint_with_sanitizer_wrapper() {
 
     // Verify that summary extraction works for this code
     use crate::state::symbol::SymbolInterner;
-    let interner = SymbolInterner::from_cfg(&the_cfg);
+    let interner = SymbolInterner::from_cfg(the_cfg);
     let ssa_summaries = super::extract_intra_file_ssa_summaries(
-        &the_cfg,
+        the_cfg,
         &interner,
         Lang::JavaScript,
         "test.js",
-        &summaries,
+        summaries,
         None,
     );
     // cleanHtml should have an SSA summary
@@ -4414,16 +4453,18 @@ fn ssa_interproc_container_store_summary() {
 
     let src = b"var express = require('express');\nvar app = express();\n\nfunction storeInto(value, arr) {\n    arr.push(value);\n}\n\napp.get('/store', function(req, res) {\n    var items = [];\n    storeInto(req.query.input, items);\n    res.send(items.join(''));\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (the_cfg, entry, summaries) = parse_lang(src, "javascript", lang);
-    let interner = SymbolInterner::from_cfg(&the_cfg);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let the_cfg = &file_cfg.first_body().graph;
+    let summaries = &file_cfg.summaries;
+    let interner = SymbolInterner::from_cfg(the_cfg);
 
     // Extract SSA summaries (uses lower_to_ssa_with_params)
     let ssa_summaries = super::extract_intra_file_ssa_summaries(
-        &the_cfg,
+        the_cfg,
         &interner,
         Lang::JavaScript,
         "test.js",
-        &summaries,
+        summaries,
         None,
     );
 
@@ -4445,9 +4486,8 @@ fn ssa_interproc_container_store_summary() {
 
     // Verify the full analysis produces a finding
     let findings = analyse_file(
-        &the_cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4549,11 +4589,11 @@ fn ssa_validation_targets_specific_var() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -4603,11 +4643,11 @@ fn ssa_phi_path_sensitive_both_branches_validated() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -4641,11 +4681,11 @@ fn ssa_phi_path_sensitive_one_branch_not_validated() {
         .unwrap();
     let tree = parser.parse(src as &[u8], None).unwrap();
 
-    let (cfg, entry, summaries) = build_cfg(&tree, src, "rust", "test.rs", None);
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Rust,
         "test.rs",
@@ -4666,11 +4706,11 @@ fn ssa_phi_path_sensitive_one_branch_not_validated() {
 fn ssa_reassignment_kills_taint_js() {
     let src = b"var express = require('express');\nvar app = express();\napp.get('/r', function(req, res) {\n    var name = req.query.input;\n    name = \"Guest\";\n    eval(name);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4689,11 +4729,11 @@ fn ssa_reassignment_kills_taint_ts() {
     let src =
         b"function main() {\n  let x = document.location();\n  x = \"safe\";\n  eval(x);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT);
-    let (cfg, entry, summaries) = parse_lang(src, "typescript", lang);
+    let file_cfg = parse_lang(src, "typescript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::TypeScript,
         "test.ts",
@@ -4711,11 +4751,11 @@ fn ssa_reassignment_kills_taint_ts() {
 fn ssa_reassignment_kills_taint_python() {
     let src = b"import os\ndef main():\n    cmd = os.getenv(\"CMD\")\n    cmd = \"safe\"\n    os.system(cmd)\n";
     let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "python", lang);
+    let file_cfg = parse_lang(src, "python", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Python,
         "test.py",
@@ -4733,11 +4773,11 @@ fn ssa_reassignment_kills_taint_python() {
 fn ssa_reassignment_kills_taint_go() {
     let src = b"package main\n\nimport \"os\"\nimport \"os/exec\"\n\nfunc main() {\n\tcmd := os.Getenv(\"CMD\")\n\tcmd = \"safe\"\n\texec.Command(cmd)\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "go", lang);
+    let file_cfg = parse_lang(src, "go", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Go,
         "test.go",
@@ -4755,11 +4795,11 @@ fn ssa_reassignment_kills_taint_go() {
 fn ssa_reassignment_kills_taint_java() {
     let src = b"class Main {\n  void main() {\n    String cmd = System.getenv(\"CMD\");\n    cmd = \"safe\";\n    Runtime.exec(cmd);\n  }\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "java", lang);
+    let file_cfg = parse_lang(src, "java", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Java,
         "test.java",
@@ -4777,11 +4817,11 @@ fn ssa_reassignment_kills_taint_java() {
 fn ssa_reassignment_kills_taint_php() {
     let src = b"<?php\n$cmd = $_GET['cmd'];\n$cmd = \"safe\";\neval($cmd);\n";
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
-    let (cfg, entry, summaries) = parse_lang(src, "php", lang);
+    let file_cfg = parse_lang(src, "php", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Php,
         "test.php",
@@ -4799,11 +4839,11 @@ fn ssa_reassignment_kills_taint_php() {
 fn ssa_reassignment_kills_taint_ruby() {
     let src = b"def main\n  cmd = gets()\n  cmd = \"safe\"\n  system(cmd)\nend\n";
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "ruby", lang);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Ruby,
         "test.rb",
@@ -4821,8 +4861,9 @@ fn ssa_reassignment_kills_taint_ruby() {
 fn ssa_reassignment_kills_taint_c() {
     let src = b"#include <stdlib.h>\nvoid main() {\n  char* cmd = getenv(\"CMD\");\n  cmd = \"safe\";\n  system(cmd);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_c::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "c", lang);
-    let findings = analyse_file(&cfg, entry, &summaries, None, Lang::C, "test.c", &[], None);
+    let file_cfg = parse_lang(src, "c", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::C, "test.c", &[], None);
     assert!(
         findings.is_empty(),
         "C: reassignment to constant should kill taint, got {} findings",
@@ -4834,11 +4875,11 @@ fn ssa_reassignment_kills_taint_c() {
 fn ssa_reassignment_kills_taint_cpp() {
     let src = b"#include <cstdlib>\nvoid main() {\n  char* cmd = std::getenv(\"CMD\");\n  cmd = \"safe\";\n  system(cmd);\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "cpp", lang);
+    let file_cfg = parse_lang(src, "cpp", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Cpp,
         "test.cpp",
@@ -4858,11 +4899,11 @@ fn ssa_reassignment_kills_taint_cpp() {
 fn ssa_compound_preserves_taint_js() {
     let src = b"var express = require('express');\nvar app = express();\napp.get('/r', function(req, res) {\n    var name = req.query.input;\n    name = name + \" suffix\";\n    eval(name);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4879,11 +4920,11 @@ fn ssa_compound_preserves_taint_js() {
 fn ssa_compound_preserves_taint_python() {
     let src = b"import os\ndef main():\n    cmd = os.getenv(\"CMD\")\n    cmd = cmd + \" safe\"\n    os.system(cmd)\n";
     let lang = tree_sitter::Language::from(tree_sitter_python::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "python", lang);
+    let file_cfg = parse_lang(src, "python", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Python,
         "test.py",
@@ -4900,11 +4941,11 @@ fn ssa_compound_preserves_taint_python() {
 fn ssa_compound_preserves_taint_go() {
     let src = b"package main\n\nimport \"os\"\nimport \"os/exec\"\n\nfunc main() {\n\tcmd := os.Getenv(\"CMD\")\n\tcmd = cmd + \" suffix\"\n\texec.Command(cmd)\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "go", lang);
+    let file_cfg = parse_lang(src, "go", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Go,
         "test.go",
@@ -4921,11 +4962,11 @@ fn ssa_compound_preserves_taint_go() {
 fn ssa_compound_preserves_taint_java() {
     let src = b"class Main {\n  void main() {\n    String cmd = System.getenv(\"CMD\");\n    cmd = cmd + \" safe\";\n    Runtime.exec(cmd);\n  }\n}\n";
     let lang = tree_sitter::Language::from(tree_sitter_java::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "java", lang);
+    let file_cfg = parse_lang(src, "java", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Java,
         "test.java",
@@ -4944,11 +4985,11 @@ fn ssa_compound_preserves_taint_java() {
 fn ssa_phi_preserves_taint_on_non_reassigned_path_js() {
     let src = b"var express = require('express');\nvar app = express();\napp.get('/r', function(req, res) {\n    var name = req.query.input;\n    if (name.length > 10) {\n        name = \"fallback\";\n    }\n    eval(name);\n});\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -4988,11 +5029,11 @@ fn ssa_phi_preserves_taint_on_non_reassigned_path_rust() {
 fn abstract_ssrf_prefix_linear_suppression() {
     let src = b"var userId = document.location();\nvar prefix = 'https://api.example.com/users/';\nvar url = prefix + userId;\nfetch(url);\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -5023,11 +5064,11 @@ fn abstract_ssrf_prefix_linear_suppression() {
 fn abstract_phi_replay_ssrf_suppression() {
     let src = b"var userId = document.location();\nvar prefix1 = 'https://api.example.com/users/';\nvar prefix2 = 'https://api.example.com/admins/';\nvar url;\nif (userId.length > 5) {\n  url = prefix1 + userId;\n} else {\n  url = prefix2 + userId;\n}\nfetch(url);\n";
     let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "javascript", lang);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::JavaScript,
         "test.js",
@@ -5049,11 +5090,11 @@ fn ruby_type_check_guard_suppresses_taint() {
     // so that the subsequent SQL sink does not produce a finding.
     let src = b"def run_query(params)\n  user_id = params[:id]\n  unless user_id.is_a?(Integer)\n    return \"bad input\"\n  end\n  connection.execute(\"SELECT * FROM users WHERE id = \" + user_id.to_s)\nend\n";
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
-    let (cfg, entry, summaries) = parse_lang(src, "ruby", lang);
+    let file_cfg = parse_lang(src, "ruby", lang);
+    let summaries = &file_cfg.summaries;
     let findings = analyse_file(
-        &cfg,
-        entry,
-        &summaries,
+        &file_cfg,
+        summaries,
         None,
         Lang::Ruby,
         "test.rb",
@@ -5064,5 +5105,89 @@ fn ruby_type_check_guard_suppresses_taint() {
         findings.is_empty(),
         "Ruby: is_a?(Integer) type guard should suppress taint finding, got {} findings",
         findings.len()
+    );
+}
+
+// ── Rust struct expression taint propagation ────────────────────────────
+
+#[test]
+fn rust_struct_literal_with_source_produces_source_caps() {
+    let src = br#"
+        use std::env;
+        struct Cfg { val: String }
+        fn make_cfg() -> Cfg {
+            Cfg { val: env::var("X").unwrap() }
+        }
+    "#;
+    let summaries = extract_summaries_from_bytes(src, "test.rs");
+    let make = summaries
+        .iter()
+        .find(|s| s.name == "make_cfg")
+        .expect("make_cfg should have a summary");
+    assert!(
+        make.source_caps != 0,
+        "make_cfg should have source_caps from env::var inside struct literal, got 0"
+    );
+}
+
+#[test]
+fn rust_struct_constructor_source_flows_through_format_to_sink() {
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        use std::fs;
+
+        struct AppConfig {
+            db_url: String,
+            upload_dir: String,
+        }
+
+        fn load_config() -> AppConfig {
+            AppConfig {
+                db_url: env::var("DATABASE_URL").unwrap(),
+                upload_dir: env::var("UPLOAD_DIR").unwrap(),
+            }
+        }
+
+        fn handle_export() {
+            let config = load_config();
+            let dump_cmd = format!("pg_dump {}", config.db_url);
+            Command::new("sh").arg("-c").arg(&dump_cmd).output().unwrap();
+            let dump_path = format!("{}/export.sql", config.upload_dir);
+            fs::write(&dump_path, "data").unwrap();
+        }
+    "#;
+    let file_cfg = parse_rust(src);
+    let findings = analyse_file(
+        &file_cfg,
+        &file_cfg.summaries,
+        None,
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert!(
+        findings.len() >= 2,
+        "Expected >= 2 taint findings (Command::new + fs::write), got {}",
+        findings.len()
+    );
+}
+
+#[test]
+fn ssa_format_macro_propagates_taint() {
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            let cmd = format!("echo {}", x);
+            Command::new("sh").arg("-c").arg(&cmd).output().unwrap();
+        }
+    "#;
+    let findings = ssa_analyse_rust(src);
+    assert_eq!(
+        findings.len(),
+        1,
+        "format! should propagate taint from env::var to Command::new sink"
     );
 }

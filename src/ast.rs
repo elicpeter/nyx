@@ -1,6 +1,6 @@
 #![allow(clippy::only_used_in_recursion, clippy::type_complexity)]
 
-use crate::cfg::{Cfg, FuncSummaries, build_cfg, export_summaries};
+use crate::cfg::{Cfg, FileCfg, FuncSummaries, build_cfg, export_summaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
 use crate::errors::{NyxError, NyxResult};
@@ -72,7 +72,10 @@ fn build_taint_diag(
 ) -> Diag {
     let sink_byte = cfg_graph[finding.sink].span.0;
     let sink_point = byte_offset_to_point(tree, sink_byte);
-    let source_byte = cfg_graph[finding.source].span.0;
+    // For cross-body origins, prefer the preserved source_span over
+    // indexing into the (possibly different) body's graph.
+    let source_byte = finding.source_span
+        .unwrap_or_else(|| cfg_graph[finding.source].span.0);
     let source_point = byte_offset_to_point(tree, source_byte);
 
     let source_callee = cfg_graph[finding.source]
@@ -431,9 +434,7 @@ impl<'a> ParsedSource<'a> {
 /// Level 2: adds CFG graph, summaries, lang rules on top of ParsedSource.
 struct ParsedFile<'a> {
     source: ParsedSource<'a>,
-    cfg_graph: Cfg,
-    entry: NodeIndex,
-    local_summaries: FuncSummaries,
+    file_cfg: FileCfg,
     lang_rules: LangAnalysisRules,
     has_lang_rules: bool,
 }
@@ -450,7 +451,7 @@ impl<'a> ParsedFile<'a> {
         } else {
             None
         };
-        let (cfg_graph, entry, local_summaries) = build_cfg(
+        let file_cfg = build_cfg(
             &source.tree,
             source.bytes,
             source.lang_slug,
@@ -459,12 +460,25 @@ impl<'a> ParsedFile<'a> {
         );
         Self {
             source,
-            cfg_graph,
-            entry,
-            local_summaries,
+            file_cfg,
             lang_rules,
             has_lang_rules,
         }
+    }
+
+    /// The top-level body's CFG graph (for backward-compatible access).
+    fn cfg_graph(&self) -> &Cfg {
+        &self.file_cfg.toplevel().graph
+    }
+
+    /// The top-level body's entry node.
+    #[allow(dead_code)]
+    fn entry(&self) -> NodeIndex {
+        self.file_cfg.toplevel().entry
+    }
+
+    fn local_summaries(&self) -> &FuncSummaries {
+        &self.file_cfg.summaries
     }
 
     fn rules_ref(&self) -> Option<&LangAnalysisRules> {
@@ -477,7 +491,7 @@ impl<'a> ParsedFile<'a> {
 
     fn export_summaries(&self) -> Vec<FuncSummary> {
         export_summaries(
-            &self.local_summaries,
+            self.local_summaries(),
             &self.source.file_path_str,
             self.source.lang_slug,
         )
@@ -505,24 +519,35 @@ impl<'a> ParsedFile<'a> {
         use crate::state::symbol::SymbolInterner;
         let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
         let lang_slug = caller_lang.as_str().to_string();
-        let interner = SymbolInterner::from_cfg(&self.cfg_graph);
         let scan_root_str = scan_root.map(|p| p.to_string_lossy());
         let namespace = normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
 
-        let (sum_map, body_vec) = crate::taint::extract_ssa_artifacts(
-            &self.cfg_graph,
-            &interner,
-            caller_lang,
-            &namespace,
-            &self.local_summaries,
-            global_summaries,
-        );
+        // Iterate per-body graphs for function lowering (not the old supergraph).
+        let mut sum_map = std::collections::HashMap::new();
+        let mut eligible_bodies = Vec::new();
+        for body in self.file_cfg.function_bodies() {
+            let _func_name = match &body.meta.name {
+                Some(n) => n.clone(),
+                None => continue,
+            };
+            let interner = SymbolInterner::from_cfg(&body.graph);
+            let (body_sums, body_bodies) = crate::taint::extract_ssa_artifacts(
+                &body.graph,
+                &interner,
+                caller_lang,
+                &namespace,
+                self.local_summaries(),
+                global_summaries,
+            );
+            sum_map.extend(body_sums);
+            eligible_bodies.extend(body_bodies);
+        }
 
         let ssa_summaries = sum_map
             .into_iter()
             .map(|(name, summary)| {
                 let param_count = self
-                    .local_summaries
+                    .local_summaries()
                     .iter()
                     .find(|(k, _)| k.name == name)
                     .map(|(_, ls)| ls.param_count)
@@ -540,7 +565,7 @@ impl<'a> ParsedFile<'a> {
             })
             .collect();
 
-        let ssa_bodies = body_vec
+        let ssa_bodies = eligible_bodies
             .into_iter()
             .map(|(name, param_count, body)| {
                 (
@@ -568,7 +593,7 @@ impl<'a> ParsedFile<'a> {
 
         // ── Taint analysis ──────────────────────────────────────────────
         tracing::debug!("Running taint analysis on: {}", self.source.path.display());
-        tracing::debug!("Func summaries: {:?}", self.local_summaries);
+        tracing::debug!("Func summaries: {:?}", self.local_summaries());
         let scan_root_str = scan_root.map(|p| p.to_string_lossy());
         let namespace = normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
         let extra = if self.lang_rules.extra_labels.is_empty() {
@@ -577,9 +602,8 @@ impl<'a> ParsedFile<'a> {
             Some(self.lang_rules.extra_labels.as_slice())
         };
         let taint_results = analyse_file(
-            &self.cfg_graph,
-            self.entry,
-            &self.local_summaries,
+            &self.file_cfg,
+            self.local_summaries(),
             global_summaries,
             caller_lang,
             &namespace,
@@ -587,26 +611,32 @@ impl<'a> ParsedFile<'a> {
             extra,
         );
         for finding in &taint_results {
+            let body_cfg = &self.file_cfg.body(finding.body_id).graph;
             out.push(build_taint_diag(
                 finding,
-                &self.cfg_graph,
+                body_cfg,
                 &self.source.tree,
                 self.source.path,
                 self.source.bytes,
             ));
         }
 
-        // ── CFG structural analyses ─────────────────────────────────────
+        // ── CFG structural analyses (per body) ─────────────────────────
         let taint_active = global_summaries.is_some() || !taint_results.is_empty();
+        for body in &self.file_cfg.bodies {
+        let body_taint: Vec<_> = taint_results.iter()
+            .filter(|f| f.body_id == body.meta.id)
+            .cloned()
+            .collect();
         let cfg_ctx = cfg_analysis::AnalysisContext {
-            cfg: &self.cfg_graph,
-            entry: self.entry,
+            cfg: &body.graph,
+            entry: body.entry,
             lang: caller_lang,
             file_path: &self.source.file_path_str,
             source_bytes: self.source.bytes,
-            func_summaries: &self.local_summaries,
+            func_summaries: self.local_summaries(),
             global_summaries,
-            taint_findings: &taint_results,
+            taint_findings: &body_taint,
             analysis_rules: self.rules_ref(),
             taint_active,
         };
@@ -651,22 +681,24 @@ impl<'a> ParsedFile<'a> {
                 rollup: None,
             });
         }
+        } // end for body in bodies (CFG structural analyses)
 
-        // ── State-model dataflow analysis ────────────────────────────────
+        // ── State-model dataflow analysis (per body) ─────────────────────
         if cfg.scanner.enable_state_analysis {
+            let resource_method_summaries =
+                state::build_resource_method_summaries(&self.file_cfg.bodies, caller_lang);
+            let mut all_state_findings = Vec::new();
+            for body in &self.file_cfg.bodies {
             let state_findings = state::run_state_analysis(
-                &self.cfg_graph,
-                self.entry,
+                &body.graph,
+                body.entry,
                 caller_lang,
                 self.source.bytes,
-                &self.local_summaries,
+                self.local_summaries(),
                 global_summaries,
                 cfg.scanner.enable_auth_analysis,
+                &resource_method_summaries,
             );
-            let state_lines: std::collections::HashSet<usize> = state_findings
-                .iter()
-                .map(|sf| byte_offset_to_point(&self.source.tree, sf.span.0).row + 1)
-                .collect();
 
             for sf in &state_findings {
                 let point = byte_offset_to_point(&self.source.tree, sf.span.0);
@@ -710,9 +742,16 @@ impl<'a> ParsedFile<'a> {
                 });
             }
 
+            all_state_findings.extend(state_findings);
+            } // end for body in bodies (state analysis)
+
             // Suppress cfg-resource-leak / cfg-auth-gap when state analysis
             // already covers the same line (state analysis is more precise).
-            if !state_findings.is_empty() {
+            let state_lines: std::collections::HashSet<usize> = all_state_findings
+                .iter()
+                .map(|sf| byte_offset_to_point(&self.source.tree, sf.span.0).row + 1)
+                .collect();
+            if !all_state_findings.is_empty() {
                 out.retain(|d| {
                     !((d.id == "cfg-resource-leak" || d.id == "cfg-auth-gap")
                         && state_lines.contains(&d.line))
@@ -761,19 +800,14 @@ pub fn extract_summaries_from_file(path: &Path, cfg: &Config) -> NyxResult<Vec<F
 pub fn build_cfg_for_file(
     path: &Path,
     cfg: &Config,
-) -> NyxResult<Option<(Cfg, NodeIndex, FuncSummaries, Lang)>> {
+) -> NyxResult<Option<(FileCfg, Lang)>> {
     let bytes = std::fs::read(path)?;
     let Some(source) = ParsedSource::try_new(&bytes, path)? else {
         return Ok(None);
     };
     let lang = Lang::from_slug(source.lang_slug).unwrap_or(Lang::C);
     let parsed = ParsedFile::from_source(source, cfg);
-    Ok(Some((
-        parsed.cfg_graph,
-        parsed.entry,
-        parsed.local_summaries,
-        lang,
-    )))
+    Ok(Some((parsed.file_cfg, lang)))
 }
 
 /// Extract both `FuncSummary` and `SsaFuncSummary` from pre-read bytes.
@@ -1002,34 +1036,39 @@ struct TaintSuppressionCtx {
 }
 
 impl TaintSuppressionCtx {
-    /// Build suppression context from a CFG graph, tree (for byte→line mapping),
-    /// and existing taint findings.
-    fn build(cfg_graph: &Cfg, tree: &tree_sitter::Tree, taint_diags: &[Diag]) -> Self {
+    /// Build suppression context from ALL per-body CFG graphs, tree (for
+    /// byte→line mapping), and existing taint findings.
+    ///
+    /// Scans every body's graph (not just top-level) so that Source/Sink
+    /// nodes inside function bodies are visible for suppression decisions.
+    fn build(file_cfg: &FileCfg, tree: &tree_sitter::Tree, taint_diags: &[Diag]) -> Self {
         let mut source_lines_by_func: HashMap<Option<String>, HashSet<usize>> = HashMap::new();
         let mut sink_func_at_line: HashMap<usize, Option<String>> = HashMap::new();
 
-        for idx in cfg_graph.node_indices() {
-            let info = &cfg_graph[idx];
-            let mut has_source = false;
-            let mut has_sink = false;
-            for label in &info.labels {
-                match label {
-                    DataLabel::Source(_) => has_source = true,
-                    DataLabel::Sink(_) => has_sink = true,
-                    _ => {}
+        for body in &file_cfg.bodies {
+            for idx in body.graph.node_indices() {
+                let info = &body.graph[idx];
+                let mut has_source = false;
+                let mut has_sink = false;
+                for label in &info.labels {
+                    match label {
+                        DataLabel::Source(_) => has_source = true,
+                        DataLabel::Sink(_) => has_sink = true,
+                        _ => {}
+                    }
                 }
-            }
-            let byte = info.span.0;
-            let point = byte_offset_to_point(tree, byte);
-            let line = point.row + 1;
-            if has_source {
-                source_lines_by_func
-                    .entry(info.enclosing_func.clone())
-                    .or_default()
-                    .insert(line);
-            }
-            if has_sink {
-                sink_func_at_line.insert(line, info.enclosing_func.clone());
+                let byte = info.span.0;
+                let point = byte_offset_to_point(tree, byte);
+                let line = point.row + 1;
+                if has_source {
+                    source_lines_by_func
+                        .entry(info.enclosing_func.clone())
+                        .or_default()
+                        .insert(line);
+                }
+                if has_sink {
+                    sink_func_at_line.insert(line, info.enclosing_func.clone());
+                }
             }
         }
 
@@ -1107,7 +1146,7 @@ pub fn run_rules_on_bytes(
         if cfg.scanner.mode == AnalysisMode::Full {
             // Layer B: suppress AST findings where taint confirmed safety
             let suppression =
-                TaintSuppressionCtx::build(&parsed.cfg_graph, &parsed.source.tree, &out);
+                TaintSuppressionCtx::build(&parsed.file_cfg, &parsed.source.tree, &out);
             let ast_findings = parsed.source.run_ast_queries(cfg);
             out.extend(
                 ast_findings
@@ -1187,7 +1226,7 @@ pub fn analyse_file_fused(
     };
 
     let parsed = ParsedFile::from_source(source, cfg);
-    let cfg_nodes = parsed.cfg_graph.node_count();
+    let cfg_nodes = parsed.cfg_graph().node_count();
     let summaries = parsed.export_summaries();
 
     let mut out = Vec::new();
@@ -1207,7 +1246,7 @@ pub fn analyse_file_fused(
         // Layer B only applies when taint had the opportunity to evaluate
         if needs_cfg && cfg.scanner.mode == AnalysisMode::Full {
             let suppression =
-                TaintSuppressionCtx::build(&parsed.cfg_graph, &parsed.source.tree, &out);
+                TaintSuppressionCtx::build(&parsed.file_cfg, &parsed.source.tree, &out);
             out.extend(
                 ast_findings
                     .into_iter()

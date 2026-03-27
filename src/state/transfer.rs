@@ -102,10 +102,34 @@ static ADMIN_PATTERNS: &[&str] = &[
     "require_admin",
 ];
 
+/// Effect type for resource method summaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceEffect {
+    Acquire,
+    Release,
+}
+
+/// Summary for a method body that wraps a known resource operation.
+/// Only created for methods whose bodies actually contain a recognized
+/// resource acquire/release call from the existing resource_pairs matchers.
+#[derive(Debug, Clone)]
+pub struct ResourceMethodSummary {
+    /// Method name (e.g., "open", "close").
+    pub method_name: String,
+    /// Whether this method acquires or releases a resource.
+    pub effect: ResourceEffect,
+    /// `parent_body_id` of the declaring method — groups methods by class.
+    pub class_group: crate::cfg::BodyId,
+    /// Span of the actual resource operation (e.g., fs.openSync at line 7).
+    pub original_span: (usize, usize),
+}
+
 pub struct DefaultTransfer<'a> {
     pub lang: Lang,
     pub resource_pairs: &'a [ResourcePair],
     pub interner: &'a SymbolInterner,
+    /// Resource method summaries for cross-body proxy resolution.
+    pub resource_method_summaries: &'a [ResourceMethodSummary],
 }
 
 impl Transfer<ProductState> for DefaultTransfer<'_> {
@@ -159,6 +183,7 @@ impl DefaultTransfer<'_> {
         };
 
         // ── Resource acquire ─────────────────────────────────────────────
+        let mut direct_acquire = false;
         for pair in self.resource_pairs {
             let is_acquire = pair.acquire.iter().any(|a| callee_matches(&callee, a));
             let is_excluded = pair
@@ -172,16 +197,19 @@ impl DefaultTransfer<'_> {
                 && let Some(sym) = self.get_sym(info, def)
             {
                 state.resource.set(sym, ResourceLifecycle::OPEN);
+                direct_acquire = true;
             }
         }
 
         // ── Resource release ─────────────────────────────────────────────
         // Track which variables have already been released to avoid double-
         // matching across multiple resource pair definitions.
+        let mut direct_release = false;
         let mut released: smallvec::SmallVec<[SymbolId; 4]> = smallvec::SmallVec::new();
         for pair in self.resource_pairs {
             let is_release = pair.release.iter().any(|r| callee_matches(&callee, r));
             if is_release {
+                direct_release = true;
                 // Go `defer f.Close()`: skip the CLOSED transition so the
                 // variable stays OPEN mid-function.  Leak suppression is
                 // handled separately in extract_findings().
@@ -205,6 +233,57 @@ impl DefaultTransfer<'_> {
                             state.resource.set(sym, ResourceLifecycle::CLOSED);
                         }
                         released.push(sym);
+                    }
+                }
+            }
+        }
+
+        // ── Resource method proxy ────────────────────────────────────────
+        // When no direct resource pair matched, check if the callee is a
+        // method wrapper for a known resource operation. Only fires when:
+        //   1. The callee is a method call (contains `.`)
+        //   2. An explicit receiver is identified
+        //   3. The method suffix matches a ResourceMethodSummary
+        //   4. For Release: the receiver was previously acquired by the same class group
+        if !direct_acquire && !direct_release && callee.contains('.') {
+            // Extract receiver: prefer explicit NodeInfo.receiver, fall back
+            // to everything before the last `.` in the callee string.
+            let recv_from_callee: Option<String>;
+            let recv_name: Option<&str> = if let Some(ref r) = info.receiver {
+                Some(r.as_str())
+            } else {
+                recv_from_callee = callee.rsplit_once('.').map(|(prefix, _)| {
+                    // For multi-segment paths like "a.b.c", use the root receiver
+                    prefix.split('.').next().unwrap_or(prefix).to_string()
+                });
+                recv_from_callee.as_deref()
+            };
+            if let Some(recv) = recv_name {
+                let method_suffix = callee.rsplit('.').next().unwrap_or("");
+                for summary in self.resource_method_summaries {
+                    if summary.method_name.eq_ignore_ascii_case(method_suffix) {
+                        if let Some(sym) = self.get_sym(info, recv) {
+                            match summary.effect {
+                                ResourceEffect::Acquire => {
+                                    state.resource.set(sym, ResourceLifecycle::OPEN);
+                                    // Track class group for release matching
+                                    state.receiver_class_group.insert(sym, summary.class_group);
+                                    // Store original acquire span for finding attribution
+                                    state.proxy_acquire_spans.insert(sym, summary.original_span);
+                                }
+                                ResourceEffect::Release => {
+                                    // Only release if receiver was acquired by same class group
+                                    if state.receiver_class_group.get(&sym)
+                                        == Some(&summary.class_group)
+                                    {
+                                        let current = state.resource.get(sym);
+                                        if current.contains(ResourceLifecycle::OPEN) {
+                                            state.resource.set(sym, ResourceLifecycle::CLOSED);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -364,6 +443,11 @@ impl DefaultTransfer<'_> {
     }
 }
 
+/// Public wrapper for `callee_matches` used by `build_resource_method_summaries`.
+pub fn callee_matches_pub(callee: &str, pattern: &str) -> bool {
+    callee_matches(callee, pattern)
+}
+
 /// Check if a callee matches a pattern.
 /// Supports suffix matching (e.g., "fclose" matches callee "my_fclose")
 /// and dot-prefix matching (e.g., ".close" matches "file.close").
@@ -515,6 +599,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let info = NodeInfo {
@@ -560,6 +645,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let mut state = ProductState::initial();
@@ -607,6 +693,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let mut state = ProductState::initial();
@@ -655,6 +742,7 @@ mod tests {
             lang: Lang::C,
             resource_pairs: rules::resource_pairs(Lang::C),
             interner: &interner,
+            resource_method_summaries: &[],
         };
 
         let mut state = ProductState::initial();

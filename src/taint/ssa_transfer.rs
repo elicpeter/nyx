@@ -33,6 +33,30 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// Maximum origins tracked per SSA value.
 const MAX_ORIGINS: usize = 4;
 
+/// Stable identity for a variable binding at body boundaries.
+///
+/// Translates between independent per-body `SymbolId` spaces.
+/// `SymbolId` remains body-local for intra-body analysis; `BindingKey`
+/// is used when taint crosses body boundaries via `global_seed`.
+///
+/// Current implementation: name-based matching (sufficient for
+/// parameter/captured-variable resolution where names are unambiguous
+/// within a body's formal parameters).
+///
+/// Intended evolution: enrich with `defining_body_id` and declaration
+/// span to disambiguate same-named bindings across scopes and enable
+/// capture-list-aware resolution.
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct BindingKey {
+    pub name: String,
+}
+
+impl BindingKey {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
+    }
+}
+
 // ── SSA Taint State ─────────────────────────────────────────────────────
 
 /// Taint state keyed by SsaValue instead of SymbolId.
@@ -369,6 +393,11 @@ pub struct CalleeSsaBody {
     /// Empty for intra-file bodies (the original CFG is used instead).
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub node_meta: std::collections::HashMap<u32, CrossFileNodeMeta>,
+    /// The body's own CFG graph.  Populated for intra-file bodies so that
+    /// inline analysis can reference the correct graph (per-body CFGs have
+    /// body-local NodeIndex spaces).  `None` for cross-file deserialized bodies.
+    #[serde(skip)]
+    pub body_graph: Option<crate::cfg::Cfg>,
 }
 
 /// Populate `node_meta` from the original CFG for cross-file persistence.
@@ -408,9 +437,11 @@ pub struct SsaTaintTransfer<'a> {
     pub local_summaries: &'a FuncSummaries,
     pub global_summaries: Option<&'a GlobalSummaries>,
     pub interop_edges: &'a [InteropEdge],
-    /// SymbolId-keyed taint from top-level scope (JS/TS two-level solve).
-    /// Read-only fallback for Param ops representing external variables.
-    pub global_seed: Option<&'a HashMap<SymbolId, VarTaint>>,
+    /// Taint from enclosing/parent body scope, keyed by [`BindingKey`].
+    /// Read-only fallback for `Param` ops representing captured or
+    /// module-scope variables.  Used in multi-body analysis for lexical
+    /// containment propagation (top-level → function → closure).
+    pub global_seed: Option<&'a HashMap<BindingKey, VarTaint>>,
     /// Per-SSA-value constant lattice from constant propagation.
     /// Used for SSA-level literal suppression at sinks.
     pub const_values: Option<&'a HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>>,
@@ -706,15 +737,17 @@ pub fn run_ssa_taint(ssa: &SsaBody, cfg: &Cfg, transfer: &SsaTaintTransfer) -> V
     run_ssa_taint_full(ssa, cfg, transfer).0
 }
 
-/// Project SsaValue-keyed taint back to SymbolId-keyed taint via var_name lookup.
-/// Recomputes exit states from converged entry states, then maps SsaValue → var_name → SymbolId.
+/// Project SsaValue-keyed taint back to [`BindingKey`]-keyed taint via var_name.
+///
+/// Recomputes exit states from converged entry states, then maps
+/// SsaValue → var_name → `BindingKey`.  The returned map is suitable
+/// for seeding child bodies via `global_seed`.
 pub fn extract_ssa_exit_state(
     block_states: &[Option<SsaTaintState>],
     ssa: &SsaBody,
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
-    interner: &SymbolInterner,
-) -> HashMap<SymbolId, VarTaint> {
+) -> HashMap<BindingKey, VarTaint> {
     // Compute exit states by replaying transfer on converged entry states
     let empty_induction = HashSet::new();
     let mut joined = SsaTaintState::initial();
@@ -733,28 +766,40 @@ pub fn extract_ssa_exit_state(
         }
     }
 
-    // Map SsaValue → var_name → SymbolId
-    let mut result: HashMap<SymbolId, VarTaint> = HashMap::new();
+    // Map SsaValue → var_name → BindingKey
+    let mut result: HashMap<BindingKey, VarTaint> = HashMap::new();
     for (val, taint) in &joined.values {
         let var_name = ssa
             .value_defs
             .get(val.0 as usize)
             .and_then(|vd| vd.var_name.as_deref());
         if let Some(name) = var_name {
-            if let Some(sym) = interner.get(name) {
-                result
-                    .entry(sym)
-                    .and_modify(|existing| {
-                        existing.caps |= taint.caps;
-                        for orig in &taint.origins {
-                            if existing.origins.len() < MAX_ORIGINS
-                                && !existing.origins.iter().any(|o| o.node == orig.node)
-                            {
-                                existing.origins.push(*orig);
-                            }
+            let key = BindingKey::new(name);
+            result
+                .entry(key)
+                .and_modify(|existing| {
+                    existing.caps |= taint.caps;
+                    for orig in &taint.origins {
+                        if existing.origins.len() < MAX_ORIGINS
+                            && !existing.origins.iter().any(|o| o.node == orig.node)
+                        {
+                            existing.origins.push(*orig);
                         }
-                    })
-                    .or_insert_with(|| taint.clone());
+                    }
+                })
+                .or_insert_with(|| taint.clone());
+        }
+    }
+
+    // Capture source spans on all origins before the seed crosses a body
+    // boundary.  At consumption time the parent's graph is not in scope,
+    // so we snapshot each origin's span now.
+    for taint in result.values_mut() {
+        for origin in taint.origins.iter_mut() {
+            if origin.source_span.is_none() {
+                if let Some(info) = cfg.node_weight(origin.node) {
+                    origin.source_span = Some(info.span);
+                }
             }
         }
     }
@@ -762,15 +807,15 @@ pub fn extract_ssa_exit_state(
     result
 }
 
-/// Join two SymbolId-keyed seed maps (OR caps, merge origins).
+/// Join two [`BindingKey`]-keyed seed maps (OR caps, merge origins).
 pub fn join_seed_maps(
-    a: &HashMap<SymbolId, VarTaint>,
-    b: &HashMap<SymbolId, VarTaint>,
-) -> HashMap<SymbolId, VarTaint> {
+    a: &HashMap<BindingKey, VarTaint>,
+    b: &HashMap<BindingKey, VarTaint>,
+) -> HashMap<BindingKey, VarTaint> {
     let mut result = a.clone();
-    for (sym, taint) in b {
+    for (key, taint) in b {
         result
-            .entry(*sym)
+            .entry(key.clone())
             .and_modify(|existing| {
                 existing.caps |= taint.caps;
                 for orig in &taint.origins {
@@ -786,14 +831,14 @@ pub fn join_seed_maps(
     result
 }
 
-/// Filter seed map to only include symbols in the given set.
+/// Filter seed map to only include bindings in the given set.
 pub fn filter_seed_to_toplevel(
-    seed: &HashMap<SymbolId, VarTaint>,
-    toplevel: &std::collections::HashSet<SymbolId>,
-) -> HashMap<SymbolId, VarTaint> {
+    seed: &HashMap<BindingKey, VarTaint>,
+    toplevel: &HashSet<BindingKey>,
+) -> HashMap<BindingKey, VarTaint> {
     seed.iter()
-        .filter(|(sym, _)| toplevel.contains(sym))
-        .map(|(sym, taint)| (*sym, taint.clone()))
+        .filter(|(key, _)| toplevel.contains(key))
+        .map(|(key, taint)| (key.clone(), taint.clone()))
         .collect()
 }
 
@@ -1306,59 +1351,57 @@ fn inline_analyse_callee(
     }
 
     // Build per-parameter seed from actual argument taint.
-    // Map callee's Param var_name → caller's argument taint.
-    let mut param_seed: HashMap<SymbolId, VarTaint> = HashMap::new();
+    // Map callee's Param var_name → caller's argument taint via BindingKey.
+    let mut param_seed: HashMap<BindingKey, VarTaint> = HashMap::new();
 
     for block in &callee_body.ssa.blocks {
         for inst in block.phis.iter().chain(block.body.iter()) {
             if let SsaOp::Param { index } = &inst.op {
                 if let Some(var_name) = inst.var_name.as_ref() {
-                    if let Some(sym) = transfer.interner.get(var_name) {
-                        // Collect taint from the corresponding caller argument.
-                        // For zero-arg method calls, fallback to receiver taint for
-                        // param 0 (matches collect_args_taint fallback behavior).
-                        let mut combined_caps = Cap::empty();
-                        let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+                    // Collect taint from the corresponding caller argument.
+                    // For zero-arg method calls, fallback to receiver taint for
+                    // param 0 (matches collect_args_taint fallback behavior).
+                    let mut combined_caps = Cap::empty();
+                    let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
-                        if *index < args.len() {
-                            for v in &args[*index] {
-                                if let Some(taint) = state.get(*v) {
-                                    combined_caps |= taint.caps;
-                                    for orig in &taint.origins {
-                                        if combined_origins.len() < MAX_ORIGINS
-                                            && !combined_origins.iter().any(|o| o.node == orig.node)
-                                        {
-                                            combined_origins.push(*orig);
-                                        }
-                                    }
-                                }
-                            }
-                        } else if *index == 0 && args.is_empty() {
-                            // Zero-arg method call: seed param 0 from receiver
-                            if let Some(rv) = receiver {
-                                if let Some(taint) = state.get(*rv) {
-                                    combined_caps |= taint.caps;
-                                    for orig in &taint.origins {
-                                        if combined_origins.len() < MAX_ORIGINS
-                                            && !combined_origins.iter().any(|o| o.node == orig.node)
-                                        {
-                                            combined_origins.push(*orig);
-                                        }
+                    if *index < args.len() {
+                        for v in &args[*index] {
+                            if let Some(taint) = state.get(*v) {
+                                combined_caps |= taint.caps;
+                                for orig in &taint.origins {
+                                    if combined_origins.len() < MAX_ORIGINS
+                                        && !combined_origins.iter().any(|o| o.node == orig.node)
+                                    {
+                                        combined_origins.push(*orig);
                                     }
                                 }
                             }
                         }
-
-                        if !combined_caps.is_empty() {
-                            param_seed.insert(
-                                sym,
-                                VarTaint {
-                                    caps: combined_caps,
-                                    origins: combined_origins,
-                                    uses_summary: false,
-                                },
-                            );
+                    } else if *index == 0 && args.is_empty() {
+                        // Zero-arg method call: seed param 0 from receiver
+                        if let Some(rv) = receiver {
+                            if let Some(taint) = state.get(*rv) {
+                                combined_caps |= taint.caps;
+                                for orig in &taint.origins {
+                                    if combined_origins.len() < MAX_ORIGINS
+                                        && !combined_origins.iter().any(|o| o.node == orig.node)
+                                    {
+                                        combined_origins.push(*orig);
+                                    }
+                                }
+                            }
                         }
+                    }
+
+                    if !combined_caps.is_empty() {
+                        param_seed.insert(
+                            BindingKey::new(var_name.as_str()),
+                            VarTaint {
+                                caps: combined_caps,
+                                origins: combined_origins,
+                                uses_summary: false,
+                            },
+                        );
                     }
                 }
             }
@@ -1428,13 +1471,17 @@ fn inline_analyse_callee(
         dynamic_pts: None, // no inter-procedural container propagation at k>1
     };
 
-    let (_, callee_block_states) = run_ssa_taint_full(&callee_body.ssa, cfg, &child_transfer);
+    // Use the callee's own body graph for inline analysis (per-body CFGs
+    // have body-local NodeIndex spaces, so the caller's graph is wrong).
+    let callee_cfg = callee_body.body_graph.as_ref().unwrap_or(cfg);
+    let (_, callee_block_states) =
+        run_ssa_taint_full(&callee_body.ssa, callee_cfg, &child_transfer);
 
     // Extract return taint from return-block exit states
     let empty_induction = HashSet::new();
     let return_taint = extract_inline_return_taint(
         &callee_body.ssa,
-        cfg,
+        callee_cfg,
         &child_transfer,
         &callee_block_states,
         &empty_induction,
@@ -1558,6 +1605,7 @@ fn transfer_inst(
                 let origin = TaintOrigin {
                     node: inst.cfg_node,
                     source_kind,
+                    source_span: None,
                 };
                 state.set(
                     inst.value,
@@ -1574,6 +1622,7 @@ fn transfer_inst(
             let origin = TaintOrigin {
                 node: inst.cfg_node,
                 source_kind: SourceKind::CaughtException,
+                source_span: None,
             };
             state.set(
                 inst.value,
@@ -1602,6 +1651,7 @@ fn transfer_inst(
                     let origin = TaintOrigin {
                         node: inst.cfg_node,
                         source_kind,
+                        source_span: None,
                     };
                     if !return_origins.iter().any(|o| o.node == inst.cfg_node) {
                         return_origins.push(origin);
@@ -1736,6 +1786,7 @@ fn transfer_inst(
                     let origin = TaintOrigin {
                         node: inst.cfg_node,
                         source_kind,
+                        source_span: None,
                     };
                     if !return_origins.iter().any(|o| o.node == inst.cfg_node) {
                         return_origins.push(origin);
@@ -1790,6 +1841,7 @@ fn transfer_inst(
                                     let origin = TaintOrigin {
                                         node: inst.cfg_node,
                                         source_kind,
+                                        source_span: None,
                                     };
                                     if !return_origins.iter().any(|o| o.node == inst.cfg_node) {
                                         return_origins.push(origin);
@@ -2112,6 +2164,7 @@ fn transfer_inst(
                     let origin = TaintOrigin {
                         node: inst.cfg_node,
                         source_kind,
+                        source_span: None,
                     };
                     if combined_origins.len() < MAX_ORIGINS
                         && !combined_origins.iter().any(|o| o.node == inst.cfg_node)
@@ -2157,17 +2210,37 @@ fn transfer_inst(
         }
 
         SsaOp::Param { .. } => {
-            // Seed from global scope (JS/TS two-level solve)
+            // Seed from enclosing/parent body scope (multi-body analysis).
+            // Look up via BindingKey (name-based, interner-independent).
             if let Some(seed) = &transfer.global_seed {
                 if let Some(var_name) = ssa
                     .value_defs
                     .get(inst.value.0 as usize)
                     .and_then(|vd| vd.var_name.as_deref())
                 {
-                    if let Some(sym) = transfer.interner.get(var_name) {
-                        if let Some(taint) = seed.get(&sym) {
-                            state.set(inst.value, taint.clone());
-                        }
+                    let key = BindingKey::new(var_name);
+                    if let Some(taint) = seed.get(&key) {
+                        // Remap origins to this body's Param cfg_node:
+                        // the meaningful anchor where taint enters this body.
+                        // Preserve source_span from the original origin for
+                        // diagnostics (captured in extract_ssa_exit_state).
+                        let remapped_origins: SmallVec<[TaintOrigin; 2]> = taint
+                            .origins
+                            .iter()
+                            .map(|o| TaintOrigin {
+                                node: inst.cfg_node,
+                                source_kind: o.source_kind,
+                                source_span: o.source_span,
+                            })
+                            .collect();
+                        state.set(
+                            inst.value,
+                            VarTaint {
+                                caps: taint.caps,
+                                origins: remapped_origins,
+                                uses_summary: true,
+                            },
+                        );
                     }
                 }
             }
@@ -2673,6 +2746,50 @@ fn collect_block_events(
         }
 
         if sink_caps.is_empty() {
+            // Callback pattern: check if callee has source_to_callback and the
+            // actual callback argument has a matching param_to_sink.
+            if let SsaOp::Call { callee, args, .. } = &inst.op {
+                let caller_func = info.enclosing_func.as_deref().unwrap_or("");
+                if let Some(resolved) =
+                    resolve_callee(transfer, callee, caller_func, info.call_ordinal)
+                {
+                    for &(cb_idx, src_caps) in &resolved.source_to_callback {
+                        let cb_name = info.arg_callees.get(cb_idx).and_then(|ac| ac.as_ref());
+                        if let Some(cb_callee) = cb_name {
+                            if let Some(cb_resolved) =
+                                resolve_callee(transfer, cb_callee, caller_func, 0)
+                            {
+                                let matching_sink_caps = cb_resolved
+                                    .param_to_sink
+                                    .iter()
+                                    .filter(|(_, caps)| !(src_caps & *caps).is_empty())
+                                    .fold(Cap::empty(), |acc, (_, c)| acc | *c);
+                                if !matching_sink_caps.is_empty() {
+                                    let source_kind =
+                                        crate::labels::infer_source_kind(src_caps, callee);
+                                    let origin = TaintOrigin {
+                                        node: inst.cfg_node,
+                                        source_kind,
+                                        source_span: None,
+                                    };
+                                    events.push(SsaTaintEvent {
+                                        sink_node: inst.cfg_node,
+                                        tainted_values: vec![(
+                                            inst.value,
+                                            src_caps & matching_sink_caps,
+                                            SmallVec::from_elem(origin, 1),
+                                        )],
+                                        sink_caps: matching_sink_caps,
+                                        all_validated: false,
+                                        guard_kind: None,
+                                        uses_summary: true,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             continue;
         }
 
@@ -4219,6 +4336,8 @@ struct ResolvedSummary {
     return_type: Option<crate::ssa::type_facts::TypeKind>,
     /// Abstract domain fact for the return value (Phase 17 hardening).
     return_abstract: Option<crate::abstract_interp::AbstractValue>,
+    /// Internal source taint flows to a call of parameter N with these caps.
+    source_to_callback: Vec<(usize, Cap)>,
 }
 
 fn resolve_callee(
@@ -4266,6 +4385,7 @@ fn resolve_callee(
                     param_to_container_store: vec![],
                     return_type: None,
                     return_abstract: None,
+                    source_to_callback: vec![],
                 });
             }
             // Try label classification for the bound function
@@ -4296,6 +4416,7 @@ fn resolve_callee(
                     param_to_container_store: vec![],
                     return_type: None,
                     return_abstract: None,
+                    source_to_callback: vec![],
                 });
             }
         }
@@ -4346,6 +4467,7 @@ fn resolve_callee(
             param_to_container_store: vec![],
             return_type: None,
             return_abstract: None,
+            source_to_callback: vec![],
         });
     }
     if local_matches.len() > 1 {
@@ -4372,6 +4494,7 @@ fn resolve_callee(
                         param_to_container_store: vec![],
                         return_type: None,
                         return_abstract: None,
+                        source_to_callback: vec![],
                     });
                 }
             }
@@ -4404,6 +4527,7 @@ fn resolve_callee(
                 param_to_container_store: vec![],
                 return_type: None,
                 return_abstract: None,
+                source_to_callback: vec![],
             });
         }
     }
@@ -4448,6 +4572,7 @@ fn convert_ssa_to_resolved(
         param_to_container_store: ssa_sum.param_to_container_store.clone(),
         return_type: ssa_sum.return_type.clone(),
         return_abstract: ssa_sum.return_abstract.clone(),
+        source_to_callback: ssa_sum.source_to_callback.clone(),
     }
 }
 
@@ -4666,6 +4791,7 @@ pub fn ssa_events_to_findings(
                     let hop_count = block_distance(ssa, origin.node, event.sink_node);
                     let flow_steps = reconstruct_flow_path(*val, origin, event.sink_node, ssa, cfg);
                     findings.push(crate::taint::Finding {
+                        body_id: crate::cfg::BodyId(0), // set by caller
                         sink: event.sink_node,
                         source: origin.node,
                         path: vec![origin.node, event.sink_node],
@@ -4677,6 +4803,7 @@ pub fn ssa_events_to_findings(
                         uses_summary: event.uses_summary,
                         flow_steps,
                         symbolic: None,
+                        source_span: origin.source_span.map(|(start, _)| start),
                     });
                 }
             }
@@ -4783,7 +4910,7 @@ pub fn extract_ssa_func_summary(
     // (surviving_return_caps, sink_events, return_abstract).
     // The return_abstract is the joined abstract value of the return SSA value
     // across all return blocks (None if Top or abstract interp disabled).
-    let run_probe = |seed: HashMap<SymbolId, VarTaint>| -> (
+    let run_probe = |seed: HashMap<BindingKey, VarTaint>| -> (
         Cap,
         Vec<SsaTaintEvent>,
         Option<crate::abstract_interp::AbstractValue>,
@@ -4885,18 +5012,14 @@ pub fn extract_ssa_func_summary(
     let mut param_to_sink_param = Vec::new();
 
     for &(idx, ref var_name, _ssa_val) in &param_info {
-        let sym = match interner.get(var_name) {
-            Some(s) => s,
-            None => continue,
-        };
-
         let mut seed = HashMap::new();
         let origin = TaintOrigin {
             node: NodeIndex::new(0), // synthetic origin for probing
             source_kind: SourceKind::UserInput,
+            source_span: None,
         };
         seed.insert(
-            sym,
+            BindingKey::new(var_name.as_str()),
             VarTaint {
                 caps: Cap::all(),
                 origins: SmallVec::from_elem(origin, 1),
@@ -4938,6 +5061,41 @@ pub fn extract_ssa_func_summary(
     // Infer return type: scan return-reaching blocks for constructor calls.
     let return_type = infer_summary_return_type(ssa, lang);
 
+    // Detect source_to_callback: internal source taint flowing to calls of
+    // parameter functions (e.g., `fn apply(f) { let x = source(); f(x); }`).
+    // Re-runs the baseline probe internally to get accurate taint state.
+    let source_to_callback = if !source_caps.is_empty() && !param_info.is_empty() {
+        let baseline_transfer = SsaTaintTransfer {
+            lang,
+            namespace,
+            interner,
+            local_summaries,
+            global_summaries,
+            interop_edges: &[],
+            global_seed: None,
+            const_values: None,
+            type_facts: None,
+            ssa_summaries: None,
+            extra_labels: None,
+            base_aliases: None,
+            callee_bodies: None,
+            inline_cache: None,
+            context_depth: 0,
+            callback_bindings: None,
+            points_to: None,
+            dynamic_pts: None,
+        };
+        detect_source_to_callback_from_states(
+            ssa,
+            cfg,
+            source_caps,
+            &param_info,
+            &baseline_transfer,
+        )
+    } else {
+        vec![]
+    };
+
     SsaFuncSummary {
         param_to_return,
         param_to_sink,
@@ -4947,7 +5105,61 @@ pub fn extract_ssa_func_summary(
         param_to_container_store,
         return_type,
         return_abstract,
+        source_to_callback,
     }
+}
+
+/// Detect callback patterns where internal source taint flows to a call of a
+/// parameter function. Re-runs the baseline probe internally to get accurate
+/// taint state at each instruction point.
+///
+/// Returns `(param_index_of_callee, source_caps)` pairs.
+fn detect_source_to_callback_from_states(
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    source_caps: Cap,
+    param_info: &[(usize, String, SsaValue)],
+    transfer: &SsaTaintTransfer,
+) -> Vec<(usize, Cap)> {
+    use crate::ssa::ir::SsaOp;
+
+    // Map param var_name → param_index
+    let param_name_to_index: HashMap<&str, usize> = param_info
+        .iter()
+        .map(|(idx, name, _)| (name.as_str(), *idx))
+        .collect();
+
+    // Run taint analysis to get converged block states
+    let (_events, block_states) = run_ssa_taint_full(ssa, cfg, transfer);
+
+    let mut result: Vec<(usize, Cap)> = vec![];
+    for (bid, block) in ssa.blocks.iter().enumerate() {
+        let Some(entry_state) = &block_states[bid] else {
+            continue;
+        };
+        // Replay block transfer to get accurate taint state at each instruction
+        let mut state = entry_state.clone();
+        for inst in &block.body {
+            // Apply transfer for this instruction to advance state
+            transfer_inst(inst, cfg, ssa, transfer, &mut state);
+
+            // After transfer: check if this is a call to a param with tainted args
+            if let SsaOp::Call { callee, args, .. } = &inst.op {
+                if let Some(&param_idx) = param_name_to_index.get(callee.as_str()) {
+                    let any_arg_tainted = args.iter().any(|arg_vals| {
+                        arg_vals
+                            .iter()
+                            .any(|v| state.get(*v).is_some_and(|t| !t.caps.is_empty()))
+                    });
+                    if any_arg_tainted && !result.iter().any(|(idx, _)| *idx == param_idx) {
+                        result.push((param_idx, source_caps));
+                    }
+                }
+            }
+        }
+    }
+
+    result
 }
 
 /// Infer the return type of a function from its SSA body by checking whether
@@ -5261,6 +5473,7 @@ mod cross_file_tests {
             },
             param_count: 0,
             node_meta: std::collections::HashMap::new(),
+            body_graph: None,
         }
     }
 

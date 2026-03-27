@@ -7,7 +7,7 @@
 
 use crate::ast::build_cfg_for_file;
 use crate::callgraph::{CallGraph, CallGraphAnalysis};
-use crate::cfg::{Cfg, EdgeKind, FuncSummaries, StmtKind};
+use crate::cfg::{Cfg, EdgeKind, FileCfg, FuncSummaries, StmtKind};
 use crate::constraint::{CompOp, ConditionExpr, ConstValue, Operand};
 use crate::labels::{Cap, DataLabel};
 use crate::ssa::ir::*;
@@ -171,77 +171,21 @@ impl CfgGraphView {
         }
     }
 
-    /// Build a CFG view filtered to a single function scope.
+    /// Build a CFG view for a single function by looking up its dedicated
+    /// `BodyCfg` in the `FileCfg`.  This replaces the old BFS-filter approach
+    /// that walked the supergraph filtered by `enclosing_func`.
     pub fn from_cfg_function(
-        cfg: &Cfg,
-        summaries: &FuncSummaries,
+        file_cfg: &FileCfg,
         func_name: &str,
         bytes: &[u8],
     ) -> Option<Self> {
-        // Find the function's entry/exit in local summaries.
-        let summary = summaries
+        // Find the BodyCfg whose meta.name matches the requested function.
+        let body = file_cfg
+            .bodies
             .iter()
-            .find(|(k, _)| k.name == func_name)
-            .map(|(_, s)| s)?;
+            .find(|b| b.meta.name.as_deref() == Some(func_name))?;
 
-        // The underlying CFG is file-scoped: sibling functions are wired in
-        // sequence at the module level. For a per-function debug view, only
-        // traverse nodes that belong to the selected function scope.
-        let in_scope = |idx: NodeIndex| cfg[idx].enclosing_func.as_deref() == Some(func_name);
-
-        if !in_scope(summary.entry) {
-            return None;
-        }
-
-        let mut reachable = std::collections::HashSet::new();
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back(summary.entry);
-        reachable.insert(summary.entry);
-
-        while let Some(node) = queue.pop_front() {
-            for edge in cfg.edges(node) {
-                let target = edge.target();
-                if !in_scope(target) {
-                    continue;
-                }
-                if reachable.insert(target) {
-                    queue.push_back(target);
-                }
-            }
-        }
-
-        let nodes: Vec<CfgNodeView> = cfg
-            .node_references()
-            .filter(|(idx, _)| reachable.contains(idx))
-            .map(|(idx, info)| CfgNodeView {
-                id: idx.index(),
-                kind: stmt_kind_str(info.kind),
-                span: info.span,
-                line: byte_offset_to_line(bytes, info.span.0),
-                defines: info.defines.clone(),
-                uses: info.uses.clone(),
-                callee: info.callee.clone(),
-                labels: info.labels.iter().map(label_str).collect(),
-                condition_text: info.condition_text.clone(),
-                enclosing_func: info.enclosing_func.clone(),
-            })
-            .collect();
-
-        let edges: Vec<CfgEdgeView> = cfg
-            .edge_references()
-            .filter(|e| reachable.contains(&e.source()) && reachable.contains(&e.target()))
-            .map(|e| CfgEdgeView {
-                source: e.source().index(),
-                target: e.target().index(),
-                kind: edge_kind_str(*e.weight()),
-            })
-            .collect();
-
-        Some(CfgGraphView {
-            nodes,
-            edges,
-            entry: summary.entry.index(),
-        })
+        Some(Self::from_cfg(&body.graph, body.entry, bytes))
     }
 }
 
@@ -878,11 +822,22 @@ fn transform_str(t: &TaintTransform) -> String {
 
 /// Result of parsing + CFG construction for a single file.
 pub struct FileAnalysis {
-    pub cfg: Cfg,
-    pub entry: NodeIndex,
-    pub summaries: FuncSummaries,
+    pub file_cfg: crate::cfg::FileCfg,
     pub lang: Lang,
     pub bytes: Vec<u8>,
+}
+
+impl FileAnalysis {
+    /// Top-level body's graph (backward-compatible accessor).
+    pub fn cfg(&self) -> &Cfg {
+        &self.file_cfg.toplevel().graph
+    }
+    pub fn entry(&self) -> NodeIndex {
+        self.file_cfg.toplevel().entry
+    }
+    pub fn summaries(&self) -> &FuncSummaries {
+        &self.file_cfg.summaries
+    }
 }
 
 /// Parse a file and build its CFG. Returns an error status code on failure.
@@ -891,12 +846,10 @@ pub fn analyse_file(file_path: &Path, config: &Config) -> Result<FileAnalysis, S
         build_cfg_for_file(file_path, config).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     match result {
-        Some((cfg, entry, summaries, lang)) => {
+        Some((file_cfg, lang)) => {
             let bytes = std::fs::read(file_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             Ok(FileAnalysis {
-                cfg,
-                entry,
-                summaries,
+                file_cfg,
                 lang,
                 bytes,
             })
@@ -908,13 +861,13 @@ pub fn analyse_file(file_path: &Path, config: &Config) -> Result<FileAnalysis, S
 /// Extract function info list from local summaries.
 pub fn function_list(analysis: &FileAnalysis) -> Vec<FunctionInfo> {
     analysis
-        .summaries
+        .summaries()
         .iter()
         .map(|(key, summary)| FunctionInfo {
             name: key.name.clone(),
             namespace: key.namespace.clone(),
             param_count: summary.param_count,
-            line: byte_offset_to_line(&analysis.bytes, analysis.cfg[summary.entry].span.0),
+            line: byte_offset_to_line(&analysis.bytes, analysis.cfg()[summary.entry].span.0),
             source_caps: cap_names(summary.source_caps),
             sanitizer_caps: cap_names(summary.sanitizer_caps),
             sink_caps: cap_names(summary.sink_caps),
@@ -927,23 +880,24 @@ pub fn analyse_function_ssa(
     analysis: &FileAnalysis,
     func_name: &str,
 ) -> Result<(SsaBody, OptimizeResult), StatusCode> {
-    // Find the function in summaries
-    let (_, summary) = analysis
-        .summaries
+    // Find the function body by name from the per-body CFGs.
+    let body = analysis
+        .file_cfg
+        .bodies
         .iter()
-        .find(|(k, _)| k.name == func_name)
+        .find(|b| b.meta.name.as_deref() == Some(func_name))
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let ssa_result = crate::ssa::lower::lower_to_ssa_with_params(
-        &analysis.cfg,
-        summary.entry,
+        &body.graph,
+        body.entry,
         Some(func_name),
         false,
-        &summary.param_names,
+        &body.meta.params,
     );
 
     let mut ssa = ssa_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let opt = ssa::optimize_ssa(&mut ssa, &analysis.cfg, Some(analysis.lang));
+    let opt = ssa::optimize_ssa(&mut ssa, &body.graph, Some(analysis.lang));
 
     Ok((ssa, opt))
 }
@@ -1145,11 +1099,14 @@ function demo() {
         let analysis = analyse_file(&path, &config).expect("file should analyse");
         let (ssa, opt) =
             analyse_function_ssa(&analysis, "demo").expect("function should lower to SSA");
+        let body = analysis.file_cfg.bodies.iter()
+            .find(|b| b.meta.name.as_deref() == Some("demo"))
+            .expect("should find demo function body");
         let (events, _entry_states, exit_states) = analyse_function_taint(
             &ssa,
-            &analysis.cfg,
+            &body.graph,
             analysis.lang,
-            &analysis.summaries,
+            analysis.summaries(),
             None,
             &opt,
         );
@@ -1213,8 +1170,7 @@ async function recentAuditLogs() {
         let config = Config::default();
         let analysis = analyse_file(&path, &config).expect("file should analyse");
         let view = CfgGraphView::from_cfg_function(
-            &analysis.cfg,
-            &analysis.summaries,
+            &analysis.file_cfg,
             "writeAuditLog",
             &analysis.bytes,
         )

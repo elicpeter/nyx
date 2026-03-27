@@ -382,6 +382,7 @@ mod tests {
         };
 
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n1,
             source: n0,
             path: vec![n0, n1],
@@ -404,6 +405,7 @@ mod tests {
                 },
             ],
             symbolic: None,
+            source_span: None,
         };
 
         let blocks = extract_path_blocks(&finding, &ssa);
@@ -445,6 +447,7 @@ mod tests {
         };
 
         let finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n1,
             source: n0,
             path: vec![n0, n1],
@@ -467,6 +470,7 @@ mod tests {
                 },
             ],
             symbolic: None,
+            source_span: None,
         };
 
         let ctx = SymexContext {
@@ -496,6 +500,7 @@ mod tests {
         let n1 = NodeIndex::new(1);
 
         let mut finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n1,
             source: n0,
             path: vec![n0, n1],
@@ -518,6 +523,7 @@ mod tests {
                 },
             ],
             symbolic: None,
+            source_span: None,
         };
 
         let ssa = SsaBody {
@@ -553,6 +559,7 @@ mod tests {
         let n0 = NodeIndex::new(0);
 
         let mut finding = Finding {
+            body_id: crate::cfg::BodyId(0),
             sink: n0,
             source: n0,
             path: vec![n0],
@@ -568,6 +575,7 @@ mod tests {
                 op_kind: crate::evidence::FlowStepKind::Source,
             }],
             symbolic: None,
+            source_span: None,
         };
 
         let ssa = SsaBody {
