@@ -884,7 +884,7 @@ fn resolve_callee_symbolically(
         && let Some(receiver_type) = tf.get_type(recv)
         && let Some(prefix) = receiver_type.label_prefix()
     {
-        let method = crate::callgraph::normalize_callee_name(callee);
+        let method = crate::callgraph::callee_leaf_name(callee);
         let qualified = format!("{}.{}", prefix, method);
 
         // Attempt 1: Exact lookup under type-qualified name.
@@ -917,7 +917,7 @@ fn resolve_callee_symbolically(
     }
 
     // Existing bare-name resolution path
-    let normalized = crate::callgraph::normalize_callee_name(callee);
+    let normalized = crate::callgraph::callee_leaf_name(callee);
     let resolution = ctx.global_summaries.resolve_callee_key(
         normalized,
         ctx.lang,

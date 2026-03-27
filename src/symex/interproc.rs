@@ -33,7 +33,7 @@ use std::fmt;
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 
-use crate::callgraph::normalize_callee_name;
+use crate::callgraph::callee_leaf_name;
 use crate::cfg::Cfg;
 use crate::labels::{Cap, DataLabel};
 use crate::ssa::ir::{BlockId, SsaOp, SsaValue, Terminator};
@@ -613,7 +613,7 @@ pub fn execute_callee(
     }
 
     // Resolve callee
-    let normalized = normalize_callee_name(callee_name);
+    let normalized = callee_leaf_name(callee_name);
     let (body, is_cross_file) = match ctx.callee_bodies.get(normalized) {
         Some(b) => (b, false),
         None => {

@@ -1,0 +1,24 @@
+{
+  "description": "Shadowed variable 'data': inner tainted scope should produce a finding, outer safe scope should not.",
+  "tags": [
+    "taint",
+    "scope-precision",
+    "cmd-injection"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        12,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "req.query.cmd flows to exec via shadowed inner 'data'"
+    }
+  ]
+}

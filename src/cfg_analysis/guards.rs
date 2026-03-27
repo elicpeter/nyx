@@ -3,7 +3,7 @@
 use super::dominators::{self, dominates};
 use super::rules;
 use super::{AnalysisContext, CfgAnalysis, CfgFinding, Confidence, is_entry_point_func};
-use crate::callgraph::normalize_callee_name;
+use crate::callgraph::callee_leaf_name;
 use crate::cfg::StmtKind;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule};
 use crate::patterns::Severity;
@@ -308,10 +308,10 @@ impl CfgAnalysis for UnguardedSink {
             // function with sanitizer caps that cover this sink's caps.
             let has_interprocedural_sanitizer = sink_info.arg_callees.iter().any(|mc| {
                 if let Some(callee) = mc {
-                    let normalized = normalize_callee_name(callee);
+                    let leaf = callee_leaf_name(callee);
                     // Check local function summaries
                     ctx.func_summaries.iter().any(|(k, s)| {
-                        k.name == normalized && (s.sanitizer_caps & sink_caps) != Cap::empty()
+                        k.name == leaf && (s.sanitizer_caps & sink_caps) != Cap::empty()
                     })
                 } else {
                     false

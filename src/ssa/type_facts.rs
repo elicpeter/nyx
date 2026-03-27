@@ -108,7 +108,7 @@ impl TypeFactResult {
 /// Uses suffix matching consistent with the label classification system.
 pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
     // Normalize: last segment after "::" (Rust/Ruby) then "." (method calls).
-    // Mirrors normalize_callee_name() in callgraph.rs:83-87.
+    // Mirrors callee_leaf_name() in callgraph.rs.
     let after_colons = callee.rsplit("::").next().unwrap_or(callee);
     let suffix = after_colons.rsplit('.').next().unwrap_or(after_colons);
     match lang {

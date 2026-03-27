@@ -10,7 +10,7 @@
 )]
 
 use crate::abstract_interp::{self, AbstractState};
-use crate::callgraph::normalize_callee_name;
+use crate::callgraph::callee_leaf_name;
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
 use crate::constraint;
 use crate::interop::InteropEdge;
@@ -39,22 +39,62 @@ const MAX_ORIGINS: usize = 4;
 /// `SymbolId` remains body-local for intra-body analysis; `BindingKey`
 /// is used when taint crosses body boundaries via `global_seed`.
 ///
-/// Current implementation: name-based matching (sufficient for
-/// parameter/captured-variable resolution where names are unambiguous
-/// within a body's formal parameters).
-///
-/// Intended evolution: enrich with `defining_body_id` and declaration
-/// span to disambiguate same-named bindings across scopes and enable
-/// capture-list-aware resolution.
+/// The optional `body_id` disambiguates same-named bindings across
+/// scopes.  When `body_id` is `None`, the key matches by name alone
+/// (backward-compatible wildcard); when `Some`, it scopes the binding
+/// to a specific body.  Use [`BindingKey::matches`] and [`seed_lookup`]
+/// for body-id-aware comparison.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct BindingKey {
     pub name: String,
+    /// Owning body id.  `None` = scope-unaware (matches any body).
+    pub body_id: Option<u32>,
 }
 
 impl BindingKey {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
+        Self {
+            name: name.into(),
+            body_id: None,
+        }
     }
+
+    pub fn with_body_id(name: impl Into<String>, body_id: u32) -> Self {
+        Self {
+            name: name.into(),
+            body_id: Some(body_id),
+        }
+    }
+
+    /// Body-id-aware matching: `None` on either side matches by name alone.
+    pub fn matches(&self, other: &BindingKey) -> bool {
+        if self.name != other.name {
+            return false;
+        }
+        match (self.body_id, other.body_id) {
+            (Some(a), Some(b)) => a == b,
+            _ => true, // None on either side → name-only match
+        }
+    }
+}
+
+/// Look up a binding in a seed map with body-id-aware fallback.
+///
+/// 1. Exact HashMap lookup (name + body_id).
+/// 2. Fallback: linear scan for any entry where [`BindingKey::matches`]
+///    succeeds (handles `None`-wildcard cases).
+pub fn seed_lookup<'a>(
+    seed: &'a HashMap<BindingKey, VarTaint>,
+    key: &BindingKey,
+) -> Option<&'a VarTaint> {
+    // Fast path: exact match (name + body_id)
+    if let Some(taint) = seed.get(key) {
+        return Some(taint);
+    }
+    // Slow path: wildcard match when body_ids differ
+    seed.iter()
+        .find(|(k, _)| k.matches(key))
+        .map(|(_, v)| v)
 }
 
 // ── SSA Taint State ─────────────────────────────────────────────────────
@@ -767,6 +807,8 @@ pub fn extract_ssa_exit_state(
     }
 
     // Map SsaValue → var_name → BindingKey
+    // TODO(C-2): pass body_id into this function and use BindingKey::with_body_id
+    // to scope exit-state keys to their owning body.
     let mut result: HashMap<BindingKey, VarTaint> = HashMap::new();
     for (val, taint) in &joined.values {
         let var_name = ssa
@@ -832,12 +874,15 @@ pub fn join_seed_maps(
 }
 
 /// Filter seed map to only include bindings in the given set.
+///
+/// Uses [`BindingKey::matches`] so that toplevel keys with `body_id=None`
+/// match seed entries regardless of their body_id.
 pub fn filter_seed_to_toplevel(
     seed: &HashMap<BindingKey, VarTaint>,
     toplevel: &HashSet<BindingKey>,
 ) -> HashMap<BindingKey, VarTaint> {
     seed.iter()
-        .filter(|(key, _)| toplevel.contains(key))
+        .filter(|(key, _)| toplevel.iter().any(|tk| tk.matches(key)))
         .map(|(key, taint)| (key.clone(), taint.clone()))
         .collect()
 }
@@ -1331,7 +1376,8 @@ fn inline_analyse_callee(
 
     let callee_bodies = transfer.callee_bodies?;
     let cache_ref = transfer.inline_cache?;
-    let normalized = normalize_callee_name(callee);
+    // Use leaf name for callee_bodies lookup (keyed by bare function name).
+    let normalized = callee_leaf_name(callee);
     let callee_body = callee_bodies.get(normalized)?;
 
     // Skip very large function bodies
@@ -1352,6 +1398,8 @@ fn inline_analyse_callee(
 
     // Build per-parameter seed from actual argument taint.
     // Map callee's Param var_name → caller's argument taint via BindingKey.
+    // TODO(C-2): use BindingKey::with_body_id(var_name, callee_body_id) to scope
+    // seeds to the callee's body, preventing shadowed-name collisions.
     let mut param_seed: HashMap<BindingKey, VarTaint> = HashMap::new();
 
     for block in &callee_body.ssa.blocks {
@@ -1426,7 +1474,7 @@ fn inline_analyse_callee(
                                     .and_then(|vd| vd.var_name.as_deref())
                                 {
                                     // Check if the argument name matches a known callee body
-                                    let norm = normalize_callee_name(arg_var_name);
+                                    let norm = callee_leaf_name(arg_var_name);
                                     if callee_bodies.contains_key(norm) {
                                         callback_bindings
                                             .insert(param_name.clone(), norm.to_string());
@@ -2266,7 +2314,7 @@ fn transfer_inst(
                     .and_then(|vd| vd.var_name.as_deref())
                 {
                     let key = BindingKey::new(var_name);
-                    if let Some(taint) = seed.get(&key) {
+                    if let Some(taint) = seed_lookup(seed, &key) {
                         // Remap origins to this body's Param cfg_node:
                         // the meaningful anchor where taint enters this body.
                         // Preserve source_span from the original origin for
@@ -4393,7 +4441,8 @@ fn resolve_callee(
     caller_func: &str,
     call_ordinal: u32,
 ) -> Option<ResolvedSummary> {
-    let normalized = normalize_callee_name(callee);
+    // Use leaf name for map/index lookups (FuncKey.name is always leaf).
+    let normalized = callee_leaf_name(callee);
 
     // -1) Callback resolution: if the callee name matches a parameter that was
     // bound to a specific function at the call site, resolve that function instead.
@@ -5627,5 +5676,204 @@ mod cross_file_tests {
         let meta = CrossFileNodeMeta::default();
         assert_eq!(meta.bin_op, None);
         assert!(meta.labels.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod binding_key_tests {
+    use super::*;
+    use crate::taint::domain::{TaintOrigin, VarTaint};
+    use smallvec::smallvec;
+    use std::collections::HashMap;
+
+    // ── PartialEq / Hash ───────────────────────────────────────────────
+
+    #[test]
+    fn same_name_both_none_match() {
+        let a = BindingKey::new("x");
+        let b = BindingKey::new("x");
+        assert_eq!(a, b);
+        assert!(a.matches(&b));
+    }
+
+    #[test]
+    fn same_name_one_none_one_some_matches() {
+        let none_key = BindingKey::new("x");
+        let some_key = BindingKey::with_body_id("x", 1);
+        // Standard PartialEq: different (body_id differs)
+        assert_ne!(none_key, some_key);
+        // Body-id-aware matching: None wildcard
+        assert!(none_key.matches(&some_key));
+        assert!(some_key.matches(&none_key));
+    }
+
+    #[test]
+    fn same_name_same_body_id_matches() {
+        let a = BindingKey::with_body_id("x", 1);
+        let b = BindingKey::with_body_id("x", 1);
+        assert_eq!(a, b);
+        assert!(a.matches(&b));
+    }
+
+    #[test]
+    fn same_name_different_body_id_no_match() {
+        let a = BindingKey::with_body_id("x", 1);
+        let b = BindingKey::with_body_id("x", 2);
+        assert_ne!(a, b);
+        assert!(!a.matches(&b));
+    }
+
+    #[test]
+    fn different_name_no_match() {
+        // None body_id
+        assert!(!BindingKey::new("x").matches(&BindingKey::new("y")));
+        // Same body_id
+        assert!(!BindingKey::with_body_id("x", 1).matches(&BindingKey::with_body_id("y", 1)));
+        // Mixed
+        assert!(!BindingKey::new("x").matches(&BindingKey::with_body_id("y", 1)));
+    }
+
+    // ── seed_lookup ────────────────────────────────────────────────────
+
+    fn taint(caps: u16) -> VarTaint {
+        VarTaint {
+            caps: Cap::from_bits_truncate(caps),
+            origins: smallvec![],
+            uses_summary: false,
+        }
+    }
+
+    #[test]
+    fn seed_lookup_exact_match() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::new("x"), taint(1));
+        let key = BindingKey::new("x");
+        assert!(seed_lookup(&seed, &key).is_some());
+        assert_eq!(seed_lookup(&seed, &key).unwrap().caps, Cap::from_bits_truncate(1));
+    }
+
+    #[test]
+    fn seed_lookup_none_finds_none() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::new("x"), taint(1));
+        // Query with None body_id → exact match (both None)
+        let key = BindingKey::new("x");
+        assert!(seed_lookup(&seed, &key).is_some());
+    }
+
+    #[test]
+    fn seed_lookup_some_falls_back_to_none() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::new("x"), taint(1)); // body_id=None
+        // Query with Some(1) → exact miss, but fallback matches None via wildcard
+        let key = BindingKey::with_body_id("x", 1);
+        assert!(seed_lookup(&seed, &key).is_some());
+    }
+
+    #[test]
+    fn seed_lookup_none_falls_back_to_some() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::with_body_id("x", 1), taint(1)); // body_id=Some(1)
+        // Query with None → exact miss, but fallback matches via wildcard
+        let key = BindingKey::new("x");
+        assert!(seed_lookup(&seed, &key).is_some());
+    }
+
+    #[test]
+    fn seed_lookup_prefers_exact_over_wildcard() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::new("x"), taint(1)); // None → caps=1
+        seed.insert(BindingKey::with_body_id("x", 1), taint(2)); // Some(1) → caps=2
+        // Exact match for Some(1) returns caps=2
+        let key = BindingKey::with_body_id("x", 1);
+        assert_eq!(seed_lookup(&seed, &key).unwrap().caps, Cap::from_bits_truncate(2));
+    }
+
+    #[test]
+    fn seed_lookup_different_body_ids_distinct() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::with_body_id("x", 1), taint(1));
+        seed.insert(BindingKey::with_body_id("x", 2), taint(2));
+        // Query for body_id=1 → exact match
+        let key1 = BindingKey::with_body_id("x", 1);
+        assert_eq!(seed_lookup(&seed, &key1).unwrap().caps, Cap::from_bits_truncate(1));
+        // Query for body_id=2 → exact match
+        let key2 = BindingKey::with_body_id("x", 2);
+        assert_eq!(seed_lookup(&seed, &key2).unwrap().caps, Cap::from_bits_truncate(2));
+        // Query for body_id=3 → no exact match, no None entry, no wildcard → None
+        let key3 = BindingKey::with_body_id("x", 3);
+        assert!(seed_lookup(&seed, &key3).is_none());
+    }
+
+    #[test]
+    fn seed_lookup_miss_different_name() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::new("x"), taint(1));
+        let key = BindingKey::new("y");
+        assert!(seed_lookup(&seed, &key).is_none());
+    }
+
+    // ── join_seed_maps ─────────────────────────────────────────────────
+
+    #[test]
+    fn join_seed_maps_does_not_merge_different_body_ids() {
+        let mut a = HashMap::new();
+        a.insert(BindingKey::with_body_id("x", 1), taint(1));
+        let mut b = HashMap::new();
+        b.insert(BindingKey::with_body_id("x", 2), taint(2));
+        let joined = join_seed_maps(&a, &b);
+        // Both entries preserved (different body_ids → different keys)
+        assert_eq!(joined.len(), 2);
+        assert_eq!(
+            joined.get(&BindingKey::with_body_id("x", 1)).unwrap().caps,
+            Cap::from_bits_truncate(1)
+        );
+        assert_eq!(
+            joined.get(&BindingKey::with_body_id("x", 2)).unwrap().caps,
+            Cap::from_bits_truncate(2)
+        );
+    }
+
+    #[test]
+    fn join_seed_maps_merges_same_body_id() {
+        let mut a = HashMap::new();
+        a.insert(BindingKey::with_body_id("x", 1), taint(1));
+        let mut b = HashMap::new();
+        b.insert(BindingKey::with_body_id("x", 1), taint(2));
+        let joined = join_seed_maps(&a, &b);
+        assert_eq!(joined.len(), 1);
+        let caps = joined.get(&BindingKey::with_body_id("x", 1)).unwrap().caps;
+        // OR of caps 1 and 2
+        assert!(caps.contains(Cap::from_bits_truncate(1)));
+        assert!(caps.contains(Cap::from_bits_truncate(2)));
+    }
+
+    // ── filter_seed_to_toplevel ────────────────────────────────────────
+
+    #[test]
+    fn filter_seed_retains_matching_body_ids() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::with_body_id("x", 1), taint(1));
+        seed.insert(BindingKey::with_body_id("y", 2), taint(2));
+
+        // Toplevel keys with None body_id should match any body_id (wildcard)
+        let mut toplevel = HashSet::new();
+        toplevel.insert(BindingKey::new("x")); // None matches body_id=1
+        let filtered = filter_seed_to_toplevel(&seed, &toplevel);
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.contains_key(&BindingKey::with_body_id("x", 1)));
+    }
+
+    #[test]
+    fn filter_seed_excludes_non_toplevel() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::new("x"), taint(1));
+        seed.insert(BindingKey::new("y"), taint(2));
+
+        let mut toplevel = HashSet::new();
+        toplevel.insert(BindingKey::new("x"));
+        let filtered = filter_seed_to_toplevel(&seed, &toplevel);
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.contains_key(&BindingKey::new("x")));
     }
 }

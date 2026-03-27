@@ -80,10 +80,55 @@ pub struct CallGraphAnalysis {
 ///
 /// The original raw text is preserved on [`CallEdge::call_site`] for
 /// diagnostics; this function only produces the lookup key.
+/// Preserve the last **two** segments for better disambiguation.
+///
+/// ```text
+/// "std::env::var"      → "env::var"
+/// "env::var"           → "env::var"
+/// "pkg.mod.func"       → "mod.func"
+/// "http_client.send"   → "http_client.send"
+/// "send"               → "send"
+/// ""                   → ""
+/// ```
 pub(crate) fn normalize_callee_name(raw: &str) -> &str {
-    // Split on "::" first (Rust-style qualification), take last segment.
+    // Try "::" separators first (Rust / C++ qualification)
+    if let Some(pos) = raw.rfind("::") {
+        let before_last = &raw[..pos];
+        if let Some(pos2) = before_last.rfind("::") {
+            // ≥3 segments → keep last two: "std::env::var" → "env::var"
+            return &raw[pos2 + 2..];
+        }
+        // ≤2 segments → keep all: "env::var" → "env::var"
+        return raw;
+    }
+
+    // Try "." separators (method calls, Python/JS dotted paths)
+    if let Some(pos) = raw.rfind('.') {
+        let before_last = &raw[..pos];
+        if let Some(pos2) = before_last.rfind('.') {
+            // ≥3 segments → keep last two: "pkg.mod.func" → "mod.func"
+            return &raw[pos2 + 1..];
+        }
+        // ≤2 segments → keep all: "http_client.send" → "http_client.send"
+        return raw;
+    }
+
+    // No separators → return as-is
+    raw
+}
+
+/// Extract the final (leaf) segment after `::` or `.` separators.
+///
+/// This is the original single-segment normalization, used for direct
+/// map lookups where keys are stored as bare function names.
+///
+/// ```text
+/// "std::env::var" → "var"
+/// "obj.method"    → "method"
+/// "foo"           → "foo"
+/// ```
+pub(crate) fn callee_leaf_name(raw: &str) -> &str {
     let after_colons = raw.rsplit("::").next().unwrap_or(raw);
-    // Then split on "." (method calls, Python/JS dotted paths), take last segment.
     after_colons.rsplit('.').next().unwrap_or(after_colons)
 }
 
@@ -93,10 +138,11 @@ pub(crate) fn normalize_callee_name(raw: &str) -> &str {
 
 /// Build the whole-program call graph from merged summaries.
 ///
-/// Resolution mirrors `GlobalSummaries::resolve_callee_key`:
-///   1. Normalize callee name (last segment after `::` or `.`)
+/// Resolution strategy:
+///   1. Extract leaf name for `resolve_callee_key` lookup
 ///   2. Same-language, arity-filtered, namespace-disambiguated lookup
-///   3. Interop edges (explicit cross-language bridges)
+///   3. On ambiguity: use two-segment qualified name to narrow candidates
+///   4. Interop edges (explicit cross-language bridges)
 ///
 /// Unresolved and ambiguous callees are recorded for diagnostics but
 /// do **not** create edges.
@@ -118,13 +164,18 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
         let caller_node = index[caller_key];
 
         for raw_callee in &summary.callees {
-            let normalized = normalize_callee_name(raw_callee);
+            // Use leaf name for the initial lookup (FuncKey.name is always leaf).
+            let leaf = callee_leaf_name(raw_callee);
+            // Two-segment form for disambiguation when the leaf is ambiguous.
+            let qualified = normalize_callee_name(raw_callee);
+            // TODO(C-3): pass arity_hint once callee arity is stored on FuncSummary.callees
+            let arity_hint: Option<usize> = None;
 
             match summaries.resolve_callee_key(
-                normalized,
+                leaf,
                 caller_key.lang,
                 &caller_key.namespace,
-                None,
+                arity_hint,
             ) {
                 CalleeResolution::Resolved(target_key) => {
                     if let Some(&target_node) = index.get(&target_key) {
@@ -158,6 +209,28 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                     });
                 }
                 CalleeResolution::Ambiguous(candidates) => {
+                    // Use the two-segment qualified name to narrow ambiguous candidates.
+                    // If the callee was qualified (e.g. "env::var"), prefer candidates
+                    // whose namespace contains the qualifier prefix.
+                    if qualified != leaf {
+                        let qualifier = &qualified[..qualified.len() - leaf.len()].trim_end_matches(|c| c == ':' || c == '.');
+                        let narrowed: Vec<_> = candidates.iter()
+                            .filter(|k| k.namespace.contains(qualifier))
+                            .cloned()
+                            .collect();
+                        if narrowed.len() == 1 {
+                            if let Some(&target_node) = index.get(&narrowed[0]) {
+                                graph.add_edge(
+                                    caller_node,
+                                    target_node,
+                                    CallEdge {
+                                        call_site: raw_callee.clone(),
+                                    },
+                                );
+                                continue;
+                            }
+                        }
+                    }
                     unresolved_ambiguous.push(AmbiguousCallee {
                         caller: caller_key.clone(),
                         callee_name: raw_callee.clone(),
@@ -392,16 +465,33 @@ mod tests {
         }
     }
 
-    // ── normalize_callee_name ────────────────────────────────────────────
+    // ── normalize_callee_name (two-segment) ─────────────────────────────
 
     #[test]
-    fn normalize_callee_basic() {
-        assert_eq!(normalize_callee_name("env::var"), "var");
-        assert_eq!(normalize_callee_name("std::process::Command"), "Command");
-        assert_eq!(normalize_callee_name("obj.method"), "method");
-        assert_eq!(normalize_callee_name("pkg.mod.func"), "func");
+    fn normalize_callee_two_segment() {
+        // Two-segment normalization preserves one level of qualification.
+        assert_eq!(normalize_callee_name("env::var"), "env::var");
+        assert_eq!(normalize_callee_name("std::env::var"), "env::var");
+        assert_eq!(normalize_callee_name("std::process::Command"), "process::Command");
+        assert_eq!(normalize_callee_name("a::b::c"), "b::c");
+        assert_eq!(normalize_callee_name("obj.method"), "obj.method");
+        assert_eq!(normalize_callee_name("pkg.mod.func"), "mod.func");
+        assert_eq!(normalize_callee_name("http_client.send"), "http_client.send");
+        assert_eq!(normalize_callee_name("send"), "send");
         assert_eq!(normalize_callee_name("foo"), "foo");
         assert_eq!(normalize_callee_name(""), "");
+    }
+
+    // ── callee_leaf_name (single-segment, backward compat) ───────────────
+
+    #[test]
+    fn callee_leaf_basic() {
+        assert_eq!(callee_leaf_name("env::var"), "var");
+        assert_eq!(callee_leaf_name("std::process::Command"), "Command");
+        assert_eq!(callee_leaf_name("obj.method"), "method");
+        assert_eq!(callee_leaf_name("pkg.mod.func"), "func");
+        assert_eq!(callee_leaf_name("foo"), "foo");
+        assert_eq!(callee_leaf_name(""), "");
     }
 
     // ── same name, different Rust modules ────────────────────────────────
@@ -918,5 +1008,80 @@ mod tests {
                 "batch {i} should not be marked as recursive"
             );
         }
+    }
+
+    // ── qualified disambiguation resolves ambiguous common names ──────
+
+    #[test]
+    fn qualified_callee_disambiguates_ambiguous() {
+        // Two "send" functions in different namespaces.
+        let send_http = make_summary("send", "src/http.rs", "rust", 0, vec![]);
+        let send_mail = make_summary("send", "src/mail.rs", "rust", 0, vec![]);
+        // Caller is in a third namespace, calling "http::send" — leaf "send"
+        // is ambiguous, but "http" qualifier should match "src/http.rs".
+        let caller = make_summary("caller", "src/main.rs", "rust", 0, vec!["http::send"]);
+
+        let gs = merge_summaries(vec![send_http, send_mail, caller], None);
+        let cg = build_call_graph(&gs, &[]);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "caller".into(),
+            arity: Some(0),
+        };
+        let send_http_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/http.rs".into(),
+            name: "send".into(),
+            arity: Some(0),
+        };
+
+        let caller_node = cg.index[&caller_key];
+        let send_http_node = cg.index[&send_http_key];
+
+        // The qualified name "http::send" disambiguates to src/http.rs::send
+        let edges: Vec<_> = cg.graph.edges(caller_node).collect();
+        assert_eq!(edges.len(), 1, "qualified name should resolve the ambiguity");
+        assert_eq!(edges[0].target(), send_http_node);
+        assert!(cg.unresolved_ambiguous.is_empty());
+    }
+
+    #[test]
+    fn unqualified_callee_stays_ambiguous() {
+        // Same setup but caller uses unqualified "send" — no disambiguation
+        let send_http = make_summary("send", "src/http.rs", "rust", 0, vec![]);
+        let send_mail = make_summary("send", "src/mail.rs", "rust", 0, vec![]);
+        let caller = make_summary("caller", "src/main.rs", "rust", 0, vec!["send"]);
+
+        let gs = merge_summaries(vec![send_http, send_mail, caller], None);
+        let cg = build_call_graph(&gs, &[]);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "caller".into(),
+            arity: Some(0),
+        };
+        let caller_node = cg.index[&caller_key];
+
+        // Unqualified "send" → still ambiguous (no edge)
+        let edges: Vec<_> = cg.graph.edges(caller_node).collect();
+        assert_eq!(edges.len(), 0, "unqualified name should remain ambiguous");
+        assert_eq!(cg.unresolved_ambiguous.len(), 1);
+    }
+
+    #[test]
+    fn simple_unqualified_resolves_as_before() {
+        // Regression: a simple unqualified callee that isn't ambiguous should still resolve.
+        let helper = make_summary("helper", "src/lib.rs", "rust", 0, vec![]);
+        let caller = make_summary("caller", "src/lib.rs", "rust", 0, vec!["helper"]);
+
+        let gs = merge_summaries(vec![helper, caller], None);
+        let cg = build_call_graph(&gs, &[]);
+
+        assert_eq!(cg.graph.edge_count(), 1);
+        assert!(cg.unresolved_not_found.is_empty());
+        assert!(cg.unresolved_ambiguous.is_empty());
     }
 }
