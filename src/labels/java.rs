@@ -200,7 +200,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "resource"                     => Kind::CallWrapper,
     "catch_clause"                 => Kind::Block,
     "finally_clause"               => Kind::Block,
-    "lambda_expression"            => Kind::Block,
+    "lambda_expression"            => Kind::Function,
     "constructor_body"             => Kind::Block,
     "static_initializer"           => Kind::Block,
 

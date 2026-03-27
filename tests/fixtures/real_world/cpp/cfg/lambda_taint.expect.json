@@ -1,0 +1,35 @@
+{
+  "description": "Lambda return should not kill parent function control flow; system() call must be reachable after lambda with internal return",
+  "tags": [
+    "cfg",
+    "cmdi",
+    "lambda"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": [
+    {
+      "rule_id": "cpp.cmdi.system",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        13,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "system() call reachable after lambda — lambda return does not kill parent CFG"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [
+        13,
+        13
+      ],
+      "evidence_contains": [],
+      "notes": "structural: system() has no dominating guard or sanitizer"
+    }
+  ]
+}

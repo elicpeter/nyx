@@ -96,7 +96,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "function_definition"   => Kind::Function,
     "try_statement"         => Kind::Try,
     "catch_clause"          => Kind::Block,
-    "lambda_expression"     => Kind::Block,
+    "lambda_expression"     => Kind::Function,
 
     // data-flow
     "call_expression"       => Kind::CallFn,

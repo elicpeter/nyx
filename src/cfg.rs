@@ -3639,15 +3639,20 @@ fn build_sub<'a>(
         // Function item – create a header and dive into its body
         Kind::Function => {
             // ── 1) Extract function name ──────────────────────────────────────
-            let fn_name = ast
-                .child_by_field_name("name")
-                .or_else(|| ast.child_by_field_name("declarator"))
-                .and_then(|n| {
-                    let mut tmp = Vec::new();
-                    collect_idents(n, code, &mut tmp);
-                    tmp.into_iter().next()
-                })
-                .unwrap_or_else(|| format!("<anon@{}>", ast.start_byte()));
+            // Lambda expressions don't have meaningful names; force <anon@byte>
+            // to avoid C++ lambdas picking up parameter names via "declarator".
+            let fn_name = if ast.kind() == "lambda_expression" {
+                format!("<anon@{}>", ast.start_byte())
+            } else {
+                ast.child_by_field_name("name")
+                    .or_else(|| ast.child_by_field_name("declarator"))
+                    .and_then(|n| {
+                        let mut tmp = Vec::new();
+                        collect_idents(n, code, &mut tmp);
+                        tmp.into_iter().next()
+                    })
+                    .unwrap_or_else(|| format!("<anon@{}>", ast.start_byte()))
+            };
 
             let is_anon = fn_name.starts_with("<anon@");
             let param_names = extract_param_names(ast, lang, code);
