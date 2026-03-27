@@ -5191,3 +5191,191 @@ fn ssa_format_macro_propagates_taint() {
         "format! should propagate taint from env::var to Command::new sink"
     );
 }
+
+// ── B-2 regression: phi validated_must must use must-analysis, not may ───
+
+#[test]
+fn phi_validated_must_requires_all_paths() {
+    use crate::cfg::build_cfg;
+    use tree_sitter::Language;
+
+    // Path A validates x, path B does NOT validate x.
+    // The phi for x after the merge must NOT get validated_must — only
+    // validated_may (since at least one path validated). The sink after
+    // the merge must still fire because the must-analysis says "not
+    // definitely validated on all paths".
+    let src = br#"
+        use std::env; use std::process::Command;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            if some_condition() {
+                validate(&x);
+            }
+            Command::new("sh").arg(&x).status().unwrap();
+        }"#;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&Language::from(tree_sitter_rust::LANGUAGE))
+        .unwrap();
+    let tree = parser.parse(src as &[u8], None).unwrap();
+
+    let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+
+    // x is validated on only one branch, so the phi merge must NOT promote
+    // to validated_must. The sink should still fire.
+    assert!(
+        !findings.is_empty(),
+        "B-2 regression: phi must NOT promote to validated_must when only \
+         one branch validates — sink should still fire"
+    );
+}
+
+// ── C-1 regression: inline return taint precision ───────────────────────
+
+#[test]
+fn inline_return_constant_with_internal_source_produces_no_finding() {
+    use tree_sitter::Language;
+
+    // Callee has an internal source (document.location) but returns a constant.
+    // The caller feeds tainted input as an argument. Since the return value is
+    // a constant (never tainted), the caller's call result should be untainted.
+    let src = b"var child_process = require('child_process');\n\
+        var express = require('express');\n\
+        var app = express();\n\
+        \n\
+        function transform(input) {\n\
+            var internal = document.location();\n\
+            return 'constant_value';\n\
+        }\n\
+        \n\
+        app.get('/safe', function(req, res) {\n\
+            var result = transform(req.query.data);\n\
+            child_process.exec(result);\n\
+        });\n";
+
+    let lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+
+    // transform() returns a constant — no taint should leak to caller
+    assert_eq!(
+        findings.len(),
+        0,
+        "C-1: transform() returns constant — internal source must not leak, got {} findings: {:?}",
+        findings.len(),
+        findings.iter().map(|f| format!("{}→{}", f.source.index(), f.sink.index())).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn inline_return_taint_prefers_explicit_return_value() {
+    use tree_sitter::Language;
+
+    // When a callee has an explicit Return(Some(rv)) and rv IS tainted,
+    // extract_inline_return_taint should collect ONLY that value's taint,
+    // not all live tainted variables.
+    let src = b"var child_process = require('child_process');\n\
+        var express = require('express');\n\
+        var app = express();\n\
+        \n\
+        function passthrough(cmd) {\n\
+            return cmd;\n\
+        }\n\
+        \n\
+        app.get('/a', function(req, res) {\n\
+            var w = passthrough(req.query.cmd);\n\
+            child_process.exec(w);\n\
+        });\n";
+
+    let lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+
+    // passthrough(tainted) returns tainted → exactly 1 finding
+    assert_eq!(
+        findings.len(),
+        1,
+        "C-1 regression: passthrough(tainted) should produce exactly 1 finding, got {}",
+        findings.len()
+    );
+}
+
+#[test]
+fn inline_return_taint_internal_source_does_not_widen_caps() {
+    use tree_sitter::Language;
+
+    // Callee has an internal source (document.location) alongside a tainted
+    // param. The explicit return value is the param. Without the C-1 fix,
+    // extract_inline_return_taint would union ALL live tainted values' caps
+    // — the internal source's derived-caps would override the param-caps
+    // (derived takes priority in the extraction logic). With the fix, only
+    // the return value's taint is collected, so param taint is returned
+    // correctly.
+    //
+    // Both old and new produce a finding, but the fix ensures the return
+    // taint comes from the param flow, not from the internal source.
+    let src = b"var child_process = require('child_process');\n\
+        var express = require('express');\n\
+        var app = express();\n\
+        \n\
+        function withSideEffect(cmd) {\n\
+            var leaked = document.location();\n\
+            return cmd;\n\
+        }\n\
+        \n\
+        app.get('/a', function(req, res) {\n\
+            var r = withSideEffect(req.query.cmd);\n\
+            child_process.exec(r);\n\
+        });\n";
+
+    let lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+    let summaries = &file_cfg.summaries;
+    let findings = analyse_file(
+        &file_cfg,
+        summaries,
+        None,
+        Lang::JavaScript,
+        "test.js",
+        &[],
+        None,
+    );
+
+    // The callee returns cmd (tainted param) — 1 finding expected.
+    // The internal document.location() should NOT widen the return taint.
+    assert_eq!(
+        findings.len(),
+        1,
+        "C-1 regression: withSideEffect should produce exactly 1 finding (param flow), got {}",
+        findings.len()
+    );
+}

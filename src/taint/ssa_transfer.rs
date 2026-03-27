@@ -992,7 +992,7 @@ fn transfer_block(
                                 .and_then(|vd| vd.var_name.as_deref());
                             if let Some(name) = var_name {
                                 if let Some(sym) = transfer.interner.get(name) {
-                                    if !pred_st.validated_may.contains(sym) {
+                                    if !pred_st.validated_must.contains(sym) {
                                         all_tainted_validated = false;
                                     }
                                 } else {
@@ -1527,9 +1527,10 @@ fn extract_inline_return_taint(
     let mut param_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
     for (bid, block) in ssa.blocks.iter().enumerate() {
-        if !matches!(block.terminator, Terminator::Return(_)) {
-            continue;
-        }
+        let ret_val = match &block.terminator {
+            Terminator::Return(rv) => rv.as_ref().copied(),
+            _ => continue,
+        };
         if let Some(entry_state) = &block_states[bid] {
             let exit = transfer_block(
                 block,
@@ -1540,18 +1541,42 @@ fn extract_inline_return_taint(
                 induction_vars,
                 None,
             );
-            for (val, taint) in &exit.values {
-                let (target_caps, target_origins) = if param_values.contains(val) {
-                    (&mut param_caps, &mut param_origins)
-                } else {
-                    (&mut derived_caps, &mut derived_origins)
-                };
-                *target_caps |= taint.caps;
-                for orig in &taint.origins {
-                    if target_origins.len() < MAX_ORIGINS
-                        && !target_origins.iter().any(|o| o.node == orig.node)
-                    {
-                        target_origins.push(*orig);
+
+            if let Some(rv) = ret_val {
+                // Explicit return value: use ONLY its taint.
+                // If rv has no taint entry, this block contributes nothing —
+                // the return value is provably untainted on this path.
+                if let Some(taint) = exit.get(rv) {
+                    let (target_caps, target_origins) = if param_values.contains(&rv) {
+                        (&mut param_caps, &mut param_origins)
+                    } else {
+                        (&mut derived_caps, &mut derived_origins)
+                    };
+                    *target_caps |= taint.caps;
+                    for orig in &taint.origins {
+                        if target_origins.len() < MAX_ORIGINS
+                            && !target_origins.iter().any(|o| o.node == orig.node)
+                        {
+                            target_origins.push(*orig);
+                        }
+                    }
+                }
+            } else {
+                // Return(None): implicit return / empty body.
+                // Fall back to collecting all live values.
+                for (val, taint) in &exit.values {
+                    let (target_caps, target_origins) = if param_values.contains(val) {
+                        (&mut param_caps, &mut param_origins)
+                    } else {
+                        (&mut derived_caps, &mut derived_origins)
+                    };
+                    *target_caps |= taint.caps;
+                    for orig in &taint.origins {
+                        if target_origins.len() < MAX_ORIGINS
+                            && !target_origins.iter().any(|o| o.node == orig.node)
+                        {
+                            target_origins.push(*orig);
+                        }
                     }
                 }
             }
@@ -2094,6 +2119,28 @@ fn transfer_inst(
                 }
             }
 
+            // Outer-callee taint suppression: when find_classifiable_inner_call
+            // overrode the callee (e.g. transform(req.query.data) → callee becomes
+            // "req.query.data" Source, outer_callee="transform"), the Source label
+            // produces return_bits. Check if the wrapper function blocks taint:
+            // if its SSA summary shows no propagation, no source_caps, and no
+            // container identity return, the return value is independent of its
+            // arguments — clear return_bits.
+            if !return_bits.is_empty() && has_source_label {
+                if let Some(ref oc) = info.outer_callee {
+                    if let Some(ref oc_sum) =
+                        resolve_callee(transfer, oc, caller_func, info.call_ordinal)
+                    {
+                        if !oc_sum.propagates_taint && oc_sum.source_caps.is_empty() {
+                            // Outer callee blocks taint: no param→return flow,
+                            // no internal sources reaching return.
+                            return_bits = Cap::empty();
+                            return_origins.clear();
+                        }
+                    }
+                }
+            }
+
             // Write result
             if return_bits.is_empty() {
                 state.remove(inst.value);
@@ -2616,7 +2663,7 @@ fn collect_block_events(
                                 .and_then(|vd| vd.var_name.as_deref());
                             if let Some(name) = var_name {
                                 if let Some(sym) = transfer.interner.get(name) {
-                                    if !pred_st.validated_may.contains(sym) {
+                                    if !pred_st.validated_must.contains(sym) {
                                         all_tainted_validated = false;
                                     }
                                 } else {
@@ -4959,22 +5006,69 @@ pub fn extract_ssa_func_summary(
                     &empty_induction,
                     None,
                 );
-                for (val, taint) in &exit.values {
-                    if all_param_values.contains(val) {
-                        param_caps |= taint.caps;
+
+                let ret_val = match &ssa.blocks[bid].terminator {
+                    Terminator::Return(rv) => rv.as_ref().copied(),
+                    _ => None,
+                };
+
+                if let Some(rv) = ret_val {
+                    // Explicit return value: use only its taint for derived_caps.
+                    // If rv has no taint entry, this block contributes no derived caps.
+                    let _rv_tainted = if let Some(taint) = exit.get(rv) {
+                        if all_param_values.contains(&rv) {
+                            param_caps |= taint.caps;
+                        } else {
+                            derived_caps |= taint.caps;
+                        }
+                        true
                     } else {
-                        derived_caps |= taint.caps;
+                        false
+                    };
+                    // When rv is not a param value, also collect param taint as a
+                    // fallback. The SSA terminator's rv may point to the last body
+                    // instruction (e.g. push/append result) rather than the actual
+                    // return expression (the container parameter itself). This fires
+                    // both when rv is tainted (derived) and when rv is untainted
+                    // (the push result may have no taint but the param does).
+                    // Skip when rv IS a param (already handled above) or when rv is
+                    // a Const (provably untainted constant return).
+                    let rv_is_const = ssa.blocks[bid]
+                        .body
+                        .iter()
+                        .chain(ssa.blocks[bid].phis.iter())
+                        .any(|inst| {
+                            inst.value == rv && matches!(inst.op, SsaOp::Const(_))
+                        });
+                    if !all_param_values.contains(&rv) && !rv_is_const {
+                        for (val, taint) in &exit.values {
+                            if all_param_values.contains(val) {
+                                param_caps |= taint.caps;
+                            }
+                        }
+                    }
+                } else {
+                    // Return(None): implicit return — fall back to all live values.
+                    for (val, taint) in &exit.values {
+                        if all_param_values.contains(val) {
+                            param_caps |= taint.caps;
+                        } else {
+                            derived_caps |= taint.caps;
+                        }
                     }
                 }
-                // Abstract return: find the last instruction's SSA value in this
-                // return block and extract its abstract value from the exit state.
+
+                // Abstract return: use terminator's return value when available,
+                // fall back to last instruction heuristic for Return(None).
                 if let Some(ref abs) = exit.abstract_state {
-                    let ret_val = ssa.blocks[bid]
-                        .body
-                        .last()
-                        .or_else(|| ssa.blocks[bid].phis.last())
-                        .map(|inst| inst.value);
-                    if let Some(rv) = ret_val {
+                    let abs_rv = ret_val.or_else(|| {
+                        ssa.blocks[bid]
+                            .body
+                            .last()
+                            .or_else(|| ssa.blocks[bid].phis.last())
+                            .map(|inst| inst.value)
+                    });
+                    if let Some(rv) = abs_rv {
                         let av = abs.get(rv);
                         if !av.is_top() {
                             return_abstract = Some(match return_abstract {

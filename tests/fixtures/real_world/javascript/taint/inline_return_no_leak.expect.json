@@ -1,0 +1,14 @@
+{
+  "description": "C-1 regression: callee with an internal source (document.location) that is NOT returned should not leak taint to the caller's return value.",
+  "tags": [
+    "taint",
+    "context-sensitivity",
+    "inline",
+    "regression",
+    "cmd-injection"
+  ],
+  "modes": [
+    "full"
+  ],
+  "expected": []
+}

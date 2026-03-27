@@ -967,20 +967,46 @@ fn rename_variables(
         let last_info = &cfg[last_node];
 
         ssa_blocks[block_idx].terminator = if succs.is_empty() {
-            // Find the return value: last non-Nop body instruction that defines
-            // a meaningful value.  This is canonical — the SSA lowerer places the
-            // return expression's evaluation as the last body instruction before
-            // setting the Return terminator.
-            let ret_val = ssa_blocks[block_idx]
-                .body
-                .iter()
-                .rev()
-                .find(|inst| !matches!(inst.op, SsaOp::Nop))
-                .map(|inst| inst.value);
-            if last_info.kind == StmtKind::Return {
-                Terminator::Return(ret_val)
+            // Check if this block contains a Return node with no uses (constant
+            // or void return). The Return node may not be the last_node — Exit
+            // often follows Return in the same block.
+            let has_const_return = blocks_nodes[block_idx].iter().any(|&n| {
+                let info = &cfg[n];
+                info.kind == StmtKind::Return && info.uses.is_empty()
+            });
+
+            if has_const_return {
+                // Return with no uses: the return expression is a constant literal
+                // or the return is void. Emit a synthetic Const instruction so that
+                // Return(Some(v_const)) correctly has no taint entry — preventing
+                // the last body instruction (which may be an unrelated tainted
+                // value) from being treated as the return value.
+                let const_v = SsaValue(*next_value);
+                *next_value += 1;
+                let block_id = BlockId(block_idx as u32);
+                value_defs.push(ValueDef {
+                    var_name: None,
+                    cfg_node: last_node,
+                    block: block_id,
+                });
+                ssa_blocks[block_idx].body.push(SsaInst {
+                    value: const_v,
+                    op: SsaOp::Const(None),
+                    cfg_node: last_node,
+                    var_name: None,
+                    span: last_info.span,
+                });
+                Terminator::Return(Some(const_v))
             } else {
-                Terminator::Return(ret_val) // Exit or dead end
+                // Find the return value: last non-Nop body instruction that defines
+                // a meaningful value.
+                let ret_val = ssa_blocks[block_idx]
+                    .body
+                    .iter()
+                    .rev()
+                    .find(|inst| !matches!(inst.op, SsaOp::Nop))
+                    .map(|inst| inst.value);
+                Terminator::Return(ret_val)
             }
         } else if succs.len() == 1 {
             Terminator::Goto(BlockId(succs[0] as u32))

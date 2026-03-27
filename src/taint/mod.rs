@@ -672,16 +672,11 @@ fn lower_all_functions_from_bodies(
                 param_count,
             );
 
-            if !summary.param_to_return.is_empty()
-                || !summary.param_to_sink.is_empty()
-                || !summary.source_caps.is_empty()
-                || !summary.param_container_to_return.is_empty()
-                || !summary.param_to_container_store.is_empty()
-                || summary.return_abstract.is_some()
-                || !summary.source_to_callback.is_empty()
-            {
-                summaries.insert(func_name.clone(), summary);
-            }
+            // Always insert the summary, even when all fields are empty/default.
+            // An empty summary tells resolve_callee "this function exists and has
+            // no taint effects" — preventing fallthrough to the less precise old
+            // FuncSummary which may report false source_caps from internal sources.
+            summaries.insert(func_name.clone(), summary);
         }
 
         let opt = crate::ssa::optimize_ssa(&mut func_ssa, &body.graph, Some(lang));
