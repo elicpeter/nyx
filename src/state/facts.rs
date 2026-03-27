@@ -15,6 +15,29 @@ fn sanitize_desc(s: &str) -> String {
     crate::fmt::normalize_snippet(s)
 }
 
+/// Returns true if `idx` is the terminal exit of a function body — the
+/// convergence node where all execution paths join before leaving the function.
+///
+/// **Invariant:** Only terminal exits carry the complete merged lifecycle state
+/// needed for leak analysis.  Return nodes are intermediate (they flow into the
+/// terminal exit) and must NOT be analyzed for terminal resource state.
+///
+/// Detection is purely topological: a node inside a function is terminal when
+/// it has no successor within the same function scope.  This works for both
+/// per-body graphs (Exit node is a sink) and legacy supergraphs (the
+/// synthesized Return's successor is the file-level Exit with
+/// `enclosing_func = None`).
+fn is_terminal_function_exit(
+    idx: petgraph::graph::NodeIndex,
+    info: &crate::cfg::NodeInfo,
+    cfg: &Cfg,
+) -> bool {
+    info.enclosing_func.is_some()
+        && !cfg
+            .neighbors_directed(idx, petgraph::Direction::Outgoing)
+            .any(|succ| cfg[succ].enclosing_func == info.enclosing_func)
+}
+
 /// A finding produced by state analysis.
 #[derive(Debug, Clone)]
 pub struct StateFinding {
@@ -110,28 +133,14 @@ pub fn extract_findings(
     };
 
     for (idx, info) in cfg.node_references() {
-        // Check both the file-level Exit node and the *synthesised* function
-        // exit node (a Return node).  Skip early-return nodes — they flow
-        // into the synthesised exit and carry only path-specific state.
-        // The synthesised exit is the one Return node that does NOT have an
-        // outgoing edge to another Return in the same function.
-        let is_exit = info.kind == StmtKind::Exit && info.enclosing_func.is_none();
-        let is_func_exit = (info.kind == StmtKind::Return || info.kind == StmtKind::Exit)
-            && info.enclosing_func.is_some();
-        if !is_exit && !is_func_exit {
+        // File-level Exit (program termination, no enclosing function).
+        let is_file_exit = info.kind == StmtKind::Exit && info.enclosing_func.is_none();
+        // Terminal function exit — the convergence node where all paths join.
+        // Return nodes are intermediate and carry only path-specific state;
+        // only the terminal exit carries the complete merged lifecycle.
+        let is_func_terminal = is_terminal_function_exit(idx, info, cfg);
+        if !is_file_exit && !is_func_terminal {
             continue;
-        }
-        if is_func_exit {
-            use petgraph::Direction;
-            let is_early_return = cfg
-                .neighbors_directed(idx, Direction::Outgoing)
-                .any(|succ| {
-                    let s = &cfg[succ];
-                    s.kind == StmtKind::Return && s.enclosing_func == info.enclosing_func
-                });
-            if is_early_return {
-                continue;
-            }
         }
         let Some(state) = result.states.get(&idx) else {
             continue;
@@ -142,7 +151,7 @@ pub fn extract_findings(
                 continue;
             }
             let var_name = interner.resolve(sym);
-            let scope = if is_func_exit {
+            let scope = if is_func_terminal {
                 info.enclosing_func.as_deref()
             } else {
                 None
@@ -154,7 +163,7 @@ pub fn extract_findings(
             // function exit checks above.  Without this, the file-level Exit
             // would duplicate leak findings with a misleading acquire span
             // (the first global match instead of the correct function-local one).
-            if is_exit {
+            if is_file_exit {
                 if let Some(acq) = acquire_node {
                     if cfg[acq].enclosing_func.is_some() {
                         continue;
@@ -189,7 +198,7 @@ pub fn extract_findings(
             // predecessors that have the variable OPEN also return it.
             // Mixed cases (some paths return, some leak) are downgraded
             // to state-resource-leak-possible.
-            if is_func_exit {
+            if is_func_terminal {
                 let scope = info.enclosing_func.as_deref();
                 let mut returned_open = 0u32;
                 let mut non_returned_open = 0u32;
@@ -205,6 +214,9 @@ pub fn extract_findings(
                     if !pred_has_open {
                         continue;
                     }
+                    // Only Return nodes can transfer resource ownership to the
+                    // caller.  Non-Return predecessors (exception edges, implicit
+                    // fallthrough) with OPEN resources represent genuine leaks.
                     let returns_var = cfg[pred].kind == StmtKind::Return
                         && cfg[pred]
                             .uses
@@ -272,9 +284,7 @@ pub fn extract_findings(
     // intervening calls between the proxy acquire and release nodes that
     // could throw and bypass the release. If so, emit a possible leak.
     for (idx, info) in cfg.node_references() {
-        let is_func_exit = (info.kind == StmtKind::Return || info.kind == StmtKind::Exit)
-            && info.enclosing_func.is_some();
-        if !is_func_exit {
+        if !is_terminal_function_exit(idx, info, cfg) {
             continue;
         }
         let Some(state) = result.states.get(&idx) else {
@@ -562,5 +572,148 @@ mod tests {
         let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new(), false);
 
         assert!(findings.is_empty());
+    }
+
+    fn make_func_node(kind: StmtKind, func: &str) -> NodeInfo {
+        NodeInfo {
+            enclosing_func: Some(func.to_string()),
+            ..make_node(kind)
+        }
+    }
+
+    #[test]
+    fn terminal_exit_is_topological() {
+        // Per-body graph: Entry → Call → Return → Exit (all enclosing_func=Some)
+        // Only Exit should be terminal (no successors in same scope).
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_func_node(StmtKind::Entry, "f"));
+        let call = cfg.add_node(NodeInfo {
+            kind: StmtKind::Call,
+            callee: Some("fopen".into()),
+            defines: Some("x".into()),
+            enclosing_func: Some("f".into()),
+            ..make_node(StmtKind::Call)
+        });
+        let ret = cfg.add_node(NodeInfo {
+            kind: StmtKind::Return,
+            uses: vec!["x".into()],
+            enclosing_func: Some("f".into()),
+            ..make_node(StmtKind::Return)
+        });
+        let exit = cfg.add_node(make_func_node(StmtKind::Exit, "f"));
+
+        cfg.add_edge(entry, call, EdgeKind::Seq);
+        cfg.add_edge(call, ret, EdgeKind::Seq);
+        cfg.add_edge(ret, exit, EdgeKind::Seq);
+
+        assert!(
+            !is_terminal_function_exit(entry, &cfg[entry], &cfg),
+            "Entry must not be terminal"
+        );
+        assert!(
+            !is_terminal_function_exit(call, &cfg[call], &cfg),
+            "Call must not be terminal"
+        );
+        assert!(
+            !is_terminal_function_exit(ret, &cfg[ret], &cfg),
+            "Return must not be terminal — it flows into Exit"
+        );
+        assert!(
+            is_terminal_function_exit(exit, &cfg[exit], &cfg),
+            "Exit must be terminal — no successors in same scope"
+        );
+    }
+
+    #[test]
+    fn per_body_factory_returned_resource_no_finding() {
+        // Per-body graph: Entry → fopen(f) → return f → Exit
+        // All nodes have enclosing_func=Some("factory").
+        // The resource is returned — no leak finding expected.
+        let func = "factory";
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_func_node(StmtKind::Entry, func));
+        let open_node = cfg.add_node(NodeInfo {
+            kind: StmtKind::Call,
+            span: (10, 20),
+            defines: Some("f".into()),
+            callee: Some("fopen".into()),
+            enclosing_func: Some(func.into()),
+            ..make_node(StmtKind::Call)
+        });
+        let ret = cfg.add_node(NodeInfo {
+            kind: StmtKind::Return,
+            uses: vec!["f".into()],
+            enclosing_func: Some(func.into()),
+            ..make_node(StmtKind::Return)
+        });
+        let exit = cfg.add_node(make_func_node(StmtKind::Exit, func));
+
+        cfg.add_edge(entry, open_node, EdgeKind::Seq);
+        cfg.add_edge(open_node, ret, EdgeKind::Seq);
+        cfg.add_edge(ret, exit, EdgeKind::Seq);
+
+        let interner = SymbolInterner::from_cfg_scoped(&cfg);
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+        };
+
+        let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
+        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new(), false);
+
+        assert!(
+            findings.is_empty(),
+            "Resource returned from factory must not produce leak finding.\n  Got: {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn per_body_non_returned_resource_leaks() {
+        // Per-body graph: Entry → fopen(f) → return (no uses) → Exit
+        // All nodes have enclosing_func=Some("leaker").
+        // Resource is NOT returned — exactly one state-resource-leak expected.
+        let func = "leaker";
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_func_node(StmtKind::Entry, func));
+        let open_node = cfg.add_node(NodeInfo {
+            kind: StmtKind::Call,
+            span: (10, 20),
+            defines: Some("f".into()),
+            callee: Some("fopen".into()),
+            enclosing_func: Some(func.into()),
+            ..make_node(StmtKind::Call)
+        });
+        let ret = cfg.add_node(NodeInfo {
+            kind: StmtKind::Return,
+            enclosing_func: Some(func.into()),
+            ..make_node(StmtKind::Return)
+        });
+        let exit = cfg.add_node(make_func_node(StmtKind::Exit, func));
+
+        cfg.add_edge(entry, open_node, EdgeKind::Seq);
+        cfg.add_edge(open_node, ret, EdgeKind::Seq);
+        cfg.add_edge(ret, exit, EdgeKind::Seq);
+
+        let interner = SymbolInterner::from_cfg_scoped(&cfg);
+        let transfer = DefaultTransfer {
+            lang: Lang::C,
+            resource_pairs: rules::resource_pairs(Lang::C),
+            interner: &interner,
+            resource_method_summaries: &[],
+        };
+
+        let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
+        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new(), false);
+
+        assert_eq!(
+            findings.len(),
+            1,
+            "Non-returned resource must produce exactly one finding.\n  Got: {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+        assert_eq!(findings[0].rule_id, "state-resource-leak");
     }
 }
