@@ -29,6 +29,11 @@ pub static RULES: &[LabelRule] = &[
     },
     // ───────── Sanitizers ──────────
     LabelRule {
+        matchers: &["JSON.parse"],
+        label: DataLabel::Sanitizer(Cap::JSON_PARSE),
+        case_sensitive: false,
+    },
+    LabelRule {
         matchers: &["encodeURIComponent", "encodeURI"],
         label: DataLabel::Sanitizer(Cap::URL_ENCODE),
         case_sensitive: false,
@@ -91,9 +96,13 @@ pub static RULES: &[LabelRule] = &[
             "child_process.exec",
             "child_process.execSync",
             "child_process.spawn",
+            // Bare forms from destructured imports:
+            //   const { exec, execSync } = require('child_process')
+            "exec",
+            "execSync",
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
-        case_sensitive: false,
+        case_sensitive: true,
     },
     LabelRule {
         matchers: &[

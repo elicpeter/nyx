@@ -25,12 +25,6 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
-    // Bounded formatting/string ops
-    LabelRule {
-        matchers: &["snprintf", "strncpy", "strncat"],
-        label: DataLabel::Sanitizer(Cap::all()),
-        case_sensitive: false,
-    },
     // Type conversion sanitizers
     LabelRule {
         matchers: &[
