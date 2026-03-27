@@ -67,7 +67,9 @@ function getReadableFocusRatio(
   const renderedWidth = Math.max(1, Math.abs(rightEdge.x - center.x) * 2);
   const renderedHeight = Math.max(1, Math.abs(bottomEdge.y - center.y) * 2);
   const totalLines =
-    node.labelLines.length + node.detailLines.length + node.sublabelLines.length;
+    node.labelLines.length +
+    node.detailLines.length +
+    node.sublabelLines.length;
   const maxLineChars = Math.max(
     1,
     ...node.labelLines.map((line) => line.length),
@@ -293,11 +295,7 @@ export function SigmaGraph({
     const nodeDisplay = renderer.getNodeDisplayData(selectedNodeKey);
     if (!nodeDisplay) return;
     const camera = renderer.getCamera();
-    const targetRatio = getReadableFocusRatio(
-      renderer,
-      graph,
-      selectedNodeKey,
-    );
+    const targetRatio = getReadableFocusRatio(renderer, graph, selectedNodeKey);
     void camera.animate(
       { x: nodeDisplay.x, y: nodeDisplay.y, ratio: targetRatio },
       { duration: 240 },

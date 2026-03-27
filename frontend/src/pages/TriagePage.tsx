@@ -371,9 +371,12 @@ export function TriagePage() {
   const triageExport = useTriageExport();
   const triageImport = useTriageImport();
 
-  const findings = findingsPage?.findings || [];
-  const auditEntries = auditData?.entries || [];
-  const suppressionRules = suppressionData?.rules || [];
+  const findings = useMemo(() => findingsPage?.findings ?? [], [findingsPage]);
+  const auditEntries = useMemo(() => auditData?.entries ?? [], [auditData]);
+  const suppressionRules = useMemo(
+    () => suppressionData?.rules ?? [],
+    [suppressionData],
+  );
 
   // Compute summary stats
   const { stateCounts, totalCount, needsAttention, openBySev, topRules } =

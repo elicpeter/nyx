@@ -1,15 +1,15 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const frontendDir = join(scriptDir, "..");
-const repoRoot = join(frontendDir, "..");
-const aboutToml = join(repoRoot, "about.toml");
-const frontendPackageJson = join(frontendDir, "package.json");
+const frontendDir = join(scriptDir, '..');
+const repoRoot = join(frontendDir, '..');
+const aboutToml = join(repoRoot, 'about.toml');
+const frontendPackageJson = join(frontendDir, 'package.json');
 
-const aboutContents = readFileSync(aboutToml, "utf8");
+const aboutContents = readFileSync(aboutToml, 'utf8');
 const acceptedBlock = aboutContents.match(/accepted\s*=\s*\[([\s\S]*?)\]/);
 
 if (!acceptedBlock) {
@@ -26,7 +26,7 @@ if (acceptedLicenses.length === 0) {
   process.exit(1);
 }
 
-const frontendPackage = JSON.parse(readFileSync(frontendPackageJson, "utf8"));
+const frontendPackage = JSON.parse(readFileSync(frontendPackageJson, 'utf8'));
 const frontendLicense = frontendPackage.license;
 
 if (!frontendLicense) {
@@ -44,18 +44,18 @@ if (!acceptedLicenses.includes(frontendLicense)) {
 }
 
 const result = spawnSync(
-  "./node_modules/.bin/license-checker-rseidelsohn",
+  './node_modules/.bin/license-checker-rseidelsohn',
   [
-    "--start",
-    ".",
-    "--excludePrivatePackages",
-    "--onlyAllow",
-    acceptedLicenses.join(";"),
-    "--summary",
+    '--start',
+    '.',
+    '--excludePrivatePackages',
+    '--onlyAllow',
+    acceptedLicenses.join(';'),
+    '--summary',
   ],
   {
     cwd: frontendDir,
-    stdio: "inherit",
+    stdio: 'inherit',
   },
 );
 

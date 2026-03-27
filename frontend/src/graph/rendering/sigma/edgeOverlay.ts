@@ -19,12 +19,7 @@ export interface GraphInteractionState {
 
 const MIN_NODE_TEXT_WIDTH = 58;
 const MIN_NODE_TEXT_HEIGHT = 18;
-const DETAIL_EDGE_LABEL_KINDS = new Set([
-  'True',
-  'False',
-  'Back',
-  'Exception',
-]);
+const DETAIL_EDGE_LABEL_KINDS = new Set(['True', 'False', 'Back', 'Exception']);
 
 export function buildInteractionState(
   graph: MultiDirectedGraph<SigmaNodeAttributes, SigmaEdgeAttributes>,
@@ -519,19 +514,17 @@ function getLabelPlacement(
     const segmentLength = measureSegmentLength(start, end);
     if (segmentLength <= 0) continue;
 
-    if (traversed + segmentLength >= targetDistance || index === points.length - 1) {
+    if (
+      traversed + segmentLength >= targetDistance ||
+      index === points.length - 1
+    ) {
       const distanceOnSegment = Math.max(0, targetDistance - traversed);
       const t = Math.min(1, distanceOnSegment / segmentLength);
       const directionX = (end.x - start.x) / segmentLength;
       const directionY = (end.y - start.y) / segmentLength;
       const normalX = -directionY;
       const normalY = directionX;
-      const offset =
-        edgeKind === 'False'
-          ? -10
-          : edgeKind === 'True'
-            ? 10
-            : 8;
+      const offset = edgeKind === 'False' ? -10 : edgeKind === 'True' ? 10 : 8;
 
       return {
         x: start.x + (end.x - start.x) * t + normalX * offset,

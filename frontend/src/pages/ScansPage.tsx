@@ -54,7 +54,7 @@ function ScanProgress({
       ? data.files_parsed
       : data.stage === 'analyzing' || data.stage === 'post_processing'
         ? data.files_analyzed
-      : data.stage === 'complete'
+        : data.stage === 'complete'
           ? total
           : 0;
   const pct = Math.min(100, (processed / total) * 100);

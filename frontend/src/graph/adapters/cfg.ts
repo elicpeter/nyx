@@ -24,8 +24,8 @@ function getCfgEdgePriority(kind: string): number {
 export function formatCfgNodeLabel(node: CfgNodeView): string {
   const summary =
     node.kind === 'Call'
-      ? node.callee ?? node.defines
-      : node.defines ?? node.callee;
+      ? (node.callee ?? node.defines)
+      : (node.defines ?? node.callee);
 
   if (summary) return `${node.kind}: ${truncate(normalizeText(summary), 56)}`;
   return node.kind;
