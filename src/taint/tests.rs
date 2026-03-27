@@ -181,15 +181,7 @@ fn env_to_arg_is_flagged() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(findings.len(), 1); // exactly one unsanitised Source→Sink
 }
@@ -219,15 +211,7 @@ fn taint_through_if_else() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Both branches have findings: the true branch uses unsanitized `x`,
     // the else branch uses `safe` which was sanitized with HTML_ESCAPE
@@ -257,15 +241,7 @@ fn taint_through_while_loop() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(findings.len(), 1);
 }
 
@@ -292,15 +268,7 @@ fn taint_killed_by_matching_sanitizer() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert!(
         findings.is_empty(),
         "matching sanitizer should kill the taint"
@@ -330,15 +298,7 @@ fn wrong_sanitizer_preserves_taint() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -368,15 +328,7 @@ fn taint_breaks_out_of_loop() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(findings.len(), 1);
 }
 
@@ -406,15 +358,7 @@ fn test_two_sources_one_sanitised() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -448,15 +392,7 @@ fn test_two_sources_wrong_sanitiser_both_flagged() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert_eq!(
         findings.len(),
         2,
@@ -485,15 +421,7 @@ fn test_should_not_panic_on_empty_function() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     assert!(findings.is_empty());
 }
 
@@ -994,15 +922,7 @@ fn sanitizer_strips_only_matching_bits() {
 
     let file_cfg = parse_rust(src);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(
         findings.len(),
@@ -1028,15 +948,7 @@ fn multiple_sanitizers_strip_all_bits() {
 
     let file_cfg = parse_rust(src);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert!(
         findings.is_empty(),
@@ -1057,15 +969,7 @@ fn taint_through_variable_reassignment() {
 
     let file_cfg = parse_rust(src);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(
         findings.len(),
@@ -1087,15 +991,7 @@ fn untainted_variable_at_sink_is_safe() {
 
     let file_cfg = parse_rust(src);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert!(
         findings.is_empty(),
@@ -1178,15 +1074,7 @@ fn empty_global_summaries_same_as_none() {
     let file_cfg = parse_rust(src);
     let summaries = &file_cfg.summaries;
 
-    let findings_none = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings_none = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
     let empty = GlobalSummaries::new();
     let findings_empty = analyse_file(
         &file_cfg,
@@ -1219,15 +1107,7 @@ fn taint_not_introduced_by_non_source_function() {
 
     let file_cfg = parse_rust(src);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert!(
         findings.is_empty(),
@@ -1383,11 +1263,7 @@ fn multiple_cross_file_sources_one_sanitised() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Parse source bytes for any supported language → FileCfg
-fn parse_lang(
-    src: &[u8],
-    slug: &str,
-    ts_lang: tree_sitter::Language,
-) -> FileCfg {
+fn parse_lang(src: &[u8], slug: &str, ts_lang: tree_sitter::Language) -> FileCfg {
     use crate::cfg::build_cfg;
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&ts_lang).unwrap();
@@ -1481,15 +1357,7 @@ fn go_source_to_sink() {
     let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
     let file_cfg = parse_lang(src, "go", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Go,
-        "test.go",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Go, "test.go", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1539,15 +1407,7 @@ fn cpp_source_to_sink() {
     let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
     let file_cfg = parse_lang(src, "cpp", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Cpp,
-        "test.cpp",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1562,15 +1422,7 @@ fn php_source_to_sink() {
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
     let file_cfg = parse_lang(src, "php", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Php,
-        "test.php",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1586,15 +1438,7 @@ fn php_echo_xss() {
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
     let file_cfg = parse_lang(src, "php", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Php,
-        "test.php",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1609,15 +1453,7 @@ fn php_echo_simple_var() {
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
     let file_cfg = parse_lang(src, "php", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Php,
-        "test.php",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -1632,15 +1468,7 @@ fn php_echo_safe_literal() {
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
     let file_cfg = parse_lang(src, "php", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Php,
-        "test.php",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
     assert_eq!(
         findings.len(),
         0,
@@ -1654,15 +1482,7 @@ fn ruby_source_to_sink() {
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
     let file_cfg = parse_lang(src, "ruby", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Ruby,
-        "test.rb",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
     assert_eq!(
         findings.len(),
         1,
@@ -2699,15 +2519,7 @@ fn validate_and_early_return() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Validated findings are now suppressed — validate() guard means the
     // sink is on the safe path, so no finding should be emitted.
@@ -2740,15 +2552,7 @@ fn validate_in_if_else_path_validated() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Validated findings are now suppressed — sink is in the validated
     // branch, so no finding should be emitted.
@@ -2778,15 +2582,7 @@ fn sink_on_failed_validation_branch() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(findings.len(), 1, "should detect taint flow to sink");
     assert!(
@@ -2822,15 +2618,7 @@ fn contradictory_null_check_pruned() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // The inner branch is infeasible, and the arg "dangerous" is a string
     // literal (not tainted), so there should be no findings.
@@ -2869,15 +2657,7 @@ fn sanitize_one_branch_no_regression() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Both branches produce findings: the true branch uses unsanitized `x`,
     // the else branch uses `safe` (HTML_ESCAPE sanitizer vs SHELL_ESCAPE sink).
@@ -2929,15 +2709,7 @@ fn path_state_budget_graceful() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Should still detect the flow — truncation shouldn't cause false negatives.
     assert_eq!(
@@ -2972,15 +2744,7 @@ fn unknown_predicate_not_pruned() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Comparison is not in the whitelist — the path should NOT be pruned.
     assert_eq!(
@@ -3016,15 +2780,7 @@ fn multi_var_predicate_not_pruned() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Note: y.is_none() condition references `y` and `is_none` — two idents.
     // Wait, `is_none` is a method — collect_idents finds `y` and `is_none` as
@@ -3562,15 +3318,7 @@ fn taint_origin_preserved_through_assignment() {
     let file_cfg = parse_rust(src);
     let the_cfg = &file_cfg.first_body().graph;
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(findings.len(), 1);
     let f = &findings[0];
@@ -3608,15 +3356,7 @@ fn taint_origin_preserved_through_branch_merge() {
     let file_cfg = parse_rust(src);
     let the_cfg = &file_cfg.first_body().graph;
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert!(!findings.is_empty());
     for f in &findings {
@@ -3647,15 +3387,7 @@ fn assert_ssa_integration(src: &[u8]) {
     let summaries = &file_cfg.summaries;
 
     // High-level path (per-body analysis)
-    let high_level = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let high_level = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Direct SSA path — use the first function body (fn main), not top-level
     let body = if file_cfg.bodies.len() > 1 {
@@ -3789,15 +3521,7 @@ fn integ_php_echo_simple_var() {
     let entry = file_cfg.first_body().entry;
     let summaries = &file_cfg.summaries;
 
-    let high_level = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Php,
-        "test.php",
-        &[],
-        None,
-    );
+    let high_level = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
 
     let interner = SymbolInterner::from_cfg(the_cfg);
     let ssa = crate::ssa::lower_to_ssa(the_cfg, entry, None, true).expect("SSA lowering");
@@ -4591,15 +4315,7 @@ fn ssa_validation_targets_specific_var() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // config flows to a sink; only x was validated, so config should NOT be validated
     assert!(!findings.is_empty(), "should detect taint flow for config");
@@ -4645,15 +4361,7 @@ fn ssa_phi_path_sensitive_both_branches_validated() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // Validated findings are now suppressed — sink is in the validated
     // branch, so no finding should be emitted.
@@ -4683,15 +4391,7 @@ fn ssa_phi_path_sensitive_one_branch_not_validated() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     assert_eq!(findings.len(), 1, "should detect taint flow");
     assert!(
@@ -4775,15 +4475,7 @@ fn ssa_reassignment_kills_taint_go() {
     let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
     let file_cfg = parse_lang(src, "go", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Go,
-        "test.go",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Go, "test.go", &[], None);
     assert!(
         findings.is_empty(),
         "Go: reassignment to constant should kill taint, got {} findings",
@@ -4819,15 +4511,7 @@ fn ssa_reassignment_kills_taint_php() {
     let lang = tree_sitter::Language::from(tree_sitter_php::LANGUAGE_PHP);
     let file_cfg = parse_lang(src, "php", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Php,
-        "test.php",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Php, "test.php", &[], None);
     assert!(
         findings.is_empty(),
         "PHP: reassignment to constant should kill taint, got {} findings",
@@ -4841,15 +4525,7 @@ fn ssa_reassignment_kills_taint_ruby() {
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
     let file_cfg = parse_lang(src, "ruby", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Ruby,
-        "test.rb",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
     assert!(
         findings.is_empty(),
         "Ruby: reassignment to constant should kill taint, got {} findings",
@@ -4877,15 +4553,7 @@ fn ssa_reassignment_kills_taint_cpp() {
     let lang = tree_sitter::Language::from(tree_sitter_cpp::LANGUAGE);
     let file_cfg = parse_lang(src, "cpp", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Cpp,
-        "test.cpp",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Cpp, "test.cpp", &[], None);
     assert!(
         findings.is_empty(),
         "C++: reassignment to constant should kill taint, got {} findings",
@@ -4943,15 +4611,7 @@ fn ssa_compound_preserves_taint_go() {
     let lang = tree_sitter::Language::from(tree_sitter_go::LANGUAGE);
     let file_cfg = parse_lang(src, "go", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Go,
-        "test.go",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Go, "test.go", &[], None);
     assert!(
         !findings.is_empty(),
         "Go: compound assignment should preserve taint"
@@ -5092,15 +4752,7 @@ fn ruby_type_check_guard_suppresses_taint() {
     let lang = tree_sitter::Language::from(tree_sitter_ruby::LANGUAGE);
     let file_cfg = parse_lang(src, "ruby", lang);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Ruby,
-        "test.rb",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Ruby, "test.rb", &[], None);
     assert!(
         findings.is_empty(),
         "Ruby: is_a?(Integer) type guard should suppress taint finding, got {} findings",
@@ -5222,15 +4874,7 @@ fn phi_validated_must_requires_all_paths() {
 
     let file_cfg = build_cfg(&tree, src, "rust", "test.rs", None);
     let summaries = &file_cfg.summaries;
-    let findings = analyse_file(
-        &file_cfg,
-        summaries,
-        None,
-        Lang::Rust,
-        "test.rs",
-        &[],
-        None,
-    );
+    let findings = analyse_file(&file_cfg, summaries, None, Lang::Rust, "test.rs", &[], None);
 
     // x is validated on only one branch, so the phi merge must NOT promote
     // to validated_must. The sink should still fire.
@@ -5283,7 +4927,10 @@ fn inline_return_constant_with_internal_source_produces_no_finding() {
         0,
         "C-1: transform() returns constant — internal source must not leak, got {} findings: {:?}",
         findings.len(),
-        findings.iter().map(|f| format!("{}→{}", f.source.index(), f.sink.index())).collect::<Vec<_>>()
+        findings
+            .iter()
+            .map(|f| format!("{}→{}", f.source.index(), f.sink.index()))
+            .collect::<Vec<_>>()
     );
 }
 

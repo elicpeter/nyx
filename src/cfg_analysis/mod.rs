@@ -209,5 +209,8 @@ pub(crate) fn is_entry_point_func(func_name: &str, lang: Lang) -> bool {
 
 /// Helper: check if a node is a sink.
 pub(crate) fn is_sink(info: &NodeInfo) -> bool {
-    info.taint.labels.iter().any(|l| matches!(l, DataLabel::Sink(_)))
+    info.taint
+        .labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Sink(_)))
 }

@@ -13,8 +13,8 @@ use crate::labels::{Cap, DataLabel};
 use crate::ssa::ir::*;
 use crate::ssa::{self, OptimizeResult};
 use crate::state::symbol::SymbolInterner;
-use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
 use crate::summary::GlobalSummaries;
+use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
 use crate::symbol::{FuncKey, Lang};
 use crate::symex::state::SymbolicState;
 use crate::taint::domain::VarTaint;
@@ -174,11 +174,7 @@ impl CfgGraphView {
     /// Build a CFG view for a single function by looking up its dedicated
     /// `BodyCfg` in the `FileCfg`.  This replaces the old BFS-filter approach
     /// that walked the supergraph filtered by `enclosing_func`.
-    pub fn from_cfg_function(
-        file_cfg: &FileCfg,
-        func_name: &str,
-        bytes: &[u8],
-    ) -> Option<Self> {
+    pub fn from_cfg_function(file_cfg: &FileCfg, func_name: &str, bytes: &[u8]) -> Option<Self> {
         // Find the BodyCfg whose meta.name matches the requested function.
         let body = file_cfg
             .bodies
@@ -1107,7 +1103,10 @@ function demo() {
         let analysis = analyse_file(&path, &config).expect("file should analyse");
         let (ssa, opt) =
             analyse_function_ssa(&analysis, "demo").expect("function should lower to SSA");
-        let body = analysis.file_cfg.bodies.iter()
+        let body = analysis
+            .file_cfg
+            .bodies
+            .iter()
             .find(|b| b.meta.name.as_deref() == Some("demo"))
             .expect("should find demo function body");
         let (events, _entry_states, exit_states) = analyse_function_taint(
@@ -1159,7 +1158,10 @@ function sink() {
         let analysis = analyse_file(&path, &config).expect("file should analyse");
         let (ssa, opt) =
             analyse_function_ssa(&analysis, "sink").expect("function should lower to SSA");
-        let body = analysis.file_cfg.bodies.iter()
+        let body = analysis
+            .file_cfg
+            .bodies
+            .iter()
             .find(|b| b.meta.name.as_deref() == Some("sink"))
             .expect("should find sink function body");
         let (events, _entry_states, exit_states) = analyse_function_taint(
@@ -1175,7 +1177,10 @@ function sink() {
         assert!(!view.cross_file_context);
         assert!(!view.ssa_summaries_available);
         // The local analysis should still find the taint event
-        assert!(!view.events.is_empty(), "local taint should still find events");
+        assert!(
+            !view.events.is_empty(),
+            "local taint should still find events"
+        );
     }
 
     #[test]
@@ -1197,7 +1202,10 @@ function consume() {
         let analysis = analyse_file(&path, &config).expect("file should analyse");
         let (ssa, opt) =
             analyse_function_ssa(&analysis, "consume").expect("function should lower to SSA");
-        let body = analysis.file_cfg.bodies.iter()
+        let body = analysis
+            .file_cfg
+            .bodies
+            .iter()
             .find(|b| b.meta.name.as_deref() == Some("consume"))
             .expect("should find consume function body");
 
@@ -1279,12 +1287,9 @@ async function recentAuditLogs() {
 
         let config = Config::default();
         let analysis = analyse_file(&path, &config).expect("file should analyse");
-        let view = CfgGraphView::from_cfg_function(
-            &analysis.file_cfg,
-            "writeAuditLog",
-            &analysis.bytes,
-        )
-        .expect("function view should exist");
+        let view =
+            CfgGraphView::from_cfg_function(&analysis.file_cfg, "writeAuditLog", &analysis.bytes)
+                .expect("function view should exist");
 
         assert!(
             !view.nodes.is_empty(),

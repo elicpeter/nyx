@@ -605,9 +605,18 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            ast: AstMeta { span: (0, 10), ..Default::default() },
-            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
-            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            ast: AstMeta {
+                span: (0, 10),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -634,9 +643,18 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            ast: AstMeta { span: (10, 20), ..Default::default() },
-            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
-            call: CallMeta { callee: Some("fclose".into()), ..Default::default() },
+            ast: AstMeta {
+                span: (10, 20),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fclose".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -662,9 +680,18 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            ast: AstMeta { span: (20, 30), ..Default::default() },
-            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
-            call: CallMeta { callee: Some("fclose".into()), ..Default::default() },
+            ast: AstMeta {
+                span: (20, 30),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fclose".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -691,9 +718,18 @@ mod tests {
 
         let info = NodeInfo {
             kind: StmtKind::Call,
-            ast: AstMeta { span: (30, 40), ..Default::default() },
-            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
-            call: CallMeta { callee: Some("fread".into()), ..Default::default() },
+            ast: AstMeta {
+                span: (30, 40),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fread".into()),
+                ..Default::default()
+            },
             ..Default::default()
         };
 

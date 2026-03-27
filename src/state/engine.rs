@@ -204,7 +204,10 @@ mod tests {
     use petgraph::Graph;
 
     fn make_node(kind: StmtKind) -> NodeInfo {
-        NodeInfo { kind, ..Default::default() }
+        NodeInfo {
+            kind,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -216,14 +219,26 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
-            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let close_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
-            call: CallMeta { callee: Some("fclose".into()), ..Default::default() },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fclose".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -269,15 +284,27 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
-            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let if_node = cfg.add_node(make_node(StmtKind::If));
         let close_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
-            call: CallMeta { callee: Some("fclose".into()), ..Default::default() },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fclose".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let no_close = cfg.add_node(make_node(StmtKind::Seq));

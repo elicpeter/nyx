@@ -702,7 +702,10 @@ fn ssa_summary_backward_compat_missing_return_abstract() {
 
 /// Helper: build a minimal CalleeSsaBody with a given number of blocks.
 #[allow(dead_code)] // used by tests below
-fn make_callee_body(num_blocks: usize, param_count: usize) -> crate::taint::ssa_transfer::CalleeSsaBody {
+fn make_callee_body(
+    num_blocks: usize,
+    param_count: usize,
+) -> crate::taint::ssa_transfer::CalleeSsaBody {
     use crate::ssa::ir::*;
     use smallvec::smallvec;
 
@@ -765,8 +768,7 @@ fn make_callee_body(num_blocks: usize, param_count: usize) -> crate::taint::ssa_
 fn callee_body_serde_round_trip_empty() {
     let body = make_callee_body(1, 0);
     let json = serde_json::to_string(&body).unwrap();
-    let back: crate::taint::ssa_transfer::CalleeSsaBody =
-        serde_json::from_str(&json).unwrap();
+    let back: crate::taint::ssa_transfer::CalleeSsaBody = serde_json::from_str(&json).unwrap();
     assert_eq!(back.param_count, 0);
     assert_eq!(back.ssa.blocks.len(), 1);
     assert!(back.node_meta.is_empty());
@@ -776,8 +778,7 @@ fn callee_body_serde_round_trip_empty() {
 fn callee_body_serde_round_trip_multi_block() {
     let body = make_callee_body(5, 2);
     let json = serde_json::to_string(&body).unwrap();
-    let back: crate::taint::ssa_transfer::CalleeSsaBody =
-        serde_json::from_str(&json).unwrap();
+    let back: crate::taint::ssa_transfer::CalleeSsaBody = serde_json::from_str(&json).unwrap();
     assert_eq!(back.param_count, 2);
     assert_eq!(back.ssa.blocks.len(), 5);
     // Verify block structure survived round-trip
@@ -787,8 +788,8 @@ fn callee_body_serde_round_trip_multi_block() {
 
 #[test]
 fn callee_body_serde_round_trip_with_node_meta() {
-    use crate::taint::ssa_transfer::CrossFileNodeMeta;
     use crate::labels::{Cap, DataLabel};
+    use crate::taint::ssa_transfer::CrossFileNodeMeta;
 
     let mut body = make_callee_body(2, 1);
     body.node_meta.insert(
@@ -807,8 +808,7 @@ fn callee_body_serde_round_trip_with_node_meta() {
     );
 
     let json = serde_json::to_string(&body).unwrap();
-    let back: crate::taint::ssa_transfer::CalleeSsaBody =
-        serde_json::from_str(&json).unwrap();
+    let back: crate::taint::ssa_transfer::CalleeSsaBody = serde_json::from_str(&json).unwrap();
 
     assert_eq!(back.node_meta.len(), 2);
     let meta0 = &back.node_meta[&0];
@@ -823,11 +823,13 @@ fn callee_body_serde_node_meta_skipped_when_empty() {
     // Verify #[serde(skip_serializing_if)] works: empty node_meta not in JSON
     let body = make_callee_body(1, 0);
     let json = serde_json::to_string(&body).unwrap();
-    assert!(!json.contains("node_meta"), "empty node_meta should be omitted from JSON");
+    assert!(
+        !json.contains("node_meta"),
+        "empty node_meta should be omitted from JSON"
+    );
 
     // But it should deserialize fine from JSON without node_meta field
-    let back: crate::taint::ssa_transfer::CalleeSsaBody =
-        serde_json::from_str(&json).unwrap();
+    let back: crate::taint::ssa_transfer::CalleeSsaBody = serde_json::from_str(&json).unwrap();
     assert!(back.node_meta.is_empty());
 }
 
@@ -840,13 +842,55 @@ fn callee_body_serde_with_all_ssa_op_variants() {
     // Replace the single block's body with all SsaOp variants
     let node = petgraph::graph::NodeIndex::new(0);
     body.ssa.blocks[0].body = vec![
-        SsaInst { value: SsaValue(0), op: SsaOp::Const(Some("hello".into())), cfg_node: node, var_name: None, span: (0, 5) },
-        SsaInst { value: SsaValue(1), op: SsaOp::Const(None), cfg_node: node, var_name: None, span: (0, 0) },
-        SsaInst { value: SsaValue(2), op: SsaOp::Source, cfg_node: node, var_name: Some("src".into()), span: (6, 10) },
-        SsaInst { value: SsaValue(3), op: SsaOp::Param { index: 0 }, cfg_node: node, var_name: Some("p0".into()), span: (0, 0) },
-        SsaInst { value: SsaValue(4), op: SsaOp::CatchParam, cfg_node: node, var_name: None, span: (0, 0) },
-        SsaInst { value: SsaValue(5), op: SsaOp::Nop, cfg_node: node, var_name: None, span: (0, 0) },
-        SsaInst { value: SsaValue(6), op: SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]), cfg_node: node, var_name: None, span: (0, 0) },
+        SsaInst {
+            value: SsaValue(0),
+            op: SsaOp::Const(Some("hello".into())),
+            cfg_node: node,
+            var_name: None,
+            span: (0, 5),
+        },
+        SsaInst {
+            value: SsaValue(1),
+            op: SsaOp::Const(None),
+            cfg_node: node,
+            var_name: None,
+            span: (0, 0),
+        },
+        SsaInst {
+            value: SsaValue(2),
+            op: SsaOp::Source,
+            cfg_node: node,
+            var_name: Some("src".into()),
+            span: (6, 10),
+        },
+        SsaInst {
+            value: SsaValue(3),
+            op: SsaOp::Param { index: 0 },
+            cfg_node: node,
+            var_name: Some("p0".into()),
+            span: (0, 0),
+        },
+        SsaInst {
+            value: SsaValue(4),
+            op: SsaOp::CatchParam,
+            cfg_node: node,
+            var_name: None,
+            span: (0, 0),
+        },
+        SsaInst {
+            value: SsaValue(5),
+            op: SsaOp::Nop,
+            cfg_node: node,
+            var_name: None,
+            span: (0, 0),
+        },
+        SsaInst {
+            value: SsaValue(6),
+            op: SsaOp::Assign(smallvec![SsaValue(0), SsaValue(1)]),
+            cfg_node: node,
+            var_name: None,
+            span: (0, 0),
+        },
         SsaInst {
             value: SsaValue(7),
             op: SsaOp::Call {
@@ -859,26 +903,30 @@ fn callee_body_serde_with_all_ssa_op_variants() {
             span: (11, 20),
         },
     ];
-    body.ssa.blocks[0].phis = vec![
-        SsaInst {
-            value: SsaValue(8),
-            op: SsaOp::Phi(smallvec![(BlockId(0), SsaValue(0)), (BlockId(1), SsaValue(1))]),
-            cfg_node: node,
-            var_name: None,
-            span: (0, 0),
-        },
-    ];
+    body.ssa.blocks[0].phis = vec![SsaInst {
+        value: SsaValue(8),
+        op: SsaOp::Phi(smallvec![
+            (BlockId(0), SsaValue(0)),
+            (BlockId(1), SsaValue(1))
+        ]),
+        cfg_node: node,
+        var_name: None,
+        span: (0, 0),
+    }];
 
     let json = serde_json::to_string(&body).unwrap();
-    let back: crate::taint::ssa_transfer::CalleeSsaBody =
-        serde_json::from_str(&json).unwrap();
+    let back: crate::taint::ssa_transfer::CalleeSsaBody = serde_json::from_str(&json).unwrap();
 
     assert_eq!(back.ssa.blocks[0].body.len(), 8);
     assert_eq!(back.ssa.blocks[0].phis.len(), 1);
 
     // Spot check: Call op preserved
     match &back.ssa.blocks[0].body[7].op {
-        SsaOp::Call { callee, args, receiver } => {
+        SsaOp::Call {
+            callee,
+            args,
+            receiver,
+        } => {
             assert_eq!(callee, "foo");
             assert_eq!(args.len(), 2);
             assert_eq!(*receiver, Some(SsaValue(2)));
@@ -897,8 +945,8 @@ fn callee_body_serde_with_all_ssa_op_variants() {
 
 #[test]
 fn callee_body_serde_with_branch_terminator() {
-    use crate::ssa::ir::*;
     use crate::constraint::lower::ConditionExpr;
+    use crate::ssa::ir::*;
 
     let mut body = make_callee_body(3, 0);
     // Set a Branch terminator with a condition
@@ -906,17 +954,19 @@ fn callee_body_serde_with_branch_terminator() {
         cond: petgraph::graph::NodeIndex::new(0),
         true_blk: BlockId(1),
         false_blk: BlockId(2),
-        condition: Some(Box::new(ConditionExpr::BoolTest {
-            var: SsaValue(0),
-        })),
+        condition: Some(Box::new(ConditionExpr::BoolTest { var: SsaValue(0) })),
     };
 
     let json = serde_json::to_string(&body).unwrap();
-    let back: crate::taint::ssa_transfer::CalleeSsaBody =
-        serde_json::from_str(&json).unwrap();
+    let back: crate::taint::ssa_transfer::CalleeSsaBody = serde_json::from_str(&json).unwrap();
 
     match &back.ssa.blocks[0].terminator {
-        Terminator::Branch { true_blk, false_blk, condition, .. } => {
+        Terminator::Branch {
+            true_blk,
+            false_blk,
+            condition,
+            ..
+        } => {
             assert_eq!(*true_blk, BlockId(1));
             assert_eq!(*false_blk, BlockId(2));
             assert!(condition.is_some());
@@ -1014,12 +1064,7 @@ fn global_summaries_resolve_callee_body_exact_match() {
     gs.insert_body(key.clone(), make_callee_body(3, 1));
 
     // Resolve with matching lang/name/arity
-    let resolved = gs.resolve_callee_body(
-        crate::symbol::Lang::Python,
-        "helper",
-        Some(1),
-        "app.py",
-    );
+    let resolved = gs.resolve_callee_body(crate::symbol::Lang::Python, "helper", Some(1), "app.py");
     assert!(resolved.is_some());
     assert_eq!(resolved.unwrap().ssa.blocks.len(), 3);
 }
@@ -1028,12 +1073,8 @@ fn global_summaries_resolve_callee_body_exact_match() {
 fn global_summaries_resolve_callee_body_not_found() {
     let gs = GlobalSummaries::new();
 
-    let resolved = gs.resolve_callee_body(
-        crate::symbol::Lang::Python,
-        "missing",
-        Some(1),
-        "app.py",
-    );
+    let resolved =
+        gs.resolve_callee_body(crate::symbol::Lang::Python, "missing", Some(1), "app.py");
     assert!(resolved.is_none());
 }
 
@@ -1061,13 +1102,11 @@ fn global_summaries_resolve_callee_body_ambiguous_returns_none() {
     gs.insert_body(key2.clone(), make_callee_body(4, 1));
 
     // Resolution from a third namespace → ambiguous → None
-    let resolved = gs.resolve_callee_body(
-        crate::symbol::Lang::Python,
-        "helper",
-        Some(1),
-        "c.py",
+    let resolved = gs.resolve_callee_body(crate::symbol::Lang::Python, "helper", Some(1), "c.py");
+    assert!(
+        resolved.is_none(),
+        "ambiguous resolution should return None"
     );
-    assert!(resolved.is_none(), "ambiguous resolution should return None");
 }
 
 #[test]
@@ -1093,12 +1132,7 @@ fn global_summaries_resolve_callee_body_namespace_disambiguates() {
     gs.insert_body(key2.clone(), make_callee_body(4, 1));
 
     // Resolution from a.py → namespace match → key1 (2 blocks)
-    let resolved = gs.resolve_callee_body(
-        crate::symbol::Lang::Python,
-        "helper",
-        Some(1),
-        "a.py",
-    );
+    let resolved = gs.resolve_callee_body(crate::symbol::Lang::Python, "helper", Some(1), "a.py");
     assert!(resolved.is_some());
     assert_eq!(resolved.unwrap().ssa.blocks.len(), 2);
 }
@@ -1115,25 +1149,26 @@ fn global_summaries_resolve_body_requires_body_present() {
         arity: Some(1),
     };
     gs.insert(key.clone(), make("helper", 0, 0, 0));
-    gs.insert_ssa(key.clone(), SsaFuncSummary {
-        param_to_return: vec![],
-        param_to_sink: vec![],
-        source_caps: crate::labels::Cap::empty(),
-        param_to_sink_param: vec![],
-        param_container_to_return: vec![],
-        param_to_container_store: vec![],
-        return_type: None,
-        return_abstract: None,
-        source_to_callback: vec![],
-    });
+    gs.insert_ssa(
+        key.clone(),
+        SsaFuncSummary {
+            param_to_return: vec![],
+            param_to_sink: vec![],
+            source_caps: crate::labels::Cap::empty(),
+            param_to_sink_param: vec![],
+            param_container_to_return: vec![],
+            param_to_container_store: vec![],
+            return_type: None,
+            return_abstract: None,
+            source_to_callback: vec![],
+        },
+    );
     // Don't insert body
 
     // Resolution finds the key but no body
-    let resolved = gs.resolve_callee_body(
-        crate::symbol::Lang::Python,
-        "helper",
-        Some(1),
-        "app.py",
+    let resolved = gs.resolve_callee_body(crate::symbol::Lang::Python, "helper", Some(1), "app.py");
+    assert!(
+        resolved.is_none(),
+        "should return None when key resolves but no body stored"
     );
-    assert!(resolved.is_none(), "should return None when key resolves but no body stored");
 }

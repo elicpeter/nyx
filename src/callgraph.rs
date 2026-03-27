@@ -213,8 +213,10 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                     // If the callee was qualified (e.g. "env::var"), prefer candidates
                     // whose namespace contains the qualifier prefix.
                     if qualified != leaf {
-                        let qualifier = &qualified[..qualified.len() - leaf.len()].trim_end_matches(|c| c == ':' || c == '.');
-                        let narrowed: Vec<_> = candidates.iter()
+                        let qualifier = &qualified[..qualified.len() - leaf.len()]
+                            .trim_end_matches(|c| c == ':' || c == '.');
+                        let narrowed: Vec<_> = candidates
+                            .iter()
                             .filter(|k| k.namespace.contains(qualifier))
                             .cloned()
                             .collect();
@@ -472,11 +474,17 @@ mod tests {
         // Two-segment normalization preserves one level of qualification.
         assert_eq!(normalize_callee_name("env::var"), "env::var");
         assert_eq!(normalize_callee_name("std::env::var"), "env::var");
-        assert_eq!(normalize_callee_name("std::process::Command"), "process::Command");
+        assert_eq!(
+            normalize_callee_name("std::process::Command"),
+            "process::Command"
+        );
         assert_eq!(normalize_callee_name("a::b::c"), "b::c");
         assert_eq!(normalize_callee_name("obj.method"), "obj.method");
         assert_eq!(normalize_callee_name("pkg.mod.func"), "mod.func");
-        assert_eq!(normalize_callee_name("http_client.send"), "http_client.send");
+        assert_eq!(
+            normalize_callee_name("http_client.send"),
+            "http_client.send"
+        );
         assert_eq!(normalize_callee_name("send"), "send");
         assert_eq!(normalize_callee_name("foo"), "foo");
         assert_eq!(normalize_callee_name(""), "");
@@ -1042,7 +1050,11 @@ mod tests {
 
         // The qualified name "http::send" disambiguates to src/http.rs::send
         let edges: Vec<_> = cg.graph.edges(caller_node).collect();
-        assert_eq!(edges.len(), 1, "qualified name should resolve the ambiguity");
+        assert_eq!(
+            edges.len(),
+            1,
+            "qualified name should resolve the ambiguity"
+        );
         assert_eq!(edges[0].target(), send_http_node);
         assert!(cg.unresolved_ambiguous.is_empty());
     }

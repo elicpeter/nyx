@@ -160,7 +160,11 @@ fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
         // Check the source text at this node's span for the acquired variable
         // appearing in a struct-field store context.
         let references_var = info.taint.uses.iter().any(|u| u == &acquired_var)
-            || info.taint.defines.as_ref().is_some_and(|d| d == &acquired_var);
+            || info
+                .taint
+                .defines
+                .as_ref()
+                .is_some_and(|d| d == &acquired_var);
 
         if references_var && start < end && end <= ctx.source_bytes.len() {
             let span_text = &ctx.source_bytes[start..end];
@@ -177,7 +181,12 @@ fn is_ownership_transferred(ctx: &AnalysisContext, acquire: NodeIndex) -> bool {
         // If the variable is truly redefined (not a field write), stop
         // following this path. A true redefinition is when `defines` matches
         // but the span doesn't contain `->` or `.field =` patterns.
-        if info.taint.defines.as_ref().is_some_and(|d| d == &acquired_var) {
+        if info
+            .taint
+            .defines
+            .as_ref()
+            .is_some_and(|d| d == &acquired_var)
+        {
             let is_field_write = if start < end && end <= ctx.source_bytes.len() {
                 let span_text = &ctx.source_bytes[start..end];
                 span_text.windows(2).any(|w| w == b"->") || has_dot_field_assignment(span_text)
@@ -354,7 +363,8 @@ impl CfgAnalysis for ResourceMisuse {
                 // Defer guarantees cleanup on all exit paths including early returns.
                 if let Some(acquired_var) = ctx.cfg[acquire].taint.defines.as_deref() {
                     let has_deferred_release = release_nodes.iter().any(|&r| {
-                        ctx.cfg[r].in_defer && ctx.cfg[r].taint.uses.iter().any(|u| u == acquired_var)
+                        ctx.cfg[r].in_defer
+                            && ctx.cfg[r].taint.uses.iter().any(|u| u == acquired_var)
                     });
                     if has_deferred_release {
                         continue;

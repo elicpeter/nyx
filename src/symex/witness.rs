@@ -508,8 +508,14 @@ mod tests {
     ) -> crate::cfg::NodeInfo {
         crate::cfg::NodeInfo {
             kind: StmtKind::Seq,
-            call: crate::cfg::CallMeta { callee, ..Default::default() },
-            taint: crate::cfg::TaintMeta { labels, ..Default::default() },
+            call: crate::cfg::CallMeta {
+                callee,
+                ..Default::default()
+            },
+            taint: crate::cfg::TaintMeta {
+                labels,
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -618,8 +624,7 @@ mod tests {
         let combined = Cap::CODE_EXEC | Cap::HTML_ESCAPE;
         let payload = witness_payload(combined);
         assert_eq!(
-            payload,
-            "require('child_process').execSync('id')",
+            payload, "require('child_process').execSync('id')",
             "CODE_EXEC should take priority over HTML_ESCAPE"
         );
     }

@@ -40,7 +40,8 @@ pub fn find_sink_nodes(cfg: &Cfg) -> Vec<NodeIndex> {
     cfg.node_indices()
         .filter(|&idx| {
             cfg[idx]
-                .taint.labels
+                .taint
+                .labels
                 .iter()
                 .any(|l| matches!(l, DataLabel::Sink(_)))
         })

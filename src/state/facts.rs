@@ -125,7 +125,8 @@ pub fn extract_findings(
             })
             .flat_map(|(_, ni)| {
                 let scope = ni.ast.enclosing_func.clone();
-                ni.taint.uses
+                ni.taint
+                    .uses
                     .iter()
                     .filter_map(move |v| interner.get_scoped(scope.as_deref(), v))
             })
@@ -219,7 +220,8 @@ pub fn extract_findings(
                     // fallthrough) with OPEN resources represent genuine leaks.
                     let returns_var = cfg[pred].kind == StmtKind::Return
                         && cfg[pred]
-                            .taint.uses
+                            .taint
+                            .uses
                             .iter()
                             .any(|u| interner.get_scoped(scope, u) == Some(sym));
                     if returns_var {
@@ -317,9 +319,7 @@ pub fn extract_findings(
                     rule_id: "state-resource-leak-possible".into(),
                     severity: Severity::Low,
                     span: acquire_span.unwrap_or(info.ast.span),
-                    message: format!(
-                        "resource `{var_name}` may not be closed on all paths"
-                    ),
+                    message: format!("resource `{var_name}` may not be closed on all paths"),
                     machine: "resource",
                     subject: Some(var_name.to_string()),
                     from_state: "open",
@@ -350,7 +350,8 @@ pub fn extract_findings(
                 continue;
             };
             if state.auth.auth_level == AuthLevel::Unauthed {
-                let callee_desc = sanitize_desc(info.call.callee.as_deref().unwrap_or("(sensitive op)"));
+                let callee_desc =
+                    sanitize_desc(info.call.callee.as_deref().unwrap_or("(sensitive op)"));
                 findings.push(StateFinding {
                     rule_id: "state-unauthed-access".into(),
                     severity: Severity::High,
@@ -475,7 +476,10 @@ mod tests {
     use std::collections::HashMap;
 
     fn make_node(kind: StmtKind) -> NodeInfo {
-        NodeInfo { kind, ..Default::default() }
+        NodeInfo {
+            kind,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -485,9 +489,18 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            ast: AstMeta { span: (10, 20), ..Default::default() },
-            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
-            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            ast: AstMeta {
+                span: (10, 20),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -518,14 +531,26 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
-            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let close_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
-            call: CallMeta { callee: Some("fclose".into()), ..Default::default() },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fclose".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -551,7 +576,10 @@ mod tests {
     fn make_func_node(kind: StmtKind, func: &str) -> NodeInfo {
         NodeInfo {
             kind,
-            ast: AstMeta { enclosing_func: Some(func.to_string()), ..Default::default() },
+            ast: AstMeta {
+                enclosing_func: Some(func.to_string()),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -564,15 +592,30 @@ mod tests {
         let entry = cfg.add_node(make_func_node(StmtKind::Entry, "f"));
         let call = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
-            ast: AstMeta { enclosing_func: Some("f".into()), ..Default::default() },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
+            ast: AstMeta {
+                enclosing_func: Some("f".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let ret = cfg.add_node(NodeInfo {
             kind: StmtKind::Return,
-            taint: TaintMeta { uses: vec!["x".into()], ..Default::default() },
-            ast: AstMeta { enclosing_func: Some("f".into()), ..Default::default() },
+            taint: TaintMeta {
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
+            ast: AstMeta {
+                enclosing_func: Some("f".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let exit = cfg.add_node(make_func_node(StmtKind::Exit, "f"));
@@ -609,15 +652,30 @@ mod tests {
         let entry = cfg.add_node(make_func_node(StmtKind::Entry, func));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            ast: AstMeta { span: (10, 20), enclosing_func: Some(func.into()) },
-            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
-            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            ast: AstMeta {
+                span: (10, 20),
+                enclosing_func: Some(func.into()),
+            },
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let ret = cfg.add_node(NodeInfo {
             kind: StmtKind::Return,
-            taint: TaintMeta { uses: vec!["f".into()], ..Default::default() },
-            ast: AstMeta { enclosing_func: Some(func.into()), ..Default::default() },
+            taint: TaintMeta {
+                uses: vec!["f".into()],
+                ..Default::default()
+            },
+            ast: AstMeta {
+                enclosing_func: Some(func.into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let exit = cfg.add_node(make_func_node(StmtKind::Exit, func));
@@ -654,14 +712,26 @@ mod tests {
         let entry = cfg.add_node(make_func_node(StmtKind::Entry, func));
         let open_node = cfg.add_node(NodeInfo {
             kind: StmtKind::Call,
-            ast: AstMeta { span: (10, 20), enclosing_func: Some(func.into()) },
-            taint: TaintMeta { defines: Some("f".into()), ..Default::default() },
-            call: CallMeta { callee: Some("fopen".into()), ..Default::default() },
+            ast: AstMeta {
+                span: (10, 20),
+                enclosing_func: Some(func.into()),
+            },
+            taint: TaintMeta {
+                defines: Some("f".into()),
+                ..Default::default()
+            },
+            call: CallMeta {
+                callee: Some("fopen".into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let ret = cfg.add_node(NodeInfo {
             kind: StmtKind::Return,
-            ast: AstMeta { enclosing_func: Some(func.into()), ..Default::default() },
+            ast: AstMeta {
+                enclosing_func: Some(func.into()),
+                ..Default::default()
+            },
             ..Default::default()
         });
         let exit = cfg.add_node(make_func_node(StmtKind::Exit, func));

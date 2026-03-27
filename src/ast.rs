@@ -74,17 +74,20 @@ fn build_taint_diag(
     let sink_point = byte_offset_to_point(tree, sink_byte);
     // For cross-body origins, prefer the preserved source_span over
     // indexing into the (possibly different) body's graph.
-    let source_byte = finding.source_span
+    let source_byte = finding
+        .source_span
         .unwrap_or_else(|| cfg_graph[finding.source].ast.span.0);
     let source_point = byte_offset_to_point(tree, source_byte);
 
     let source_callee = cfg_graph[finding.source]
-        .call.callee
+        .call
+        .callee
         .as_deref()
         .map(sanitize_desc)
         .unwrap_or_else(|| "(unknown)".into());
     let sink_callee = cfg_graph[finding.sink]
-        .call.callee
+        .call
+        .callee
         .as_deref()
         .map(sanitize_desc)
         .unwrap_or_else(|| "(unknown)".into());
@@ -624,96 +627,42 @@ impl<'a> ParsedFile<'a> {
         // ── CFG structural analyses (per body) ─────────────────────────
         let taint_active = global_summaries.is_some() || !taint_results.is_empty();
         for body in &self.file_cfg.bodies {
-        let body_taint: Vec<_> = taint_results.iter()
-            .filter(|f| f.body_id == body.meta.id)
-            .cloned()
-            .collect();
-        let cfg_ctx = cfg_analysis::AnalysisContext {
-            cfg: &body.graph,
-            entry: body.entry,
-            lang: caller_lang,
-            file_path: &self.source.file_path_str,
-            source_bytes: self.source.bytes,
-            func_summaries: self.local_summaries(),
-            global_summaries,
-            taint_findings: &body_taint,
-            analysis_rules: self.rules_ref(),
-            taint_active,
-        };
-        for cf in cfg_analysis::run_all(&cfg_ctx) {
-            let point = byte_offset_to_point(&self.source.tree, cf.span.0);
-            let cfg_confidence = Some(match cf.confidence {
-                cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
-                cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
-                cfg_analysis::Confidence::Low => crate::evidence::Confidence::Low,
-            });
-            out.push(Diag {
-                path: self.source.path.to_string_lossy().into_owned(),
-                line: point.row + 1,
-                col: point.column + 1,
-                severity: cf.severity,
-                id: cf.rule_id,
-                category: FindingCategory::Security,
-                path_validated: false,
-                guard_kind: None,
-                message: Some(cf.message),
-                labels: vec![],
-                confidence: cfg_confidence,
-                evidence: Some(Evidence {
-                    source: None,
-                    sink: Some(SpanEvidence {
-                        path: self.source.path.to_string_lossy().into_owned(),
-                        line: (point.row + 1) as u32,
-                        col: (point.column + 1) as u32,
-                        kind: "sink".into(),
-                        snippet: None,
-                    }),
-                    guards: vec![],
-                    sanitizers: vec![],
-                    state: None,
-                    notes: vec![],
-                    ..Default::default()
-                }),
-                rank_score: None,
-                rank_reason: None,
-                suppressed: false,
-                suppression: None,
-                rollup: None,
-            });
-        }
-        } // end for body in bodies (CFG structural analyses)
-
-        // ── State-model dataflow analysis (per body) ─────────────────────
-        if cfg.scanner.enable_state_analysis {
-            let resource_method_summaries =
-                state::build_resource_method_summaries(&self.file_cfg.bodies, caller_lang);
-            let mut all_state_findings = Vec::new();
-            for body in &self.file_cfg.bodies {
-            let state_findings = state::run_state_analysis(
-                &body.graph,
-                body.entry,
-                caller_lang,
-                self.source.bytes,
-                self.local_summaries(),
+            let body_taint: Vec<_> = taint_results
+                .iter()
+                .filter(|f| f.body_id == body.meta.id)
+                .cloned()
+                .collect();
+            let cfg_ctx = cfg_analysis::AnalysisContext {
+                cfg: &body.graph,
+                entry: body.entry,
+                lang: caller_lang,
+                file_path: &self.source.file_path_str,
+                source_bytes: self.source.bytes,
+                func_summaries: self.local_summaries(),
                 global_summaries,
-                cfg.scanner.enable_auth_analysis,
-                &resource_method_summaries,
-            );
-
-            for sf in &state_findings {
-                let point = byte_offset_to_point(&self.source.tree, sf.span.0);
+                taint_findings: &body_taint,
+                analysis_rules: self.rules_ref(),
+                taint_active,
+            };
+            for cf in cfg_analysis::run_all(&cfg_ctx) {
+                let point = byte_offset_to_point(&self.source.tree, cf.span.0);
+                let cfg_confidence = Some(match cf.confidence {
+                    cfg_analysis::Confidence::High => crate::evidence::Confidence::High,
+                    cfg_analysis::Confidence::Medium => crate::evidence::Confidence::Medium,
+                    cfg_analysis::Confidence::Low => crate::evidence::Confidence::Low,
+                });
                 out.push(Diag {
                     path: self.source.path.to_string_lossy().into_owned(),
                     line: point.row + 1,
                     col: point.column + 1,
-                    severity: sf.severity,
-                    id: sf.rule_id.clone(),
+                    severity: cf.severity,
+                    id: cf.rule_id,
                     category: FindingCategory::Security,
                     path_validated: false,
                     guard_kind: None,
-                    message: Some(sf.message.clone()),
+                    message: Some(cf.message),
                     labels: vec![],
-                    confidence: None,
+                    confidence: cfg_confidence,
                     evidence: Some(Evidence {
                         source: None,
                         sink: Some(SpanEvidence {
@@ -725,12 +674,7 @@ impl<'a> ParsedFile<'a> {
                         }),
                         guards: vec![],
                         sanitizers: vec![],
-                        state: Some(StateEvidence {
-                            machine: sf.machine.into(),
-                            subject: sf.subject.clone(),
-                            from_state: sf.from_state.into(),
-                            to_state: sf.to_state.into(),
-                        }),
+                        state: None,
                         notes: vec![],
                         ..Default::default()
                     }),
@@ -741,8 +685,68 @@ impl<'a> ParsedFile<'a> {
                     rollup: None,
                 });
             }
+        } // end for body in bodies (CFG structural analyses)
 
-            all_state_findings.extend(state_findings);
+        // ── State-model dataflow analysis (per body) ─────────────────────
+        if cfg.scanner.enable_state_analysis {
+            let resource_method_summaries =
+                state::build_resource_method_summaries(&self.file_cfg.bodies, caller_lang);
+            let mut all_state_findings = Vec::new();
+            for body in &self.file_cfg.bodies {
+                let state_findings = state::run_state_analysis(
+                    &body.graph,
+                    body.entry,
+                    caller_lang,
+                    self.source.bytes,
+                    self.local_summaries(),
+                    global_summaries,
+                    cfg.scanner.enable_auth_analysis,
+                    &resource_method_summaries,
+                );
+
+                for sf in &state_findings {
+                    let point = byte_offset_to_point(&self.source.tree, sf.span.0);
+                    out.push(Diag {
+                        path: self.source.path.to_string_lossy().into_owned(),
+                        line: point.row + 1,
+                        col: point.column + 1,
+                        severity: sf.severity,
+                        id: sf.rule_id.clone(),
+                        category: FindingCategory::Security,
+                        path_validated: false,
+                        guard_kind: None,
+                        message: Some(sf.message.clone()),
+                        labels: vec![],
+                        confidence: None,
+                        evidence: Some(Evidence {
+                            source: None,
+                            sink: Some(SpanEvidence {
+                                path: self.source.path.to_string_lossy().into_owned(),
+                                line: (point.row + 1) as u32,
+                                col: (point.column + 1) as u32,
+                                kind: "sink".into(),
+                                snippet: None,
+                            }),
+                            guards: vec![],
+                            sanitizers: vec![],
+                            state: Some(StateEvidence {
+                                machine: sf.machine.into(),
+                                subject: sf.subject.clone(),
+                                from_state: sf.from_state.into(),
+                                to_state: sf.to_state.into(),
+                            }),
+                            notes: vec![],
+                            ..Default::default()
+                        }),
+                        rank_score: None,
+                        rank_reason: None,
+                        suppressed: false,
+                        suppression: None,
+                        rollup: None,
+                    });
+                }
+
+                all_state_findings.extend(state_findings);
             } // end for body in bodies (state analysis)
 
             // Suppress cfg-resource-leak / cfg-auth-gap when state analysis
@@ -797,10 +801,7 @@ pub fn extract_summaries_from_file(path: &Path, cfg: &Config) -> NyxResult<Vec<F
 ///
 /// Returns `None` for binary files or unsupported languages.
 /// Intended for benchmarks and isolated testing of state analysis.
-pub fn build_cfg_for_file(
-    path: &Path,
-    cfg: &Config,
-) -> NyxResult<Option<(FileCfg, Lang)>> {
+pub fn build_cfg_for_file(path: &Path, cfg: &Config) -> NyxResult<Option<(FileCfg, Lang)>> {
     let bytes = std::fs::read(path)?;
     let Some(source) = ParsedSource::try_new(&bytes, path)? else {
         return Ok(None);

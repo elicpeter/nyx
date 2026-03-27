@@ -65,7 +65,8 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
                 // a Source, the variable is constant.
                 if info.taint.uses.is_empty()
                     && !info
-                        .taint.labels
+                        .taint
+                        .labels
                         .iter()
                         .any(|l| matches!(l, DataLabel::Source(_)))
                 {
@@ -197,7 +198,8 @@ fn sink_arg_is_source_derived(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
             continue;
         }
         if !info
-            .taint.labels
+            .taint
+            .labels
             .iter()
             .any(|l| matches!(l, DataLabel::Source(_)))
         {

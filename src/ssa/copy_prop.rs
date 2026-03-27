@@ -123,7 +123,10 @@ mod tests {
     use smallvec::SmallVec;
 
     fn make_cfg_node(kind: StmtKind) -> NodeInfo {
-        NodeInfo { kind, ..Default::default() }
+        NodeInfo {
+            kind,
+            ..Default::default()
+        }
     }
 
     #[test]

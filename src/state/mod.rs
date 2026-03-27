@@ -92,7 +92,11 @@ pub fn build_resource_method_summaries(
                 None => continue,
             };
             for pair in resource_pairs {
-                if pair.acquire.iter().any(|a| transfer::callee_matches_pub(&callee, a)) {
+                if pair
+                    .acquire
+                    .iter()
+                    .any(|a| transfer::callee_matches_pub(&callee, a))
+                {
                     summaries.push(transfer::ResourceMethodSummary {
                         method_name: method_name.clone(),
                         effect: transfer::ResourceEffect::Acquire,
@@ -100,7 +104,11 @@ pub fn build_resource_method_summaries(
                         original_span: info.ast.span,
                     });
                 }
-                if pair.release.iter().any(|r| transfer::callee_matches_pub(&callee, r)) {
+                if pair
+                    .release
+                    .iter()
+                    .any(|r| transfer::callee_matches_pub(&callee, r))
+                {
                     summaries.push(transfer::ResourceMethodSummary {
                         method_name: method_name.clone(),
                         effect: transfer::ResourceEffect::Release,

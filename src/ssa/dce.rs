@@ -117,7 +117,10 @@ mod tests {
     use smallvec::SmallVec;
 
     fn make_cfg_node(kind: StmtKind) -> NodeInfo {
-        NodeInfo { kind, ..Default::default() }
+        NodeInfo {
+            kind,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -216,7 +219,10 @@ mod tests {
         };
 
         let removed = eliminate_dead_defs(&mut body, &cfg);
-        assert_eq!(removed, 0, "Sanitizer-labeled instruction must not be removed");
+        assert_eq!(
+            removed, 0,
+            "Sanitizer-labeled instruction must not be removed"
+        );
         assert_eq!(body.blocks[0].body.len(), 1);
     }
 

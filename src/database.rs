@@ -311,9 +311,7 @@ pub mod index {
                 }
                 _ => {
                     let old = stored.as_deref().unwrap_or("<none>");
-                    tracing::info!(
-                        "engine version changed ({old} → {current}), rebuilding index"
-                    );
+                    tracing::info!("engine version changed ({old} → {current}), rebuilding index");
 
                     // Wipe all cached summaries and file hashes so everything
                     // gets rescanned.
@@ -349,7 +347,10 @@ pub mod index {
         /// Force a specific engine version into the metadata table.
         /// Used by tests to simulate version mismatch scenarios.
         #[cfg(test)]
-        pub fn set_engine_version(pool: &Pool<SqliteConnectionManager>, version: &str) -> NyxResult<()> {
+        pub fn set_engine_version(
+            pool: &Pool<SqliteConnectionManager>,
+            version: &str,
+        ) -> NyxResult<()> {
             let conn = pool.get()?;
             conn.execute(
                 "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES ('engine_version', ?1)",
@@ -360,7 +361,9 @@ pub mod index {
 
         /// Read the stored engine version from metadata. Returns None if not set.
         #[cfg(test)]
-        pub fn get_stored_engine_version(pool: &Pool<SqliteConnectionManager>) -> NyxResult<Option<String>> {
+        pub fn get_stored_engine_version(
+            pool: &Pool<SqliteConnectionManager>,
+        ) -> NyxResult<Option<String>> {
             let conn = pool.get()?;
             let v: Option<String> = conn
                 .query_row(
@@ -374,7 +377,11 @@ pub mod index {
 
         /// Count rows in a table for a given project. Test helper.
         #[cfg(test)]
-        pub fn count_rows(pool: &Pool<SqliteConnectionManager>, table: &str, project: &str) -> NyxResult<i64> {
+        pub fn count_rows(
+            pool: &Pool<SqliteConnectionManager>,
+            table: &str,
+            project: &str,
+        ) -> NyxResult<i64> {
             let conn = pool.get()?;
             // table name can't be parameterized; this is test-only code with trusted inputs.
             let sql = format!("SELECT COUNT(*) FROM {table} WHERE project = ?1");
@@ -385,7 +392,9 @@ pub mod index {
         /// Create a pool with init (schema + migrations + version check) for testing.
         /// This is `init()` but exposed under a clearer name for tests.
         #[cfg(test)]
-        pub fn init_for_test(database_path: &Path) -> NyxResult<Arc<Pool<SqliteConnectionManager>>> {
+        pub fn init_for_test(
+            database_path: &Path,
+        ) -> NyxResult<Arc<Pool<SqliteConnectionManager>>> {
             Self::init(database_path)
         }
 
@@ -1921,7 +1930,10 @@ fn clear_drops_ssa_summaries_table() {
 
 /// Helper: build a minimal CalleeSsaBody for DB tests.
 #[allow(dead_code)] // used by tests below
-fn make_test_callee_body(num_blocks: usize, param_count: usize) -> crate::taint::ssa_transfer::CalleeSsaBody {
+fn make_test_callee_body(
+    num_blocks: usize,
+    param_count: usize,
+) -> crate::taint::ssa_transfer::CalleeSsaBody {
     use crate::ssa::ir::*;
     use smallvec::smallvec;
 
@@ -1988,9 +2000,13 @@ fn ssa_bodies_round_trip() {
     let hash = index::Indexer::digest_bytes(b"def transform(val): return val");
 
     let body = make_test_callee_body(3, 1);
-    let bodies = vec![
-        ("transform".to_string(), 1_usize, "python".to_string(), "helper.py".to_string(), body),
-    ];
+    let bodies = vec![(
+        "transform".to_string(),
+        1_usize,
+        "python".to_string(),
+        "helper.py".to_string(),
+        body,
+    )];
 
     idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
 
@@ -2019,19 +2035,29 @@ fn ssa_bodies_replace_on_rescan() {
 
     // Store v1 with 2 blocks
     let hash1 = index::Indexer::digest_bytes(b"v1");
-    let bodies1 = vec![
-        ("func".to_string(), 1_usize, "python".to_string(), "h.py".to_string(), make_test_callee_body(2, 1)),
-    ];
-    idx.replace_ssa_bodies_for_file(&f, &hash1, &bodies1).unwrap();
+    let bodies1 = vec![(
+        "func".to_string(),
+        1_usize,
+        "python".to_string(),
+        "h.py".to_string(),
+        make_test_callee_body(2, 1),
+    )];
+    idx.replace_ssa_bodies_for_file(&f, &hash1, &bodies1)
+        .unwrap();
     assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
     assert_eq!(idx.load_all_ssa_bodies().unwrap()[0].5.ssa.blocks.len(), 2);
 
     // Store v2 with 5 blocks — should replace, not accumulate
     let hash2 = index::Indexer::digest_bytes(b"v2");
-    let bodies2 = vec![
-        ("func".to_string(), 1_usize, "python".to_string(), "h.py".to_string(), make_test_callee_body(5, 1)),
-    ];
-    idx.replace_ssa_bodies_for_file(&f, &hash2, &bodies2).unwrap();
+    let bodies2 = vec![(
+        "func".to_string(),
+        1_usize,
+        "python".to_string(),
+        "h.py".to_string(),
+        make_test_callee_body(5, 1),
+    )];
+    idx.replace_ssa_bodies_for_file(&f, &hash2, &bodies2)
+        .unwrap();
 
     let loaded = idx.load_all_ssa_bodies().unwrap();
     assert_eq!(loaded.len(), 1, "should replace, not accumulate");
@@ -2040,8 +2066,8 @@ fn ssa_bodies_replace_on_rescan() {
 
 #[test]
 fn ssa_bodies_with_node_meta_round_trip() {
-    use crate::taint::ssa_transfer::CrossFileNodeMeta;
     use crate::labels::{Cap, DataLabel};
+    use crate::taint::ssa_transfer::CrossFileNodeMeta;
 
     let td = tempfile::tempdir().unwrap();
     let db = td.path().join("nyx.sqlite");
@@ -2053,14 +2079,21 @@ fn ssa_bodies_with_node_meta_round_trip() {
     let hash = index::Indexer::digest_bytes(b"code");
 
     let mut body = make_test_callee_body(1, 0);
-    body.node_meta.insert(0, CrossFileNodeMeta {
-        bin_op: Some(crate::cfg::BinOp::Add),
-        labels: smallvec::smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
-    });
+    body.node_meta.insert(
+        0,
+        CrossFileNodeMeta {
+            bin_op: Some(crate::cfg::BinOp::Add),
+            labels: smallvec::smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+        },
+    );
 
-    let bodies = vec![
-        ("f".to_string(), 0_usize, "python".to_string(), "h.py".to_string(), body),
-    ];
+    let bodies = vec![(
+        "f".to_string(),
+        0_usize,
+        "python".to_string(),
+        "h.py".to_string(),
+        body,
+    )];
     idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
 
     let loaded = idx.load_all_ssa_bodies().unwrap();
@@ -2086,9 +2119,13 @@ fn ssa_bodies_removed_on_file_delete() {
     // Register file first so remove_file_and_related has something to find
     idx.upsert_file(&f).unwrap();
 
-    let bodies = vec![
-        ("f".to_string(), 0_usize, "python".to_string(), "h.py".to_string(), make_test_callee_body(1, 0)),
-    ];
+    let bodies = vec![(
+        "f".to_string(),
+        0_usize,
+        "python".to_string(),
+        "h.py".to_string(),
+        make_test_callee_body(1, 0),
+    )];
     idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
     assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
 
@@ -2119,7 +2156,11 @@ fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
 
 /// Helper: insert a fake summary + SSA summary + file row for a project.
 #[cfg(test)]
-fn populate_project(pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>, project: &str, dir: &std::path::Path) {
+fn populate_project(
+    pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>,
+    project: &str,
+    dir: &std::path::Path,
+) {
     let f = dir.join("app.py");
     std::fs::write(&f, "# code").unwrap();
 
@@ -2143,7 +2184,8 @@ fn populate_project(pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>, pro
         tainted_sink_params: vec![],
         callees: vec![],
     };
-    idx.replace_summaries_for_file(&f, &hash, &[func_summary]).unwrap();
+    idx.replace_summaries_for_file(&f, &hash, &[func_summary])
+        .unwrap();
 
     // Insert an SSA summary
     let ssa_sums = vec![(
@@ -2153,7 +2195,8 @@ fn populate_project(pool: &r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>, pro
         "app.py".to_string(),
         make_test_ssa_summary(),
     )];
-    idx.replace_ssa_summaries_for_file(&f, &hash, &ssa_sums).unwrap();
+    idx.replace_ssa_summaries_for_file(&f, &hash, &ssa_sums)
+        .unwrap();
 
     // Insert an SSA body
     let bodies = vec![(
@@ -2178,17 +2221,35 @@ fn version_match_no_reset() {
     populate_project(&pool, "proj", td.path());
 
     // Verify data exists
-    assert_eq!(index::Indexer::count_rows(&pool, "function_summaries", "proj").unwrap(), 1);
-    assert_eq!(index::Indexer::count_rows(&pool, "ssa_function_summaries", "proj").unwrap(), 1);
-    assert_eq!(index::Indexer::count_rows(&pool, "ssa_function_bodies", "proj").unwrap(), 1);
+    assert_eq!(
+        index::Indexer::count_rows(&pool, "function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool, "ssa_function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool, "ssa_function_bodies", "proj").unwrap(),
+        1
+    );
 
     // Second init with same version: data should be preserved
     drop(pool);
     let pool2 = index::Indexer::init(&db).unwrap();
 
-    assert_eq!(index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(), 1);
-    assert_eq!(index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(), 1);
-    assert_eq!(index::Indexer::count_rows(&pool2, "ssa_function_bodies", "proj").unwrap(), 1);
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_bodies", "proj").unwrap(),
+        1
+    );
 
     let stored = index::Indexer::get_stored_engine_version(&pool2).unwrap();
     assert_eq!(stored.as_deref(), Some(index::ENGINE_VERSION));
@@ -2207,15 +2268,27 @@ fn version_mismatch_triggers_reset() {
     index::Indexer::set_engine_version(&pool, "0.0.1-old").unwrap();
 
     // Verify data is populated
-    assert_eq!(index::Indexer::count_rows(&pool, "function_summaries", "proj").unwrap(), 1);
+    assert_eq!(
+        index::Indexer::count_rows(&pool, "function_summaries", "proj").unwrap(),
+        1
+    );
 
     // Reopen — version mismatch should trigger full wipe
     drop(pool);
     let pool2 = index::Indexer::init(&db).unwrap();
 
-    assert_eq!(index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(), 0);
-    assert_eq!(index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(), 0);
-    assert_eq!(index::Indexer::count_rows(&pool2, "ssa_function_bodies", "proj").unwrap(), 0);
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_bodies", "proj").unwrap(),
+        0
+    );
 
     // files table should also be cleared (forces rescan)
     let idx = index::Indexer::from_pool("proj", &pool2).unwrap();
@@ -2238,7 +2311,8 @@ fn missing_version_triggers_reset() {
     // Remove the metadata row to simulate a pre-version DB
     {
         let conn = pool.get().unwrap();
-        conn.execute("DELETE FROM nyx_metadata WHERE key = 'engine_version'", []).unwrap();
+        conn.execute("DELETE FROM nyx_metadata WHERE key = 'engine_version'", [])
+            .unwrap();
     }
 
     // Reopen
@@ -2246,8 +2320,14 @@ fn missing_version_triggers_reset() {
     let pool2 = index::Indexer::init(&db).unwrap();
 
     // All caches should be wiped
-    assert_eq!(index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(), 0);
-    assert_eq!(index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(), 0);
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(),
+        0
+    );
 
     // Version should now be set
     let stored = index::Indexer::get_stored_engine_version(&pool2).unwrap();
@@ -2266,7 +2346,10 @@ fn multiple_opens_no_repeated_resets() {
 
     // Second open — should preserve data
     let pool2 = index::Indexer::init(&db).unwrap();
-    assert_eq!(index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(), 1);
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj").unwrap(),
+        1
+    );
 
     // Re-populate after second open
     populate_project(&pool2, "proj2", td.path());
@@ -2274,8 +2357,14 @@ fn multiple_opens_no_repeated_resets() {
 
     // Third open — should still preserve both projects
     let pool3 = index::Indexer::init(&db).unwrap();
-    assert_eq!(index::Indexer::count_rows(&pool3, "function_summaries", "proj").unwrap(), 1);
-    assert_eq!(index::Indexer::count_rows(&pool3, "function_summaries", "proj2").unwrap(), 1);
+    assert_eq!(
+        index::Indexer::count_rows(&pool3, "function_summaries", "proj").unwrap(),
+        1
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool3, "function_summaries", "proj2").unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -2341,7 +2430,8 @@ fn missing_ssa_namespace_column_triggers_recreate() {
                 summary TEXT NOT NULL, updated_at INTEGER NOT NULL,
                 UNIQUE(project, file_path, name, arity)
             );",
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     // Open via init — should detect missing namespace and recreate
@@ -2360,7 +2450,8 @@ fn missing_ssa_namespace_column_triggers_recreate() {
         make_test_ssa_summary(),
     )];
     // This would fail if the namespace column doesn't exist
-    idx.replace_ssa_summaries_for_file(&f, &hash, &sums).unwrap();
+    idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
+        .unwrap();
     assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 1);
 }
 
@@ -2377,7 +2468,10 @@ fn valid_schema_no_recreate() {
     // Second init — schema is valid, should NOT drop/recreate
     let pool2 = index::Indexer::init(&db).unwrap();
     // Data survives because schema was already correct
-    assert_eq!(index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(), 1);
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj").unwrap(),
+        1
+    );
 }
 
 // ── 3. Deserialization Failure Tests ────────────────────────────────────────
@@ -2463,7 +2557,8 @@ fn partial_failure_does_not_drop_valid_rows() {
         "".to_string(),
         make_test_ssa_summary(),
     )];
-    idx.replace_ssa_summaries_for_file(&f, &hash, &sums).unwrap();
+    idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
+        .unwrap();
 
     // Insert a corrupted row directly
     {
@@ -2570,7 +2665,8 @@ fn multiple_projects_isolated() {
         "".to_string(),
         make_test_ssa_summary(),
     )];
-    idx1.replace_ssa_summaries_for_file(&f1, &hash1, &sums1).unwrap();
+    idx1.replace_ssa_summaries_for_file(&f1, &hash1, &sums1)
+        .unwrap();
 
     let mut idx2 = index::Indexer::from_pool("project_b", &pool).unwrap();
     idx2.upsert_file(&f2).unwrap();
@@ -2582,7 +2678,8 @@ fn multiple_projects_isolated() {
         "".to_string(),
         make_test_ssa_summary(),
     )];
-    idx2.replace_ssa_summaries_for_file(&f2, &hash2, &sums2).unwrap();
+    idx2.replace_ssa_summaries_for_file(&f2, &hash2, &sums2)
+        .unwrap();
 
     // Each project sees only its own summaries
     assert_eq!(idx1.load_all_ssa_summaries().unwrap().len(), 1);
@@ -2615,19 +2712,27 @@ fn version_reset_wipes_all_projects() {
     idx1.upsert_file(&f1).unwrap();
     let hash1 = index::Indexer::digest_bytes(b"a");
     let sums1 = vec![(
-        "fx".to_string(), 0_usize, "python".to_string(), "".to_string(),
+        "fx".to_string(),
+        0_usize,
+        "python".to_string(),
+        "".to_string(),
         make_test_ssa_summary(),
     )];
-    idx1.replace_ssa_summaries_for_file(&f1, &hash1, &sums1).unwrap();
+    idx1.replace_ssa_summaries_for_file(&f1, &hash1, &sums1)
+        .unwrap();
 
     let mut idx2 = index::Indexer::from_pool("proj_y", &pool).unwrap();
     idx2.upsert_file(&f2).unwrap();
     let hash2 = index::Indexer::digest_bytes(b"b");
     let sums2 = vec![(
-        "fy".to_string(), 0_usize, "python".to_string(), "".to_string(),
+        "fy".to_string(),
+        0_usize,
+        "python".to_string(),
+        "".to_string(),
         make_test_ssa_summary(),
     )];
-    idx2.replace_ssa_summaries_for_file(&f2, &hash2, &sums2).unwrap();
+    idx2.replace_ssa_summaries_for_file(&f2, &hash2, &sums2)
+        .unwrap();
 
     // Simulate version mismatch
     index::Indexer::set_engine_version(&pool, "0.0.0-stale").unwrap();
@@ -2636,10 +2741,22 @@ fn version_reset_wipes_all_projects() {
     let pool2 = index::Indexer::init(&db).unwrap();
 
     // Both projects' data should be gone (version check is global, not per-project)
-    assert_eq!(index::Indexer::count_rows(&pool2, "function_summaries", "proj_x").unwrap(), 0);
-    assert_eq!(index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj_x").unwrap(), 0);
-    assert_eq!(index::Indexer::count_rows(&pool2, "function_summaries", "proj_y").unwrap(), 0);
-    assert_eq!(index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj_y").unwrap(), 0);
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj_x").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj_x").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "function_summaries", "proj_y").unwrap(),
+        0
+    );
+    assert_eq!(
+        index::Indexer::count_rows(&pool2, "ssa_function_summaries", "proj_y").unwrap(),
+        0
+    );
 }
 
 #[test]

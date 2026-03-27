@@ -130,7 +130,12 @@ pub fn analyse_file(
 
     // 4. Deduplicate findings by (body_id, sink, source), prefer path_validated=true
     all_findings.sort_by_key(|f| {
-        (f.body_id.0, f.sink.index(), f.source.index(), !f.path_validated)
+        (
+            f.body_id.0,
+            f.sink.index(),
+            f.source.index(),
+            !f.path_validated,
+        )
     });
     all_findings.dedup_by_key(|f| (f.body_id, f.sink, f.source));
 
@@ -179,7 +184,10 @@ fn analyse_body_with_seed(
     callee_bodies: Option<&std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>>,
     inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
     seed: Option<&HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>,
-) -> (Vec<Finding>, Option<HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>) {
+) -> (
+    Vec<Finding>,
+    Option<HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>,
+) {
     let cfg = &body.graph;
     let entry = body.entry;
     let body_id = body.meta.id;
@@ -205,14 +213,15 @@ fn analyse_body_with_seed(
     // i.e. the parent body actually has taint to propagate.  Without a seed,
     // Param ops would just introduce unused SSA values.
     let has_nonempty_seed = seed.map_or(false, |s| !s.is_empty());
-    let use_scoped_lowering = !is_toplevel
-        && (matches!(lang, Lang::JavaScript | Lang::TypeScript) || has_nonempty_seed);
+    let use_scoped_lowering =
+        !is_toplevel && (matches!(lang, Lang::JavaScript | Lang::TypeScript) || has_nonempty_seed);
     let ssa_result = if use_scoped_lowering {
-        let func_name = body.meta.name.clone()
+        let func_name = body
+            .meta
+            .name
+            .clone()
             .unwrap_or_else(|| format!("<anon@{}>", body.meta.span.0));
-        crate::ssa::lower_to_ssa_with_params(
-            cfg, entry, Some(&func_name), false, &body.meta.params,
-        )
+        crate::ssa::lower_to_ssa_with_params(cfg, entry, Some(&func_name), false, &body.meta.params)
     } else {
         crate::ssa::lower_to_ssa(cfg, entry, None, true)
     };
@@ -264,12 +273,8 @@ fn analyse_body_with_seed(
                 crate::symex::annotate_findings(&mut findings, &symex_ctx);
             }
             // Extract exit state for seeding child bodies.
-            let exit_state = ssa_transfer::extract_ssa_exit_state(
-                &block_states,
-                &ssa_body,
-                cfg,
-                &transfer,
-            );
+            let exit_state =
+                ssa_transfer::extract_ssa_exit_state(&block_states, &ssa_body, cfg, &transfer);
             (findings, Some(exit_state))
         }
         Err(_) => (Vec::new(), None),
@@ -311,13 +316,23 @@ fn analyse_multi_body(
     for &idx in &order {
         let body = &file_cfg.bodies[idx];
         // Determine seed from parent body's exit state.
-        let parent_seed = body.meta.parent_body_id
+        let parent_seed = body
+            .meta
+            .parent_body_id
             .and_then(|pid| body_exit_states.get(&pid));
 
         let (findings, exit_state) = analyse_body_with_seed(
-            body, lang, namespace, local_summaries, global_summaries,
-            interop_edges, extra_labels, ssa_summaries, callee_bodies,
-            inline_cache, parent_seed,
+            body,
+            lang,
+            namespace,
+            local_summaries,
+            global_summaries,
+            interop_edges,
+            extra_labels,
+            ssa_summaries,
+            callee_bodies,
+            inline_cache,
+            parent_seed,
         );
         tracing::debug!(
             body_id = body.meta.id.0,
@@ -386,7 +401,9 @@ fn analyse_multi_body(
             body_exit_states.insert(BodyId(0), current_seed.clone());
             // Remove stale non-toplevel findings from previous rounds.
             all_findings.retain(|f| {
-                file_cfg.bodies.get(f.body_id.0 as usize)
+                file_cfg
+                    .bodies
+                    .get(f.body_id.0 as usize)
                     .map_or(true, |b| b.meta.parent_body_id.is_none())
             });
             for &idx in &order {
@@ -394,13 +411,23 @@ fn analyse_multi_body(
                 if body.meta.parent_body_id.is_none() {
                     continue; // don't re-run top-level
                 }
-                let parent_seed = body.meta.parent_body_id
+                let parent_seed = body
+                    .meta
+                    .parent_body_id
                     .and_then(|pid| body_exit_states.get(&pid));
 
                 let (findings, exit_state) = analyse_body_with_seed(
-                    body, lang, namespace, local_summaries, global_summaries,
-                    interop_edges, extra_labels, ssa_summaries, callee_bodies,
-                    inline_cache, parent_seed,
+                    body,
+                    lang,
+                    namespace,
+                    local_summaries,
+                    global_summaries,
+                    interop_edges,
+                    extra_labels,
+                    ssa_summaries,
+                    callee_bodies,
+                    inline_cache,
+                    parent_seed,
                 );
                 all_findings.extend(findings);
                 if let Some(es) = exit_state {
@@ -633,7 +660,10 @@ fn lower_all_functions_from_bodies(
     let mut bodies = std::collections::HashMap::new();
 
     for body in file_cfg.function_bodies() {
-        let func_name = body.meta.name.clone()
+        let func_name = body
+            .meta
+            .name
+            .clone()
             .unwrap_or_else(|| format!("<anon@{}>", body.meta.span.0));
 
         let interner = SymbolInterner::from_cfg(&body.graph);

@@ -717,12 +717,14 @@ fn rename_variables(
                                    var_stacks: &HashMap<String, Vec<SsaValue>>|
              -> (Vec<SmallVec<[SsaValue; 2]>>, Option<SsaValue>) {
                 let receiver = info
-                    .call.receiver
+                    .call
+                    .receiver
                     .as_ref()
                     .and_then(|r| var_stacks.get(r).and_then(|s| s.last().copied()));
                 let args = if !info.call.arg_uses.is_empty() {
                     let mut args: Vec<SmallVec<[SsaValue; 2]>> = info
-                        .call.arg_uses
+                        .call
+                        .arg_uses
                         .iter()
                         .map(|arg_idents| {
                             arg_idents
@@ -738,12 +740,14 @@ fn rename_variables(
                     // calls (like `url` in fetch) are in info.taint.uses but not arg_uses.
                     // Add them as an extra group so sink detection can see them.
                     let arg_uses_flat: HashSet<&str> = info
-                        .call.arg_uses
+                        .call
+                        .arg_uses
                         .iter()
                         .flat_map(|g| g.iter().map(|s| s.as_str()))
                         .collect();
                     let implicit: SmallVec<[SsaValue; 2]> = info
-                        .taint.uses
+                        .taint
+                        .uses
                         .iter()
                         .filter(|u| !arg_uses_flat.contains(u.as_str()))
                         .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
@@ -755,7 +759,8 @@ fn rename_variables(
                 } else {
                     // Fallback: treat all uses as a single argument group
                     let all_uses: SmallVec<[SsaValue; 2]> = info
-                        .taint.uses
+                        .taint
+                        .uses
                         .iter()
                         .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
                         .collect();
@@ -776,7 +781,8 @@ fn rename_variables(
             } else if info.catch_param {
                 SsaOp::CatchParam
             } else if info
-                .taint.labels
+                .taint
+                .labels
                 .iter()
                 .any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
                 && info.call.callee.is_none()
@@ -796,7 +802,8 @@ fn rename_variables(
             } else if info.taint.defines.is_some()
                 && info.taint.uses.is_empty()
                 && !info
-                    .taint.labels
+                    .taint
+                    .labels
                     .iter()
                     .any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
             {
@@ -808,7 +815,8 @@ fn rename_variables(
                 SsaOp::Const(info.taint.const_text.clone())
             } else if info.taint.defines.is_some() {
                 let mut uses: SmallVec<[SsaValue; 4]> = info
-                    .taint.uses
+                    .taint
+                    .uses
                     .iter()
                     .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
                     .collect();
@@ -1285,11 +1293,18 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let n1 = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let n2 = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("y".into()), uses: vec!["x".into()], ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("y".into()),
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1314,16 +1329,25 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let def_x = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let if_node = cfg.add_node(make_node(StmtKind::If));
         let true_node = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let false_node = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let join = cfg.add_node(make_node(StmtKind::Seq));
@@ -1365,12 +1389,19 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let def_x = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let loop_header = cfg.add_node(make_node(StmtKind::Loop));
         let body = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), uses: vec!["x".into()], ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1404,15 +1435,24 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let n1 = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let n2 = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let n3 = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1454,11 +1494,18 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let a = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let b = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("y".into()), uses: vec!["x".into()], ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("y".into()),
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1478,16 +1525,25 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let def_x = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let if_node = cfg.add_node(make_node(StmtKind::If));
         let true_node = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let false_node = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let join = cfg.add_node(make_node(StmtKind::Seq));
@@ -1528,12 +1584,19 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let def_x = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let loop_h = cfg.add_node(make_node(StmtKind::Loop));
         let body = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), uses: vec!["x".into()], ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1556,12 +1619,18 @@ mod tests {
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let body = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let catch = cfg.add_node(NodeInfo {
             catch_param: true,
-            taint: TaintMeta { defines: Some("e".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("e".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1584,15 +1653,24 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let if_node = cfg.add_node(make_node(StmtKind::If));
         let t = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("v".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("v".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let f = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("v".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("v".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let join = cfg.add_node(NodeInfo {
-            taint: TaintMeta { uses: vec!["v".into()], ..Default::default() },
+            taint: TaintMeta {
+                uses: vec!["v".into()],
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1626,11 +1704,11 @@ mod tests {
     fn bfs_assertion_helper_accepts_valid_orderings() {
         // Direct unit test of the assertion helper with valid input
         let block_preds = vec![
-            vec![],      // block 0: entry (no preds)
-            vec![0],     // block 1: pred is block 0 (forward)
-            vec![0, 1],  // block 2: both forward preds
-            vec![],      // block 3: orphan (no preds)
-            vec![2],     // block 4: forward pred
+            vec![],     // block 0: entry (no preds)
+            vec![0],    // block 1: pred is block 0 (forward)
+            vec![0, 1], // block 2: both forward preds
+            vec![],     // block 3: orphan (no preds)
+            vec![2],    // block 4: forward pred
         ];
         // Should not panic
         debug_assert_bfs_ordering(&block_preds);
@@ -1657,14 +1735,20 @@ mod tests {
         };
         let block_preds = vec![vec![], vec![0, 2]];
         // 1 operand <= 2 preds — should not panic
-        debug_assert_phi_operand_counts(&[SsaBlock {
-            id: BlockId(0),
-            phis: vec![],
-            body: vec![],
-            terminator: Terminator::Goto(BlockId(1)),
-            preds: smallvec::smallvec![],
-            succs: smallvec::smallvec![BlockId(1)],
-        }, block], &block_preds);
+        debug_assert_phi_operand_counts(
+            &[
+                SsaBlock {
+                    id: BlockId(0),
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(BlockId(1)),
+                    preds: smallvec::smallvec![],
+                    succs: smallvec::smallvec![BlockId(1)],
+                },
+                block,
+            ],
+            &block_preds,
+        );
     }
 
     #[test]
@@ -1693,7 +1777,10 @@ mod tests {
 
         // The block corresponding to the 3-successor node should have a Goto terminator
         // (collapsed from 3 successors), not a Branch
-        let has_goto = ssa.blocks.iter().any(|b| matches!(b.terminator, Terminator::Goto(_)));
+        let has_goto = ssa
+            .blocks
+            .iter()
+            .any(|b| matches!(b.terminator, Terminator::Goto(_)));
         assert!(
             has_goto,
             "3-successor collapse should produce a Goto terminator"
@@ -1707,11 +1794,17 @@ mod tests {
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let if_node = cfg.add_node(make_node(StmtKind::If));
         let t = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let f = cfg.add_node(NodeInfo {
-            taint: TaintMeta { defines: Some("x".into()), ..Default::default() },
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
             ..make_node(StmtKind::Seq)
         });
         let exit = cfg.add_node(make_node(StmtKind::Exit));
@@ -1723,9 +1816,10 @@ mod tests {
         cfg.add_edge(f, exit, EdgeKind::Seq);
 
         let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
-        let has_branch = ssa.blocks.iter().any(|b| {
-            matches!(b.terminator, Terminator::Branch { .. })
-        });
+        let has_branch = ssa
+            .blocks
+            .iter()
+            .any(|b| matches!(b.terminator, Terminator::Branch { .. }));
         assert!(
             has_branch,
             "normal 2-successor case must produce Branch, not Goto"

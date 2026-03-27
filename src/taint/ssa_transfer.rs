@@ -92,9 +92,7 @@ pub fn seed_lookup<'a>(
         return Some(taint);
     }
     // Slow path: wildcard match when body_ids differ
-    seed.iter()
-        .find(|(k, _)| k.matches(key))
-        .map(|(_, v)| v)
+    seed.iter().find(|(k, _)| k.matches(key)).map(|(_, v)| v)
 }
 
 // ── SSA Taint State ─────────────────────────────────────────────────────
@@ -1774,7 +1772,8 @@ fn transfer_inst(
             // (matches legacy `apply_call()` semantics).
             let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
             let has_source_label = info
-                .taint.labels
+                .taint
+                .labels
                 .iter()
                 .any(|l| matches!(l, DataLabel::Source(_)));
 
@@ -1810,7 +1809,8 @@ fn transfer_inst(
             let mut resolved_container_store: Vec<(usize, usize)> = Vec::new();
 
             // Resolve callee summary (used for both taint propagation and container fields)
-            let callee_summary = resolve_callee(transfer, callee, caller_func, info.call.call_ordinal);
+            let callee_summary =
+                resolve_callee(transfer, callee, caller_func, info.call.call_ordinal);
 
             // Capture container fields and return type regardless of whether
             // inline analysis handled the call
@@ -2847,7 +2847,10 @@ fn collect_block_events(
         if sink_caps.is_empty() {
             // Callback pattern: check if callee has source_to_callback and the
             // actual callback argument has a matching param_to_sink.
-            if let SsaOp::Call { callee, args: _, .. } = &inst.op {
+            if let SsaOp::Call {
+                callee, args: _, ..
+            } = &inst.op
+            {
                 let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
                 if let Some(resolved) =
                     resolve_callee(transfer, callee, caller_func, info.call.call_ordinal)
@@ -3580,7 +3583,8 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
     }
 
     let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
-    info.call.callee
+    info.call
+        .callee
         .as_ref()
         .and_then(|c| resolve_callee(transfer, c, caller_func, info.call.call_ordinal))
         .filter(|r| !r.sink_caps.is_empty())
@@ -4734,7 +4738,9 @@ fn reconstruct_flow_path(
     // 1. Add sink step
     steps.push(FlowStepRaw {
         cfg_node: sink_node,
-        var_name: cfg.node_weight(sink_node).and_then(|n| n.call.callee.clone()),
+        var_name: cfg
+            .node_weight(sink_node)
+            .and_then(|n| n.call.callee.clone()),
         op_kind: FlowStepKind::Sink,
     });
 
@@ -5090,9 +5096,7 @@ pub fn extract_ssa_func_summary(
                         .body
                         .iter()
                         .chain(ssa.blocks[bid].phis.iter())
-                        .any(|inst| {
-                            inst.value == rv && matches!(inst.op, SsaOp::Const(_))
-                        });
+                        .any(|inst| inst.value == rv && matches!(inst.op, SsaOp::Const(_)));
                     if !all_param_values.contains(&rv) && !rv_is_const {
                         for (val, taint) in &exit.values {
                             if all_param_values.contains(val) {
@@ -5517,7 +5521,10 @@ mod cross_file_tests {
         let mut cfg = Graph::new();
         let n0 = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            ast: AstMeta { span: (0, 10), ..Default::default() },
+            ast: AstMeta {
+                span: (0, 10),
+                ..Default::default()
+            },
             taint: TaintMeta {
                 labels: smallvec![DataLabel::Source(crate::labels::Cap::all())],
                 defines: Some("x".into()),
@@ -5529,7 +5536,10 @@ mod cross_file_tests {
         });
         let n1 = cfg.add_node(NodeInfo {
             kind: StmtKind::Seq,
-            ast: AstMeta { span: (10, 20), ..Default::default() },
+            ast: AstMeta {
+                span: (10, 20),
+                ..Default::default()
+            },
             taint: TaintMeta {
                 defines: Some("y".into()),
                 ..Default::default()
@@ -5568,8 +5578,16 @@ mod cross_file_tests {
                 }],
                 entry: BlockId(0),
                 value_defs: vec![
-                    ValueDef { var_name: Some("x".into()), cfg_node: n0, block: BlockId(0) },
-                    ValueDef { var_name: Some("y".into()), cfg_node: n1, block: BlockId(0) },
+                    ValueDef {
+                        var_name: Some("x".into()),
+                        cfg_node: n0,
+                        block: BlockId(0),
+                    },
+                    ValueDef {
+                        var_name: Some("y".into()),
+                        cfg_node: n1,
+                        block: BlockId(0),
+                    },
                 ],
                 cfg_node_map: std::collections::HashMap::new(),
                 exception_edges: vec![],
@@ -5639,7 +5657,10 @@ mod cross_file_tests {
         let first_pass = body.node_meta.clone();
 
         populate_node_meta(&mut body, &cfg);
-        assert_eq!(body.node_meta, first_pass, "second call should be idempotent");
+        assert_eq!(
+            body.node_meta, first_pass,
+            "second call should be idempotent"
+        );
     }
 
     #[test]
@@ -5720,7 +5741,10 @@ mod binding_key_tests {
         seed.insert(BindingKey::new("x"), taint(1));
         let key = BindingKey::new("x");
         assert!(seed_lookup(&seed, &key).is_some());
-        assert_eq!(seed_lookup(&seed, &key).unwrap().caps, Cap::from_bits_truncate(1));
+        assert_eq!(
+            seed_lookup(&seed, &key).unwrap().caps,
+            Cap::from_bits_truncate(1)
+        );
     }
 
     #[test]
@@ -5757,7 +5781,10 @@ mod binding_key_tests {
         seed.insert(BindingKey::with_body_id("x", 1), taint(2)); // Some(1) → caps=2
         // Exact match for Some(1) returns caps=2
         let key = BindingKey::with_body_id("x", 1);
-        assert_eq!(seed_lookup(&seed, &key).unwrap().caps, Cap::from_bits_truncate(2));
+        assert_eq!(
+            seed_lookup(&seed, &key).unwrap().caps,
+            Cap::from_bits_truncate(2)
+        );
     }
 
     #[test]
@@ -5767,10 +5794,16 @@ mod binding_key_tests {
         seed.insert(BindingKey::with_body_id("x", 2), taint(2));
         // Query for body_id=1 → exact match
         let key1 = BindingKey::with_body_id("x", 1);
-        assert_eq!(seed_lookup(&seed, &key1).unwrap().caps, Cap::from_bits_truncate(1));
+        assert_eq!(
+            seed_lookup(&seed, &key1).unwrap().caps,
+            Cap::from_bits_truncate(1)
+        );
         // Query for body_id=2 → exact match
         let key2 = BindingKey::with_body_id("x", 2);
-        assert_eq!(seed_lookup(&seed, &key2).unwrap().caps, Cap::from_bits_truncate(2));
+        assert_eq!(
+            seed_lookup(&seed, &key2).unwrap().caps,
+            Cap::from_bits_truncate(2)
+        );
         // Query for body_id=3 → no exact match, no None entry, no wildcard → None
         let key3 = BindingKey::with_body_id("x", 3);
         assert!(seed_lookup(&seed, &key3).is_none());

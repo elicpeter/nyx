@@ -99,12 +99,8 @@ async fn get_cfg(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let analysis = debug::analyse_file(&path, &config)?;
 
-    let view = CfgGraphView::from_cfg_function(
-        &analysis.file_cfg,
-        &q.function,
-        &analysis.bytes,
-    )
-    .ok_or(StatusCode::NOT_FOUND)?;
+    let view = CfgGraphView::from_cfg_function(&analysis.file_cfg, &q.function, &analysis.bytes)
+        .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(view))
 }
 
@@ -141,8 +137,9 @@ async fn get_taint(
     // Try to load global summaries from DB for cross-file context
     let global = load_global_summaries(&state);
     let cross_file_context = global.as_ref().map_or(false, |g| !g.is_empty());
-    let ssa_summaries_available =
-        global.as_ref().map_or(false, |g| !g.snapshot_ssa().is_empty());
+    let ssa_summaries_available = global
+        .as_ref()
+        .map_or(false, |g| !g.snapshot_ssa().is_empty());
 
     let (events, _entry_states, exit_states) = debug::analyse_function_taint(
         &ssa,
@@ -410,8 +407,8 @@ mod tests {
         let scan_root = dir.path().join("myproject");
         let pool = setup_db_with_summaries(dir.path(), &scan_root);
 
-        let global = load_global_summaries_from_pool(&scan_root, &pool)
-            .expect("should load summaries");
+        let global =
+            load_global_summaries_from_pool(&scan_root, &pool).expect("should load summaries");
 
         let cross_file_context = !global.is_empty();
         let ssa_summaries_available = !global.snapshot_ssa().is_empty();
@@ -439,8 +436,9 @@ mod tests {
         let global = load_global_summaries_from_pool(&scan_root, &pool);
 
         let cross_file_context = global.as_ref().map_or(false, |g| !g.is_empty());
-        let ssa_summaries_available =
-            global.as_ref().map_or(false, |g| !g.snapshot_ssa().is_empty());
+        let ssa_summaries_available = global
+            .as_ref()
+            .map_or(false, |g| !g.snapshot_ssa().is_empty());
 
         assert!(
             !cross_file_context,
@@ -455,13 +453,19 @@ mod tests {
     #[test]
     fn taint_view_includes_context_flags_with_no_summaries() {
         // Simulate the debug view construction with no cross-file context
-        let view = TaintAnalysisView::from_results(&[], &[], &crate::ssa::ir::SsaBody {
-            blocks: vec![],
-            entry: crate::ssa::ir::BlockId(0),
-            value_defs: vec![],
-            cfg_node_map: std::collections::HashMap::new(),
-            exception_edges: vec![],
-        }, false, false);
+        let view = TaintAnalysisView::from_results(
+            &[],
+            &[],
+            &crate::ssa::ir::SsaBody {
+                blocks: vec![],
+                entry: crate::ssa::ir::BlockId(0),
+                value_defs: vec![],
+                cfg_node_map: std::collections::HashMap::new(),
+                exception_edges: vec![],
+            },
+            false,
+            false,
+        );
 
         assert!(!view.cross_file_context);
         assert!(!view.ssa_summaries_available);
@@ -469,13 +473,19 @@ mod tests {
 
     #[test]
     fn taint_view_includes_context_flags_with_summaries() {
-        let view = TaintAnalysisView::from_results(&[], &[], &crate::ssa::ir::SsaBody {
-            blocks: vec![],
-            entry: crate::ssa::ir::BlockId(0),
-            value_defs: vec![],
-            cfg_node_map: std::collections::HashMap::new(),
-            exception_edges: vec![],
-        }, true, true);
+        let view = TaintAnalysisView::from_results(
+            &[],
+            &[],
+            &crate::ssa::ir::SsaBody {
+                blocks: vec![],
+                entry: crate::ssa::ir::BlockId(0),
+                value_defs: vec![],
+                cfg_node_map: std::collections::HashMap::new(),
+                exception_edges: vec![],
+            },
+            true,
+            true,
+        );
 
         assert!(view.cross_file_context);
         assert!(view.ssa_summaries_available);
@@ -483,13 +493,19 @@ mod tests {
 
     #[test]
     fn taint_view_serializes_context_fields() {
-        let view = TaintAnalysisView::from_results(&[], &[], &crate::ssa::ir::SsaBody {
-            blocks: vec![],
-            entry: crate::ssa::ir::BlockId(0),
-            value_defs: vec![],
-            cfg_node_map: std::collections::HashMap::new(),
-            exception_edges: vec![],
-        }, true, false);
+        let view = TaintAnalysisView::from_results(
+            &[],
+            &[],
+            &crate::ssa::ir::SsaBody {
+                blocks: vec![],
+                entry: crate::ssa::ir::BlockId(0),
+                value_defs: vec![],
+                cfg_node_map: std::collections::HashMap::new(),
+                exception_edges: vec![],
+            },
+            true,
+            false,
+        );
 
         let json = serde_json::to_value(&view).unwrap();
         assert_eq!(json["cross_file_context"], true);

@@ -108,7 +108,7 @@ pub struct TaintMeta {
     /// from a syntactic literal with no uses. Used by SSA constant propagation.
     pub const_text: Option<String>,
     pub defines: Option<String>, // variable written by this stmt
-    pub uses: Vec<String>, // variables read
+    pub uses: Vec<String>,       // variables read
     /// Additional variable definitions from destructuring patterns.
     /// E.g. `const { a, b, c } = source()` → defines="a", extra_defines=["b", "c"].
     pub extra_defines: Vec<String>,
@@ -4407,7 +4407,10 @@ mod cfg_tests {
             1,
             "Expected exactly one catch_param node in Java"
         );
-        assert_eq!(cfg[catch_param_nodes[0]].taint.defines.as_deref(), Some("e"));
+        assert_eq!(
+            cfg[catch_param_nodes[0]].taint.defines.as_deref(),
+            Some("e")
+        );
     }
 
     #[test]
@@ -4542,7 +4545,10 @@ mod cfg_tests {
             1,
             "implicit begin rescue should have one catch_param node"
         );
-        assert_eq!(cfg[catch_param_nodes[0]].taint.defines.as_deref(), Some("e"));
+        assert_eq!(
+            cfg[catch_param_nodes[0]].taint.defines.as_deref(),
+            Some("e")
+        );
     }
 
     #[test]
@@ -5030,9 +5036,10 @@ mod cfg_tests {
 
         // Find the node whose callee is "safe_wrapper"
         let body = &file_cfg.bodies[1]; // function body
-        let has_safe = body.graph.node_weights().any(|info| {
-            info.call.callee.as_deref() == Some("safe_wrapper")
-        });
+        let has_safe = body
+            .graph
+            .node_weights()
+            .any(|info| info.call.callee.as_deref() == Some("safe_wrapper"));
         assert!(has_safe, "expected a node with callee 'safe_wrapper'");
 
         // The outer body should NOT have a node with callee "eval" attributed
@@ -5167,7 +5174,9 @@ mod cfg_tests {
             taint: TaintMeta {
                 labels: {
                     let mut v = SmallVec::new();
-                    v.push(crate::labels::DataLabel::Sink(crate::labels::Cap::CODE_EXEC));
+                    v.push(crate::labels::DataLabel::Sink(
+                        crate::labels::Cap::CODE_EXEC,
+                    ));
                     v
                 },
                 defines: Some("result".into()),
@@ -5248,7 +5257,10 @@ mod cfg_tests {
         assert_eq!(cloned.call.call_ordinal, original.call.call_ordinal);
         assert_eq!(cloned.call.arg_uses, original.call.arg_uses);
         assert_eq!(cloned.call.receiver, original.call.receiver);
-        assert_eq!(cloned.call.sink_payload_args, original.call.sink_payload_args);
+        assert_eq!(
+            cloned.call.sink_payload_args,
+            original.call.sink_payload_args
+        );
         assert_eq!(cloned.taint.labels.len(), original.taint.labels.len());
         assert_eq!(cloned.taint.const_text, original.taint.const_text);
         assert_eq!(cloned.taint.defines, original.taint.defines);
@@ -5277,7 +5289,14 @@ mod cfg_tests {
             .collect();
         assert_eq!(catch_params.len(), 1);
         assert_eq!(catch_params[0].taint.defines.as_deref(), Some("e"));
-        assert!(catch_params[0].call.callee.as_deref().unwrap().starts_with("catch("));
+        assert!(
+            catch_params[0]
+                .call
+                .callee
+                .as_deref()
+                .unwrap()
+                .starts_with("catch(")
+        );
     }
 
     #[test]
@@ -5309,5 +5328,4 @@ mod cfg_tests {
         assert!(n.taint.defines.is_none());
         assert!(n.taint.uses.is_empty());
     }
-
 }

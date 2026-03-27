@@ -688,7 +688,8 @@ fn taint_and_unguarded_sink_deduped() {
         .node_indices()
         .find(|&idx| {
             cfg_graph[idx]
-                .taint.labels
+                .taint
+                .labels
                 .iter()
                 .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
         })
@@ -945,7 +946,8 @@ fn location_href_assignment_is_sink() {
 
     let has_sink = cfg.node_indices().any(|idx| {
         cfg[idx]
-            .taint.labels
+            .taint
+            .labels
             .iter()
             .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
     });
@@ -969,7 +971,8 @@ fn a_href_assignment_is_not_sink() {
 
     let has_sink = cfg.node_indices().any(|idx| {
         cfg[idx]
-            .taint.labels
+            .taint
+            .labels
             .iter()
             .any(|l| matches!(l, crate::labels::DataLabel::Sink(_)))
     });

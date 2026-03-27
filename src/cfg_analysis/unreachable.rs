@@ -67,32 +67,38 @@ impl CfgAnalysis for UnreachableCode {
             }
 
             // Check labels in priority order: Sink > Sanitizer > Source
-            let label_classification =
-                if info.taint.labels.iter().any(|l| matches!(l, DataLabel::Sink(_))) {
-                    Some(("cfg-unreachable-sink", "Unreachable sink", Severity::Medium))
-                } else if info
-                    .taint.labels
-                    .iter()
-                    .any(|l| matches!(l, DataLabel::Sanitizer(_)))
-                {
-                    Some((
-                        "cfg-unreachable-sanitizer",
-                        "Unreachable sanitizer",
-                        Severity::Medium,
-                    ))
-                } else if info
-                    .taint.labels
-                    .iter()
-                    .any(|l| matches!(l, DataLabel::Source(_)))
-                {
-                    Some((
-                        "cfg-unreachable-source",
-                        "Unreachable source",
-                        Severity::Low,
-                    ))
-                } else {
-                    None
-                };
+            let label_classification = if info
+                .taint
+                .labels
+                .iter()
+                .any(|l| matches!(l, DataLabel::Sink(_)))
+            {
+                Some(("cfg-unreachable-sink", "Unreachable sink", Severity::Medium))
+            } else if info
+                .taint
+                .labels
+                .iter()
+                .any(|l| matches!(l, DataLabel::Sanitizer(_)))
+            {
+                Some((
+                    "cfg-unreachable-sanitizer",
+                    "Unreachable sanitizer",
+                    Severity::Medium,
+                ))
+            } else if info
+                .taint
+                .labels
+                .iter()
+                .any(|l| matches!(l, DataLabel::Source(_)))
+            {
+                Some((
+                    "cfg-unreachable-source",
+                    "Unreachable source",
+                    Severity::Low,
+                ))
+            } else {
+                None
+            };
 
             let (rule_id, title, severity) = if let Some(lc) = label_classification {
                 lc
