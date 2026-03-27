@@ -91,11 +91,10 @@ jobs:
           toolchain: stable
           cache: true
 
+      - uses: taiki-e/install-action@cargo-deny
+
       - name: License & advisory checks
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          arguments: advisories licenses bans sources
+        run: cargo deny check advisories licenses bans sources
 
   rust-beta-build:
     name: rust-beta-build
