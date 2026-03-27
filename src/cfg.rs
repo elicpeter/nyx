@@ -6,7 +6,7 @@
 
 use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::prelude::*;
-use tracing::debug;
+use tracing::{debug, warn};
 use tree_sitter::{Node, Tree};
 
 use crate::labels::{
@@ -3226,7 +3226,17 @@ fn build_sub<'a>(
             let mut loop_continues = Vec::new();
 
             // The body is the single `block` child
-            let body = ast.child_by_field_name("body").expect("loop without body");
+            let body = match ast.child_by_field_name("body") {
+                Some(b) => b,
+                None => {
+                    warn!(
+                        "loop without body (error recovery?): kind={} byte={}",
+                        ast.kind(),
+                        ast.start_byte()
+                    );
+                    return vec![header];
+                }
+            };
             let body_exits = build_sub(
                 body,
                 &[header],
@@ -3647,18 +3657,28 @@ fn build_sub<'a>(
             let (mut fn_graph, fn_entry, fn_exit) =
                 create_body_graph(ast.start_byte(), ast.end_byte(), Some(&fn_name));
 
-            let body_ast = ast.child_by_field_name("body").unwrap_or_else(|| {
+            let body_ast = match ast.child_by_field_name("body").or_else(|| {
                 let mut c = ast.walk();
                 ast.children(&mut c)
                     .find(|n| matches!(lookup(lang, n.kind()), Kind::Block | Kind::SourceFile))
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "fn w/o body: kind={} text=’{}’",
-                            ast.kind(),
-                            text_of(ast, code).unwrap_or_default()
-                        )
-                    })
-            });
+            }) {
+                Some(b) => b,
+                None => {
+                    warn!(
+                        "fn without body (forward decl / abstract / error recovery): kind={} name=’{}’",
+                        ast.kind(),
+                        fn_name
+                    );
+                    // Insert placeholder in parent graph and skip body processing
+                    let placeholder = g.add_node(make_empty_node_info(
+                        StmtKind::Seq,
+                        (ast.start_byte(), ast.end_byte()),
+                        enclosing_func,
+                    ));
+                    connect_all(g, preds, placeholder, EdgeKind::Seq);
+                    return vec![placeholder];
+                }
+            };
 
             // Allocate a BodyId for this function
             let fn_body_id = BodyId(*next_body_id);

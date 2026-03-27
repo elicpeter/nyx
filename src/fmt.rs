@@ -113,7 +113,11 @@ pub fn normalize_snippet(s: &str) -> String {
     let cleaned = collapse_chain_spacing(&collapsed);
     let trimmed = cleaned.trim();
     if trimmed.len() > 120 {
-        format!("{}…", &trimmed[..120])
+        let trunc = match trimmed.char_indices().nth(120) {
+            Some((i, _)) => &trimmed[..i],
+            None => trimmed,
+        };
+        format!("{trunc}…")
     } else {
         trimmed.to_string()
     }
