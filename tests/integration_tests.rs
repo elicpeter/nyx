@@ -179,6 +179,27 @@ fn cross_file_js_aliased_import() {
     validate_expectations(&diags, &dir);
 }
 
+/// JavaScript: req.body.returnTo (inline source member expression in call arg)
+/// flows through cross-file safeRedirect() passthrough to res.redirect() sink.
+/// Exercises arg_source_caps detection for source member expressions nested
+/// directly inside sink call arguments.
+#[test]
+fn cross_file_js_redirect() {
+    let dir = fixture_path("cross_file_js_redirect");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// JavaScript: req.query.q flows through cross-file globalSearch() which
+/// concatenates the param into raw SQL and passes it to db.query().
+/// Tests cross-file param_to_sink propagation for SQL injection.
+#[test]
+fn cross_file_js_sqli() {
+    let dir = fixture_path("cross_file_js_sqli");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 /// Python: 3-file chain — os.environ in input_reader.py → passthrough in
 /// transform.py → subprocess.call in executor.py.  Taint must survive two
 /// inter-file hops with no sanitisation.

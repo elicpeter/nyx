@@ -3726,6 +3726,42 @@ fn collect_tainted_sink_values(
         check_heap_taint(v, &mut result);
     }
 
+    // Priority 4: inline source arguments — when a call argument is a source
+    // member expression (e.g. `req.body.returnTo` in `res.redirect(req.body.returnTo)`),
+    // the argument may not have been tainted by a prior node because it was
+    // inlined directly into the call without a separate assignment.  Use
+    // `arg_source_caps` from the CFG to recognise these as tainted.
+    if result.is_empty() && !info.call.arg_source_caps.is_empty() {
+        if let SsaOp::Call { args, .. } = &inst.op {
+            for (pos, maybe_caps) in info.call.arg_source_caps.iter().enumerate() {
+                if let Some(src_caps) = maybe_caps {
+                    let effective = *src_caps & sink_caps;
+                    if effective.is_empty() {
+                        continue;
+                    }
+                    let adj = pos + receiver_offset;
+                    if let Some(arg_vals) = args.get(adj) {
+                        for &v in arg_vals {
+                            if !result.iter().any(|&(rv, _, _)| rv == v) {
+                                let origin = TaintOrigin {
+                                    node: inst.cfg_node,
+                                    source_kind: crate::labels::infer_source_kind(
+                                        *src_caps,
+                                        info.call.callee.as_deref().unwrap_or(""),
+                                    ),
+                                    source_span: None,
+                                };
+                                let mut origins = SmallVec::new();
+                                origins.push(origin);
+                                result.push((v, *src_caps, origins));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     apply_field_aware_suppression(&mut result, inst, state, sink_caps, ssa);
     result
 }

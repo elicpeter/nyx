@@ -98,6 +98,12 @@ pub struct CallMeta {
     /// When `Some`, only variables from these `arg_uses` positions are checked
     /// for taint.  `None` = all arguments are payload (default).
     pub sink_payload_args: Option<Vec<usize>>,
+    /// Per-argument source caps: when a call argument is a member expression
+    /// that matches a source pattern (e.g. `req.body.returnTo` matching the
+    /// `req.body` source rule), this stores the Source caps for that position.
+    /// Used by sink detection to treat inline source arguments as tainted even
+    /// though they don't have their own dedicated Source CFG node.
+    pub arg_source_caps: Vec<Option<Cap>>,
 }
 
 /// Taint-classification and variable-flow metadata.
@@ -1502,6 +1508,46 @@ fn extract_arg_callees(call_node: Node, lang: &str, code: &[u8]) -> Vec<Option<S
     result
 }
 
+/// For each argument of `call_node`, check if it is a member expression that
+/// classifies as a source (e.g. `req.body.returnTo` matching `req.body`).
+/// Returns `Vec<Option<Cap>>` parallel to `extract_arg_uses` output, with
+/// `Some(caps)` for arguments that are source member expressions.
+fn extract_arg_source_caps(
+    call_node: Node,
+    lang: &str,
+    code: &[u8],
+    extra: Option<&[crate::labels::RuntimeLabelRule]>,
+) -> Vec<Option<Cap>> {
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        let kind = child.kind();
+        if kind == "spread_element"
+            || kind == "dictionary_splat"
+            || kind == "list_splat"
+            || kind == "keyword_argument"
+            || kind == "splat_argument"
+            || kind == "hash_splat_argument"
+            || kind == "named_argument"
+        {
+            return Vec::new();
+        }
+        // Check if this argument (or any sub-expression) is a source member expression.
+        let caps = first_member_label(child, lang, code, extra).and_then(|lbl| {
+            if let DataLabel::Source(caps) = lbl {
+                Some(caps)
+            } else {
+                None
+            }
+        });
+        result.push(caps);
+    }
+    result
+}
+
 /// Return `(defines, uses)` for the AST fragment `ast`.
 /// Returns (defines, uses, extra_defines) where extra_defines captures additional
 /// bindings from destructuring patterns beyond the primary define.
@@ -2293,6 +2339,20 @@ fn push_node<'a>(
         Vec::new()
     };
 
+    // Extract per-argument source caps: detect when a call argument is a source
+    // member expression (e.g. `req.body.returnTo` in `res.redirect(req.body.returnTo)`).
+    // This allows sink detection to recognise inline source arguments as tainted.
+    let arg_source_caps = if kind == StmtKind::Call
+        && !labels.is_empty()
+        && labels.iter().any(|l| matches!(l, DataLabel::Sink(_)))
+    {
+        call_ast
+            .map(|cn| extract_arg_source_caps(cn, lang, code, extra))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     // For assignment sinks (including CallWrapper-wrapped assignments like
     // `element.innerHTML = clean(name)`), also extract the RHS callee.
     // This runs regardless of kind because a CallWrapper node may have
@@ -2402,6 +2462,7 @@ fn push_node<'a>(
             arg_uses,
             receiver,
             sink_payload_args,
+            arg_source_caps,
         },
         taint: TaintMeta {
             labels,
@@ -5641,6 +5702,7 @@ mod cfg_tests {
                 arg_uses: vec![vec!["a".into()]],
                 receiver: Some("obj".into()),
                 sink_payload_args: Some(vec![1, 2]),
+                arg_source_caps: vec![],
             },
             taint: TaintMeta {
                 labels: {
