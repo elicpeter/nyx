@@ -1,0 +1,23 @@
+{
+  "description": "Safe parameterized SQL query — Python cursor.execute with ? placeholder and bind tuple",
+  "tags": ["taint", "sqli", "sqlite", "safe"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [4, 9],
+      "evidence_contains": [],
+      "notes": "user_id flows into bind tuple, not the SQL string — should not fire"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [4, 9],
+      "evidence_contains": [],
+      "notes": "Parameterized query should suppress cfg-unguarded-sink as well"
+    }
+  ]
+}

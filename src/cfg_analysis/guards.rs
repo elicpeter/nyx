@@ -341,6 +341,13 @@ impl CfgAnalysis for UnguardedSink {
                 continue;
             }
 
+            // Parameterized SQL queries: arg 0 is a string literal with
+            // placeholders ($1, ?, %s, :name) and a params argument exists.
+            // These are safe by construction — the driver handles escaping.
+            if sink_info.parameterized_query {
+                continue;
+            }
+
             let param_only = sink_arg_is_parameter_only(ctx, *sink);
             let in_entrypoint = sink_in_entrypoint(ctx, *sink);
 

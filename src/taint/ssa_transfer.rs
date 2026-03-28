@@ -2830,6 +2830,11 @@ fn collect_block_events(
             continue;
         }
 
+        // Parameterized SQL queries are safe — skip sink detection.
+        if info.parameterized_query {
+            continue;
+        }
+
         let sink_info = resolve_sink_info(info, transfer);
         let mut sink_caps = sink_info.caps;
 

@@ -1,0 +1,47 @@
+{
+  "description": "Same file has unsafe concat and safe parameterized cursor.execute — only concat fires",
+  "tags": ["taint", "sqli", "sqlite", "parameterized", "mixed"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 9],
+      "evidence_contains": [],
+      "notes": "request.args.get concatenated into SQL string — unsafe, must fire"
+    },
+    {
+      "rule_id": "py.sqli.execute_format",
+      "severity": null,
+      "must_match": true,
+      "line_range": [8, 8],
+      "evidence_contains": [],
+      "notes": "AST pattern detects string concatenation inside cursor.execute"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [11, 16],
+      "evidence_contains": [],
+      "notes": "Parameterized query with ? placeholder — safe, must NOT fire"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [1, 17],
+      "evidence_contains": [],
+      "notes": "noise: resource leaks unrelated to SQL injection"
+    },
+    {
+      "rule_id": "cfg-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [1, 17],
+      "evidence_contains": [],
+      "notes": "noise: cfg-resource-leak unrelated to SQL injection"
+    }
+  ]
+}

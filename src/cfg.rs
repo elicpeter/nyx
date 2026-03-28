@@ -180,6 +180,11 @@ pub struct NodeInfo {
     /// suppress leak findings (defer guarantees cleanup at function exit).
     /// Only set on Call nodes, not on all nodes within a defer_statement.
     pub in_defer: bool,
+    /// True when this is a SQL_QUERY sink whose first argument is a string
+    /// literal containing parameterized-query placeholders (`$1`, `?`, `%s`,
+    /// `:name`) AND the call has >= 2 arguments (the params array/tuple).
+    /// Both CFG analysis and SSA taint suppress findings on such nodes.
+    pub parameterized_query: bool,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -1055,6 +1060,127 @@ fn extract_const_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) -
         }
     }
     None
+}
+
+/// Recursively find a call-expression node within an AST subtree (up to
+/// 4 levels deep).  Unlike `find_call_node` which only checks 2 levels,
+/// this handles `await`-wrapped calls inside declarations.
+fn find_call_node_deep<'a>(n: Node<'a>, lang: &str, depth: u8) -> Option<Node<'a>> {
+    if depth == 0 {
+        return None;
+    }
+    match lookup(lang, n.kind()) {
+        Kind::CallFn | Kind::CallMethod | Kind::CallMacro => Some(n),
+        _ => {
+            let mut cursor = n.walk();
+            for c in n.children(&mut cursor) {
+                if let Some(found) = find_call_node_deep(c, lang, depth - 1) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Detect whether a call node is a parameterized SQL query.
+///
+/// Returns `true` when:
+/// 1. The first argument (arg 0) is a string literal (including template
+///    strings without interpolation) containing SQL placeholder patterns:
+///    `$1`..`$N`, `?`, `%s`, or `:identifier`.
+/// 2. The call has at least 2 arguments (the second being the params
+///    array/tuple).
+///
+/// This is intentionally conservative: if arg 0 is dynamic (variable,
+/// concatenation, template with interpolation), returns `false`.
+fn is_parameterized_query_call(call_node: Node, code: &[u8]) -> bool {
+    let Some(args) = call_node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    let named: Vec<_> = args.named_children(&mut cursor).collect();
+    // Need at least 2 arguments: query string + params
+    if named.len() < 2 {
+        return false;
+    }
+    let first_arg = named[0];
+    // Extract the raw text of arg 0 — must be a string literal or
+    // template string without interpolation.
+    let query_text = match first_arg.kind() {
+        "string" | "string_literal" | "interpreted_string_literal" | "raw_string_literal" => {
+            text_of(first_arg, code)
+        }
+        "template_string" => {
+            // Only constant templates (no interpolation)
+            let mut c = first_arg.walk();
+            if first_arg
+                .named_children(&mut c)
+                .any(|ch| ch.kind() == "template_substitution")
+            {
+                return false; // dynamic — not safe
+            }
+            text_of(first_arg, code)
+        }
+        // Python concatenated strings: "SELECT" "..." are implicit concat
+        "concatenated_string" => {
+            // If it's a concatenated_string, get the full text
+            text_of(first_arg, code)
+        }
+        _ => return false, // not a literal
+    };
+    let Some(qt) = query_text else {
+        return false;
+    };
+    has_sql_placeholders(&qt)
+}
+
+/// Check whether a string contains SQL parameterized-query placeholders.
+///
+/// Recognised patterns:
+/// - `$1`, `$2`, …, `$N` (PostgreSQL positional)
+/// - `?` (MySQL / SQLite positional)
+/// - `%s` (Python DB-API / psycopg2)
+/// - `:identifier` (Oracle / named parameters) — requires the colon to be
+///   preceded by a space or `=` (to avoid matching JS ternary / object
+///   literals).
+fn has_sql_placeholders(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        match bytes[i] {
+            b'$' => {
+                // $N where N is 1..9 (at minimum)
+                if i + 1 < len && bytes[i + 1].is_ascii_digit() && bytes[i + 1] != b'0' {
+                    return true;
+                }
+            }
+            b'?' => return true,
+            b'%' => {
+                if i + 1 < len && bytes[i + 1] == b's' {
+                    return true;
+                }
+            }
+            b':' => {
+                // :identifier — must be preceded by whitespace/= to avoid
+                // false positives on object literals or ternary operators.
+                if i > 0
+                    && (bytes[i - 1] == b' '
+                        || bytes[i - 1] == b'='
+                        || bytes[i - 1] == b'('
+                        || bytes[i - 1] == b',')
+                    && i + 1 < len
+                    && bytes[i + 1].is_ascii_alphabetic()
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Returns true when a tree-sitter node is a syntactic literal value.
@@ -2147,6 +2273,17 @@ fn push_node<'a>(
         false
     };
 
+    // Detect parameterized SQL queries: arg 0 is a string literal with
+    // placeholder patterns ($1, ?, %s, :name) and >= 2 args present.
+    // Uses a deeper recursive search than `call_ast` (which only goes 2
+    // levels) to handle await-wrapped calls inside declarations.
+    let parameterized_query = labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SQL_QUERY)))
+        && call_ast
+            .or_else(|| find_call_node_deep(ast, lang, 5))
+            .is_some_and(|cn| is_parameterized_query_call(cn, code));
+
     // Extract per-argument inner call callees for interprocedural sanitizer resolution.
     let mut arg_callees = if kind == StmtKind::Call {
         call_ast
@@ -2288,6 +2425,7 @@ fn push_node<'a>(
         bin_op_const: extract_bin_op_const(ast, lang, code),
         managed_resource: is_raii_managed || is_ruby_block_managed,
         in_defer: false,
+        parameterized_query,
     });
 
     debug!(
@@ -5716,5 +5854,23 @@ mod cfg_tests {
         let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
         let file_cfg = parse_to_file_cfg(src, "java", ts_lang);
         assert!(file_cfg.import_bindings.is_empty());
+    }
+
+    #[test]
+    fn sql_placeholder_detection() {
+        // Positive cases
+        assert!(has_sql_placeholders("SELECT * FROM users WHERE id = $1"));
+        assert!(has_sql_placeholders("SELECT * FROM users WHERE id = ?"));
+        assert!(has_sql_placeholders("SELECT * FROM users WHERE id = %s"));
+        assert!(has_sql_placeholders("INSERT INTO t (a, b) VALUES ($1, $2)"));
+        assert!(has_sql_placeholders("SELECT * FROM t WHERE x = :name"));
+        assert!(has_sql_placeholders("WHERE id = ? AND name = ?"));
+
+        // Negative cases
+        assert!(!has_sql_placeholders("SELECT * FROM users"));
+        assert!(!has_sql_placeholders("SELECT * FROM users WHERE id = 1"));
+        assert!(!has_sql_placeholders("SELECT $dollar FROM t")); // $d not $N
+        assert!(!has_sql_placeholders("SELECT * FROM t WHERE x = $0")); // $0 not valid
+        assert!(!has_sql_placeholders("ratio = 50%")); // %<not s>
     }
 }

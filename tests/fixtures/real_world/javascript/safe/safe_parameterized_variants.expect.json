@@ -1,0 +1,63 @@
+{
+  "description": "Parameterized SQL queries across multiple drivers and placeholder styles — all safe",
+  "tags": ["taint", "sqli", "mysql", "pg", "safe", "parameterized"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [5, 11],
+      "evidence_contains": [],
+      "notes": "MySQL ? placeholder — parameterized, should not fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [14, 21],
+      "evidence_contains": [],
+      "notes": "PG $1/$2 placeholders — parameterized, should not fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [24, 29],
+      "evidence_contains": [],
+      "notes": "pool.query with $1 — parameterized, should not fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [32, 35],
+      "evidence_contains": [],
+      "notes": "db.execute with ? — parameterized, should not fire"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [38, 43],
+      "evidence_contains": [],
+      "notes": "Template literal with ? (no interpolation) — parameterized, should not fire"
+    },
+    {
+      "rule_id": "cfg-unguarded-sink",
+      "severity": null,
+      "must_match": false,
+      "line_range": [1, 44],
+      "evidence_contains": [],
+      "notes": "No cfg-unguarded-sink should fire for any parameterized query"
+    },
+    {
+      "rule_id": "state-resource-leak",
+      "severity": null,
+      "must_match": false,
+      "line_range": [1, 44],
+      "evidence_contains": [],
+      "notes": "noise: resource leak unrelated to SQL injection"
+    }
+  ]
+}
