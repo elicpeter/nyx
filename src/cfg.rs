@@ -4177,6 +4177,112 @@ fn extract_import_bindings(tree: &Tree, code: &[u8]) -> ImportBindings {
                     }
                 }
             }
+            // Python: from module import A as B
+            "import_from_statement" => {
+                // Extract module path from the module_name field.
+                let module_path = child
+                    .child_by_field_name("module_name")
+                    .and_then(|m| text_of(m, code));
+
+                let mut c1 = child.walk();
+                for part in child.children(&mut c1) {
+                    if part.kind() != "aliased_import" {
+                        continue;
+                    }
+                    let original = part
+                        .child_by_field_name("name")
+                        .and_then(|n| text_of(n, code));
+                    let alias = part
+                        .child_by_field_name("alias")
+                        .and_then(|a| text_of(a, code));
+                    if let (Some(orig), Some(al)) = (original, alias) {
+                        if orig != al {
+                            bindings.insert(
+                                al,
+                                ImportBinding {
+                                    original: orig,
+                                    module_path: module_path.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            // PHP: use Namespace\ClassName as Alias;
+            "namespace_use_declaration" => {
+                let mut c1 = child.walk();
+                for clause in child.children(&mut c1) {
+                    if clause.kind() != "namespace_use_clause" {
+                        continue;
+                    }
+                    // The alias is accessed via the "alias" field (a `name` node).
+                    // The qualified name has no field — find it by kind.
+                    let alias_node = clause.child_by_field_name("alias");
+                    let mut c2 = clause.walk();
+                    let qname_node = clause
+                        .children(&mut c2)
+                        .find(|n| n.kind() == "qualified_name" || n.kind() == "name");
+                    if let (Some(qn), Some(alias_n)) = (qname_node, alias_node) {
+                        let full_path = text_of(qn, code);
+                        let alias = text_of(alias_n, code);
+                        if let (Some(path_str), Some(al)) = (full_path, alias) {
+                            // Extract the last segment as the original name.
+                            let orig = path_str
+                                .rsplit('\\')
+                                .next()
+                                .unwrap_or(&path_str)
+                                .to_string();
+                            if orig != al {
+                                bindings.insert(
+                                    al,
+                                    ImportBinding {
+                                        original: orig,
+                                        module_path: Some(path_str),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            // Rust: use crate::module::func as alias;
+            "use_declaration" => {
+                // Walk all descendants looking for use_as_clause nodes
+                // (may be nested inside use_list / scoped_use_list).
+                let mut stack = vec![child];
+                while let Some(node) = stack.pop() {
+                    if node.kind() == "use_as_clause" {
+                        let path_node = node.child_by_field_name("path");
+                        let alias_node = node.child_by_field_name("alias");
+                        if let (Some(p), Some(a)) = (path_node, alias_node) {
+                            let path_text = text_of(p, code);
+                            let alias_text = text_of(a, code);
+                            if let (Some(path_str), Some(al)) = (path_text, alias_text) {
+                                // Extract the last segment of the path as the original name.
+                                let orig = path_str
+                                    .rsplit("::")
+                                    .next()
+                                    .unwrap_or(&path_str)
+                                    .to_string();
+                                if orig != al {
+                                    bindings.insert(
+                                        al,
+                                        ImportBinding {
+                                            original: orig,
+                                            module_path: Some(path_str),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        let mut c1 = node.walk();
+                        for ch in node.children(&mut c1) {
+                            stack.push(ch);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -4320,7 +4426,7 @@ pub(crate) fn build_cfg<'a>(
     bodies.sort_by_key(|b| b.meta.id);
 
     // Extract import alias bindings for JS/TS files.
-    let import_bindings = if matches!(lang, "javascript" | "typescript" | "tsx") {
+    let import_bindings = if matches!(lang, "javascript" | "typescript" | "tsx" | "python" | "php" | "rust") {
         extract_import_bindings(tree, code)
     } else {
         HashMap::new()
@@ -5488,5 +5594,122 @@ mod cfg_tests {
         assert!(n.call.callee.is_none());
         assert!(n.taint.defines.is_none());
         assert!(n.taint.uses.is_empty());
+    }
+
+    // ── Import alias binding tests ──────────────────────────────────
+
+    #[test]
+    fn js_import_alias_bindings() {
+        let src = b"import { getInput as fetchInput } from './source';";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        assert_eq!(file_cfg.import_bindings.len(), 1);
+        let b = &file_cfg.import_bindings["fetchInput"];
+        assert_eq!(b.original, "getInput");
+        assert_eq!(b.module_path.as_deref(), Some("./source"));
+    }
+
+    #[test]
+    fn js_same_name_import_not_recorded() {
+        let src = b"import { exec } from 'child_process';";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        assert!(file_cfg.import_bindings.is_empty());
+    }
+
+    #[test]
+    fn python_import_alias_bindings() {
+        let src = b"from os import getenv as fetch_env";
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+        assert_eq!(file_cfg.import_bindings.len(), 1);
+        let b = &file_cfg.import_bindings["fetch_env"];
+        assert_eq!(b.original, "getenv");
+        assert_eq!(b.module_path.as_deref(), Some("os"));
+    }
+
+    #[test]
+    fn python_multiple_aliased_imports() {
+        let src = b"from source import get_input as fetch_input, run_query as exec_query";
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+        assert_eq!(file_cfg.import_bindings.len(), 2);
+        assert_eq!(file_cfg.import_bindings["fetch_input"].original, "get_input");
+        assert_eq!(file_cfg.import_bindings["exec_query"].original, "run_query");
+    }
+
+    #[test]
+    fn python_same_name_import_not_recorded() {
+        let src = b"from os import getenv";
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+        assert!(file_cfg.import_bindings.is_empty());
+    }
+
+    #[test]
+    fn php_namespace_alias_bindings() {
+        let src = b"<?php\nuse App\\Security\\Sanitizer as Clean;\n";
+        let ts_lang = Language::from(tree_sitter_php::LANGUAGE_PHP);
+        let file_cfg = parse_to_file_cfg(src, "php", ts_lang);
+        assert_eq!(file_cfg.import_bindings.len(), 1);
+        let b = &file_cfg.import_bindings["Clean"];
+        assert_eq!(b.original, "Sanitizer");
+        assert_eq!(b.module_path.as_deref(), Some("App\\Security\\Sanitizer"));
+    }
+
+    #[test]
+    fn php_no_alias_not_recorded() {
+        let src = b"<?php\nuse App\\Security\\Sanitizer;\n";
+        let ts_lang = Language::from(tree_sitter_php::LANGUAGE_PHP);
+        let file_cfg = parse_to_file_cfg(src, "php", ts_lang);
+        assert!(file_cfg.import_bindings.is_empty());
+    }
+
+    #[test]
+    fn rust_use_as_alias_bindings() {
+        let src = b"use std::collections::HashMap as Map;";
+        let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "rust", ts_lang);
+        assert_eq!(file_cfg.import_bindings.len(), 1);
+        let b = &file_cfg.import_bindings["Map"];
+        assert_eq!(b.original, "HashMap");
+        assert_eq!(
+            b.module_path.as_deref(),
+            Some("std::collections::HashMap")
+        );
+    }
+
+    #[test]
+    fn rust_no_alias_not_recorded() {
+        let src = b"use std::collections::HashMap;";
+        let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "rust", ts_lang);
+        assert!(file_cfg.import_bindings.is_empty());
+    }
+
+    #[test]
+    fn rust_nested_use_as_alias() {
+        let src = b"use std::io::{Read as IoRead, Write};";
+        let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "rust", ts_lang);
+        assert_eq!(file_cfg.import_bindings.len(), 1);
+        let b = &file_cfg.import_bindings["IoRead"];
+        assert_eq!(b.original, "Read");
+    }
+
+    #[test]
+    fn go_no_import_bindings() {
+        let src = b"package main\nimport alias \"fmt\"\n";
+        let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "go", ts_lang);
+        assert!(file_cfg.import_bindings.is_empty());
+    }
+
+    #[test]
+    fn java_no_import_bindings() {
+        let src = b"import java.util.List;";
+        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "java", ts_lang);
+        assert!(file_cfg.import_bindings.is_empty());
     }
 }

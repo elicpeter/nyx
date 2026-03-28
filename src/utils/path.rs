@@ -112,14 +112,14 @@ pub fn open_repo_text_file(
 ) -> Result<OpenedTextFile, RepoPathError> {
     let resolved = resolve_repo_path(scan_root, requested)?;
 
-    let file = File::open(&resolved.canonical).map_err(|err| io_error_kind(&err))?;
-    let metadata = file.metadata().map_err(|err| io_error_kind(&err))?;
+    let metadata = fs::metadata(&resolved.canonical).map_err(|err| io_error_kind(&err))?;
     if !metadata.file_type().is_file() {
         return Err(RepoPathError::NotFile);
     }
     if metadata.len() > max_bytes {
         return Err(RepoPathError::TooLarge);
     }
+    let file = File::open(&resolved.canonical).map_err(|err| io_error_kind(&err))?;
 
     let mut reader = BufReader::new(file);
     let mut content = String::new();
