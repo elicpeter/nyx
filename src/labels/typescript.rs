@@ -130,7 +130,7 @@ pub static RULES: &[LabelRule] = &[
     },
     // Express response sinks
     LabelRule {
-        matchers: &["res.send", "res.json", "res.render"],
+        matchers: &["res.send", "res.json"],
         label: DataLabel::Sink(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
@@ -204,6 +204,30 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SQL_QUERY),
         case_sensitive: true,
     },
+];
+
+/// Callee patterns that must never be classified as source/sanitizer/sink.
+pub static EXCLUDES: &[&str] = &[
+    // Express route registration
+    "router.get",
+    "router.post",
+    "router.put",
+    "router.delete",
+    "router.patch",
+    "router.use",
+    "router.all",
+    "app.get",
+    "app.post",
+    "app.put",
+    "app.delete",
+    "app.patch",
+    "app.use",
+    "app.all",
+    // Non-user-controlled req properties
+    "req.session",
+    "req.app",
+    "req.route",
+    "req.next",
 ];
 
 pub static GATED_SINKS: &[SinkGate] = &[

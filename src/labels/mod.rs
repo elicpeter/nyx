@@ -224,6 +224,33 @@ static GATED_REGISTRY: Lazy<HashMap<&'static str, &'static [SinkGate]>> = Lazy::
     m
 });
 
+/// Per-language exclusion patterns: callee text that must never be classified.
+static EXCLUDES: Lazy<HashMap<&'static str, &'static [&'static str]>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("javascript", javascript::EXCLUDES);
+    m.insert("js", javascript::EXCLUDES);
+    m.insert("typescript", typescript::EXCLUDES);
+    m.insert("ts", typescript::EXCLUDES);
+    m
+});
+
+/// Check whether `text` matches a per-language exclusion pattern.
+fn is_excluded(lang: &str, trimmed: &[u8]) -> bool {
+    let excludes = match EXCLUDES.get(lang).or_else(|| {
+        let key = lang.to_ascii_lowercase();
+        EXCLUDES.get(key.as_str())
+    }) {
+        Some(e) => *e,
+        None => return false,
+    };
+    for &pat in excludes {
+        if match_suffix_cs(trimmed, pat.as_bytes(), false) {
+            return true;
+        }
+    }
+    false
+}
+
 type FastMap = &'static Map<&'static str, Kind>;
 
 pub(crate) static CLASSIFIERS: Lazy<HashMap<&'static str, FastMap>> = Lazy::new(|| {
@@ -543,6 +570,11 @@ pub fn classify(lang: &str, text: &str, extra: Option<&[RuntimeLabelRule]>) -> O
     let head = text.split(['(', '<']).next().unwrap_or("");
     let trimmed = head.trim().as_bytes();
 
+    // Early out: exclude known-benign framework patterns.
+    if is_excluded(lang, trimmed) {
+        return None;
+    }
+
     // For chained calls like `r.URL.Query().Get`, also strip internal
     // `().` segments to produce a normalized form like `r.URL.Query.Get`.
     let full_normalized = normalize_chained_call(text);
@@ -627,6 +659,11 @@ pub fn classify_all(
 ) -> SmallVec<[DataLabel; 2]> {
     let head = text.split(['(', '<']).next().unwrap_or("");
     let trimmed = head.trim().as_bytes();
+
+    // Early out: exclude known-benign framework patterns.
+    if is_excluded(lang, trimmed) {
+        return SmallVec::new();
+    }
 
     let full_normalized = normalize_chained_call(text);
     let full_norm_bytes = full_normalized.as_bytes();

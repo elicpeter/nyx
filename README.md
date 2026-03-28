@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/logo.png" alt="nyx logo" width="300"/>
+  <img src="assets/nyx-logo-text.png" alt="nyx logo" width="500"/>
 
 **A cross-language static analysis tool for security vulnerabilities.**
 

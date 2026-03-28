@@ -4446,6 +4446,12 @@ fn is_string_safe_for_ssrf(sf: &crate::abstract_interp::StringFact) -> bool {
         Some(p) => p.as_str(),
         None => return false,
     };
+    // Absolute-path prefix (e.g. "/projects/...") — internal redirect, not open redirect.
+    // The leading "/" locks the path to the same origin; the attacker cannot control the scheme
+    // or host, so this is not an SSRF vector.
+    if prefix.starts_with('/') {
+        return true;
+    }
     if let Some(after_scheme) = prefix.find("://") {
         let host_and_rest = &prefix[after_scheme + 3..];
         if let Some(slash_pos) = host_and_rest.find('/') {
