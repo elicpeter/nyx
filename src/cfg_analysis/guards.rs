@@ -246,6 +246,49 @@ fn sink_arg_is_parameter_only(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     sink_uses.iter().all(|u| param_names.contains(&u.as_str()))
 }
 
+/// Check if this sink is an internal redirect — a `res.redirect` (SSRF sink)
+/// whose argument is a template literal or string starting with `/`, indicating
+/// a server-relative path rather than an attacker-controlled URL.
+fn is_internal_redirect(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) -> bool {
+    if !sink_caps.contains(Cap::SSRF) {
+        return false;
+    }
+    let sink_info = &ctx.cfg[sink];
+    let callee = match &sink_info.call.callee {
+        Some(c) => c.as_str(),
+        None => return false,
+    };
+    // Only applies to redirect calls
+    if !callee.ends_with("redirect") && !callee.ends_with("Redirect") {
+        return false;
+    }
+    // Check the source text at the sink's span for a path-prefix argument.
+    // Look for patterns like: redirect(`/...`), redirect("/..."), redirect('/...')
+    let (start, end) = sink_info.ast.span;
+    if start >= ctx.source_bytes.len() || end > ctx.source_bytes.len() {
+        return false;
+    }
+    let text = &ctx.source_bytes[start..end];
+    // Search for the argument portion after the first '('
+    if let Some(paren_pos) = text.iter().position(|&b| b == b'(') {
+        let after_paren = &text[paren_pos + 1..];
+        let trimmed = after_paren
+            .iter()
+            .skip_while(|&&b| b == b' ' || b == b'\n' || b == b'\t')
+            .copied()
+            .collect::<Vec<_>>();
+        // Template literal: `/ ...
+        if trimmed.starts_with(b"`/") {
+            return true;
+        }
+        // String literal: "/ ... or '/ ...
+        if trimmed.starts_with(b"\"/") || trimmed.starts_with(b"'/") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check if the enclosing function qualifies as an entrypoint.
 fn sink_in_entrypoint(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     let sink_info = &ctx.cfg[sink];
@@ -345,6 +388,12 @@ impl CfgAnalysis for UnguardedSink {
             // placeholders ($1, ?, %s, :name) and a params argument exists.
             // These are safe by construction — the driver handles escaping.
             if sink_info.parameterized_query {
+                continue;
+            }
+
+            // Internal redirects: res.redirect(`/path/...`) with a path-prefix
+            // argument are server-relative — not attacker-controlled URLs.
+            if is_internal_redirect(ctx, *sink, sink_caps) {
                 continue;
             }
 

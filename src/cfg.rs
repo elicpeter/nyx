@@ -32,6 +32,7 @@ pub enum StmtKind {
     Break,
     Continue,
     Return,
+    Throw,
     Call,
 }
 
@@ -3714,7 +3715,7 @@ fn build_sub<'a>(
                 connect_all(g, &effective_preds, call_idx, EdgeKind::Seq);
                 let ret = push_node(
                     g,
-                    StmtKind::Return,
+                    StmtKind::Throw,
                     ast,
                     lang,
                     code,
@@ -3728,7 +3729,7 @@ fn build_sub<'a>(
             } else {
                 let ret = push_node(
                     g,
-                    StmtKind::Return,
+                    StmtKind::Throw,
                     ast,
                     lang,
                     code,
@@ -3961,9 +3962,9 @@ fn build_sub<'a>(
             for &b in &body_exits {
                 connect_all(&mut fn_graph, &[b], fn_exit, EdgeKind::Seq);
             }
-            // Wire internal Return nodes to Exit (returns target this body’s exit)
+            // Wire internal Return/Throw nodes to Exit (both terminate this body)
             for idx in fn_graph.node_indices().collect::<Vec<_>>() {
-                if fn_graph[idx].kind == StmtKind::Return
+                if matches!(fn_graph[idx].kind, StmtKind::Return | StmtKind::Throw)
                     && idx != fn_exit
                     && !fn_graph.contains_edge(idx, fn_exit)
                 {

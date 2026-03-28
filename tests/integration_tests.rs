@@ -393,6 +393,15 @@ fn mixed_project_multi_language() {
     );
 }
 
+/// JS: throw in error-check branch should be recognized as a terminator,
+/// suppressing cfg-error-fallthrough false positives.
+#[test]
+fn error_throw_terminates() {
+    let dir = fixture_path("error_throw_terminates");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── Binary smoke test ──────────────────────────────────────────────────────
 
 #[test]

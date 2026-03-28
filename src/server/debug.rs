@@ -195,6 +195,7 @@ fn stmt_kind_str(k: StmtKind) -> String {
         StmtKind::Break => "Break",
         StmtKind::Continue => "Continue",
         StmtKind::Return => "Return",
+        StmtKind::Throw => "Throw",
         StmtKind::Call => "Call",
     }
     .into()

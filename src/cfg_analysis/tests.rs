@@ -855,19 +855,17 @@ fn js_throw_terminates_block() {
     let cfg = &file_cfg.first_body().graph;
     let entry = file_cfg.first_body().entry;
 
-    // Verify throw creates a Return-kind node
+    // Verify throw creates a Throw-kind node
     let throw_nodes: Vec<_> = cfg
         .node_indices()
         .filter(|&idx| {
-            cfg[idx].kind == crate::cfg::StmtKind::Return
-                && cfg[idx].ast.span.0 > 0
-                && src[cfg[idx].ast.span.0..].starts_with(b"throw")
+            cfg[idx].kind == crate::cfg::StmtKind::Throw
         })
         .collect();
 
     assert!(
         !throw_nodes.is_empty(),
-        "throw statement should create a Return-kind node"
+        "throw statement should create a Throw-kind node"
     );
 
     // eval after throw should be unreachable

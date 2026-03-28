@@ -47,7 +47,7 @@ fn terminates_on_all_paths(
 
         let info = &cfg[current];
         match info.kind {
-            StmtKind::Return | StmtKind::Break | StmtKind::Continue => {
+            StmtKind::Return | StmtKind::Throw | StmtKind::Break | StmtKind::Continue => {
                 // This path terminates
                 continue;
             }

@@ -854,6 +854,7 @@ fn rename_variables(
                     | StmtKind::Break
                     | StmtKind::Continue
                     | StmtKind::Return
+                    | StmtKind::Throw
             ) {
                 SsaOp::Nop
             } else if info.call.callee.is_some() {
