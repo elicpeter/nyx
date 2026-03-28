@@ -10,6 +10,7 @@ pub fn lowercase_ext(path: &std::path::Path) -> Option<&'static str> {
         "ts" | "TSX" | "tsx" => Some("ts"),
         "js" => Some("js"),
         "rb" | "RB" => Some("rb"),
+        "ejs" | "EJS" => Some("ejs"),
         _ => None,
     })
 }

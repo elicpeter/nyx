@@ -438,3 +438,31 @@ fn binary_json_output() {
         "Expected at least 1 finding in JSON output"
     );
 }
+
+// ── EJS / config / debug endpoint fixtures ──────────────────────────────────
+
+/// EJS template: detects unescaped `<%- query %>` and `<%- resultHtml %>`
+/// but not `<%- include(...) %>` or `<%= safe %>`.
+#[test]
+fn ejs_xss() {
+    let dir = fixture_path("ejs_xss");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Express session config: detects httpOnly: false, secure: false,
+/// sameSite: "none", and hardcoded secret.
+#[test]
+fn insecure_session_config() {
+    let dir = fixture_path("insecure_session_config");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Debug endpoint: process.env → res.json() should be caught by taint.
+#[test]
+fn debug_endpoint() {
+    let dir = fixture_path("debug_endpoint");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}

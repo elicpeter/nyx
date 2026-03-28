@@ -40,6 +40,7 @@
 
 pub mod c;
 pub mod cpp;
+pub mod ejs;
 mod go;
 mod java;
 pub mod javascript;
@@ -224,6 +225,7 @@ pub enum PatternCategory {
     Reflection,
     MemorySafety,
     Prototype,
+    InsecureConfig,
     CodeQuality,
 }
 

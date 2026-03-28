@@ -193,4 +193,41 @@ pub const PATTERNS: &[Pattern] = &[
         category: PatternCategory::Xss,
         confidence: Confidence::Medium,
     },
+    // ── Tier A: Insecure session / cookie configuration ─────────────────
+    Pattern {
+        id: "ts.config.insecure_session_httponly",
+        description: "Session cookie with httpOnly: false — allows XSS-based session theft",
+        query: r#"(pair
+                     key: (property_identifier) @key (#eq? @key "httpOnly")
+                     value: (false) @val)
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::High,
+    },
+    Pattern {
+        id: "ts.config.insecure_session_secure",
+        description: "Session cookie with secure: false — cookie sent over plain HTTP",
+        query: r#"(pair
+                     key: (property_identifier) @key (#eq? @key "secure")
+                     value: (false) @val)
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::Medium,
+    },
+    Pattern {
+        id: "ts.config.insecure_session_samesite",
+        description: "sameSite: \"none\" allows cross-origin cookie sending, increasing CSRF risk",
+        query: r#"(pair
+                     key: (property_identifier) @key (#eq? @key "sameSite")
+                     value: (string) @val (#match? @val "^[\"']none[\"']$"))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::High,
+    },
 ];

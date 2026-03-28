@@ -1132,7 +1132,8 @@ pub fn run_rules_on_bytes(
     let _span = tracing::debug_span!("run_rules", file = %path.display()).entered();
 
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
-        return Ok(vec![]);
+        // Not a recognized tree-sitter language — try text-based patterns.
+        return Ok(scan_text_based_patterns(bytes, path, cfg));
     };
 
     let mut out = Vec::new();
@@ -1219,9 +1220,10 @@ pub fn analyse_file_fused(
     let _span = tracing::debug_span!("analyse_fused", file = %path.display()).entered();
 
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
+        // Not a recognized tree-sitter language — try text-based patterns.
         return Ok(FusedResult {
             summaries: vec![],
-            diags: vec![],
+            diags: scan_text_based_patterns(bytes, path, cfg),
             ssa_summaries: vec![],
             cfg_nodes: 0,
             ssa_bodies: vec![],
@@ -1270,6 +1272,25 @@ pub fn analyse_file_fused(
         cfg_nodes,
         ssa_bodies,
     })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Text-based pattern scanning (non-tree-sitter files)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Run text-based pattern scanners on files whose extension is not supported
+/// by tree-sitter.  Currently handles `.ejs` templates.
+fn scan_text_based_patterns(bytes: &[u8], path: &Path, cfg: &Config) -> Vec<Diag> {
+    let ext = lowercase_ext(path);
+    match ext.as_deref() {
+        Some("ejs") => {
+            let mut diags = crate::patterns::ejs::scan_ejs_file(path, bytes);
+            // Respect severity filter
+            diags.retain(|d| d.severity <= cfg.scanner.min_severity);
+            diags
+        }
+        _ => vec![],
+    }
 }
 
 #[test]
