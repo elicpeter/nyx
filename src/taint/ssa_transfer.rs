@@ -517,6 +517,10 @@ pub struct SsaTaintTransfer<'a> {
     /// container identity propagation from `param_container_to_return` summaries.
     /// Uses `RefCell` for interior mutability (same pattern as `inline_cache`).
     pub dynamic_pts: Option<&'a RefCell<HashMap<SsaValue, PointsToSet>>>,
+    /// Import alias bindings: local alias → (original name, module path).
+    /// Used in `resolve_callee` to map aliased import names back to their
+    /// original exported symbol before summary lookup.
+    pub import_bindings: Option<&'a crate::cfg::ImportBindings>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -1519,6 +1523,7 @@ fn inline_analyse_callee(
         callback_bindings: cb_ref,
         points_to: Some(&callee_body.opt.points_to),
         dynamic_pts: None, // no inter-procedural container propagation at k>1
+        import_bindings: transfer.import_bindings,
     };
 
     // Use the callee's own body graph for inline analysis (per-body CFGs
@@ -1766,6 +1771,11 @@ fn transfer_inst(
                 }
             }
 
+            // CFG-level receiver offset: 1 when the receiver was prepended to
+            // arg_uses during CFG construction (CallMethod), 0 otherwise.
+            let cfg_receiver_offset: usize =
+                if info.call.receiver.is_some() { 1 } else { 0 };
+
             // Resolve callee summary — always attempt, even when explicit
             // labels are present. Labels take precedence for source caps, but
             // summary propagation and sanitizer behaviour must still apply
@@ -1879,7 +1889,7 @@ fn transfer_inst(
                         &resolved.propagating_params
                     };
                     let (prop_caps, prop_origins) =
-                        collect_args_taint(args, receiver, state, effective_params);
+                        collect_args_taint(args, receiver, state, effective_params, cfg_receiver_offset);
                     return_bits |= prop_caps;
                     for orig in &prop_origins {
                         if return_origins.len() < MAX_ORIGINS
@@ -1941,7 +1951,7 @@ fn transfer_inst(
             // Apply explicit sanitizer labels
             if !sanitizer_bits.is_empty() {
                 // Collect uses taint then strip bits
-                let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
+                let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[], cfg_receiver_offset);
                 return_bits |= use_caps;
                 for orig in &use_origins {
                     if return_origins.len() < MAX_ORIGINS
@@ -2043,7 +2053,7 @@ fn transfer_inst(
                     }
 
                     // No labels and no summary — default propagation (gen/kill)
-                    let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
+                    let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[], cfg_receiver_offset);
                     if return_bits.is_empty() {
                         return_bits = use_caps;
                         return_origins = use_origins;
@@ -3090,11 +3100,18 @@ fn collect_block_events(
 }
 
 /// Collect taint from call arguments.
+///
+/// `receiver_offset` is the number of entries at the front of `args` that
+/// correspond to the receiver (prepended by CFG construction for CallMethod
+/// nodes).  Use `info.call.receiver.is_some()` to compute this — NOT the
+/// SSA-level `receiver` field, which may be `None` when the receiver variable
+/// is out of scope (e.g., Java class fields).
 fn collect_args_taint(
     args: &[SmallVec<[SsaValue; 2]>],
     receiver: &Option<SsaValue>,
     state: &SsaTaintState,
     propagating_params: &[usize],
+    receiver_offset: usize,
 ) -> (Cap, SmallVec<[TaintOrigin; 2]>) {
     let mut combined_caps = Cap::empty();
     let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
@@ -3129,9 +3146,8 @@ fn collect_args_taint(
         }
     } else {
         // Collect only from propagating param positions
-        let offset = if receiver.is_some() { 1 } else { 0 };
         for &param_idx in propagating_params {
-            let adj = param_idx + offset;
+            let adj = param_idx + receiver_offset;
             if let Some(arg_vals) = args.get(adj) {
                 for &v in arg_vals {
                     if let Some(taint) = state.get(v) {
@@ -3630,12 +3646,19 @@ fn collect_tainted_sink_values(
     // Collect SSA values used by this instruction
     let used_values = inst_use_values(inst);
 
+    // Receiver offset: for CallMethod nodes the receiver identifier is
+    // prepended to arg_uses[0] during CFG construction (cfg.rs push_node),
+    // regardless of whether the receiver could be resolved to an SSA value.
+    // Use `info.call.receiver` (always set for CallMethod) instead of the
+    // SSA-level `receiver` field so the offset is correct even when the
+    // receiver variable is out of scope (e.g., Java class fields).
+    let receiver_offset: usize = if info.call.receiver.is_some() { 1 } else { 0 };
+
     // Priority 1: gated sink filtering (CFG-level sink_payload_args)
     if let Some(ref positions) = info.call.sink_payload_args {
-        if let SsaOp::Call { args, receiver, .. } = &inst.op {
-            let offset = if receiver.is_some() { 1 } else { 0 };
+        if let SsaOp::Call { args, .. } = &inst.op {
             for &pos in positions {
-                let adj = pos + offset;
+                let adj = pos + receiver_offset;
                 if let Some(arg_vals) = args.get(adj) {
                     for &v in arg_vals {
                         if let Some(taint) = state.get(v) {
@@ -3653,8 +3676,9 @@ fn collect_tainted_sink_values(
     }
 
     // Priority 2: summary-based per-parameter sink filtering.
-    // param_to_sink indices map directly to args[] (no receiver offset —
-    // SsaOp::Param { index } corresponds to args[index], receiver is separate).
+    // param_to_sink indices refer to the callee's formal parameter positions.
+    // For CallMethod nodes the receiver is prepended to args[0] (see cfg.rs
+    // push_node), so we offset using receiver_offset computed above.
     if !param_to_sink.is_empty() {
         if let SsaOp::Call { args, .. } = &inst.op {
             for &(param_idx, per_param_caps) in param_to_sink {
@@ -3662,7 +3686,8 @@ fn collect_tainted_sink_values(
                 if effective_caps.is_empty() {
                     continue;
                 }
-                if let Some(arg_vals) = args.get(param_idx) {
+                let adj = param_idx + receiver_offset;
+                if let Some(arg_vals) = args.get(adj) {
                     for &v in arg_vals {
                         if let Some(taint) = state.get(v) {
                             if (taint.caps & effective_caps) != Cap::empty()
@@ -4452,6 +4477,17 @@ fn resolve_callee(
     // Use leaf name for map/index lookups (FuncKey.name is always leaf).
     let normalized = callee_leaf_name(callee);
 
+    // -2) Import alias resolution: if the callee matches an aliased import
+    // (e.g. `fetchUserCmd` → `getInput` from `./source`), resolve using the
+    // original exported name instead.  This fires before all other resolution
+    // so that downstream steps see the canonical symbol name.
+    if let Some(bindings) = transfer.import_bindings {
+        if let Some(binding) = bindings.get(normalized) {
+            // Recursively resolve using the original name.
+            return resolve_callee(transfer, &binding.original, caller_func, call_ordinal);
+        }
+    }
+
     // -1) Callback resolution: if the callee name matches a parameter that was
     // bound to a specific function at the call site, resolve that function instead.
     if let Some(cb) = transfer.callback_bindings {
@@ -5041,6 +5077,7 @@ pub fn extract_ssa_func_summary(
             callback_bindings: None,
             points_to: None,
             dynamic_pts: None,
+            import_bindings: None,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);
@@ -5235,6 +5272,7 @@ pub fn extract_ssa_func_summary(
             callback_bindings: None,
             points_to: None,
             dynamic_pts: None,
+            import_bindings: None,
         };
         detect_source_to_callback_from_states(
             ssa,

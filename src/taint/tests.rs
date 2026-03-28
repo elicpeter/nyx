@@ -50,6 +50,7 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         callback_bindings: None,
         points_to: None,
         dynamic_pts: None,
+        import_bindings: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, cfg, &transfer);
     let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, cfg);
@@ -3419,6 +3420,7 @@ fn assert_ssa_integration(src: &[u8]) {
         callback_bindings: None,
         points_to: None,
         dynamic_pts: None,
+        import_bindings: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -3544,6 +3546,7 @@ fn integ_php_echo_simple_var() {
         callback_bindings: None,
         points_to: None,
         dynamic_pts: None,
+        import_bindings: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -3601,6 +3604,7 @@ fn integ_c_curl_handle_ssrf() {
         callback_bindings: None,
         points_to: None,
         dynamic_pts: None,
+        import_bindings: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);

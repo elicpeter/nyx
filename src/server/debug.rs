@@ -941,6 +941,7 @@ pub fn analyse_function_taint(
         callback_bindings: None,
         points_to: Some(&opt.points_to),
         dynamic_pts: None,
+        import_bindings: None,
     };
 
     crate::taint::ssa_transfer::run_ssa_taint_full_with_exits(ssa, cfg, &transfer)

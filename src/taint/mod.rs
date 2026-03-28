@@ -114,6 +114,11 @@ pub fn analyse_file(
     } else {
         1
     };
+    let import_bindings_ref = if file_cfg.import_bindings.is_empty() {
+        None
+    } else {
+        Some(&file_cfg.import_bindings)
+    };
     let mut all_findings = analyse_multi_body(
         file_cfg,
         caller_lang,
@@ -126,6 +131,7 @@ pub fn analyse_file(
         callee_bodies_ref,
         inline_cache_ref,
         max_iterations,
+        import_bindings_ref,
     );
 
     // 4. Deduplicate findings by (body_id, sink, source), prefer path_validated=true
@@ -184,6 +190,7 @@ fn analyse_body_with_seed(
     callee_bodies: Option<&std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>>,
     inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
     seed: Option<&HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>,
+    import_bindings: Option<&crate::cfg::ImportBindings>,
 ) -> (
     Vec<Finding>,
     Option<HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>,
@@ -249,6 +256,7 @@ fn analyse_body_with_seed(
                 callback_bindings: None,
                 points_to: Some(&opt.points_to),
                 dynamic_pts: Some(&dynamic_pts),
+                import_bindings,
             };
             let (events, block_states) =
                 ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);
@@ -302,6 +310,7 @@ fn analyse_multi_body(
     callee_bodies: Option<&std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>>,
     inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
     max_iterations: usize,
+    import_bindings: Option<&crate::cfg::ImportBindings>,
 ) -> Vec<Finding> {
     let order = containment_order(&file_cfg.bodies);
     let mut all_findings: Vec<Finding> = Vec::new();
@@ -333,6 +342,7 @@ fn analyse_multi_body(
             callee_bodies,
             inline_cache,
             parent_seed,
+            import_bindings,
         );
         tracing::debug!(
             body_id = body.meta.id.0,
@@ -428,6 +438,7 @@ fn analyse_multi_body(
                     callee_bodies,
                     inline_cache,
                     parent_seed,
+                    import_bindings,
                 );
                 all_findings.extend(findings);
                 if let Some(es) = exit_state {

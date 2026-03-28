@@ -246,11 +246,27 @@ pub struct BodyCfg {
     pub exit: NodeIndex,
 }
 
+/// A single import alias binding: local alias → original exported name + module.
+#[derive(Debug, Clone)]
+pub struct ImportBinding {
+    /// The original exported symbol name (e.g. `getInput`).
+    pub original: String,
+    /// The module path (e.g. `./source`), if extractable.
+    pub module_path: Option<String>,
+}
+
+/// Per-file map from locally-bound alias name to its import origin.
+/// Populated during CFG construction for ES6 `import { A as B }` and
+/// CommonJS `const { A: B } = require(...)` patterns.
+pub type ImportBindings = HashMap<String, ImportBinding>;
+
 /// All CFGs for a file.
 #[derive(Debug)]
 pub struct FileCfg {
     pub bodies: Vec<BodyCfg>,
     pub summaries: FuncSummaries,
+    /// Import alias bindings: local alias → (original name, module path).
+    pub import_bindings: ImportBindings,
 }
 
 impl FileCfg {
@@ -4055,6 +4071,140 @@ fn build_sub<'a>(
 }
 
 // -------------------------------------------------------------------------
+//  Import binding extraction
+// -------------------------------------------------------------------------
+
+/// Walk the top-level AST nodes and collect import alias bindings:
+///
+/// - ES6: `import { A as B } from 'mod'` → B → ImportBinding { original: A, module: mod }
+/// - CommonJS: `const { A: B } = require('mod')` → B → ImportBinding { original: A, module: mod }
+///
+/// Only aliased (renamed) bindings are recorded — same-name imports (e.g.
+/// `import { exec }`) are already resolvable by their original name.
+fn extract_import_bindings(tree: &Tree, code: &[u8]) -> ImportBindings {
+    let mut bindings = ImportBindings::new();
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+
+    for child in root.children(&mut cursor) {
+        match child.kind() {
+            // ES6: import { A as B } from 'mod'
+            "import_statement" => {
+                let source_str = child
+                    .child_by_field_name("source")
+                    .and_then(|s| text_of(s, code))
+                    .map(|s| s.trim_matches(|c| c == '\'' || c == '"').to_string());
+
+                let mut c1 = child.walk();
+                for clause_child in child.children(&mut c1) {
+                    if clause_child.kind() != "import_clause" {
+                        continue;
+                    }
+                    let mut c2 = clause_child.walk();
+                    for part in clause_child.children(&mut c2) {
+                        if part.kind() != "named_imports" {
+                            continue;
+                        }
+                        let mut c3 = part.walk();
+                        for spec in part.children(&mut c3) {
+                            if spec.kind() != "import_specifier" {
+                                continue;
+                            }
+                            let original = spec
+                                .child_by_field_name("name")
+                                .and_then(|n| text_of(n, code));
+                            let alias = spec
+                                .child_by_field_name("alias")
+                                .and_then(|a| text_of(a, code));
+                            if let (Some(orig), Some(al)) = (original, alias) {
+                                if orig != al {
+                                    bindings.insert(
+                                        al,
+                                        ImportBinding {
+                                            original: orig,
+                                            module_path: source_str.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // CommonJS: const { A: B } = require('mod')
+            "lexical_declaration" | "variable_declaration" => {
+                let mut c1 = child.walk();
+                for decl in child.children(&mut c1) {
+                    if decl.kind() != "variable_declarator" {
+                        continue;
+                    }
+                    let (pattern, value) = match (
+                        decl.child_by_field_name("name"),
+                        decl.child_by_field_name("value"),
+                    ) {
+                        (Some(p), Some(v)) => (p, v),
+                        _ => continue,
+                    };
+                    if pattern.kind() != "object_pattern" {
+                        continue;
+                    }
+                    let module_path = extract_require_module(value, code);
+                    if module_path.is_none() {
+                        continue;
+                    }
+                    let mut c2 = pattern.walk();
+                    for pair in pattern.children(&mut c2) {
+                        if pair.kind() != "pair_pattern" {
+                            continue;
+                        }
+                        let key = pair
+                            .child_by_field_name("key")
+                            .and_then(|n| text_of(n, code));
+                        let val = pair
+                            .child_by_field_name("value")
+                            .and_then(|n| text_of(n, code));
+                        if let (Some(orig), Some(al)) = (key, val) {
+                            if orig != al {
+                                bindings.insert(
+                                    al,
+                                    ImportBinding {
+                                        original: orig,
+                                        module_path: module_path.clone(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    bindings
+}
+
+/// Extract the module path from a `require('...')` call expression.
+fn extract_require_module(node: Node, code: &[u8]) -> Option<String> {
+    if node.kind() != "call_expression" {
+        return None;
+    }
+    let func = node.child_by_field_name("function")?;
+    let func_text = text_of(func, code)?;
+    if func_text != "require" {
+        return None;
+    }
+    let args = node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    for arg in args.children(&mut cursor) {
+        if arg.kind() == "string" || arg.kind() == "template_string" {
+            return text_of(arg, code)
+                .map(|s| s.trim_matches(|c| c == '\'' || c == '"' || c == '`').to_string());
+        }
+    }
+    None
+}
+
+// -------------------------------------------------------------------------
 //  === PUBLIC ENTRY POINT =================================================
 // -------------------------------------------------------------------------
 
@@ -4169,7 +4319,18 @@ pub(crate) fn build_cfg<'a>(
     // so the Vec may be out of order before this sort.
     bodies.sort_by_key(|b| b.meta.id);
 
-    FileCfg { bodies, summaries }
+    // Extract import alias bindings for JS/TS files.
+    let import_bindings = if matches!(lang, "javascript" | "typescript" | "tsx") {
+        extract_import_bindings(tree, code)
+    } else {
+        HashMap::new()
+    };
+
+    FileCfg {
+        bodies,
+        summaries,
+        import_bindings,
+    }
 }
 
 /// Convert the graph‑local `FuncSummaries` into serialisable [`FuncSummary`]

@@ -4,13 +4,11 @@ const { execSync } = require('child_process');
 const { getInput: fetchUserCmd } = require('./source');
 
 /**
- * VULN: fetchUserCmd() returns a user-controlled value (process.env.USER_CMD)
- * and that value is passed directly to execSync() — a shell execution sink.
- * No sanitisation occurs between source and sink.
+ * VULN: req.query.cmd is user-controlled input (source) that flows through
+ * fetchUserCmd() — an alias for getInput() defined in source.js — and then
+ * directly to execSync() (shell execution sink) with no sanitisation.
  */
-function handleRequest() {
-    const cmd = fetchUserCmd(); // taint flows through renamed binding
-    execSync(cmd);              // SINK: unsanitised command execution
+function handleRequest(req) {
+    const cmd = fetchUserCmd(req.query.cmd); // taint flows through renamed binding
+    execSync(cmd);                           // SINK: unsanitised command execution
 }
-
-handleRequest();

@@ -152,8 +152,7 @@ fn cross_file_go_handler_exec() {
 
 /// Java: UserController.java reads getParameter("name") and passes it to
 /// UserRepository.findByName(), which concatenates it into executeQuery().
-/// Engine gap: cross-file taint doesn't propagate for Java in this version;
-/// the AST pattern java.sqli.execute_concat fires instead of taint-unsanitised-flow.
+/// Cross-file taint propagates via param_to_sink in the resolved summary.
 #[test]
 fn cross_file_java_sqli() {
     let dir = fixture_path("cross_file_java_sqli");
@@ -170,10 +169,9 @@ fn cross_file_ts_ssrf() {
     validate_expectations(&diags, &dir);
 }
 
-/// JavaScript: source.js exports getInput(); app.js destructures it under
-/// the alias fetchUserCmd and passes the result to execSync.
-/// Engine note: JS aliased import doesn't propagate taint across files in this
-/// version; cfg-unguarded-sink fires instead of taint-unsanitised-flow.
+/// JavaScript: source.js exports getInput(data); app.js destructures it under
+/// the alias fetchUserCmd and passes req.query.cmd through it to execSync.
+/// Import alias resolution maps fetchUserCmd → getInput for cross-file taint.
 #[test]
 fn cross_file_js_aliased_import() {
     let dir = fixture_path("cross_file_js_aliased_import");

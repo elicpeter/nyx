@@ -1,10 +1,10 @@
 /**
- * SOURCE module — exports a function that reads a user-controlled environment
- * variable.  The export name will be renamed (aliased) at the import site in
- * app.js to test that Nyx resolves renamed bindings correctly.
+ * SOURCE module — exports a function that passes its parameter through to
+ * the return value.  The export name will be renamed (aliased) at the import
+ * site in app.js to test that Nyx resolves renamed bindings correctly.
  */
-function getInput() {
-    return process.env.USER_CMD; // taint source
+function getInput(data) {
+    return data; // passthrough: param 0 → return
 }
 
 module.exports = { getInput };
