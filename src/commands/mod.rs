@@ -101,7 +101,8 @@ pub fn handle_command(
             match effective_mode {
                 ScanMode::Full => config.scanner.mode = AnalysisMode::Full,
                 ScanMode::Ast => config.scanner.mode = AnalysisMode::Ast,
-                ScanMode::Cfg | ScanMode::Taint => config.scanner.mode = AnalysisMode::Taint,
+                ScanMode::Cfg => config.scanner.mode = AnalysisMode::Cfg,
+                ScanMode::Taint => config.scanner.mode = AnalysisMode::Taint,
             }
 
             if keep_nonprod_severity {

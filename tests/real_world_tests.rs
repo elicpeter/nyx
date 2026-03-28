@@ -330,6 +330,7 @@ fn match_expectations(
 fn resolve_mode(mode_str: &str) -> AnalysisMode {
     match mode_str.to_lowercase().as_str() {
         "ast" => AnalysisMode::Ast,
+        "cfg" => AnalysisMode::Cfg,
         "taint" => AnalysisMode::Taint,
         "full" => AnalysisMode::Full,
         _ => AnalysisMode::Full,

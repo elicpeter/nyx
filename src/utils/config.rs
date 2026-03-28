@@ -19,6 +19,7 @@ pub enum AnalysisMode {
     #[default]
     Full,
     Ast,
+    Cfg,
     Taint,
 }
 

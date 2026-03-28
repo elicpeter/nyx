@@ -647,8 +647,12 @@ pub(crate) fn scan_filesystem_with_observer(
         );
     }
 
-    let needs_taint = cfg.scanner.mode == crate::utils::config::AnalysisMode::Full
-        || cfg.scanner.mode == crate::utils::config::AnalysisMode::Taint;
+    let needs_taint = matches!(
+        cfg.scanner.mode,
+        crate::utils::config::AnalysisMode::Full
+            | crate::utils::config::AnalysisMode::Cfg
+            | crate::utils::config::AnalysisMode::Taint
+    );
 
     if !needs_taint {
         // ── AST-only: single fused pass (no cross-file context needed) ──
@@ -1080,8 +1084,12 @@ pub fn scan_with_index_parallel_observer(
         }
     }
 
-    let needs_taint = cfg.scanner.mode == crate::utils::config::AnalysisMode::Full
-        || cfg.scanner.mode == crate::utils::config::AnalysisMode::Taint;
+    let needs_taint = matches!(
+        cfg.scanner.mode,
+        crate::utils::config::AnalysisMode::Full
+            | crate::utils::config::AnalysisMode::Cfg
+            | crate::utils::config::AnalysisMode::Taint
+    );
 
     // ── Pass 1: ensure summaries are up‑to‑date ──────────────────────────
     if needs_taint {

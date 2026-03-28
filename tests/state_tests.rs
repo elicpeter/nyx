@@ -147,6 +147,22 @@ fn state_analysis_disabled_via_flag() {
 }
 
 #[test]
+fn cfg_mode_keeps_state_findings() {
+    let mut cfg = common::test_config(AnalysisMode::Cfg);
+    cfg.scanner.enable_state_analysis = true;
+    let diags =
+        nyx_scanner::scan_no_index(&state_fixture_dir(), &cfg).expect("scan should succeed");
+    let state: Vec<_> = diags
+        .iter()
+        .filter(|d| d.id.starts_with("state-"))
+        .collect();
+    assert!(
+        !state.is_empty(),
+        "State findings should appear in cfg mode when enable_state_analysis is true."
+    );
+}
+
+#[test]
 fn state_and_auth_on_by_default() {
     // Both state analysis and auth analysis are on by default.
     let cfg = Config::default();

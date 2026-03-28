@@ -4303,8 +4303,10 @@ fn extract_require_module(node: Node, code: &[u8]) -> Option<String> {
     let mut cursor = args.walk();
     for arg in args.children(&mut cursor) {
         if arg.kind() == "string" || arg.kind() == "template_string" {
-            return text_of(arg, code)
-                .map(|s| s.trim_matches(|c| c == '\'' || c == '"' || c == '`').to_string());
+            return text_of(arg, code).map(|s| {
+                s.trim_matches(|c| c == '\'' || c == '"' || c == '`')
+                    .to_string()
+            });
         }
     }
     None
@@ -4426,7 +4428,10 @@ pub(crate) fn build_cfg<'a>(
     bodies.sort_by_key(|b| b.meta.id);
 
     // Extract import alias bindings for JS/TS files.
-    let import_bindings = if matches!(lang, "javascript" | "typescript" | "tsx" | "python" | "php" | "rust") {
+    let import_bindings = if matches!(
+        lang,
+        "javascript" | "typescript" | "tsx" | "python" | "php" | "rust"
+    ) {
         extract_import_bindings(tree, code)
     } else {
         HashMap::new()
@@ -5634,7 +5639,10 @@ mod cfg_tests {
         let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
         let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
         assert_eq!(file_cfg.import_bindings.len(), 2);
-        assert_eq!(file_cfg.import_bindings["fetch_input"].original, "get_input");
+        assert_eq!(
+            file_cfg.import_bindings["fetch_input"].original,
+            "get_input"
+        );
         assert_eq!(file_cfg.import_bindings["exec_query"].original, "run_query");
     }
 
@@ -5673,10 +5681,7 @@ mod cfg_tests {
         assert_eq!(file_cfg.import_bindings.len(), 1);
         let b = &file_cfg.import_bindings["Map"];
         assert_eq!(b.original, "HashMap");
-        assert_eq!(
-            b.module_path.as_deref(),
-            Some("std::collections::HashMap")
-        );
+        assert_eq!(b.module_path.as_deref(), Some("std::collections::HashMap"));
     }
 
     #[test]

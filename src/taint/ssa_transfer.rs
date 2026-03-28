@@ -1773,8 +1773,7 @@ fn transfer_inst(
 
             // CFG-level receiver offset: 1 when the receiver was prepended to
             // arg_uses during CFG construction (CallMethod), 0 otherwise.
-            let cfg_receiver_offset: usize =
-                if info.call.receiver.is_some() { 1 } else { 0 };
+            let cfg_receiver_offset: usize = if info.call.receiver.is_some() { 1 } else { 0 };
 
             // Resolve callee summary — always attempt, even when explicit
             // labels are present. Labels take precedence for source caps, but
@@ -1888,8 +1887,13 @@ fn transfer_inst(
                     } else {
                         &resolved.propagating_params
                     };
-                    let (prop_caps, prop_origins) =
-                        collect_args_taint(args, receiver, state, effective_params, cfg_receiver_offset);
+                    let (prop_caps, prop_origins) = collect_args_taint(
+                        args,
+                        receiver,
+                        state,
+                        effective_params,
+                        cfg_receiver_offset,
+                    );
                     return_bits |= prop_caps;
                     for orig in &prop_origins {
                         if return_origins.len() < MAX_ORIGINS
@@ -1951,7 +1955,8 @@ fn transfer_inst(
             // Apply explicit sanitizer labels
             if !sanitizer_bits.is_empty() {
                 // Collect uses taint then strip bits
-                let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[], cfg_receiver_offset);
+                let (use_caps, use_origins) =
+                    collect_args_taint(args, receiver, state, &[], cfg_receiver_offset);
                 return_bits |= use_caps;
                 for orig in &use_origins {
                     if return_origins.len() < MAX_ORIGINS
@@ -2053,7 +2058,8 @@ fn transfer_inst(
                     }
 
                     // No labels and no summary — default propagation (gen/kill)
-                    let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[], cfg_receiver_offset);
+                    let (use_caps, use_origins) =
+                        collect_args_taint(args, receiver, state, &[], cfg_receiver_offset);
                     if return_bits.is_empty() {
                         return_bits = use_caps;
                         return_origins = use_origins;

@@ -1137,9 +1137,11 @@ pub fn run_rules_on_bytes(
 
     let mut out = Vec::new();
 
-    // CFG construction + taint + cfg_analysis only needed for Full/Taint modes.
-    let needs_cfg =
-        cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Taint;
+    // CFG construction + taint + cfg_analysis only needed for CFG-capable modes.
+    let needs_cfg = matches!(
+        cfg.scanner.mode,
+        AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
+    );
 
     if needs_cfg {
         let parsed = ParsedFile::from_source(source, cfg);
@@ -1232,8 +1234,10 @@ pub fn analyse_file_fused(
 
     let mut out = Vec::new();
 
-    let needs_cfg =
-        cfg.scanner.mode == AnalysisMode::Full || cfg.scanner.mode == AnalysisMode::Taint;
+    let needs_cfg = matches!(
+        cfg.scanner.mode,
+        AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
+    );
 
     let (ssa_summaries, ssa_bodies) = if needs_cfg {
         out.extend(parsed.run_cfg_analyses(cfg, global_summaries, scan_root));
