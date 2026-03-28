@@ -466,3 +466,20 @@ fn debug_endpoint() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
+
+/// Internal path-prefix redirects should be suppressed; open redirects should fire.
+#[test]
+fn internal_redirect_taint() {
+    let dir = fixture_path("internal_redirect_taint");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Route registration methods (router.get/post) and session lifecycle should
+/// not propagate taint or generate findings.
+#[test]
+fn route_registration_noise() {
+    let dir = fixture_path("route_registration_noise");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}

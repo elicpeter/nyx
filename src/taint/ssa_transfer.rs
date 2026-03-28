@@ -1719,6 +1719,13 @@ fn transfer_inst(
             args,
             receiver,
         } => {
+            // Excluded callees (e.g. router.get, app.post) should not propagate
+            // taint through their return value — they are framework scaffolding,
+            // not data-flow operations.
+            if crate::labels::is_excluded(transfer.lang.as_str(), callee.as_bytes()) {
+                return;
+            }
+
             // Check for source labels first
             let mut return_bits = Cap::empty();
             let mut return_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();

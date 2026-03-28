@@ -235,7 +235,7 @@ static EXCLUDES: Lazy<HashMap<&'static str, &'static [&'static str]>> = Lazy::ne
 });
 
 /// Check whether `text` matches a per-language exclusion pattern.
-fn is_excluded(lang: &str, trimmed: &[u8]) -> bool {
+pub(crate) fn is_excluded(lang: &str, trimmed: &[u8]) -> bool {
     let excludes = match EXCLUDES.get(lang).or_else(|| {
         let key = lang.to_ascii_lowercase();
         EXCLUDES.get(key.as_str())

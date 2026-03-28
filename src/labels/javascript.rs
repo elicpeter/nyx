@@ -252,6 +252,11 @@ pub static EXCLUDES: &[&str] = &[
     "req.app",
     "req.route",
     "req.next",
+    // Session management lifecycle methods
+    "req.session.destroy",
+    "req.session.regenerate",
+    "req.session.save",
+    "req.session.reload",
 ];
 
 pub static GATED_SINKS: &[SinkGate] = &[
