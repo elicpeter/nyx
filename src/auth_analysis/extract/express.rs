@@ -261,6 +261,7 @@ fn build_function_unit(
         span: span(node),
         params,
         context_inputs,
+        call_sites: state.call_sites,
         auth_checks: state.auth_checks,
         operations: state.operations,
         value_refs: state.value_refs,
@@ -271,6 +272,7 @@ fn build_function_unit(
 
 #[derive(Default)]
 struct UnitState {
+    call_sites: Vec<CallSite>,
     auth_checks: Vec<AuthCheck>,
     operations: Vec<SensitiveOperation>,
     value_refs: Vec<ValueRef>,
@@ -325,6 +327,11 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
         .collect();
     let line = node.start_position().row + 1;
     let string_args: Vec<String> = args.iter().map(|arg| text(*arg, bytes)).collect();
+    state.call_sites.push(CallSite {
+        name: callee.clone(),
+        args: string_args.clone(),
+        span: span(node),
+    });
 
     if rules.is_authorization_check(&callee) {
         state.auth_checks.push(AuthCheck {

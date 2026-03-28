@@ -858,9 +858,7 @@ fn js_throw_terminates_block() {
     // Verify throw creates a Throw-kind node
     let throw_nodes: Vec<_> = cfg
         .node_indices()
-        .filter(|&idx| {
-            cfg[idx].kind == crate::cfg::StmtKind::Throw
-        })
+        .filter(|&idx| cfg[idx].kind == crate::cfg::StmtKind::Throw)
         .collect();
 
     assert!(

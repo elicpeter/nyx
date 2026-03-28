@@ -97,6 +97,7 @@ pub struct AnalysisUnit {
     pub span: (usize, usize),
     pub params: Vec<String>,
     pub context_inputs: Vec<ValueRef>,
+    pub call_sites: Vec<CallSite>,
     pub auth_checks: Vec<AuthCheck>,
     pub operations: Vec<SensitiveOperation>,
     pub value_refs: Vec<ValueRef>,

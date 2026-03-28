@@ -71,6 +71,22 @@ fn admin_route_with_admin_guard_is_clean() {
 }
 
 #[test]
+fn support_impersonation_requires_admin_guard() {
+    assert_has(
+        "support_impersonation_missing.js",
+        "js.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn debug_session_requires_admin_guard() {
+    assert_has(
+        "debug_session_missing.js",
+        "js.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
 fn scoped_read_without_membership_check() {
     assert_has("scoped_read_missing.js", "js.auth.missing_ownership_check");
 }
@@ -78,6 +94,46 @@ fn scoped_read_without_membership_check() {
 #[test]
 fn scoped_write_without_membership_check() {
     assert_has("scoped_write_missing.js", "js.auth.missing_ownership_check");
+}
+
+#[test]
+fn self_profile_read_is_clean() {
+    assert_absent("self_profile_read.js", "js.auth.missing_ownership_check");
+}
+
+#[test]
+fn self_profile_update_is_clean() {
+    assert_absent("self_profile_update.js", "js.auth.missing_ownership_check");
+    assert_absent("self_profile_update.js", "js.auth.stale_authorization");
+}
+
+#[test]
+fn current_user_listing_is_clean() {
+    assert_absent(
+        "dashboard_self_listing.js",
+        "js.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn auth_helper_lookup_is_clean() {
+    assert_absent("membership_helper.js", "js.auth.missing_ownership_check");
+}
+
+#[test]
+fn delegated_service_read_is_clean() {
+    assert_absent(
+        "delegated_service_read.js",
+        "js.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn related_membership_check_covers_child_reads() {
+    assert_absent(
+        "related_membership_check.js",
+        "js.auth.missing_ownership_check",
+    );
 }
 
 #[test]

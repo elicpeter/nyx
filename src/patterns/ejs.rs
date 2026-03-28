@@ -147,11 +147,13 @@ mod tests {
         let path = PathBuf::from("views/profile.ejs");
         let diags = scan_ejs_file(&path, src);
         assert_eq!(diags.len(), 1);
-        assert!(diags[0]
-            .message
-            .as_ref()
-            .unwrap()
-            .contains("user.name.toUpperCase()"));
+        assert!(
+            diags[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("user.name.toUpperCase()")
+        );
     }
 
     #[test]

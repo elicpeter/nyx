@@ -71,12 +71,21 @@ fn check_ownership_gaps(model: &AuthorizationModel) -> Vec<AuthFinding> {
             if op.kind == OperationKind::TokenLookup {
                 continue;
             }
-            let relevant_subjects: Vec<&ValueRef> =
-                op.subjects.iter().filter(|s| is_id_like(s)).collect();
+            if op.kind == OperationKind::Read && unit_is_auth_helper(unit) {
+                continue;
+            }
+            let relevant_subjects: Vec<&ValueRef> = op
+                .subjects
+                .iter()
+                .filter(|s| is_relevant_target_subject(s))
+                .collect();
             if relevant_subjects.is_empty() {
                 continue;
             }
             if op.kind == OperationKind::Read || op.kind == OperationKind::Mutation {
+                if is_delegated_read_with_actor_context(unit, op, &relevant_subjects) {
+                    continue;
+                }
                 if !has_prior_subject_auth(unit, op, &relevant_subjects) {
                     findings.push(AuthFinding {
                         rule_id: "js.auth.missing_ownership_check".into(),
@@ -147,9 +156,7 @@ fn check_stale_authorization(model: &AuthorizationModel) -> Vec<AuthFinding> {
             .iter()
             .filter(|operation| operation.kind == OperationKind::Mutation)
         {
-            let session_subject = op.subjects.iter().any(|subject| {
-                subject.source_kind == ValueSourceKind::Session && is_id_like(subject)
-            });
+            let session_subject = op.subjects.iter().any(is_stale_session_subject);
             if !session_subject {
                 continue;
             }
@@ -256,8 +263,8 @@ fn check_token_override_without_validation(
 }
 
 fn route_is_admin_sensitive(unit: &AnalysisUnit) -> bool {
-    unit.operations.iter().any(|operation| {
-        let lower = operation.callee.to_ascii_lowercase();
+    unit.call_sites.iter().any(|call| {
+        let lower = call.name.to_ascii_lowercase();
         lower.contains("admin") || lower.contains("impersonat") || lower.contains("role")
     })
 }
@@ -286,11 +293,15 @@ fn has_prior_subject_auth(
 
 fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef) -> bool {
     let subject_key = canonical_subject_name(subject);
-    check
-        .subjects
-        .iter()
-        .map(canonical_subject_name)
-        .any(|check_key| check_key == subject_key)
+    let subject_related_base = related_subject_base(subject);
+    check.subjects.iter().any(|check_subject| {
+        let check_key = canonical_subject_name(check_subject);
+        let check_related_base = related_subject_base(check_subject);
+        check_key == subject_key
+            || (subject_related_base.is_some() && subject_related_base == check_related_base)
+            || (subject_related_base.as_ref() == Some(&check_key))
+            || (check_related_base.as_ref() == Some(&subject_key))
+    })
 }
 
 fn canonical_subject_name(subject: &ValueRef) -> String {
@@ -298,6 +309,123 @@ fn canonical_subject_name(subject: &ValueRef) -> String {
         ValueSourceKind::ArrayIndex => subject.base.clone().unwrap_or_else(|| subject.name.clone()),
         _ => subject.name.clone(),
     }
+}
+
+fn related_subject_base(subject: &ValueRef) -> Option<String> {
+    let base = subject.base.as_deref()?;
+    let lower = base.to_ascii_lowercase();
+    if lower == "req"
+        || lower.starts_with("req.")
+        || lower == "request"
+        || lower.starts_with("request.")
+        || lower == "session"
+        || lower.starts_with("session.")
+    {
+        None
+    } else {
+        Some(base.to_string())
+    }
+}
+
+fn is_relevant_target_subject(subject: &ValueRef) -> bool {
+    is_id_like(subject) && !is_actor_context_subject(subject)
+}
+
+fn is_actor_context_subject(subject: &ValueRef) -> bool {
+    if is_self_scoped_session_subject(subject) {
+        return true;
+    }
+
+    matches!(
+        subject_identity_key(subject).as_deref(),
+        Some(
+            "ownerid"
+                | "authorid"
+                | "actorid"
+                | "currentuserid"
+                | "uploaderid"
+                | "createdby"
+                | "updatedby"
+        )
+    )
+}
+
+fn subject_identity_key(subject: &ValueRef) -> Option<String> {
+    let raw = match subject.source_kind {
+        ValueSourceKind::ArrayIndex => subject.base.as_deref().unwrap_or(&subject.name),
+        _ => subject
+            .field
+            .as_deref()
+            .or(subject.base.as_deref())
+            .unwrap_or(&subject.name),
+    };
+    let key: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if key.is_empty() { None } else { Some(key) }
+}
+
+fn is_self_scoped_session_subject(subject: &ValueRef) -> bool {
+    subject.source_kind == ValueSourceKind::Session
+        && subject.base.as_deref().is_some_and(|base| {
+            matches!(
+                base,
+                "req.session.user"
+                    | "session.user"
+                    | "req.session.currentUser"
+                    | "session.currentUser"
+            )
+        })
+}
+
+fn is_stale_session_subject(subject: &ValueRef) -> bool {
+    subject.source_kind == ValueSourceKind::Session
+        && is_id_like(subject)
+        && !is_self_scoped_session_subject(subject)
+}
+
+fn unit_is_auth_helper(unit: &AnalysisUnit) -> bool {
+    let Some(name) = unit.name.as_deref() else {
+        return false;
+    };
+    let normalized: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    (normalized.starts_with("has")
+        || normalized.starts_with("check")
+        || normalized.starts_with("require")
+        || normalized.starts_with("verify")
+        || normalized.starts_with("authorize")
+        || normalized.starts_with("can")
+        || normalized.starts_with("is"))
+        && (normalized.contains("membership")
+            || normalized.contains("ownership")
+            || normalized.contains("access")
+            || normalized.contains("permission")
+            || normalized.contains("authoriz"))
+}
+
+fn is_delegated_read_with_actor_context(
+    unit: &AnalysisUnit,
+    op: &SensitiveOperation,
+    relevant_subjects: &[&ValueRef],
+) -> bool {
+    unit.kind == super::model::AnalysisUnitKind::RouteHandler
+        && op.kind == OperationKind::Read
+        && op.callee.to_ascii_lowercase().contains("service")
+        && op.subjects.iter().any(is_self_scoped_session_subject)
+        && relevant_subjects.iter().any(|subject| {
+            matches!(
+                subject.source_kind,
+                ValueSourceKind::RequestParam
+                    | ValueSourceKind::RequestBody
+                    | ValueSourceKind::RequestQuery
+            )
+        })
 }
 
 fn is_id_like(subject: &ValueRef) -> bool {

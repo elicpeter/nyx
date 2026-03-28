@@ -524,8 +524,7 @@ pub struct SsaTaintTransfer<'a> {
     /// Module aliases from `require()` calls: SSA value → possible module names.
     /// Used to resolve dynamic dispatch (e.g., `lib.request()` where
     /// `lib = require("http")`) for sink label matching.
-    pub module_aliases:
-        Option<&'a HashMap<SsaValue, smallvec::SmallVec<[String; 2]>>>,
+    pub module_aliases: Option<&'a HashMap<SsaValue, smallvec::SmallVec<[String; 2]>>>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -2895,8 +2894,7 @@ fn collect_block_events(
                             let method = &callee[dot_pos + 1..];
                             let lang_str = transfer.lang.as_str();
                             for module_name in module_names {
-                                let qualified =
-                                    format!("{}.{}", module_name, method);
+                                let qualified = format!("{}.{}", module_name, method);
                                 let labels = crate::labels::classify_all(
                                     lang_str,
                                     &qualified,
