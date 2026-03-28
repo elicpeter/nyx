@@ -521,6 +521,11 @@ pub struct SsaTaintTransfer<'a> {
     /// Used in `resolve_callee` to map aliased import names back to their
     /// original exported symbol before summary lookup.
     pub import_bindings: Option<&'a crate::cfg::ImportBindings>,
+    /// Module aliases from `require()` calls: SSA value → possible module names.
+    /// Used to resolve dynamic dispatch (e.g., `lib.request()` where
+    /// `lib = require("http")`) for sink label matching.
+    pub module_aliases:
+        Option<&'a HashMap<SsaValue, smallvec::SmallVec<[String; 2]>>>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -1524,6 +1529,7 @@ fn inline_analyse_callee(
         points_to: Some(&callee_body.opt.points_to),
         dynamic_pts: None, // no inter-procedural container propagation at k>1
         import_bindings: transfer.import_bindings,
+        module_aliases: None, // callee body has its own const_values; module aliases not propagated
     };
 
     // Use the callee's own body graph for inline analysis (per-body CFGs
@@ -2866,6 +2872,42 @@ fn collect_block_events(
                     for lbl in &tq_labels {
                         if let DataLabel::Sink(bits) = lbl {
                             sink_caps |= *bits;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Module alias resolution: when the receiver was assigned from require()
+        // of a known module (e.g., `const lib = require("http")`), substitute
+        // the module name into the callee for label matching.
+        // Example: `lib.request(url)` with lib→"http" tries "http.request".
+        if sink_caps.is_empty() {
+            if let SsaOp::Call {
+                callee,
+                receiver: Some(rv),
+                ..
+            } = &inst.op
+            {
+                if let Some(aliases) = transfer.module_aliases {
+                    if let Some(module_names) = aliases.get(rv) {
+                        if let Some(dot_pos) = callee.find('.') {
+                            let method = &callee[dot_pos + 1..];
+                            let lang_str = transfer.lang.as_str();
+                            for module_name in module_names {
+                                let qualified =
+                                    format!("{}.{}", module_name, method);
+                                let labels = crate::labels::classify_all(
+                                    lang_str,
+                                    &qualified,
+                                    transfer.extra_labels,
+                                );
+                                for lbl in &labels {
+                                    if let DataLabel::Sink(bits) = lbl {
+                                        sink_caps |= *bits;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -5038,6 +5080,7 @@ pub fn extract_ssa_func_summary(
     namespace: &str,
     interner: &crate::state::symbol::SymbolInterner,
     param_count: usize,
+    module_aliases: Option<&HashMap<SsaValue, smallvec::SmallVec<[String; 2]>>>,
 ) -> crate::summary::ssa_summary::SsaFuncSummary {
     use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
 
@@ -5102,6 +5145,7 @@ pub fn extract_ssa_func_summary(
             points_to: None,
             dynamic_pts: None,
             import_bindings: None,
+            module_aliases,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);
@@ -5297,6 +5341,7 @@ pub fn extract_ssa_func_summary(
             points_to: None,
             dynamic_pts: None,
             import_bindings: None,
+            module_aliases: None,
         };
         detect_source_to_callback_from_states(
             ssa,
@@ -5661,6 +5706,7 @@ mod cross_file_tests {
                 },
                 alias_result: crate::ssa::alias::BaseAliasResult::empty(),
                 points_to: crate::ssa::heap::PointsToResult::empty(),
+                module_aliases: std::collections::HashMap::new(),
                 branches_pruned: 0,
                 copies_eliminated: 0,
                 dead_defs_removed: 0,

@@ -1,0 +1,10 @@
+{
+  "required_findings": [],
+  "forbidden_findings": [
+    { "id_prefix": "cfg-unguarded-sink" }
+  ],
+  "noise_budget": {
+    "max_total_findings": 5,
+    "max_high_findings": 0
+  }
+}

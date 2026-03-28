@@ -250,6 +250,52 @@ fn is_binary(bytes: &[u8]) -> bool {
     bytes.iter().filter(|b| **b == 0).count() * 100 / bytes.len().max(1) > 1
 }
 
+/// Check if a file path indicates a test file. Matches filename-based
+/// conventions (`.test.js`, `.spec.ts`) and the `__tests__` directory
+/// convention.  Directory-only checks (`test/`, `tests/`, `fixtures/`)
+/// are intentionally excluded because they're too broad when scanning
+/// absolute paths.
+fn is_test_file(path: &Path) -> bool {
+    static TEST_SUFFIXES: &[&str] = &[
+        ".test.js",
+        ".test.ts",
+        ".test.jsx",
+        ".test.tsx",
+        ".spec.js",
+        ".spec.ts",
+        ".spec.jsx",
+        ".spec.tsx",
+    ];
+
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        for suffix in TEST_SUFFIXES {
+            if name.ends_with(suffix) {
+                return true;
+            }
+        }
+    }
+
+    // __tests__ is specific enough (React/Jest convention) to match on directory
+    for component in path.components() {
+        if let std::path::Component::Normal(c) = component
+            && c == "__tests__"
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Pattern IDs that are noise-prone in test files (fixture credentials,
+/// non-crypto randomness, plain HTTP in test harnesses).
+fn is_test_suppressible_pattern(id: &str) -> bool {
+    // Suffix-match to handle both js. and ts. prefixes
+    id.ends_with(".secrets.hardcoded_secret")
+        || id.ends_with(".crypto.math_random")
+        || id.ends_with(".transport.fetch_http")
+}
+
 /// Check if a file path belongs to a non-production context (tests, vendor,
 /// benchmarks, etc.).  Used to downgrade severity for findings in paths that
 /// are unlikely to represent attack surface.
@@ -363,9 +409,14 @@ impl<'a> ParsedSource<'a> {
         let compiled = query_cache::for_lang(self.lang_slug, self.ts_lang.clone());
         let mut cursor = QueryCursor::new();
         let mut out = Vec::new();
+        let in_test_file = is_test_file(self.path);
 
         for cq in compiled.iter() {
             if cq.meta.severity > cfg.scanner.min_severity {
+                continue;
+            }
+            // Suppress noise-prone patterns in test files
+            if in_test_file && is_test_suppressible_pattern(cq.meta.id) {
                 continue;
             }
             let mut matches = cursor.matches(&cq.query, root, self.bytes);

@@ -32,26 +32,28 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
         .split(['.', ':'])
         .map(|p| p.split('(').next().unwrap_or(p))
         .collect();
+    // When the callee was overridden by an inner call (e.g. `db.query` inside
+    // `Promise.all([db.query(...)])`), the outer callee's parts (e.g. "Promise",
+    // "all") also belong to the callee machinery, not to arguments.
+    let outer_parts: Vec<&str> = sink_info
+        .call
+        .outer_callee
+        .as_deref()
+        .map(|oc| {
+            oc.split(['.', ':'])
+                .map(|p| p.split('(').next().unwrap_or(p))
+                .collect()
+        })
+        .unwrap_or_default();
     let sink_func = sink_info.ast.enclosing_func.as_deref();
 
-    // Collect parameter names for the enclosing function — parameters are not
-    // user-controlled constants but they're not externally tainted either, so
-    // they should not block constant-arg suppression.
-    let param_names: Vec<&str> = ctx
-        .func_summaries
-        .values()
-        .filter(|s| ctx.cfg[s.entry].ast.enclosing_func.as_deref() == sink_func)
-        .flat_map(|s| s.param_names.iter().map(|p| p.as_str()))
-        .collect();
-
     sink_info.taint.uses.iter().all(|u| {
-        // Part of the callee name itself → constant
+        // Part of the callee name itself → not an argument, skip
         // Check both individual parts and the full dotted callee path
-        if callee_parts.contains(&u.as_str()) || u == callee_desc {
-            return true;
-        }
-        // Function parameter → not externally tainted
-        if param_names.contains(&u.as_str()) {
+        if callee_parts.contains(&u.as_str())
+            || u == callee_desc
+            || outer_parts.contains(&u.as_str())
+        {
             return true;
         }
         // One-hop trace: find the defining node in the same function
@@ -423,6 +425,29 @@ impl CfgAnalysis for UnguardedSink {
                     Cap::SHELL_ESCAPE | Cap::CODE_EXEC | Cap::SQL_QUERY | Cap::DESERIALIZE;
                 if (sink_caps & high_risk).is_empty() {
                     continue; // FILE_IO, SSRF, FMT_STRING etc. without taint → noise
+                }
+                // If the function containing the sink has no Source-labeled
+                // nodes AND no parameters (through which taint could flow
+                // from callers), taint ran and found nothing because there
+                // is nothing to find.  Suppress — the structural finding
+                // is noise.
+                let sink_func = sink_info.ast.enclosing_func.as_deref();
+                let has_sources = ctx.cfg.node_indices().any(|n| {
+                    let info = &ctx.cfg[n];
+                    info.ast.enclosing_func.as_deref() == sink_func
+                        && info
+                            .taint
+                            .labels
+                            .iter()
+                            .any(|l| matches!(l, DataLabel::Source(_)))
+                });
+                let has_params = ctx.func_summaries.values().any(|s| {
+                    s.entry.index() < ctx.cfg.node_count()
+                        && ctx.cfg[s.entry].ast.enclosing_func.as_deref() == sink_func
+                        && !s.param_names.is_empty()
+                });
+                if !has_sources && !has_params {
+                    continue; // No sources or params in scope → noise
                 }
                 (Severity::Medium, Confidence::Medium)
             };

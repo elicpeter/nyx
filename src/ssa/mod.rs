@@ -33,6 +33,9 @@ pub struct OptimizeResult {
     pub alias_result: alias::BaseAliasResult,
     /// Points-to analysis: per-SSA-value abstract heap object sets.
     pub points_to: heap::PointsToResult,
+    /// Module aliases from `require()` calls: SSA value → possible module names.
+    /// Used to resolve dynamic dispatch like `lib.request()` where `lib = require("http")`.
+    pub module_aliases: HashMap<SsaValue, smallvec::SmallVec<[String; 2]>>,
     /// Number of branches pruned by constant propagation.
     pub branches_pruned: usize,
     /// Number of copies eliminated.
@@ -64,11 +67,19 @@ pub fn optimize_ssa(body: &mut SsaBody, cfg: &Cfg, lang: Option<Lang>) -> Optimi
     // 6. Points-to analysis (uses allocation site detection + SSA def-use)
     let points_to = heap::analyze_points_to(body, cfg, lang);
 
+    // 7. Module alias analysis (require() tracking for JS/TS)
+    let module_aliases = if matches!(lang, Some(Lang::JavaScript) | Some(Lang::TypeScript)) {
+        const_prop::collect_module_aliases(body, &cp.values)
+    } else {
+        HashMap::new()
+    };
+
     OptimizeResult {
         const_values: cp.values,
         type_facts,
         alias_result,
         points_to,
+        module_aliases,
         branches_pruned,
         copies_eliminated,
         dead_defs_removed,

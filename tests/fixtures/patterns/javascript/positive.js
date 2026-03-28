@@ -62,3 +62,20 @@ function triggerWeakHashImport(password) {
 function triggerMathRandom() {
     var token = Math.random();
 }
+
+// js.config.reject_unauthorized
+var opts = { rejectUnauthorized: false, timeout: 3000 };
+
+// js.secrets.fallback_secret
+var sessionSecret = process.env.SESSION_SECRET || "fake-default-session-secret";
+
+// js.config.verbose_error_response
+function errorHandler(err, req, res) {
+    var error = err;
+    res.status(500).render("errors/error", { title: "Server Error", error });
+}
+
+// js.config.cors_dynamic_origin
+function setCors(req, res) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+}

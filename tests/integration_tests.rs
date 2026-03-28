@@ -483,3 +483,21 @@ fn route_registration_noise() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
+
+/// Dynamic HTTP module dispatch: lib = require("http"), lib.request(url)
+/// should be resolved as SSRF sink via module alias tracking.
+#[test]
+fn dynamic_dispatch_ssrf() {
+    let dir = fixture_path("dynamic_dispatch_ssrf");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Cross-file info leak: service returns process.env data (source-independent
+/// taint), caller passes to res.json() sink.
+#[test]
+fn cross_file_info_leak() {
+    let dir = fixture_path("cross_file_info_leak");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}

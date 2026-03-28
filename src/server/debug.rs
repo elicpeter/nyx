@@ -943,6 +943,11 @@ pub fn analyse_function_taint(
         points_to: Some(&opt.points_to),
         dynamic_pts: None,
         import_bindings: None,
+        module_aliases: if opt.module_aliases.is_empty() {
+            None
+        } else {
+            Some(&opt.module_aliases)
+        },
     };
 
     crate::taint::ssa_transfer::run_ssa_taint_full_with_exits(ssa, cfg, &transfer)

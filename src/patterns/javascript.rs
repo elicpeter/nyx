@@ -241,4 +241,71 @@ pub const PATTERNS: &[Pattern] = &[
         category: PatternCategory::InsecureConfig,
         confidence: Confidence::High,
     },
+    // ── Tier A: TLS verification disabled ─────────────────────────────
+    Pattern {
+        id: "js.config.reject_unauthorized",
+        description: "TLS certificate verification disabled via rejectUnauthorized: false",
+        query: r#"(pair
+                     key: (property_identifier) @key (#eq? @key "rejectUnauthorized")
+                     value: (false) @val)
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::High,
+    },
+    // ── Tier A: Hardcoded fallback secret ──────────────────────────────
+    Pattern {
+        id: "js.secrets.fallback_secret",
+        description: "Environment variable with secret-like name has hardcoded fallback value",
+        query: r#"(binary_expression
+                     left: (member_expression
+                       object: (member_expression
+                         object: (identifier) @proc (#eq? @proc "process")
+                         property: (property_identifier) @env (#eq? @env "env"))
+                       property: (property_identifier) @key
+                         (#match? @key "(?i)(secret|password|key|token)"))
+                     operator: "||"
+                     right: (string) @fallback)
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Secrets,
+        confidence: Confidence::Medium,
+    },
+    // ── Tier A: Verbose error response ────────────────────────────────
+    Pattern {
+        id: "js.config.verbose_error_response",
+        description: "Error object passed to response renderer — may leak stack traces to users",
+        query: r#"(call_expression
+                     function: (member_expression
+                       property: (property_identifier) @method
+                         (#match? @method "^(render|send|json)$"))
+                     arguments: (arguments
+                       (_)
+                       (object
+                         (shorthand_property_identifier) @prop
+                           (#eq? @prop "error"))))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::Medium,
+    },
+    // ── Tier B: CORS dynamic origin reflection ────────────────────────
+    Pattern {
+        id: "js.config.cors_dynamic_origin",
+        description: "CORS Access-Control-Allow-Origin set to dynamic value — may reflect arbitrary origins",
+        query: r#"(call_expression
+                     function: (member_expression
+                       property: (property_identifier) @method (#eq? @method "setHeader"))
+                     arguments: (arguments
+                       (string) @header_name (#match? @header_name "Access-Control-Allow-Origin")
+                       . (identifier) @value))
+                   @vuln"#,
+        severity: Severity::High,
+        tier: PatternTier::A,
+        category: PatternCategory::InsecureConfig,
+        confidence: Confidence::Medium,
+    },
 ];

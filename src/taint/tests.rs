@@ -51,6 +51,7 @@ fn ssa_analyse_rust(src: &[u8]) -> Vec<Finding> {
         points_to: None,
         dynamic_pts: None,
         import_bindings: None,
+        module_aliases: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, cfg, &transfer);
     let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, cfg);
@@ -1712,7 +1713,7 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
             lang: Lang::C,
             namespace: "native.c".into(),
             name: "run_cmd".into(),
-            arity: Some(0), // C param extraction yields 0 (pre-existing limitation)
+            arity: Some(1),
         },
     }];
     let findings = analyse_file(
@@ -1804,7 +1805,7 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 lang: Lang::C,
                 namespace: "native.c".into(),
                 name: "run_dangerous".into(),
-                arity: Some(0), // C param extraction yields 0 (pre-existing limitation)
+                arity: Some(1),
             },
         },
     ];
@@ -1875,7 +1876,7 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 lang: Lang::C,
                 namespace: "native.c".into(),
                 name: "run_dangerous".into(),
-                arity: Some(0), // C param extraction yields 0 (pre-existing limitation)
+                arity: Some(1),
             },
         },
     ];
@@ -3421,6 +3422,7 @@ fn assert_ssa_integration(src: &[u8]) {
         points_to: None,
         dynamic_pts: None,
         import_bindings: None,
+        module_aliases: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -3547,6 +3549,7 @@ fn integ_php_echo_simple_var() {
         points_to: None,
         dynamic_pts: None,
         import_bindings: None,
+        module_aliases: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -3605,6 +3608,7 @@ fn integ_c_curl_handle_ssrf() {
         points_to: None,
         dynamic_pts: None,
         import_bindings: None,
+        module_aliases: None,
     };
     let events = ssa_transfer::run_ssa_taint(&ssa, the_cfg, &ssa_xfer);
     let mut ssa_findings = ssa_transfer::ssa_events_to_findings(&events, &ssa, the_cfg);
@@ -3945,6 +3949,7 @@ fn ssa_summary_identity_propagation() {
                 "test.rs",
                 &interner,
                 param_count,
+                None,
             );
             assert!(
                 !summary.param_to_return.is_empty(),
@@ -4005,6 +4010,7 @@ fn ssa_summary_sanitizer_strips_bits() {
                 "test.rs",
                 &interner,
                 param_count,
+                None,
             );
             // Sanitizer should strip some bits
             for (_, transform) in &summary.param_to_return {
@@ -4058,6 +4064,7 @@ fn ssa_summary_source_adds_bits() {
                 "test.rs",
                 &interner,
                 param_count,
+                None,
             );
             assert!(
                 !summary.source_caps.is_empty(),
@@ -4111,6 +4118,7 @@ fn ssa_summary_param_to_sink() {
                 "test.rs",
                 &interner,
                 param_count,
+                None,
             );
             assert!(
                 !summary.param_to_sink.is_empty(),

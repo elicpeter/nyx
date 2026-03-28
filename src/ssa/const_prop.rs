@@ -459,6 +459,106 @@ pub fn apply_const_prop(body: &mut SsaBody, result: &ConstPropResult) -> usize {
     pruned
 }
 
+/// Collect module aliases from `require()` calls in the SSA body.
+///
+/// Detects patterns like `const http = require("http")` and propagates
+/// aliases through phi nodes (e.g., `const lib = cond ? https : http`).
+/// Returns a map from SSA value → set of possible module names.
+///
+/// Only tracks known HTTP-related modules to avoid false positives.
+pub fn collect_module_aliases(
+    body: &SsaBody,
+    const_values: &HashMap<SsaValue, ConstLattice>,
+) -> HashMap<SsaValue, smallvec::SmallVec<[String; 2]>> {
+    use smallvec::SmallVec;
+
+    // Known modules whose methods are security-relevant for alias tracking.
+    const KNOWN_MODULES: &[&str] = &["http", "https", "child_process", "fs", "net", "dgram"];
+
+    let mut aliases: HashMap<SsaValue, SmallVec<[String; 2]>> = HashMap::new();
+
+    // Pass 1: detect `require("module")` calls.
+    for block in &body.blocks {
+        for inst in &block.body {
+            if let SsaOp::Call { callee, args, .. } = &inst.op {
+                if callee == "require" || callee.ends_with(".require") {
+                    // Check if the first argument is a known module string constant.
+                    if let Some(first_arg) = args.first() {
+                        if let Some(&first_val) = first_arg.first() {
+                            if let Some(ConstLattice::Str(module_name)) =
+                                const_values.get(&first_val)
+                            {
+                                if KNOWN_MODULES.contains(&module_name.as_str()) {
+                                    aliases
+                                        .entry(inst.value)
+                                        .or_default()
+                                        .push(module_name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if aliases.is_empty() {
+        return aliases;
+    }
+
+    // Pass 2: propagate through copies (single-use Assign) and phi nodes.
+    let mut changed = true;
+    let mut iterations = 0;
+    while changed && iterations < 10 {
+        changed = false;
+        iterations += 1;
+        for block in &body.blocks {
+            // Phi nodes
+            for phi in &block.phis {
+                if let SsaOp::Phi(operands) = &phi.op {
+                    let mut merged: SmallVec<[String; 2]> = SmallVec::new();
+                    for (_, operand_val) in operands {
+                        if let Some(operand_aliases) = aliases.get(operand_val) {
+                            for a in operand_aliases {
+                                if !merged.contains(a) {
+                                    merged.push(a.clone());
+                                }
+                            }
+                        }
+                    }
+                    if !merged.is_empty() {
+                        let entry = aliases.entry(phi.value).or_default();
+                        for a in &merged {
+                            if !entry.contains(a) {
+                                entry.push(a.clone());
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+            // Copy propagation through single-use Assign
+            for inst in &block.body {
+                if let SsaOp::Assign(uses) = &inst.op {
+                    if uses.len() == 1 {
+                        if let Some(src_aliases) = aliases.get(&uses[0]).cloned() {
+                            let entry = aliases.entry(inst.value).or_default();
+                            for a in &src_aliases {
+                                if !entry.contains(a) {
+                                    entry.push(a.clone());
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    aliases
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

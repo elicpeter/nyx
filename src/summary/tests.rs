@@ -754,6 +754,7 @@ fn make_callee_body(
             },
             alias_result: crate::ssa::alias::BaseAliasResult::empty(),
             points_to: crate::ssa::heap::PointsToResult::empty(),
+            module_aliases: std::collections::HashMap::new(),
             branches_pruned: 0,
             copies_eliminated: 0,
             dead_defs_removed: 0,

@@ -314,6 +314,10 @@ fn positive_javascript() {
             "js.crypto.weak_hash",
             "js.crypto.weak_hash_import",
             "js.xss.cookie_write",
+            "js.config.reject_unauthorized",
+            "js.secrets.fallback_secret",
+            "js.config.verbose_error_response",
+            "js.config.cors_dynamic_origin",
         ],
     );
 }
@@ -337,6 +341,10 @@ fn positive_typescript() {
             "ts.crypto.weak_hash",
             "ts.crypto.weak_hash_import",
             "ts.xss.cookie_write",
+            "ts.config.reject_unauthorized",
+            "ts.secrets.fallback_secret",
+            "ts.config.verbose_error_response",
+            "ts.config.cors_dynamic_origin",
         ],
     );
 }

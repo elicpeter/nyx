@@ -61,6 +61,22 @@ pub struct Finding {
     pub source_span: Option<usize>,
 }
 
+/// Pre-compute module aliases from an unoptimized SSA body for JS/TS.
+///
+/// Runs const propagation (read-only) to get constant values, then detects
+/// `require()` calls to known modules and propagates through phis/copies.
+/// Used to make module aliases available during summary extraction.
+fn compute_module_aliases_for_summary(
+    ssa: &crate::ssa::SsaBody,
+    lang: Lang,
+) -> std::collections::HashMap<crate::ssa::SsaValue, smallvec::SmallVec<[String; 2]>> {
+    if !matches!(lang, Lang::JavaScript | Lang::TypeScript) {
+        return std::collections::HashMap::new();
+    }
+    let cp = crate::ssa::const_prop::const_propagate(ssa);
+    crate::ssa::const_prop::collect_module_aliases(ssa, &cp.values)
+}
+
 /// Run taint analysis on all bodies in a file.
 ///
 /// Uses a unified multi-body analysis for all languages:
@@ -257,6 +273,11 @@ fn analyse_body_with_seed(
                 points_to: Some(&opt.points_to),
                 dynamic_pts: Some(&dynamic_pts),
                 import_bindings,
+                module_aliases: if opt.module_aliases.is_empty() {
+                    None
+                } else {
+                    Some(&opt.module_aliases)
+                },
             };
             let (events, block_states) =
                 ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);
@@ -525,6 +546,14 @@ pub(crate) fn extract_intra_file_ssa_summaries(
             continue; // No params → no per-parameter summary needed
         }
 
+        // Pre-compute module aliases for JS/TS (read-only const prop pass)
+        let mod_aliases = compute_module_aliases_for_summary(&func_ssa, lang);
+        let mod_aliases_ref = if mod_aliases.is_empty() {
+            None
+        } else {
+            Some(&mod_aliases)
+        };
+
         let summary = ssa_transfer::extract_ssa_func_summary(
             &func_ssa,
             cfg,
@@ -534,6 +563,7 @@ pub(crate) fn extract_intra_file_ssa_summaries(
             namespace,
             interner,
             param_count,
+            mod_aliases_ref,
         );
 
         // Only store if the summary has observable effects
@@ -606,6 +636,12 @@ fn lower_all_functions(
 
         // Extract summary from unoptimized SSA (matches original behavior)
         if param_count > 0 {
+            let mod_aliases = compute_module_aliases_for_summary(&func_ssa, lang);
+            let mod_aliases_ref = if mod_aliases.is_empty() {
+                None
+            } else {
+                Some(&mod_aliases)
+            };
             let summary = ssa_transfer::extract_ssa_func_summary(
                 &func_ssa,
                 cfg,
@@ -615,6 +651,7 @@ fn lower_all_functions(
                 namespace,
                 interner,
                 param_count,
+                mod_aliases_ref,
             );
 
             if !summary.param_to_return.is_empty()
@@ -702,6 +739,12 @@ fn lower_all_functions_from_bodies(
         };
 
         if param_count > 0 {
+            let mod_aliases = compute_module_aliases_for_summary(&func_ssa, lang);
+            let mod_aliases_ref = if mod_aliases.is_empty() {
+                None
+            } else {
+                Some(&mod_aliases)
+            };
             let summary = ssa_transfer::extract_ssa_func_summary(
                 &func_ssa,
                 &body.graph,
@@ -711,6 +754,7 @@ fn lower_all_functions_from_bodies(
                 namespace,
                 &interner,
                 param_count,
+                mod_aliases_ref,
             );
 
             // Always insert the summary, even when all fields are empty/default.

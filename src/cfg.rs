@@ -2448,7 +2448,18 @@ fn push_node<'a>(
 fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> Vec<String> {
     let cfg = param_config(lang);
     let mut names = Vec::new();
-    let Some(params) = func_node.child_by_field_name(cfg.params_field) else {
+    // Try the params_field directly on the function node first.
+    // For C/C++, the parameter list is nested inside the declarator
+    // (function_definition > declarator:function_declarator > parameters:parameter_list),
+    // so fall back to looking one level deeper via the "declarator" field.
+    let params = func_node
+        .child_by_field_name(cfg.params_field)
+        .or_else(|| {
+            func_node
+                .child_by_field_name("declarator")
+                .and_then(|d| d.child_by_field_name(cfg.params_field))
+        });
+    let Some(params) = params else {
         return names;
     };
     let mut cursor = params.walk();
@@ -6026,5 +6037,49 @@ mod cfg_tests {
         assert!(!has_sql_placeholders("SELECT $dollar FROM t")); // $d not $N
         assert!(!has_sql_placeholders("SELECT * FROM t WHERE x = $0")); // $0 not valid
         assert!(!has_sql_placeholders("ratio = 50%")); // %<not s>
+    }
+
+    #[test]
+    fn c_function_extracts_param_names() {
+        let src = b"void handle_command(int cmd, char *arg) { }";
+        let ts_lang = Language::from(tree_sitter_c::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "c", ts_lang);
+        let params: Vec<_> = file_cfg
+            .summaries
+            .values()
+            .flat_map(|s| s.param_names.iter().cloned())
+            .collect();
+        assert!(
+            params.contains(&"cmd".to_string()),
+            "expected 'cmd' in params, got: {:?}",
+            params
+        );
+        assert!(
+            params.contains(&"arg".to_string()),
+            "expected 'arg' in params, got: {:?}",
+            params
+        );
+    }
+
+    #[test]
+    fn cpp_function_extracts_param_names() {
+        let src = b"void process(int x, std::string name) { }";
+        let ts_lang = Language::from(tree_sitter_cpp::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "cpp", ts_lang);
+        let params: Vec<_> = file_cfg
+            .summaries
+            .values()
+            .flat_map(|s| s.param_names.iter().cloned())
+            .collect();
+        assert!(
+            params.contains(&"x".to_string()),
+            "expected 'x' in params, got: {:?}",
+            params
+        );
+        assert!(
+            params.contains(&"name".to_string()),
+            "expected 'name' in params, got: {:?}",
+            params
+        );
     }
 }

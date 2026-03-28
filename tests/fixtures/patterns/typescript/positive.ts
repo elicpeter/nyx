@@ -67,3 +67,20 @@ function triggerWeakHashImport(password: string): void {
 function triggerCookieWrite(sid: string): void {
     document.cookie = "session=" + sid;
 }
+
+// ts.config.reject_unauthorized
+const opts = { rejectUnauthorized: false, timeout: 3000 };
+
+// ts.secrets.fallback_secret
+const sessionSecret: string = process.env.SESSION_SECRET || "fake-default-session-secret";
+
+// ts.config.verbose_error_response
+function errorHandler(err: Error, req: any, res: any): void {
+    const error = err;
+    res.status(500).render("errors/error", { title: "Server Error", error });
+}
+
+// ts.config.cors_dynamic_origin
+function setCors(req: any, res: any): void {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+}
