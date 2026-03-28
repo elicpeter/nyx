@@ -137,6 +137,134 @@ fn cross_file_symex_js() {
     validate_expectations(&diags, &dir);
 }
 
+// ── New multi-file fixtures ────────────────────────────────────────────────
+
+// --- True positives ---------------------------------------------------------
+
+/// Go: HTTP handler in handler.go passes r.FormValue("cmd") to runCommand()
+/// defined in executor.go, which calls exec.Command — shell execution sink.
+#[test]
+fn cross_file_go_handler_exec() {
+    let dir = fixture_path("cross_file_go_handler_exec");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Java: UserController.java reads getParameter("name") and passes it to
+/// UserRepository.findByName(), which concatenates it into executeQuery().
+/// Engine gap: cross-file taint doesn't propagate for Java in this version;
+/// the AST pattern java.sqli.execute_concat fires instead of taint-unsanitised-flow.
+#[test]
+fn cross_file_java_sqli() {
+    let dir = fixture_path("cross_file_java_sqli");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// TypeScript: router.ts reads req.query.url and forwards it to
+/// fetchRemote() in httpClient.ts, which passes it to fetch() — SSRF.
+#[test]
+fn cross_file_ts_ssrf() {
+    let dir = fixture_path("cross_file_ts_ssrf");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// JavaScript: source.js exports getInput(); app.js destructures it under
+/// the alias fetchUserCmd and passes the result to execSync.
+/// Engine note: JS aliased import doesn't propagate taint across files in this
+/// version; cfg-unguarded-sink fires instead of taint-unsanitised-flow.
+#[test]
+fn cross_file_js_aliased_import() {
+    let dir = fixture_path("cross_file_js_aliased_import");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Python: 3-file chain — os.environ in input_reader.py → passthrough in
+/// transform.py → subprocess.call in executor.py.  Taint must survive two
+/// inter-file hops with no sanitisation.
+#[test]
+fn cross_file_py_nested_chain() {
+    let dir = fixture_path("cross_file_py_nested_chain");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Python: object attribute carries taint across files — JobRequest.cmd is
+/// populated from os.environ in models.py; handler.py reads req.cmd and
+/// passes it to subprocess.call.
+#[test]
+fn cross_file_py_object_field() {
+    let dir = fixture_path("cross_file_py_object_field");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+// --- True negatives ---------------------------------------------------------
+
+/// Python: shlex.quote (SHELL_ESCAPE sanitiser) is defined in shell_utils.py
+/// and called from handler.py before subprocess.call — no finding expected.
+#[test]
+fn cross_file_py_shlex_sanitizer() {
+    let dir = fixture_path("cross_file_py_shlex_sanitizer");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// JavaScript: xss() HTML sanitiser defined in security.js is applied before
+/// document.write in app.js — no taint-unsanitised-flow expected.
+#[test]
+fn cross_file_js_html_sanitized() {
+    let dir = fixture_path("cross_file_js_html_sanitized");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Python: constants.py returns a hardcoded string literal; runner.py uses it
+/// in subprocess.call — no taint source exists, so no finding expected.
+#[test]
+fn cross_file_py_const_passthrough() {
+    let dir = fixture_path("cross_file_py_const_passthrough");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Go: validation.go converts r.FormValue("id") with strconv.Atoi (Cap::all
+/// sanitiser) before handler.go calls db.QueryRow — no SQL taint expected.
+#[test]
+fn cross_file_go_int_validated() {
+    let dir = fixture_path("cross_file_go_int_validated");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+// --- Near-miss cases --------------------------------------------------------
+
+/// Python near miss — TRUE POSITIVE:
+/// html_guard.py applies html.escape (HTML_ESCAPE cap) before a SQL
+/// concatenation in app.py.  The HTML sanitiser does not cover SQL_QUERY
+/// capability, so the flow is still vulnerable — Nyx should detect it.
+/// Tests that the engine does not over-sanitise with the wrong cap type.
+#[test]
+fn cross_file_near_miss_wrong_sanitizer() {
+    let dir = fixture_path("cross_file_near_miss_wrong_sanitizer");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// JavaScript near miss — TRUE NEGATIVE:
+/// session.js stores user input in `lastUser` but getDefaultQuery() returns
+/// the constant `defaultQuery`.  app.js passes the result to pool.query().
+/// A coarse analysis might falsely flag this; a precise one should not.
+/// Tests that the engine does not conflate distinct module-level variables.
+#[test]
+fn cross_file_near_miss_field_isolation() {
+    let dir = fixture_path("cross_file_near_miss_field_isolation");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── Cross-cutting tests ───────────────────────────────────────────────────
 
 #[test]
