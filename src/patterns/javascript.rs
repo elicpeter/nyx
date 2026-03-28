@@ -125,6 +125,17 @@ pub const PATTERNS: &[Pattern] = &[
         confidence: Confidence::Medium,
     },
     Pattern {
+        id: "js.crypto.weak_hash_import",
+        description: "Direct md5()/sha1() call — weak hash from imported package",
+        query: r#"(call_expression
+                     function: (identifier) @id (#match? @id "^(md5|sha1)$"))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
+    },
+    Pattern {
         id: "js.crypto.math_random",
         description: "Math.random() — not cryptographically secure",
         query: r#"(call_expression
@@ -135,6 +146,20 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
+    },
+    // ── Tier A: Hardcoded secrets ───────────────────────────────────────
+    Pattern {
+        id: "js.secrets.hardcoded_secret",
+        description: "Hardcoded secret/password/API key in source code",
+        query: r#"(pair
+                     key: (property_identifier) @key
+                       (#match? @key "^(secret|password|api_key|apiKey|apiSecret|api_secret|SESSION_SECRET|secretKey|secret_key|privateKey|private_key)$")
+                     value: (string) @val)
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::Secrets,
         confidence: Confidence::Medium,
     },
     // ── Tier A: Open redirect ──────────────────────────────────────────

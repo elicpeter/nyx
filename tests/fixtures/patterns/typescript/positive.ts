@@ -50,6 +50,19 @@ function triggerLocationAssign(url: string): void {
     window.location = url;
 }
 
+// ts.secrets.hardcoded_secret
+const config = { secret: "keyboard-cat-fallback", password: "admin123" };
+
+// ts.crypto.weak_hash
+function triggerWeakHash(): void {
+    const hash = crypto.createHash("md5");
+}
+
+// ts.crypto.weak_hash_import
+function triggerWeakHashImport(password: string): void {
+    const hash = md5(password);
+}
+
 // ts.xss.cookie_write
 function triggerCookieWrite(sid: string): void {
     document.cookie = "session=" + sid;

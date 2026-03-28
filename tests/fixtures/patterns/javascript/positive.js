@@ -45,6 +45,19 @@ function triggerCookieWrite(sid) {
     document.cookie = "session=" + sid;
 }
 
+// js.secrets.hardcoded_secret
+var config = { secret: "keyboard-cat-fallback", password: "admin123" };
+
+// js.crypto.weak_hash
+function triggerWeakHash() {
+    var hash = crypto.createHash("md5");
+}
+
+// js.crypto.weak_hash_import
+function triggerWeakHashImport(password) {
+    var hash = md5(password);
+}
+
 // js.crypto.math_random
 function triggerMathRandom() {
     var token = Math.random();

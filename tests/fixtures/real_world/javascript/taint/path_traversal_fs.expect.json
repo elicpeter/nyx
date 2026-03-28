@@ -1,5 +1,5 @@
 {
-  "description": "Path traversal via req.query flowing into fs.readFileSync. Scanner lacks fs.readFileSync as a defined sink.",
+  "description": "Path traversal via req.query flowing into fs.readFileSync.",
   "tags": [
     "taint",
     "path-traversal",
@@ -13,13 +13,13 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         5,
         10
       ],
       "evidence_contains": [],
-      "notes": "req.query.path flows into fs.readFileSync but fs.readFileSync is not a recognized taint sink"
+      "notes": "req.query.path flows into fs.readFileSync (FILE_IO sink)"
     },
     {
       "rule_id": "taint-unsanitised-flow",

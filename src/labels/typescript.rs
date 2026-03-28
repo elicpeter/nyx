@@ -96,10 +96,15 @@ pub static RULES: &[LabelRule] = &[
             "child_process.exec",
             "child_process.execSync",
             "child_process.spawn",
+            "child_process.execFile",
             // Bare forms from destructured imports:
             //   const { exec, execSync } = require('child_process')
             "exec",
             "execSync",
+            "execFile",
+            // Common promisified wrappers around child_process.exec
+            "execAsync",
+            "execPromise",
         ],
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: true,
@@ -140,7 +145,7 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     LabelRule {
-        matchers: &["res.sendFile"],
+        matchers: &["res.sendFile", "res.download"],
         label: DataLabel::Sink(Cap::FILE_IO),
         case_sensitive: false,
     },
@@ -166,9 +171,23 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SSRF),
         case_sensitive: false,
     },
-    // Node.js file-system write sinks
+    // Node.js file-system sinks
     LabelRule {
-        matchers: &["fs.writeFile", "fs.writeFileSync"],
+        matchers: &[
+            "fs.writeFile",
+            "fs.writeFileSync",
+            "fs.readFile",
+            "fs.readFileSync",
+            "fs.createReadStream",
+            "fs.createWriteStream",
+            "fs.access",
+            "fs.stat",
+            "fs.statSync",
+            "fs.unlink",
+            "fs.unlinkSync",
+            "fs.readdir",
+            "fs.readdirSync",
+        ],
         label: DataLabel::Sink(Cap::FILE_IO),
         case_sensitive: false,
     },

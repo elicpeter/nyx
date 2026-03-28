@@ -82,6 +82,31 @@ pub const PATTERNS: &[Pattern] = &[
     },
     // ── Tier A: Weak crypto ────────────────────────────────────────────
     Pattern {
+        id: "ts.crypto.weak_hash",
+        description: "crypto.createHash with weak algorithm (md5/sha1)",
+        query: r#"(call_expression
+                     function: (member_expression
+                       property: (property_identifier) @prop (#eq? @prop "createHash"))
+                     arguments: (arguments
+                       (string) @alg (#match? @alg "\"(md5|sha1)\"")))
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
+    },
+    Pattern {
+        id: "ts.crypto.weak_hash_import",
+        description: "Direct md5()/sha1() call — weak hash from imported package",
+        query: r#"(call_expression
+                     function: (identifier) @id (#match? @id "^(md5|sha1)$"))
+                   @vuln"#,
+        severity: Severity::Medium,
+        tier: PatternTier::A,
+        category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
+    },
+    Pattern {
         id: "ts.crypto.math_random",
         description: "Math.random() — not cryptographically secure",
         query: r#"(call_expression
@@ -92,6 +117,20 @@ pub const PATTERNS: &[Pattern] = &[
         severity: Severity::Low,
         tier: PatternTier::A,
         category: PatternCategory::Crypto,
+        confidence: Confidence::Medium,
+    },
+    // ── Tier A: Hardcoded secrets ───────────────────────────────────────
+    Pattern {
+        id: "ts.secrets.hardcoded_secret",
+        description: "Hardcoded secret/password/API key in source code",
+        query: r#"(pair
+                     key: (property_identifier) @key
+                       (#match? @key "^(secret|password|api_key|apiKey|apiSecret|api_secret|SESSION_SECRET|secretKey|secret_key|privateKey|private_key)$")
+                     value: (string) @val)
+                   @vuln"#,
+        severity: Severity::Low,
+        tier: PatternTier::A,
+        category: PatternCategory::Secrets,
         confidence: Confidence::Medium,
     },
     // ── Tier A: TypeScript-specific type-safety escapes ────────────────

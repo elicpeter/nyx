@@ -263,6 +263,42 @@ fn cross_file_near_miss_field_isolation() {
     validate_expectations(&diags, &dir);
 }
 
+// ── New sink coverage fixtures ────────────────────────────────────────────
+
+/// JS: execAsync wraps child_process.exec; user input flows through the
+/// wrapper to the inner exec call — SHELL_ESCAPE finding expected.
+#[test]
+fn exec_async_wrapper() {
+    let dir = fixture_path("exec_async_wrapper");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// JS: res.download(path.join(root, req.query.path)) — path traversal
+/// via Express res.download FILE_IO sink.
+#[test]
+fn path_traversal_download() {
+    let dir = fixture_path("path_traversal_download");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// JS: md5(password) and crypto.createHash("sha1") — weak hash patterns.
+#[test]
+fn weak_hash_password() {
+    let dir = fixture_path("weak_hash_password");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// JS: hardcoded secret/password in object literal.
+#[test]
+fn hardcoded_secret() {
+    let dir = fixture_path("hardcoded_secret");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── Cross-cutting tests ───────────────────────────────────────────────────
 
 #[test]
