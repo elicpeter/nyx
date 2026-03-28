@@ -1,9 +1,9 @@
 use crate::commands::scan::Diag;
 use crate::evidence::{Confidence, Evidence};
 use crate::patterns::{FindingCategory, Severity};
+use crate::utils::path::{DEFAULT_UI_MAX_FILE_BYTES, open_repo_text_file};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
-use std::fs;
 use std::path::Path;
 
 /// Compact related-finding reference for the detail panel.
@@ -351,8 +351,8 @@ fn compute_sanitizer_status(d: &Diag) -> String {
 
 /// Load surrounding lines of code for a finding.
 fn load_code_context(path: &str, line: usize, scan_root: &Path) -> Option<CodeContextView> {
-    let full_path = scan_root.join(path);
-    let content = fs::read_to_string(&full_path).ok()?;
+    let opened = open_repo_text_file(scan_root, path, DEFAULT_UI_MAX_FILE_BYTES).ok()?;
+    let content = opened.content;
     let all_lines: Vec<&str> = content.lines().collect();
 
     if line == 0 || line > all_lines.len() {
@@ -665,4 +665,56 @@ pub fn top_n_from_map(map: &HashMap<String, usize>, limit: usize) -> Vec<Overvie
             count,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diag_for_path(path: String) -> Diag {
+        Diag {
+            path,
+            line: 1,
+            col: 1,
+            severity: Severity::Low,
+            id: "test.rule".to_string(),
+            category: FindingCategory::Security,
+            path_validated: false,
+            guard_kind: None,
+            message: None,
+            labels: Vec::new(),
+            confidence: None,
+            evidence: None,
+            rank_score: None,
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+            rollup: None,
+        }
+    }
+
+    #[test]
+    fn code_context_does_not_read_outside_repo_for_absolute_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(outside.path(), "secret").unwrap();
+
+        let diag = diag_for_path(outside.path().to_string_lossy().to_string());
+        let view = finding_from_diag_with_context(0, &diag, root.path());
+
+        assert!(view.code_context.is_none());
+    }
+
+    #[test]
+    fn code_context_reads_repo_files() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("src.rs");
+        std::fs::write(&file, "line1\nline2\n").unwrap();
+
+        let diag = diag_for_path(file.to_string_lossy().to_string());
+        let view = finding_from_diag_with_context(0, &diag, root.path());
+
+        assert!(view.code_context.is_some());
+        assert_eq!(view.code_context.unwrap().highlight_line, 1);
+    }
 }

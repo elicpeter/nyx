@@ -6,6 +6,7 @@
 
 use crate::server::app::AppState;
 use crate::server::debug::{self, *};
+use crate::utils::path::{DEFAULT_UI_MAX_FILE_BYTES, RepoPathError, resolve_repo_path};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
@@ -13,7 +14,6 @@ use axum::{Json, Router};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use serde::Deserialize;
-use std::fs;
 use std::path::Path;
 
 pub fn routes() -> Router<AppState> {
@@ -56,17 +56,15 @@ struct SummaryQuery {
 // ── Path validation ──────────────────────────────────────────────────────────
 
 fn validate_and_resolve(scan_root: &Path, file: &str) -> Result<std::path::PathBuf, StatusCode> {
-    if file.contains("..") {
-        return Err(StatusCode::FORBIDDEN);
+    let resolved = resolve_repo_path(scan_root, file).map_err(map_path_error)?;
+    let metadata = std::fs::metadata(&resolved.canonical).map_err(|_| StatusCode::NOT_FOUND)?;
+    if !metadata.file_type().is_file() {
+        return Err(StatusCode::BAD_REQUEST);
     }
-    let canonical_root =
-        fs::canonicalize(scan_root).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let target = canonical_root.join(file);
-    let canonical = fs::canonicalize(&target).map_err(|_| StatusCode::NOT_FOUND)?;
-    if !canonical.starts_with(&canonical_root) {
-        return Err(StatusCode::FORBIDDEN);
+    if metadata.len() > DEFAULT_UI_MAX_FILE_BYTES {
+        return Err(StatusCode::BAD_REQUEST);
     }
-    Ok(canonical)
+    Ok(resolved.canonical)
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -84,6 +82,18 @@ async fn list_functions(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let analysis = debug::analyse_file(&path, &config)?;
     Ok(Json(debug::function_list(&analysis)))
+}
+
+fn map_path_error(err: RepoPathError) -> StatusCode {
+    match err {
+        RepoPathError::InvalidPath | RepoPathError::OutsideRoot => StatusCode::FORBIDDEN,
+        RepoPathError::NotFound => StatusCode::NOT_FOUND,
+        RepoPathError::NotFile
+        | RepoPathError::NotDirectory
+        | RepoPathError::TooLarge
+        | RepoPathError::InvalidText => StatusCode::BAD_REQUEST,
+        RepoPathError::Io => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 /// GET /api/debug/cfg?file=<path>&function=<name>

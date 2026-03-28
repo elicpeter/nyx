@@ -377,10 +377,17 @@ async fn import_triage_file(
         Json(serde_json::json!({ "error": "database not available" })),
     ))?;
 
-    let file = crate::server::triage_sync::load_triage_file(&state.scan_root).ok_or((
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({ "error": ".nyx/triage.json not found" })),
-    ))?;
+    let file = crate::server::triage_sync::load_triage_file_checked(&state.scan_root)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": ".nyx/triage.json not found" })),
+        ))?;
 
     let findings = load_latest_findings(&state);
     let applied =

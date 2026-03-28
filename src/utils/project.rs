@@ -2,6 +2,7 @@
 
 use crate::errors::{NyxError, NyxResult};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Determine `<project-name, path/to/<project>.sqlite>`.
@@ -67,9 +68,11 @@ const MANIFEST_READ_LIMIT: usize = 64 * 1024;
 
 /// Read up to `MANIFEST_READ_LIMIT` bytes from a file.
 fn read_bounded(path: &Path) -> Option<String> {
-    let data = fs::read(path).ok()?;
-    let len = data.len().min(MANIFEST_READ_LIMIT);
-    String::from_utf8(data[..len].to_vec()).ok()
+    let file = fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(file).take(MANIFEST_READ_LIMIT as u64);
+    let mut out = String::new();
+    reader.read_to_string(&mut out).ok()?;
+    Some(out)
 }
 
 /// Detect frameworks from manifest files in the project root.

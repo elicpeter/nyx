@@ -4,6 +4,7 @@ use crate::database::index::Indexer;
 use crate::server::app::AppState;
 use crate::server::models::lang_for_finding_path;
 use crate::server::routes::findings::load_latest_findings;
+use crate::utils::path::{RepoPathError, resolve_repo_dir, resolve_repo_path};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
@@ -11,7 +12,6 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
 
 use crate::patterns::Severity;
 
@@ -96,35 +96,6 @@ fn max_severity(a: Option<Severity>, b: Severity) -> Severity {
     }
 }
 
-/// Validate a path parameter is safe and within scan_root. Returns the
-/// canonical absolute path and the relative path from scan_root.
-fn validate_path(
-    scan_root: &Path,
-    query_path: Option<&str>,
-) -> Result<(std::path::PathBuf, String), StatusCode> {
-    if let Some(p) = query_path {
-        if p.contains("..") {
-            return Err(StatusCode::FORBIDDEN);
-        }
-    }
-    let canonical_root =
-        fs::canonicalize(scan_root).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let target = match query_path {
-        Some(p) if !p.is_empty() => canonical_root.join(p),
-        _ => canonical_root.clone(),
-    };
-    let canonical = fs::canonicalize(&target).map_err(|_| StatusCode::NOT_FOUND)?;
-    if !canonical.starts_with(&canonical_root) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    let rel = canonical
-        .strip_prefix(&canonical_root)
-        .unwrap_or(&canonical)
-        .to_string_lossy()
-        .to_string();
-    Ok((canonical, rel))
-}
-
 /// Normalize a Diag path to be relative to scan_root.
 ///
 /// Diag.path is typically absolute (from the file walker). The explorer UI
@@ -143,16 +114,13 @@ async fn get_tree(
     State(state): State<AppState>,
     Query(query): Query<TreeQuery>,
 ) -> Result<Json<Vec<TreeEntry>>, StatusCode> {
-    let (canonical, _rel) = validate_path(&state.scan_root, query.path.as_deref())?;
-
-    if !canonical.is_dir() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
+    let resolved =
+        resolve_repo_dir(&state.scan_root, query.path.as_deref()).map_err(map_path_error)?;
+    let canonical = resolved.canonical;
 
     // Load findings and pre-compute per-file and per-directory aggregates
     let findings = load_latest_findings(&state);
-    let canonical_root =
-        fs::canonicalize(&state.scan_root).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let canonical_root = resolved.root;
     let root_str = canonical_root.to_string_lossy();
 
     let mut file_counts: HashMap<String, (usize, Severity)> = HashMap::new();
@@ -206,6 +174,9 @@ async fn get_tree(
             Ok(c) => c,
             Err(_) => continue,
         };
+        if !canonical_entry.starts_with(&canonical_root) {
+            continue;
+        }
         let rel_path = canonical_entry
             .strip_prefix(&canonical_root)
             .unwrap_or(&canonical_entry)
@@ -262,8 +233,7 @@ async fn get_symbols(
     State(state): State<AppState>,
     Query(query): Query<SymbolsQuery>,
 ) -> Result<Json<Vec<SymbolEntry>>, StatusCode> {
-    // Validate path is within scan_root
-    let _ = validate_path(&state.scan_root, Some(&query.path))?;
+    let resolved = resolve_repo_path(&state.scan_root, &query.path).map_err(map_path_error)?;
 
     let pool = match &state.db_pool {
         Some(p) => p,
@@ -273,9 +243,8 @@ async fn get_symbols(
     let idx = Indexer::from_pool("_scans", pool).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Build absolute path for DB lookup (DB stores absolute paths)
-    let canonical_root =
-        fs::canonicalize(&state.scan_root).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let abs_path = canonical_root.join(&query.path);
+    let canonical_root = resolved.root;
+    let abs_path = resolved.canonical;
     let abs_path_str = abs_path.to_string_lossy();
     let root_str = canonical_root.to_string_lossy();
 
@@ -284,7 +253,7 @@ async fn get_symbols(
     let mut func_finding_counts: HashMap<String, usize> = HashMap::new();
     for d in findings.iter() {
         let rel = relativize_path(&d.path, &root_str);
-        if rel != query.path {
+        if rel != resolved.relative {
             continue;
         }
         // Try to get function name from evidence flow steps
@@ -344,20 +313,17 @@ async fn get_findings(
     State(state): State<AppState>,
     Query(query): Query<ExplorerFindingsQuery>,
 ) -> Result<Json<Vec<ExplorerFinding>>, StatusCode> {
-    // Validate path
-    let _ = validate_path(&state.scan_root, Some(&query.path))?;
+    let resolved = resolve_repo_path(&state.scan_root, &query.path).map_err(map_path_error)?;
 
     let findings = load_latest_findings(&state);
-    let canonical_root =
-        fs::canonicalize(&state.scan_root).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let root_str = canonical_root.to_string_lossy();
+    let root_str = resolved.root.to_string_lossy();
 
     let mut results: Vec<ExplorerFinding> = findings
         .iter()
         .enumerate()
         .filter(|(_, d)| {
             let rel = relativize_path(&d.path, &root_str);
-            rel == query.path
+            rel == resolved.relative
         })
         .map(|(i, d)| ExplorerFinding {
             index: i,
@@ -374,4 +340,16 @@ async fn get_findings(
     results.sort_by_key(|f| f.line);
 
     Ok(Json(results))
+}
+
+fn map_path_error(err: RepoPathError) -> StatusCode {
+    match err {
+        RepoPathError::InvalidPath | RepoPathError::OutsideRoot => StatusCode::FORBIDDEN,
+        RepoPathError::NotFound => StatusCode::NOT_FOUND,
+        RepoPathError::NotDirectory => StatusCode::BAD_REQUEST,
+        RepoPathError::NotFile | RepoPathError::TooLarge | RepoPathError::InvalidText => {
+            StatusCode::BAD_REQUEST
+        }
+        RepoPathError::Io => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }

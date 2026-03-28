@@ -1,10 +1,10 @@
 use crate::server::app::AppState;
+use crate::utils::path::{DEFAULT_UI_MAX_FILE_BYTES, RepoPathError, open_repo_text_file};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use std::fs;
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/files", get(get_file))
@@ -34,29 +34,9 @@ async fn get_file(
     State(state): State<AppState>,
     Query(query): Query<FileQuery>,
 ) -> Result<Json<FileResponse>, StatusCode> {
-    // Belt-and-suspenders: reject paths with ".." segments
-    if query.path.contains("..") {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    // Canonicalize and validate the path is within scan_root
-    let scan_root =
-        fs::canonicalize(&state.scan_root).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let requested = scan_root.join(&query.path);
-    let canonical = fs::canonicalize(&requested).map_err(|_| StatusCode::NOT_FOUND)?;
-
-    if !canonical.starts_with(&scan_root) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    // Max file size guard (5MB)
-    let metadata = fs::metadata(&canonical).map_err(|_| StatusCode::NOT_FOUND)?;
-    if metadata.len() > 5 * 1024 * 1024 {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-
-    // Read file (binary files will fail here)
-    let content = fs::read_to_string(&canonical).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let opened = open_repo_text_file(&state.scan_root, &query.path, DEFAULT_UI_MAX_FILE_BYTES)
+        .map_err(map_path_error)?;
+    let content = opened.content;
     let all_lines: Vec<&str> = content.lines().collect();
     let total_lines = all_lines.len();
 
@@ -78,8 +58,20 @@ async fn get_file(
     };
 
     Ok(Json(FileResponse {
-        path: query.path,
+        path: opened.resolved.relative,
         lines,
         total_lines,
     }))
+}
+
+fn map_path_error(err: RepoPathError) -> StatusCode {
+    match err {
+        RepoPathError::InvalidPath | RepoPathError::OutsideRoot => StatusCode::FORBIDDEN,
+        RepoPathError::NotFound => StatusCode::NOT_FOUND,
+        RepoPathError::TooLarge
+        | RepoPathError::InvalidText
+        | RepoPathError::NotFile
+        | RepoPathError::NotDirectory => StatusCode::BAD_REQUEST,
+        RepoPathError::Io => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }

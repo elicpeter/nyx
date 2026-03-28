@@ -108,4 +108,9 @@ describe('highlightSyntax', () => {
     const code = 'hello world';
     expect(highlightSyntax(code, 'python')).toBe('hello world');
   });
+
+  it('skips regex highlighting for very long lines', () => {
+    const code = 'const ' + 'x'.repeat(25_000);
+    expect(highlightSyntax(code, 'javascript')).toBe(code);
+  });
 });

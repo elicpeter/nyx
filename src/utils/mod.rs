@@ -1,5 +1,6 @@
 pub mod config;
 pub(crate) mod ext;
+pub mod path;
 pub mod project;
 pub(crate) mod query_cache;
 

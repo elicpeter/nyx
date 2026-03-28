@@ -14,7 +14,10 @@ use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::Path;
+
+const MAX_TRIAGE_FILE_BYTES: u64 = 1024 * 1024;
 
 /// On-disk format for `.nyx/triage.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,9 +81,19 @@ pub fn triage_file_path(scan_root: &Path) -> std::path::PathBuf {
 /// Load triage decisions from `.nyx/triage.json`.
 /// Returns None if the file doesn't exist.
 pub fn load_triage_file(scan_root: &Path) -> Option<TriageFile> {
+    load_triage_file_checked(scan_root).ok().flatten()
+}
+
+pub fn load_triage_file_checked(scan_root: &Path) -> Result<Option<TriageFile>, String> {
     let path = triage_file_path(scan_root);
-    let content = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&content).ok()
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = read_bounded_text_file(&path, MAX_TRIAGE_FILE_BYTES)?;
+    let parsed =
+        serde_json::from_str(&content).map_err(|e| format!("failed to parse triage file: {e}"))?;
+    Ok(Some(parsed))
 }
 
 /// Save triage decisions to `.nyx/triage.json`.
@@ -95,6 +108,25 @@ pub fn save_triage_file(scan_root: &Path, file: &TriageFile) -> Result<(), Strin
         .map_err(|e| format!("failed to serialize triage file: {e}"))?;
     std::fs::write(&path, json).map_err(|e| format!("failed to write triage file: {e}"))?;
     Ok(())
+}
+
+fn read_bounded_text_file(path: &Path, max_bytes: u64) -> Result<String, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("failed to open file: {e}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("failed to stat file: {e}"))?;
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "triage file exceeds {max_bytes} bytes and was rejected"
+        ));
+    }
+
+    let mut reader = std::io::BufReader::new(file).take(max_bytes);
+    let mut content = String::new();
+    reader
+        .read_to_string(&mut content)
+        .map_err(|e| format!("failed to read triage file: {e}"))?;
+    Ok(content)
 }
 
 /// Export current DB triage state to a `TriageFile`.
@@ -213,4 +245,20 @@ pub fn sync_to_file(
 ) -> Result<(), String> {
     let file = export_triage(pool, findings, scan_root)?;
     save_triage_file(scan_root, &file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_triage_files_are_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let path = triage_file_path(root.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, vec![b'a'; (MAX_TRIAGE_FILE_BYTES as usize) + 1]).unwrap();
+
+        let err = load_triage_file_checked(root.path()).unwrap_err();
+        assert!(err.contains("exceeds"));
+    }
 }

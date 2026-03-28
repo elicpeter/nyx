@@ -1,4 +1,5 @@
 use crate::utils::Config;
+use crate::utils::path::path_stays_within_root;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use ignore::{WalkBuilder, WalkState, overrides::OverrideBuilder};
 use std::thread::JoinHandle;
@@ -84,6 +85,7 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
     let (tx, rx) = bounded::<Paths>(workers * cfg.performance.channel_multiplier);
 
     let root = root.to_path_buf();
+    let canonical_root = std::fs::canonicalize(&root).ok();
     let scan_hidden = cfg.scanner.scan_hidden_files;
     let follow = cfg.scanner.follow_symlinks;
     let max_bytes = cfg.scanner.max_file_size_mb.unwrap_or(0) * 1_048_576;
@@ -124,14 +126,25 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
             .build_parallel()
             .run(move || {
                 let mut bs = BatchSender::new(tx.clone(), batch_size);
+                let canonical_root = canonical_root.clone();
 
                 Box::new(move |entry| {
                     if let Ok(e) = entry {
-                        let is_file = e.file_type().is_some_and(|ft| ft.is_file());
-                        let under_limit = max_bytes == 0
-                            || e.metadata().map(|m| m.len() <= max_bytes).unwrap_or(true);
+                        let metadata = match e.metadata() {
+                            Ok(metadata) => metadata,
+                            Err(_) => return WalkState::Continue,
+                        };
+                        let is_file = metadata.file_type().is_file();
+                        let under_limit = max_bytes == 0 || metadata.len() <= max_bytes;
+                        let path_allowed = canonical_root.as_ref().is_none_or(|root| {
+                            if follow {
+                                path_stays_within_root(root, e.path()).unwrap_or(false)
+                            } else {
+                                true
+                            }
+                        });
 
-                        if is_file && under_limit {
+                        if is_file && under_limit && path_allowed {
                             bs.push_path(e.into_path());
                         }
                     }
@@ -259,4 +272,33 @@ fn walker_returns_empty_on_empty_directory() {
     let all: Vec<_> = rx.into_iter().flatten().collect();
 
     assert!(all.is_empty(), "empty directory should yield no files");
+}
+
+#[cfg(unix)]
+#[test]
+fn walker_follow_symlinks_does_not_escape_root() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("secret.rs");
+    std::fs::write(&outside_file, "fn leaked() {}").unwrap();
+
+    let link = tmp.path().join("escape.rs");
+    symlink(&outside_file, &link).unwrap();
+
+    let mut cfg = Config::default();
+    cfg.scanner.follow_symlinks = true;
+    cfg.performance.worker_threads = Some(1);
+    cfg.performance.channel_multiplier = 1;
+    cfg.performance.batch_size = 4;
+
+    let (rx, handle) = spawn_file_walker(tmp.path(), &cfg);
+    handle.join().ok();
+    let all: Vec<_> = rx.into_iter().flatten().collect();
+
+    assert!(
+        all.iter().all(|path| path != &link),
+        "symlink escapes must not be scanned: {all:?}"
+    );
 }

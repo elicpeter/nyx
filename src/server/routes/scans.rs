@@ -44,7 +44,15 @@ async fn start_scan(
     let req = body.map(|b| b.0).unwrap_or_default();
 
     let scan_root = if let Some(ref root) = req.scan_root {
-        std::path::PathBuf::from(root)
+        let requested = std::path::Path::new(root)
+            .canonicalize()
+            .map_err(|_| bad_request("invalid scan_root"))?;
+        if requested != state.scan_root {
+            return Err(bad_request(
+                "scan_root must match the repository passed to nyx serve",
+            ));
+        }
+        requested
     } else {
         state.scan_root.clone()
     };
@@ -67,6 +75,13 @@ async fn start_scan(
             Json(serde_json::json!({ "error": msg })),
         )),
     }
+}
+
+fn bad_request(message: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": message })),
+    )
 }
 
 async fn list_scans(State(state): State<AppState>) -> Json<Vec<ScanView>> {

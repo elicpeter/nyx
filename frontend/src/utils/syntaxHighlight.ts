@@ -5,6 +5,8 @@ interface SyntaxRules {
   numbers: RegExp;
 }
 
+const MAX_HIGHLIGHT_INPUT_CHARS = 20_000;
+
 const SYNTAX_RULES: Record<string, SyntaxRules> = {
   javascript: {
     keywords:
@@ -82,7 +84,7 @@ interface Token {
  */
 export function highlightSyntax(escapedHtml: string, lang: string): string {
   const rules = SYNTAX_RULES[lang];
-  if (!rules) return escapedHtml;
+  if (!rules || escapedHtml.length > MAX_HIGHLIGHT_INPUT_CHARS) return escapedHtml;
 
   const tokens: Token[] = [];
 

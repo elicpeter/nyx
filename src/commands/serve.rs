@@ -2,6 +2,7 @@ use crate::database::index::Indexer;
 use crate::errors::NyxResult;
 use crate::server::app::{AppState, build_router};
 use crate::server::jobs::JobManager;
+use crate::server::security::LocalServerSecurity;
 use crate::utils::config::Config;
 use crate::utils::project::get_project_info;
 use console::style;
@@ -19,9 +20,10 @@ pub fn handle(
 ) -> NyxResult<()> {
     let scan_root = Path::new(path).canonicalize()?;
 
-    let host = host
+    let requested_host = host
         .map(String::from)
         .unwrap_or_else(|| config.server.host.clone());
+    let host = normalize_loopback_host(&requested_host)?;
     let port = port.unwrap_or(config.server.port);
     let open_browser = !no_browser && config.server.open_browser;
     let max_jobs = config.server.max_saved_runs as usize;
@@ -41,25 +43,12 @@ pub fn handle(
         }
     };
 
-    let state = AppState {
-        scan_root: scan_root.clone(),
-        config_dir: config_dir.to_path_buf(),
-        database_dir: database_dir.to_path_buf(),
-        config: Arc::new(RwLock::new(config.clone())),
-        job_manager: Arc::new(JobManager::new(max_jobs, rayon_stack_size)),
-        event_tx,
-        db_pool,
-    };
-
-    let router = build_router(state);
-
-    let addr = format!("{host}:{port}");
-    let url = format!("http://{addr}");
+    let addr = socket_addr(&host, port);
 
     eprintln!(
         "\n  {} Nyx web UI at {}\n",
         style("Serving").green().bold(),
-        style(&url).cyan().underlined(),
+        style(format!("http://{addr}")).cyan().underlined(),
     );
     eprintln!(
         "  Scan root: {}\n  Press {} to stop\n",
@@ -77,6 +66,25 @@ pub fn handle(
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .map_err(|e| crate::errors::NyxError::Msg(format!("Failed to bind {addr}: {e}")))?;
+        let local_addr = listener
+            .local_addr()
+            .map_err(|e| crate::errors::NyxError::Msg(format!("Failed to read local addr: {e}")))?;
+        let display_host = display_host(&host);
+        let url = format!("http://{}:{}", display_host, local_addr.port());
+        let security = LocalServerSecurity::new(local_addr.port());
+
+        let state = AppState {
+            scan_root: scan_root.clone(),
+            config_dir: config_dir.to_path_buf(),
+            database_dir: database_dir.to_path_buf(),
+            security,
+            config: Arc::new(RwLock::new(config.clone())),
+            job_manager: Arc::new(JobManager::new(max_jobs, rayon_stack_size)),
+            event_tx,
+            db_pool,
+        };
+
+        let router = build_router(state);
 
         if open_browser {
             open_browser_url(&url);
@@ -90,6 +98,32 @@ pub fn handle(
         eprintln!("\n  {} Server stopped.", style("Done.").green().bold());
         Ok(())
     })
+}
+
+fn normalize_loopback_host(host: &str) -> NyxResult<String> {
+    let normalized = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+    match normalized.as_str() {
+        "localhost" | "127.0.0.1" | "::1" => Ok(normalized),
+        _ => Err(crate::errors::NyxError::Msg(format!(
+            "Nyx serve only binds to loopback addresses; refused host '{host}'"
+        ))),
+    }
+}
+
+fn socket_addr(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+fn display_host(host: &str) -> String {
+    if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    }
 }
 
 async fn shutdown_signal() {
