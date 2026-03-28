@@ -69,12 +69,12 @@ pub enum IndexMode {
 /// Analysis mode for scan operations.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum, Default)]
 pub enum ScanMode {
-    /// Run all analyses: AST patterns + CFG + taint (default)
+    /// Run all analyses: AST analyses + CFG + taint (default)
     #[default]
     Full,
-    /// Run AST pattern queries only (no CFG/taint)
+    /// Run AST analyses only (tree-sitter patterns + auth analysis; no CFG/taint/state)
     Ast,
-    /// Run CFG structural analyses + taint only (no AST patterns)
+    /// Run CFG structural analyses + taint only (no AST analyses)
     Cfg,
     /// Alias for cfg (CFG + taint analysis)
     Taint,

@@ -431,6 +431,44 @@ pub struct LanguageAnalysisConfig {
     pub rules: Vec<ConfigLabelRule>,
     pub terminators: Vec<String>,
     pub event_handlers: Vec<String>,
+    pub auth: AuthAnalysisConfig,
+}
+
+fn default_auth_enabled() -> bool {
+    true
+}
+
+/// Per-language authorization-analysis configuration from config file.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct AuthAnalysisConfig {
+    pub enabled: bool,
+    pub admin_path_patterns: Vec<String>,
+    pub admin_guard_names: Vec<String>,
+    pub login_guard_names: Vec<String>,
+    pub authorization_check_names: Vec<String>,
+    pub mutation_indicator_names: Vec<String>,
+    pub read_indicator_names: Vec<String>,
+    pub token_lookup_names: Vec<String>,
+    pub token_expiry_fields: Vec<String>,
+    pub token_recipient_fields: Vec<String>,
+}
+
+impl Default for AuthAnalysisConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_auth_enabled(),
+            admin_path_patterns: Vec::new(),
+            admin_guard_names: Vec::new(),
+            login_guard_names: Vec::new(),
+            authorization_check_names: Vec::new(),
+            mutation_indicator_names: Vec::new(),
+            read_indicator_names: Vec::new(),
+            token_lookup_names: Vec::new(),
+            token_expiry_fields: Vec::new(),
+            token_recipient_fields: Vec::new(),
+        }
+    }
 }
 
 /// Top-level analysis rules config, keyed by language slug.
@@ -905,9 +943,55 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
                 entry.event_handlers.push(eh);
             }
         }
+
+        entry.auth.enabled = user_lang_cfg.auth.enabled;
+        extend_dedup(
+            &mut entry.auth.admin_path_patterns,
+            user_lang_cfg.auth.admin_path_patterns,
+        );
+        extend_dedup(
+            &mut entry.auth.admin_guard_names,
+            user_lang_cfg.auth.admin_guard_names,
+        );
+        extend_dedup(
+            &mut entry.auth.login_guard_names,
+            user_lang_cfg.auth.login_guard_names,
+        );
+        extend_dedup(
+            &mut entry.auth.authorization_check_names,
+            user_lang_cfg.auth.authorization_check_names,
+        );
+        extend_dedup(
+            &mut entry.auth.mutation_indicator_names,
+            user_lang_cfg.auth.mutation_indicator_names,
+        );
+        extend_dedup(
+            &mut entry.auth.read_indicator_names,
+            user_lang_cfg.auth.read_indicator_names,
+        );
+        extend_dedup(
+            &mut entry.auth.token_lookup_names,
+            user_lang_cfg.auth.token_lookup_names,
+        );
+        extend_dedup(
+            &mut entry.auth.token_expiry_fields,
+            user_lang_cfg.auth.token_expiry_fields,
+        );
+        extend_dedup(
+            &mut entry.auth.token_recipient_fields,
+            user_lang_cfg.auth.token_recipient_fields,
+        );
     }
 
     default
+}
+
+fn extend_dedup(dst: &mut Vec<String>, src: Vec<String>) {
+    for item in src {
+        if !dst.contains(&item) {
+            dst.push(item);
+        }
+    }
 }
 
 #[test]
@@ -940,6 +1024,7 @@ fn merge_analysis_rules_unions_and_dedupes() {
             }],
             terminators: vec!["process.exit".into()],
             event_handlers: vec![],
+            auth: AuthAnalysisConfig::default(),
         },
     );
 
@@ -963,6 +1048,12 @@ fn merge_analysis_rules_unions_and_dedupes() {
             ],
             terminators: vec!["process.exit".into(), "abort".into()],
             event_handlers: vec!["addEventListener".into()],
+            auth: AuthAnalysisConfig {
+                enabled: true,
+                admin_guard_names: vec!["requireAdmin".into()],
+                token_lookup_names: vec!["findByToken".into()],
+                ..AuthAnalysisConfig::default()
+            },
         },
     );
 
@@ -971,6 +1062,8 @@ fn merge_analysis_rules_unions_and_dedupes() {
     assert_eq!(js.rules.len(), 2); // deduped
     assert_eq!(js.terminators, vec!["process.exit", "abort"]);
     assert_eq!(js.event_handlers, vec!["addEventListener"]);
+    assert_eq!(js.auth.admin_guard_names, vec!["requireAdmin"]);
+    assert_eq!(js.auth.token_lookup_names, vec!["findByToken"]);
 }
 
 #[test]
@@ -979,6 +1072,11 @@ fn analysis_config_toml_roundtrip() {
 [analysis.languages.javascript]
 terminators = ["process.exit"]
 event_handlers = ["addEventListener"]
+
+[analysis.languages.javascript.auth]
+enabled = true
+admin_guard_names = ["requireAdmin"]
+token_lookup_names = ["findByToken"]
 
 [[analysis.languages.javascript.rules]]
 matchers = ["escapeHtml"]
@@ -993,6 +1091,9 @@ cap = "html_escape"
     assert_eq!(js.rules[0].cap, CapName::HtmlEscape);
     assert_eq!(js.terminators, vec!["process.exit"]);
     assert_eq!(js.event_handlers, vec!["addEventListener"]);
+    assert!(js.auth.enabled);
+    assert_eq!(js.auth.admin_guard_names, vec!["requireAdmin"]);
+    assert_eq!(js.auth.token_lookup_names, vec!["findByToken"]);
 }
 
 #[test]
@@ -1121,6 +1222,10 @@ fn backward_compat_existing_toml() {
         matchers = ["escapeHtml"]
         kind = "sanitizer"
         cap = "html_escape"
+
+        [analysis.languages.javascript.auth]
+        enabled = false
+        admin_path_patterns = ["/admin/"]
     "#;
     let cfg: Config = toml::from_str(toml_str).unwrap();
     assert_eq!(cfg.scanner.mode, AnalysisMode::Full);
@@ -1133,6 +1238,21 @@ fn backward_compat_existing_toml() {
         cfg.analysis.languages["javascript"].rules[0].cap,
         CapName::HtmlEscape
     );
+    assert!(!cfg.analysis.languages["javascript"].auth.enabled);
+    assert_eq!(
+        cfg.analysis.languages["javascript"]
+            .auth
+            .admin_path_patterns,
+        vec!["/admin/"]
+    );
+}
+
+#[test]
+fn auth_analysis_config_defaults() {
+    let cfg = AuthAnalysisConfig::default();
+    assert!(cfg.enabled);
+    assert!(cfg.admin_path_patterns.is_empty());
+    assert!(cfg.authorization_check_names.is_empty());
 }
 
 // ─── Phase 2 tests: server and runs config ──────────────────────────────────

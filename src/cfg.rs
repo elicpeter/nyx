@@ -2452,13 +2452,11 @@ fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> V
     // For C/C++, the parameter list is nested inside the declarator
     // (function_definition > declarator:function_declarator > parameters:parameter_list),
     // so fall back to looking one level deeper via the "declarator" field.
-    let params = func_node
-        .child_by_field_name(cfg.params_field)
-        .or_else(|| {
-            func_node
-                .child_by_field_name("declarator")
-                .and_then(|d| d.child_by_field_name(cfg.params_field))
-        });
+    let params = func_node.child_by_field_name(cfg.params_field).or_else(|| {
+        func_node
+            .child_by_field_name("declarator")
+            .and_then(|d| d.child_by_field_name(cfg.params_field))
+    });
     let Some(params) = params else {
         return names;
     };
@@ -3664,7 +3662,13 @@ fn build_sub<'a>(
                 let ord = *call_ordinal;
                 *call_ordinal += 1;
                 let (effective_preds, src_bindings) = pre_emit_arg_source_nodes(
-                    g, ast, lang, code, enclosing_func, analysis_rules, preds,
+                    g,
+                    ast,
+                    lang,
+                    code,
+                    enclosing_func,
+                    analysis_rules,
+                    preds,
                 );
                 let call_idx = push_node(
                     g,
@@ -3710,7 +3714,13 @@ fn build_sub<'a>(
                 let ord = *call_ordinal;
                 *call_ordinal += 1;
                 let (effective_preds, src_bindings) = pre_emit_arg_source_nodes(
-                    g, ast, lang, code, enclosing_func, analysis_rules, preds,
+                    g,
+                    ast,
+                    lang,
+                    code,
+                    enclosing_func,
+                    analysis_rules,
+                    preds,
                 );
                 let call_idx = push_node(
                     g,
@@ -4200,9 +4210,7 @@ fn build_sub<'a>(
             // node so they get lower indices — see doc comment on
             // `pre_emit_arg_source_nodes` for why this ordering matters.
             let (effective_preds, src_bindings) = if kind == StmtKind::Call {
-                pre_emit_arg_source_nodes(
-                    g, ast, lang, code, enclosing_func, analysis_rules, preds,
-                )
+                pre_emit_arg_source_nodes(g, ast, lang, code, enclosing_func, analysis_rules, preds)
             } else {
                 (SmallVec::from_slice(preds), Vec::new())
             };
@@ -4272,7 +4280,13 @@ fn build_sub<'a>(
             let ord = *call_ordinal;
             *call_ordinal += 1;
             let (effective_preds, src_bindings) = pre_emit_arg_source_nodes(
-                g, ast, lang, code, enclosing_func, analysis_rules, preds,
+                g,
+                ast,
+                lang,
+                code,
+                enclosing_func,
+                analysis_rules,
+                preds,
             );
             let n = push_node(
                 g,

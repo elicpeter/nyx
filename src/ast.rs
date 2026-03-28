@@ -1,5 +1,6 @@
 #![allow(clippy::only_used_in_recursion, clippy::type_complexity)]
 
+use crate::auth_analysis;
 use crate::cfg::{Cfg, FileCfg, FuncSummaries, build_cfg, export_summaries};
 use crate::cfg_analysis;
 use crate::commands::scan::Diag;
@@ -838,6 +839,17 @@ impl<'a> ParsedFile<'a> {
 
         out
     }
+
+    /// Run AST-backed authorization analyses that do not require CFG construction.
+    fn run_auth_analyses(&self, cfg: &Config) -> Vec<Diag> {
+        auth_analysis::run_auth_analysis(
+            &self.source.tree,
+            self.source.bytes,
+            self.source.lang_slug,
+            self.source.path,
+            cfg,
+        )
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1231,11 +1243,16 @@ pub fn run_rules_on_bytes(
                     .filter(|d| !suppression.should_suppress(&d.id, d.line)),
             );
         }
+        if cfg.scanner.mode == AnalysisMode::Full {
+            out.extend(parsed.run_auth_analyses(cfg));
+        }
         parsed.source.finalize_diags(&mut out, cfg);
     } else {
         // AST-only: no CFG construction (fast path preserved)
         out.extend(source.run_ast_queries(cfg));
-        source.finalize_diags(&mut out, cfg);
+        let parsed = ParsedFile::from_source(source, cfg);
+        out.extend(parsed.run_auth_analyses(cfg));
+        parsed.source.finalize_diags(&mut out, cfg);
     }
 
     Ok(out)
@@ -1276,7 +1293,7 @@ pub struct FusedResult {
 }
 
 /// Parse the file once, build the CFG once, and produce both function
-/// summaries (for cross-file resolution) and full diagnostics (AST queries +
+/// summaries (for cross-file resolution) and full diagnostics (AST analyses +
 /// taint + CFG structural analyses).
 ///
 /// When `global_summaries` is `None`, the taint engine runs with local
@@ -1335,6 +1352,7 @@ pub fn analyse_file_fused(
         } else {
             out.extend(ast_findings);
         }
+        out.extend(parsed.run_auth_analyses(cfg));
     }
     parsed.source.finalize_diags(&mut out, cfg);
 
