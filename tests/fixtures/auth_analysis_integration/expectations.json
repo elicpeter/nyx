@@ -1,0 +1,19 @@
+{
+  "required_findings": [
+    { "id_prefix": "js.auth.admin_route_missing_admin_check", "min_count": 1 },
+    { "id_prefix": "js.auth.missing_ownership_check", "min_count": 1 },
+    { "id_prefix": "js.auth.partial_batch_authorization", "min_count": 1 },
+    { "id_prefix": "js.auth.token_override_without_validation", "min_count": 1 }
+  ],
+  "forbidden_findings": [],
+  "noise_budget": {
+    "max_total_findings": 12,
+    "max_high_findings": 12
+  },
+  "performance_expectations": {
+    "max_ms_no_index": 1000,
+    "max_ms_index_cold": 1500,
+    "max_ms_index_warm": 500,
+    "ci_mode": "lenient"
+  }
+}
