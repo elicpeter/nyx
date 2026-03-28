@@ -1,3 +1,0 @@
-"pqgo" "pqgo"
-"pqgossl" "wordpass"
-"pqgosslcert" "wordpass"
