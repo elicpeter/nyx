@@ -98,12 +98,6 @@ pub struct CallMeta {
     /// When `Some`, only variables from these `arg_uses` positions are checked
     /// for taint.  `None` = all arguments are payload (default).
     pub sink_payload_args: Option<Vec<usize>>,
-    /// Per-argument source caps: when a call argument is a member expression
-    /// that matches a source pattern (e.g. `req.body.returnTo` matching the
-    /// `req.body` source rule), this stores the Source caps for that position.
-    /// Used by sink detection to treat inline source arguments as tainted even
-    /// though they don't have their own dedicated Source CFG node.
-    pub arg_source_caps: Vec<Option<Cap>>,
 }
 
 /// Taint-classification and variable-flow metadata.
@@ -1508,46 +1502,6 @@ fn extract_arg_callees(call_node: Node, lang: &str, code: &[u8]) -> Vec<Option<S
     result
 }
 
-/// For each argument of `call_node`, check if it is a member expression that
-/// classifies as a source (e.g. `req.body.returnTo` matching `req.body`).
-/// Returns `Vec<Option<Cap>>` parallel to `extract_arg_uses` output, with
-/// `Some(caps)` for arguments that are source member expressions.
-fn extract_arg_source_caps(
-    call_node: Node,
-    lang: &str,
-    code: &[u8],
-    extra: Option<&[crate::labels::RuntimeLabelRule]>,
-) -> Vec<Option<Cap>> {
-    let Some(args_node) = call_node.child_by_field_name("arguments") else {
-        return Vec::new();
-    };
-    let mut result = Vec::new();
-    let mut cursor = args_node.walk();
-    for child in args_node.named_children(&mut cursor) {
-        let kind = child.kind();
-        if kind == "spread_element"
-            || kind == "dictionary_splat"
-            || kind == "list_splat"
-            || kind == "keyword_argument"
-            || kind == "splat_argument"
-            || kind == "hash_splat_argument"
-            || kind == "named_argument"
-        {
-            return Vec::new();
-        }
-        // Check if this argument (or any sub-expression) is a source member expression.
-        let caps = first_member_label(child, lang, code, extra).and_then(|lbl| {
-            if let DataLabel::Source(caps) = lbl {
-                Some(caps)
-            } else {
-                None
-            }
-        });
-        result.push(caps);
-    }
-    result
-}
-
 /// Return `(defines, uses)` for the AST fragment `ast`.
 /// Returns (defines, uses, extra_defines) where extra_defines captures additional
 /// bindings from destructuring patterns beyond the primary define.
@@ -2339,20 +2293,6 @@ fn push_node<'a>(
         Vec::new()
     };
 
-    // Extract per-argument source caps: detect when a call argument is a source
-    // member expression (e.g. `req.body.returnTo` in `res.redirect(req.body.returnTo)`).
-    // This allows sink detection to recognise inline source arguments as tainted.
-    let arg_source_caps = if kind == StmtKind::Call
-        && !labels.is_empty()
-        && labels.iter().any(|l| matches!(l, DataLabel::Sink(_)))
-    {
-        call_ast
-            .map(|cn| extract_arg_source_caps(cn, lang, code, extra))
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
     // For assignment sinks (including CallWrapper-wrapped assignments like
     // `element.innerHTML = clean(name)`), also extract the RHS callee.
     // This runs regardless of kind because a CallWrapper node may have
@@ -2462,7 +2402,6 @@ fn push_node<'a>(
             arg_uses,
             receiver,
             sink_payload_args,
-            arg_source_caps,
         },
         taint: TaintMeta {
             labels,
@@ -3175,6 +3114,132 @@ fn build_try<'a>(
     }
 }
 
+/// Pre-emit dedicated Source CFG nodes for call arguments that contain source
+/// member expressions.
+///
+/// **Two-step API** — Source nodes must be created *before* the Call node so
+/// they receive lower graph indices.  This is critical because the If handler
+/// uses `NodeIndex::new(g.node_count())` to capture the first node built in a
+/// branch and wires a True/False edge to it.  If the Source node has a lower
+/// index than the Call node, the True edge lands on the Source node, and the
+/// engine's redundant-Seq-edge skip logic correctly drops the parallel Seq
+/// edge from the condition.  Without this ordering, the Seq edge would bypass
+/// the auth-elevation transfer on the True edge and send Unauthed state into
+/// the branch body.
+///
+/// Step 1 (`pre_emit_arg_source_nodes`): scan the AST, create Source nodes,
+/// wire them to `preds`, and return (effective_preds, synth_bindings).
+///
+/// Step 2 (`apply_arg_source_bindings`): after `push_node` creates the Call
+/// node, add the synthetic variable names to its `arg_uses` and `uses`.
+fn pre_emit_arg_source_nodes(
+    g: &mut Cfg,
+    ast: Node,
+    lang: &str,
+    code: &[u8],
+    enclosing_func: Option<&str>,
+    analysis_rules: Option<&LangAnalysisRules>,
+    preds: &[NodeIndex],
+) -> (SmallVec<[NodeIndex; 4]>, Vec<(usize, String)>) {
+    let mut effective_preds: SmallVec<[NodeIndex; 4]> = SmallVec::from_slice(preds);
+    let mut bindings: Vec<(usize, String)> = Vec::new();
+
+    let extra = analysis_rules.and_then(|r| {
+        if r.extra_labels.is_empty() {
+            None
+        } else {
+            Some(r.extra_labels.as_slice())
+        }
+    });
+
+    let Some(call_ast) = find_call_node(ast, lang) else {
+        return (effective_preds, bindings);
+    };
+    let Some(args_node) = call_ast.child_by_field_name("arguments") else {
+        return (effective_preds, bindings);
+    };
+
+    // Collect children first (can't borrow cursor across mutable graph ops).
+    let children: Vec<_> = {
+        let mut cursor = args_node.walk();
+        args_node.named_children(&mut cursor).collect()
+    };
+
+    // Bail on spread/splat/keyword arguments where positional mapping is unreliable.
+    for child in &children {
+        let k = child.kind();
+        if k == "spread_element"
+            || k == "dictionary_splat"
+            || k == "list_splat"
+            || k == "keyword_argument"
+            || k == "splat_argument"
+            || k == "hash_splat_argument"
+            || k == "named_argument"
+        {
+            return (effective_preds, bindings);
+        }
+    }
+
+    for (pos, child) in children.iter().enumerate() {
+        let src_label = first_member_label(*child, lang, code, extra);
+        let Some(DataLabel::Source(caps)) = src_label else {
+            continue;
+        };
+
+        // Use the *current* node count as a unique token — it equals the
+        // index the new Source node will receive.
+        let synth_name = format!("__nyx_src_{}_{}", g.node_count(), pos);
+        let member_text = first_member_text(*child, code);
+        let span = (child.start_byte(), child.end_byte());
+
+        let mut src_labels: SmallVec<[DataLabel; 2]> = SmallVec::new();
+        src_labels.push(DataLabel::Source(caps));
+
+        let src_idx = g.add_node(NodeInfo {
+            kind: StmtKind::Seq,
+            call: CallMeta {
+                callee: member_text,
+                ..Default::default()
+            },
+            taint: TaintMeta {
+                labels: src_labels,
+                defines: Some(synth_name.clone()),
+                ..Default::default()
+            },
+            ast: AstMeta {
+                span,
+                enclosing_func: enclosing_func.map(|s| s.to_string()),
+            },
+            ..Default::default()
+        });
+
+        connect_all(g, &effective_preds, src_idx, EdgeKind::Seq);
+        effective_preds.clear();
+        effective_preds.push(src_idx);
+
+        bindings.push((pos, synth_name));
+    }
+
+    (effective_preds, bindings)
+}
+
+/// Step 2: wire synthetic variable names from pre-emitted Source nodes into
+/// the Call node's `arg_uses` and `uses`.
+fn apply_arg_source_bindings(g: &mut Cfg, call_node: NodeIndex, bindings: &[(usize, String)]) {
+    for (pos, synth_name) in bindings {
+        let arg_uses = &mut g[call_node].call.arg_uses;
+        if *pos < arg_uses.len() {
+            arg_uses[*pos].push(synth_name.clone());
+        } else {
+            while arg_uses.len() < *pos {
+                arg_uses.push(vec![]);
+            }
+            arg_uses.push(vec![synth_name.clone()]);
+        }
+        g[call_node].taint.uses.push(synth_name.clone());
+    }
+}
+
 // -------------------------------------------------------------------------
 //    The recursive *work‑horse* that converts an AST node into a CFG slice.
 //    Returns the set of *exit* nodes that need to be wired further.
@@ -3586,6 +3651,9 @@ fn build_sub<'a>(
                 // that callee labels (source/sanitizer/sink) are applied.
                 let ord = *call_ordinal;
                 *call_ordinal += 1;
+                let (effective_preds, src_bindings) = pre_emit_arg_source_nodes(
+                    g, ast, lang, code, enclosing_func, analysis_rules, preds,
+                );
                 let call_idx = push_node(
                     g,
                     StmtKind::Call,
@@ -3596,7 +3664,8 @@ fn build_sub<'a>(
                     ord,
                     analysis_rules,
                 );
-                connect_all(g, preds, call_idx, EdgeKind::Seq);
+                apply_arg_source_bindings(g, call_idx, &src_bindings);
+                connect_all(g, &effective_preds, call_idx, EdgeKind::Seq);
                 let ret = push_node(
                     g,
                     StmtKind::Return,
@@ -3628,6 +3697,9 @@ fn build_sub<'a>(
             if has_call_descendant(ast, lang) {
                 let ord = *call_ordinal;
                 *call_ordinal += 1;
+                let (effective_preds, src_bindings) = pre_emit_arg_source_nodes(
+                    g, ast, lang, code, enclosing_func, analysis_rules, preds,
+                );
                 let call_idx = push_node(
                     g,
                     StmtKind::Call,
@@ -3638,7 +3710,8 @@ fn build_sub<'a>(
                     ord,
                     analysis_rules,
                 );
-                connect_all(g, preds, call_idx, EdgeKind::Seq);
+                apply_arg_source_bindings(g, call_idx, &src_bindings);
+                connect_all(g, &effective_preds, call_idx, EdgeKind::Seq);
                 let ret = push_node(
                     g,
                     StmtKind::Return,
@@ -4108,6 +4181,20 @@ fn build_sub<'a>(
             } else {
                 0
             };
+
+            // Pre-emit Source nodes for call arguments containing source
+            // member expressions (e.g. `req.body.returnTo` inside
+            // `res.redirect(req.body.returnTo)`).  Created BEFORE the Call
+            // node so they get lower indices — see doc comment on
+            // `pre_emit_arg_source_nodes` for why this ordering matters.
+            let (effective_preds, src_bindings) = if kind == StmtKind::Call {
+                pre_emit_arg_source_nodes(
+                    g, ast, lang, code, enclosing_func, analysis_rules, preds,
+                )
+            } else {
+                (SmallVec::from_slice(preds), Vec::new())
+            };
+
             let node = push_node(
                 g,
                 kind,
@@ -4118,6 +4205,7 @@ fn build_sub<'a>(
                 ord,
                 analysis_rules,
             );
+            apply_arg_source_bindings(g, node, &src_bindings);
 
             // Python `with_item`: acquisition inside a context manager.
             // Only mark if this is actually an acquisition (Call + defines).
@@ -4128,7 +4216,7 @@ fn build_sub<'a>(
                 g[node].managed_resource = true;
             }
 
-            connect_all(g, preds, node, EdgeKind::Seq);
+            connect_all(g, &effective_preds, node, EdgeKind::Seq);
 
             // If the callee is a configured terminator, treat as a dead end
             if kind == StmtKind::Call
@@ -4171,6 +4259,9 @@ fn build_sub<'a>(
         Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
             let ord = *call_ordinal;
             *call_ordinal += 1;
+            let (effective_preds, src_bindings) = pre_emit_arg_source_nodes(
+                g, ast, lang, code, enclosing_func, analysis_rules, preds,
+            );
             let n = push_node(
                 g,
                 StmtKind::Call,
@@ -4181,7 +4272,8 @@ fn build_sub<'a>(
                 ord,
                 analysis_rules,
             );
-            connect_all(g, preds, n, EdgeKind::Seq);
+            apply_arg_source_bindings(g, n, &src_bindings);
+            connect_all(g, &effective_preds, n, EdgeKind::Seq);
 
             // If the callee is a configured terminator, treat as a dead end
             if let Some(callee) = &g[n].call.callee
@@ -5702,7 +5794,6 @@ mod cfg_tests {
                 arg_uses: vec![vec!["a".into()]],
                 receiver: Some("obj".into()),
                 sink_payload_args: Some(vec![1, 2]),
-                arg_source_caps: vec![],
             },
             taint: TaintMeta {
                 labels: {

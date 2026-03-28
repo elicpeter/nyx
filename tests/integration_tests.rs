@@ -181,7 +181,7 @@ fn cross_file_js_aliased_import() {
 
 /// JavaScript: req.body.returnTo (inline source member expression in call arg)
 /// flows through cross-file safeRedirect() passthrough to res.redirect() sink.
-/// Exercises arg_source_caps detection for source member expressions nested
+/// Exercises source node pre-emission for source member expressions nested
 /// directly inside sink call arguments.
 #[test]
 fn cross_file_js_redirect() {
