@@ -15,7 +15,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAX_TRIAGE_FILE_BYTES: u64 = 1024 * 1024;
 
@@ -74,46 +74,73 @@ fn default_suppressed() -> String {
 }
 
 /// Path to the triage sync file for a given scan root.
-pub fn triage_file_path(scan_root: &Path) -> std::path::PathBuf {
-    scan_root.join(".nyx").join("triage.json")
+pub fn triage_file_path(scan_root: &Path) -> Result<PathBuf, String> {
+    let root = canonical_scan_root(scan_root)?;
+    Ok(triage_file_path_for_root(&root))
 }
 
-/// Path to the triage sync file, ensuring it stays within the given scan root.
-fn triage_file_path_checked(scan_root: &Path) -> Result<std::path::PathBuf, String> {
-    // Canonicalize the scan root to avoid traversal via symlinks or relative components.
+fn canonical_scan_root(scan_root: &Path) -> Result<PathBuf, String> {
     let canonical_root = scan_root
         .canonicalize()
         .map_err(|e| format!("failed to canonicalize scan root: {e}"))?;
-    let path = canonical_root.join(".nyx").join("triage.json");
-    // Ensure the resulting path is still within the (canonical) scan root directory.
-    if !path.starts_with(&canonical_root) {
+    let metadata =
+        std::fs::metadata(&canonical_root).map_err(|e| format!("failed to stat scan root: {e}"))?;
+    if !metadata.is_dir() {
+        return Err("scan root is not a directory".to_string());
+    }
+    Ok(canonical_root)
+}
+
+fn triage_file_path_for_root(root: &Path) -> PathBuf {
+    root.join(".nyx").join("triage.json")
+}
+
+fn validate_existing_path_within_root(path: &Path, root: &Path) -> Result<(), String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("failed to canonicalize triage file path: {e}"))?;
+    if !canonical.starts_with(root) {
         return Err("triage file path escapes scan root".to_string());
     }
-    Ok(path)
+
+    let metadata =
+        std::fs::metadata(&canonical).map_err(|e| format!("failed to stat triage file: {e}"))?;
+    if !metadata.is_file() {
+        return Err("triage file path is not a regular file".to_string());
+    }
+
+    Ok(())
 }
 
 /// Compute and validate the triage file path for a given scan root.
-///
-/// This ensures that the resulting path stays within the provided `scan_root`
-/// to avoid writing outside the intended project directory if `scan_root`
-/// is misconfigured or attacker-controlled.
-fn validated_triage_file_path(scan_root: &Path) -> Result<std::path::PathBuf, String> {
-    // Canonicalize the root to eliminate `.` / `..` components and follow symlinks.
-    let path = triage_file_path_checked(scan_root)?;
-        .canonicalize()
-        .map_err(|e| format!("failed to canonicalize scan root: {e}"))?;
+fn validated_triage_file_path(scan_root: &Path) -> Result<PathBuf, String> {
+    let root = canonical_scan_root(scan_root)?;
+    let path = triage_file_path_for_root(&root);
 
-    let triage_path = triage_file_path(&root_canon);
-
-    let parsed = serde_json::from_str(&content)
-        .map_err(|e| format!("failed to parse triage file: {e}"))?;
+    if let Some(parent) = path.parent()
+        && parent.exists()
+    {
+        let canonical_parent = parent
+            .canonicalize()
+            .map_err(|e| format!("failed to canonicalize triage directory: {e}"))?;
+        if !canonical_parent.starts_with(&root) {
+            return Err("triage directory escapes scan root".to_string());
+        }
+        let metadata = std::fs::metadata(&canonical_parent)
+            .map_err(|e| format!("failed to stat triage directory: {e}"))?;
+        if !metadata.is_dir() {
+            return Err("triage directory is not a directory".to_string());
+        }
     }
 
-    Ok(triage_path)
+    if path.exists() {
+        validate_existing_path_within_root(&path, &root)?;
+    }
+
+    Ok(path)
 }
 
 /// Load triage decisions from `.nyx/triage.json`.
-    let path = triage_file_path_checked(scan_root)?;
 pub fn load_triage_file(scan_root: &Path) -> Option<TriageFile> {
     load_triage_file_checked(scan_root).ok().flatten()
 }
@@ -125,8 +152,8 @@ pub fn load_triage_file_checked(scan_root: &Path) -> Result<Option<TriageFile>, 
     }
 
     let content = read_bounded_text_file(&path, MAX_TRIAGE_FILE_BYTES)?;
-    let parsed = serde_json::from_str(&content)
-        .map_err(|e| format!("failed to parse triage file: {e}"))?;
+    let parsed =
+        serde_json::from_str(&content).map_err(|e| format!("failed to parse triage file: {e}"))?;
     Ok(Some(parsed))
 }
 
@@ -288,11 +315,74 @@ mod tests {
     #[test]
     fn oversized_triage_files_are_rejected() {
         let root = tempfile::tempdir().unwrap();
-        let path = triage_file_path(root.path());
+        let path = triage_file_path(root.path()).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, vec![b'a'; (MAX_TRIAGE_FILE_BYTES as usize) + 1]).unwrap();
 
         let err = load_triage_file_checked(root.path()).unwrap_err();
         assert!(err.contains("exceeds"));
+    }
+
+    #[test]
+    fn triage_file_path_uses_canonical_root() {
+        let root = tempfile::tempdir().unwrap();
+        let requested = root.path().join(".");
+
+        let path = triage_file_path(&requested).unwrap();
+
+        assert_eq!(
+            path,
+            root.path()
+                .canonicalize()
+                .unwrap()
+                .join(".nyx")
+                .join("triage.json")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_triage_file_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let escaped = outside.path().join("triage.json");
+        std::fs::write(
+            &escaped,
+            serde_json::to_string(&TriageFile {
+                version: 1,
+                decisions: vec![],
+                suppression_rules: vec![],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        symlink(outside.path(), root.path().join(".nyx")).unwrap();
+
+        let err = load_triage_file_checked(root.path()).unwrap_err();
+        assert!(err.contains("escapes scan root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_triage_file_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join(".nyx")).unwrap();
+
+        let err = save_triage_file(
+            root.path(),
+            &TriageFile {
+                version: 1,
+                decisions: vec![],
+                suppression_rules: vec![],
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.contains("escapes scan root"));
     }
 }

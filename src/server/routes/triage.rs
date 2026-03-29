@@ -359,7 +359,12 @@ async fn export_triage_file(
         )
     })?;
 
-    let path = crate::server::triage_sync::triage_file_path(&state.scan_root);
+    let path = crate::server::triage_sync::triage_file_path(&state.scan_root).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+    })?;
     Ok(Json(serde_json::json!({
         "exported": file.decisions.len(),
         "suppression_rules": file.suppression_rules.len(),
@@ -409,7 +414,7 @@ async fn import_triage_file(
 // ── GET /api/triage/sync-status ─────────────────────────────────────────────
 
 async fn get_sync_status(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let path = crate::server::triage_sync::triage_file_path(&state.scan_root);
+    let path = crate::server::triage_sync::triage_file_path(&state.scan_root).ok();
     let file = crate::server::triage_sync::load_triage_file(&state.scan_root);
     let sync_enabled = state
         .config
@@ -418,8 +423,8 @@ async fn get_sync_status(State(state): State<AppState>) -> Json<serde_json::Valu
         .unwrap_or(true);
 
     Json(serde_json::json!({
-        "file_path": path.to_string_lossy(),
-        "file_exists": path.exists(),
+        "file_path": path.as_ref().map(|p| p.to_string_lossy().to_string()),
+        "file_exists": path.as_ref().map(|p| p.exists()).unwrap_or(false),
         "sync_enabled": sync_enabled,
         "decisions": file.as_ref().map(|f| f.decisions.len()).unwrap_or(0),
         "suppression_rules": file.as_ref().map(|f| f.suppression_rules.len()).unwrap_or(0),
