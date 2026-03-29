@@ -5,8 +5,13 @@ pub enum Framework {
     Express,
     Koa,
     Fastify,
+    Gin,
+    Echo,
     Flask,
     Django,
+    Spring,
+    Rails,
+    Sinatra,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -25,7 +25,11 @@ fn auth_diags_for(filename: &str) -> Vec<&'static Diag> {
         .iter()
         .filter(|d| {
             d.path.contains(filename)
-                && (d.id.starts_with("js.auth.") || d.id.starts_with("py.auth."))
+                && (d.id.starts_with("js.auth.")
+                    || d.id.starts_with("py.auth.")
+                    || d.id.starts_with("rb.auth.")
+                    || d.id.starts_with("go.auth.")
+                    || d.id.starts_with("java.auth."))
         })
         .collect()
 }
@@ -389,6 +393,182 @@ fn django_token_flow_missing_recipient_check() {
 }
 
 #[test]
+fn rails_admin_route_missing_admin_check() {
+    assert_has(
+        "rails_admin_route_missing.rb",
+        "rb.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn rails_admin_route_with_admin_guard_is_clean() {
+    assert_absent(
+        "rails_admin_route_clean.rb",
+        "rb.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn rails_scoped_write_without_membership_check() {
+    assert_has(
+        "rails_scoped_write_missing.rb",
+        "rb.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn rails_clean_controller_action_with_before_action_auth_is_clean() {
+    assert_absent(
+        "rails_clean_before_action.rb",
+        "rb.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn rails_partial_batch_authorization_detected() {
+    assert_has(
+        "rails_partial_batch.rb",
+        "rb.auth.partial_batch_authorization",
+    );
+}
+
+#[test]
+fn rails_stale_session_backed_mutation() {
+    assert_has(
+        "rails_stale_session_mutation.rb",
+        "rb.auth.stale_authorization",
+    );
+}
+
+#[test]
+fn rails_token_flow_missing_expiry_check() {
+    assert_has(
+        "rails_token_missing_expiry.rb",
+        "rb.auth.token_override_without_validation",
+    );
+}
+
+#[test]
+fn rails_clean_token_acceptance_is_clean() {
+    assert_absent(
+        "rails_token_clean.rb",
+        "rb.auth.token_override_without_validation",
+    );
+}
+
+#[test]
+fn sinatra_admin_route_missing_admin_check() {
+    assert_has(
+        "sinatra_admin_route_missing.rb",
+        "rb.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn sinatra_admin_route_with_admin_guard_is_clean() {
+    assert_absent(
+        "sinatra_admin_route_clean.rb",
+        "rb.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn sinatra_scoped_read_without_membership_check() {
+    assert_has(
+        "sinatra_scoped_read_missing.rb",
+        "rb.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn sinatra_scoped_read_with_membership_check_is_clean() {
+    assert_absent(
+        "sinatra_scoped_read_clean.rb",
+        "rb.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn sinatra_token_flow_missing_recipient_check() {
+    assert_has(
+        "sinatra_token_missing_recipient.rb",
+        "rb.auth.token_override_without_validation",
+    );
+}
+
+#[test]
+fn gin_admin_route_missing_admin_check() {
+    assert_has(
+        "gin_admin_route_missing.go",
+        "go.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn gin_scoped_write_with_ownership_check_is_clean() {
+    assert_absent(
+        "gin_scoped_write_clean.go",
+        "go.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn gin_stale_session_backed_mutation() {
+    assert_has(
+        "gin_stale_session_mutation.go",
+        "go.auth.stale_authorization",
+    );
+}
+
+#[test]
+fn echo_admin_route_with_admin_guard_is_clean() {
+    assert_absent(
+        "echo_admin_route_clean.go",
+        "go.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn echo_partial_batch_authorization_detected() {
+    assert_has(
+        "echo_partial_batch.go",
+        "go.auth.partial_batch_authorization",
+    );
+}
+
+#[test]
+fn echo_token_flow_missing_recipient_check() {
+    assert_has(
+        "echo_token_missing_recipient.go",
+        "go.auth.token_override_without_validation",
+    );
+}
+
+#[test]
+fn spring_admin_route_missing_admin_check() {
+    assert_has(
+        "spring_admin_route_missing.java",
+        "java.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn spring_admin_route_with_annotation_guard_is_clean() {
+    assert_absent(
+        "spring_admin_route_clean.java",
+        "java.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn spring_scoped_read_without_membership_check() {
+    assert_has(
+        "spring_scoped_read_missing.java",
+        "java.auth.missing_ownership_check",
+    );
+}
+
+#[test]
 fn auth_analysis_runs_in_ast_mode() {
     let cfg = common::test_config(AnalysisMode::Ast);
     let diags = nyx_scanner::scan_no_index(&auth_fixture_dir(), &cfg).expect("scan should succeed");
@@ -427,6 +607,41 @@ fn auth_analysis_runs_in_ast_mode() {
         }),
         "expected AST mode to emit Django py.auth findings"
     );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("rails_scoped_write_missing.rb")
+                && diag.id == "rb.auth.missing_ownership_check"
+        }),
+        "expected AST mode to emit Rails rb.auth findings"
+    );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("sinatra_scoped_read_missing.rb")
+                && diag.id == "rb.auth.missing_ownership_check"
+        }),
+        "expected AST mode to emit Sinatra rb.auth findings"
+    );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("gin_admin_route_missing.go")
+                && diag.id == "go.auth.admin_route_missing_admin_check"
+        }),
+        "expected AST mode to emit Gin go.auth findings"
+    );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("echo_partial_batch.go")
+                && diag.id == "go.auth.partial_batch_authorization"
+        }),
+        "expected AST mode to emit Echo go.auth findings"
+    );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("spring_scoped_read_missing.java")
+                && diag.id == "java.auth.missing_ownership_check"
+        }),
+        "expected AST mode to emit Spring java.auth findings"
+    );
 }
 
 #[test]
@@ -440,6 +655,18 @@ fn auth_analysis_does_not_run_in_cfg_mode() {
     assert!(
         diags.iter().all(|diag| !diag.id.starts_with("py.auth.")),
         "CFG mode should not emit py.auth findings"
+    );
+    assert!(
+        diags.iter().all(|diag| !diag.id.starts_with("rb.auth.")),
+        "CFG mode should not emit rb.auth findings"
+    );
+    assert!(
+        diags.iter().all(|diag| !diag.id.starts_with("go.auth.")),
+        "CFG mode should not emit go.auth findings"
+    );
+    assert!(
+        diags.iter().all(|diag| !diag.id.starts_with("java.auth.")),
+        "CFG mode should not emit java.auth findings"
     );
     assert!(
         diags
@@ -464,5 +691,35 @@ fn auth_analysis_does_not_run_in_cfg_mode() {
             .iter()
             .all(|diag| !diag.path.contains("django_cbv_scoped_write_missing.py")),
         "CFG mode should not emit Django auth-analysis findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("rails_scoped_write_missing.rb")),
+        "CFG mode should not emit Rails auth-analysis findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("sinatra_scoped_read_missing.rb")),
+        "CFG mode should not emit Sinatra auth-analysis findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("gin_admin_route_missing.go")),
+        "CFG mode should not emit Gin auth-analysis findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("echo_partial_batch.go")),
+        "CFG mode should not emit Echo auth-analysis findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("spring_scoped_read_missing.java")),
+        "CFG mode should not emit Spring auth-analysis findings"
     );
 }

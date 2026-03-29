@@ -6,10 +6,15 @@ use tree_sitter::Tree;
 
 pub mod common;
 pub mod django;
+pub mod echo;
 pub mod express;
 pub mod fastify;
 pub mod flask;
+pub mod gin;
 pub mod koa;
+pub mod rails;
+pub mod sinatra;
+pub mod spring;
 
 pub trait AuthExtractor {
     fn supports(&self, lang: &str, framework_ctx: Option<&FrameworkContext>) -> bool;
@@ -30,12 +35,17 @@ pub fn extract_authorization_model(
     path: &Path,
     rules: &AuthAnalysisRules,
 ) -> AuthorizationModel {
-    let extractors: [&dyn AuthExtractor; 5] = [
+    let extractors: [&dyn AuthExtractor; 10] = [
         &express::ExpressExtractor,
         &koa::KoaExtractor,
         &fastify::FastifyExtractor,
+        &gin::GinExtractor,
+        &echo::EchoExtractor,
         &flask::FlaskExtractor,
         &django::DjangoExtractor,
+        &spring::SpringExtractor,
+        &rails::RailsExtractor,
+        &sinatra::SinatraExtractor,
     ];
     let mut model = AuthorizationModel::default();
 

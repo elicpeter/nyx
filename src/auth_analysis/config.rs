@@ -46,6 +46,21 @@ impl AuthAnalysisRules {
     }
 
     pub fn is_admin_guard(&self, name: &str, args: &[String]) -> bool {
+        if matches_name(name, "PreAuthorize")
+            || matches_name(name, "Secured")
+            || matches_name(name, "RolesAllowed")
+            || matches_name(name, "hasRole")
+            || matches_name(name, "hasAuthority")
+        {
+            return args.iter().any(|arg| {
+                let lower = strip_quotes(arg).to_ascii_lowercase();
+                lower.contains("admin")
+                    || lower.contains("role_admin")
+                    || lower.contains("manage")
+                    || lower.contains("superuser")
+            });
+        }
+
         if self
             .admin_guard_names
             .iter()
@@ -82,6 +97,17 @@ impl AuthAnalysisRules {
     }
 
     pub fn is_login_guard(&self, name: &str) -> bool {
+        if matches_name(name, "isAuthenticated")
+            || matches_name(name, "authenticated")
+            || matches_name(name, "hasRole")
+            || matches_name(name, "hasAuthority")
+            || matches_name(name, "Secured")
+            || matches_name(name, "RolesAllowed")
+            || matches_name(name, "PreAuthorize")
+        {
+            return true;
+        }
+
         self.login_guard_names
             .iter()
             .any(|pattern| matches_name(name, pattern))
@@ -153,7 +179,10 @@ impl AuthAnalysisRules {
 }
 
 pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
-    if !matches!(lang_slug, "javascript" | "typescript" | "python") {
+    if !matches!(
+        lang_slug,
+        "javascript" | "typescript" | "python" | "ruby" | "go" | "java"
+    ) {
         return AuthAnalysisRules::disabled();
     }
 
@@ -244,6 +273,310 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "recipientemail".into(),
                 "invited_email".into(),
                 "invitedemail".into(),
+                "recipient".into(),
+            ],
+        }
+    } else if matches!(lang_slug, "ruby") {
+        AuthAnalysisRules {
+            enabled: true,
+            finding_prefix: "rb.auth".into(),
+            admin_path_patterns: vec!["/admin/".into()],
+            admin_guard_names: vec![
+                "require_admin".into(),
+                "require_admin!".into(),
+                "authenticate_admin".into(),
+                "authenticate_admin!".into(),
+                "ensure_admin".into(),
+                "ensure_admin!".into(),
+                "admin_only".into(),
+                "admin_only!".into(),
+                "admin_required".into(),
+                "admin_required!".into(),
+            ],
+            login_guard_names: vec![
+                "require_login".into(),
+                "require_login!".into(),
+                "authenticate_user".into(),
+                "authenticate_user!".into(),
+                "authenticate".into(),
+                "authenticate!".into(),
+                "ensure_authenticated".into(),
+                "ensure_authenticated!".into(),
+                "login_required".into(),
+                "login_required!".into(),
+            ],
+            authorization_check_names: vec![
+                "authorize".into(),
+                "authorize!".into(),
+                "check_membership".into(),
+                "check_membership!".into(),
+                "has_membership".into(),
+                "has_membership?".into(),
+                "require_membership".into(),
+                "require_membership!".into(),
+                "ensure_membership".into(),
+                "ensure_membership!".into(),
+                "member_of?".into(),
+                "member?".into(),
+                "check_ownership".into(),
+                "check_ownership!".into(),
+                "has_ownership".into(),
+                "has_ownership?".into(),
+                "require_ownership".into(),
+                "require_ownership!".into(),
+                "ensure_ownership".into(),
+                "ensure_ownership!".into(),
+                "owner?".into(),
+                "owns?".into(),
+                "verify_access".into(),
+                "verify_access!".into(),
+                "can_access?".into(),
+                "can?".into(),
+            ],
+            mutation_indicator_names: vec![
+                "update".into(),
+                "update!".into(),
+                "delete".into(),
+                "delete!".into(),
+                "destroy".into(),
+                "destroy!".into(),
+                "create".into(),
+                "create!".into(),
+                "save".into(),
+                "save!".into(),
+                "archive".into(),
+                "archive!".into(),
+                "publish".into(),
+                "publish!".into(),
+                "remove".into(),
+                "remove!".into(),
+                "add".into(),
+                "add!".into(),
+                "confirm".into(),
+                "confirm!".into(),
+                "invite".into(),
+                "invite!".into(),
+                "accept".into(),
+                "accept!".into(),
+            ],
+            read_indicator_names: vec![
+                "find".into(),
+                "find_by".into(),
+                "find_by!".into(),
+                "where".into(),
+                "first".into(),
+                "last".into(),
+                "take".into(),
+                "pluck".into(),
+                "load".into(),
+                "fetch".into(),
+                "get".into(),
+                "lookup".into(),
+                "retrieve".into(),
+            ],
+            token_lookup_names: vec![
+                "find_by_token".into(),
+                "find_by_token!".into(),
+                "find_by_invite_token".into(),
+                "find_by_invite_token!".into(),
+                "find_by_invitation_token".into(),
+                "find_by_invitation_token!".into(),
+                "find_by_accept_token".into(),
+                "find_by_accept_token!".into(),
+                "find_signed".into(),
+                "find_signed!".into(),
+                "lookup_invitation".into(),
+                "lookup_invitation!".into(),
+                "Invitation.find_by".into(),
+                "Invitation.find_by!".into(),
+                "Invite.find_by".into(),
+                "Invite.find_by!".into(),
+            ],
+            token_expiry_fields: vec![
+                "expires_at".into(),
+                "expiry".into(),
+                "expires".into(),
+                "expired".into(),
+                "expired?".into(),
+                "expired_at".into(),
+                "valid_until".into(),
+            ],
+            token_recipient_fields: vec![
+                "email".into(),
+                "recipient_email".into(),
+                "recipient".into(),
+                "invited_email".into(),
+                "invitee_email".into(),
+                "user_email".into(),
+            ],
+        }
+    } else if matches!(lang_slug, "go") {
+        AuthAnalysisRules {
+            enabled: true,
+            finding_prefix: "go.auth".into(),
+            admin_path_patterns: vec!["/admin/".into()],
+            admin_guard_names: vec![
+                "RequireAdmin".into(),
+                "AdminOnly".into(),
+                "EnsureAdmin".into(),
+                "requireAdmin".into(),
+                "adminOnly".into(),
+                "ensureAdmin".into(),
+            ],
+            login_guard_names: vec![
+                "RequireLogin".into(),
+                "RequireAuth".into(),
+                "EnsureAuthenticated".into(),
+                "AuthMiddleware".into(),
+                "requireLogin".into(),
+                "requireAuth".into(),
+                "ensureAuthenticated".into(),
+            ],
+            authorization_check_names: vec![
+                "CheckMembership".into(),
+                "HasMembership".into(),
+                "RequireMembership".into(),
+                "EnsureMembership".into(),
+                "IsMember".into(),
+                "CheckOwnership".into(),
+                "HasOwnership".into(),
+                "RequireOwnership".into(),
+                "EnsureOwnership".into(),
+                "IsOwner".into(),
+                "Authorize".into(),
+                "VerifyAccess".into(),
+                "HasPermission".into(),
+                "CanAccess".into(),
+            ],
+            mutation_indicator_names: vec![
+                "Update".into(),
+                "Delete".into(),
+                "Create".into(),
+                "Save".into(),
+                "Archive".into(),
+                "Publish".into(),
+                "Remove".into(),
+                "Add".into(),
+                "Confirm".into(),
+                "Invite".into(),
+                "Accept".into(),
+            ],
+            read_indicator_names: vec![
+                "Find".into(),
+                "Get".into(),
+                "List".into(),
+                "Load".into(),
+                "Fetch".into(),
+                "Lookup".into(),
+                "Query".into(),
+            ],
+            token_lookup_names: vec![
+                "FindByToken".into(),
+                "LookupByToken".into(),
+                "FindInvitationByToken".into(),
+                "FindInviteByToken".into(),
+                "GetInvitationByToken".into(),
+                "LookupInvitation".into(),
+            ],
+            token_expiry_fields: vec![
+                "expires_at".into(),
+                "expiresat".into(),
+                "expiresAt".into(),
+                "expiry".into(),
+                "expired".into(),
+                "validUntil".into(),
+            ],
+            token_recipient_fields: vec![
+                "email".into(),
+                "recipient_email".into(),
+                "recipientEmail".into(),
+                "invited_email".into(),
+                "invitedEmail".into(),
+                "invitee_email".into(),
+                "inviteeEmail".into(),
+                "recipient".into(),
+            ],
+        }
+    } else if matches!(lang_slug, "java") {
+        AuthAnalysisRules {
+            enabled: true,
+            finding_prefix: "java.auth".into(),
+            admin_path_patterns: vec!["/admin/".into()],
+            admin_guard_names: vec![
+                "RequireAdmin".into(),
+                "AdminOnly".into(),
+                "EnsureAdmin".into(),
+                "adminOnly".into(),
+            ],
+            login_guard_names: vec![
+                "RequireLogin".into(),
+                "LoginRequired".into(),
+                "EnsureAuthenticated".into(),
+                "Authenticated".into(),
+                "isAuthenticated".into(),
+            ],
+            authorization_check_names: vec![
+                "checkMembership".into(),
+                "hasMembership".into(),
+                "requireMembership".into(),
+                "ensureMembership".into(),
+                "isMember".into(),
+                "checkOwnership".into(),
+                "hasOwnership".into(),
+                "requireOwnership".into(),
+                "ensureOwnership".into(),
+                "isOwner".into(),
+                "authorize".into(),
+                "verifyAccess".into(),
+                "hasPermission".into(),
+                "canAccess".into(),
+            ],
+            mutation_indicator_names: vec![
+                "update".into(),
+                "delete".into(),
+                "create".into(),
+                "save".into(),
+                "archive".into(),
+                "publish".into(),
+                "remove".into(),
+                "add".into(),
+                "confirm".into(),
+                "invite".into(),
+                "accept".into(),
+            ],
+            read_indicator_names: vec![
+                "find".into(),
+                "get".into(),
+                "load".into(),
+                "fetch".into(),
+                "lookup".into(),
+                "read".into(),
+                "query".into(),
+            ],
+            token_lookup_names: vec![
+                "findByToken".into(),
+                "findByInviteToken".into(),
+                "findByInvitationToken".into(),
+                "findByAcceptToken".into(),
+                "getByToken".into(),
+                "lookupByToken".into(),
+                "lookupInvitation".into(),
+            ],
+            token_expiry_fields: vec![
+                "expires_at".into(),
+                "expiresAt".into(),
+                "expiry".into(),
+                "expired".into(),
+                "validUntil".into(),
+            ],
+            token_recipient_fields: vec![
+                "email".into(),
+                "recipient_email".into(),
+                "recipientEmail".into(),
+                "invited_email".into(),
+                "invitedEmail".into(),
+                "invitee_email".into(),
+                "inviteeEmail".into(),
                 "recipient".into(),
             ],
         }
