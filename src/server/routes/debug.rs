@@ -146,10 +146,10 @@ async fn get_taint(
 
     // Try to load global summaries from DB for cross-file context
     let global = load_global_summaries(&state);
-    let cross_file_context = global.as_ref().map_or(false, |g| !g.is_empty());
+    let cross_file_context = global.as_ref().is_some_and(|g| !g.is_empty());
     let ssa_summaries_available = global
         .as_ref()
-        .map_or(false, |g| !g.snapshot_ssa().is_empty());
+        .is_some_and(|g| !g.snapshot_ssa().is_empty());
 
     let (events, _entry_states, exit_states) = debug::analyse_function_taint(
         &ssa,

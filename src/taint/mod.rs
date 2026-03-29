@@ -235,7 +235,7 @@ fn analyse_body_with_seed(
     // Other languages: scoped lowering only when the parent seed is non-empty,
     // i.e. the parent body actually has taint to propagate.  Without a seed,
     // Param ops would just introduce unused SSA values.
-    let has_nonempty_seed = seed.map_or(false, |s| !s.is_empty());
+    let has_nonempty_seed = seed.is_some_and(|s| !s.is_empty());
     let use_scoped_lowering =
         !is_toplevel && (matches!(lang, Lang::JavaScript | Lang::TypeScript) || has_nonempty_seed);
     let ssa_result = if use_scoped_lowering {
@@ -435,7 +435,7 @@ fn analyse_multi_body(
                 file_cfg
                     .bodies
                     .get(f.body_id.0 as usize)
-                    .map_or(true, |b| b.meta.parent_body_id.is_none())
+                    .is_none_or(|b| b.meta.parent_body_id.is_none())
             });
             for &idx in &order {
                 let body = &file_cfg.bodies[idx];

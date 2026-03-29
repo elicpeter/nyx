@@ -676,9 +676,9 @@ impl<'a> ParsedFile<'a> {
                 .labels
                 .iter()
                 .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SSRF)));
-            if sink_has_ssrf {
-                if let Some(ref callee) = sink_info.call.callee {
-                    if (callee.ends_with("redirect") || callee.ends_with("Redirect"))
+            if sink_has_ssrf
+                && let Some(ref callee) = sink_info.call.callee
+                    && (callee.ends_with("redirect") || callee.ends_with("Redirect"))
                         && crate::cfg_analysis::guards::has_redirect_path_prefix(
                             self.source.bytes,
                             sink_info.ast.span,
@@ -686,8 +686,6 @@ impl<'a> ParsedFile<'a> {
                     {
                         continue;
                     }
-                }
-            }
 
             out.push(build_taint_diag(
                 finding,
@@ -1373,7 +1371,7 @@ pub fn analyse_file_fused(
 /// by tree-sitter.  Currently handles `.ejs` templates.
 fn scan_text_based_patterns(bytes: &[u8], path: &Path, cfg: &Config) -> Vec<Diag> {
     let ext = lowercase_ext(path);
-    match ext.as_deref() {
+    match ext {
         Some("ejs") => {
             let mut diags = crate::patterns::ejs::scan_ejs_file(path, bytes);
             // Respect severity filter

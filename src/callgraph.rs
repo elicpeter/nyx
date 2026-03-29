@@ -214,14 +214,14 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                     // whose namespace contains the qualifier prefix.
                     if qualified != leaf {
                         let qualifier = &qualified[..qualified.len() - leaf.len()]
-                            .trim_end_matches(|c| c == ':' || c == '.');
+                            .trim_end_matches([':', '.']);
                         let narrowed: Vec<_> = candidates
                             .iter()
                             .filter(|k| k.namespace.contains(qualifier))
                             .cloned()
                             .collect();
-                        if narrowed.len() == 1 {
-                            if let Some(&target_node) = index.get(&narrowed[0]) {
+                        if narrowed.len() == 1
+                            && let Some(&target_node) = index.get(&narrowed[0]) {
                                 graph.add_edge(
                                     caller_node,
                                     target_node,
@@ -231,7 +231,6 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                                 );
                                 continue;
                             }
-                        }
                     }
                     unresolved_ambiguous.push(AmbiguousCallee {
                         caller: caller_key.clone(),
