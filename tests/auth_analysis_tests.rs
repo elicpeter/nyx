@@ -87,6 +87,38 @@ fn debug_session_requires_admin_guard() {
 }
 
 #[test]
+fn koa_admin_route_missing_admin_check() {
+    assert_has(
+        "koa_admin_route_missing.js",
+        "js.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn koa_admin_route_with_admin_guard_is_clean() {
+    assert_absent(
+        "koa_admin_route_clean.js",
+        "js.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn fastify_admin_route_missing_admin_check() {
+    assert_has(
+        "fastify_admin_route_missing.js",
+        "js.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn fastify_admin_route_with_admin_guard_is_clean() {
+    assert_absent(
+        "fastify_admin_route_clean.js",
+        "js.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
 fn scoped_read_without_membership_check() {
     assert_has("scoped_read_missing.js", "js.auth.missing_ownership_check");
 }
@@ -94,6 +126,48 @@ fn scoped_read_without_membership_check() {
 #[test]
 fn scoped_write_without_membership_check() {
     assert_has("scoped_write_missing.js", "js.auth.missing_ownership_check");
+}
+
+#[test]
+fn koa_scoped_read_without_membership_check() {
+    assert_has(
+        "koa_scoped_read_missing.js",
+        "js.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn koa_scoped_read_with_ownership_check_is_clean() {
+    assert_absent(
+        "koa_scoped_read_clean.js",
+        "js.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn fastify_scoped_write_without_membership_check() {
+    assert_has(
+        "fastify_scoped_write_missing.js",
+        "js.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn fastify_scoped_write_with_ownership_check_is_clean() {
+    assert_absent(
+        "fastify_scoped_write_clean.js",
+        "js.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn koa_route_registration_noise_is_clean() {
+    assert!(auth_diags_for("koa_route_registration_noise.js").is_empty());
+}
+
+#[test]
+fn fastify_route_registration_noise_is_clean() {
+    assert!(auth_diags_for("fastify_route_registration_noise.js").is_empty());
 }
 
 #[test]
@@ -218,6 +292,20 @@ fn auth_analysis_runs_in_ast_mode() {
         }),
         "expected AST mode to emit js.auth findings"
     );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("koa_scoped_read_missing.js")
+                && diag.id == "js.auth.missing_ownership_check"
+        }),
+        "expected AST mode to emit Koa js.auth findings"
+    );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("fastify_scoped_write_missing.js")
+                && diag.id == "js.auth.missing_ownership_check"
+        }),
+        "expected AST mode to emit Fastify js.auth findings"
+    );
 }
 
 #[test]
@@ -227,5 +315,17 @@ fn auth_analysis_does_not_run_in_cfg_mode() {
     assert!(
         diags.iter().all(|diag| !diag.id.starts_with("js.auth.")),
         "CFG mode should not emit js.auth findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("koa_scoped_read_missing.js")),
+        "CFG mode should not emit Koa auth-analysis findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("fastify_scoped_write_missing.js")),
+        "CFG mode should not emit Fastify auth-analysis findings"
     );
 }

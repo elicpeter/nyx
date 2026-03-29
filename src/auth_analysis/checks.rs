@@ -318,6 +318,8 @@ fn related_subject_base(subject: &ValueRef) -> Option<String> {
         || lower.starts_with("req.")
         || lower == "request"
         || lower.starts_with("request.")
+        || lower == "ctx"
+        || lower.starts_with("ctx.")
         || lower == "session"
         || lower.starts_with("session.")
     {
@@ -369,15 +371,30 @@ fn subject_identity_key(subject: &ValueRef) -> Option<String> {
 
 fn is_self_scoped_session_subject(subject: &ValueRef) -> bool {
     subject.source_kind == ValueSourceKind::Session
-        && subject.base.as_deref().is_some_and(|base| {
-            matches!(
-                base,
-                "req.session.user"
-                    | "session.user"
-                    | "req.session.currentUser"
-                    | "session.currentUser"
-            )
-        })
+        && subject
+            .base
+            .as_deref()
+            .is_some_and(is_self_scoped_session_base)
+}
+
+fn is_self_scoped_session_base(base: &str) -> bool {
+    matches!(
+        base,
+        "req.session.user"
+            | "request.session.user"
+            | "session.user"
+            | "req.session.currentUser"
+            | "request.session.currentUser"
+            | "session.currentUser"
+            | "req.user"
+            | "request.user"
+            | "req.currentUser"
+            | "request.currentUser"
+            | "ctx.session.user"
+            | "ctx.session.currentUser"
+            | "ctx.state.user"
+            | "ctx.state.currentUser"
+    )
 }
 
 fn is_stale_session_subject(subject: &ValueRef) -> bool {

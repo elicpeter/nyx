@@ -36,6 +36,20 @@ fn auth_analysis_integration() {
 }
 
 #[test]
+fn auth_analysis_frameworks_integration() {
+    let dir = fixture_path("auth_analysis_frameworks_integration");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn auth_analysis_noise_frameworks() {
+    let dir = fixture_path("auth_analysis_noise_frameworks");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
 fn flask_app() {
     let dir = fixture_path("flask_app");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);

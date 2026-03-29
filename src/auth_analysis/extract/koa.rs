@@ -4,20 +4,18 @@ use super::common::{
     named_children, string_literal_value, text,
 };
 use crate::auth_analysis::config::AuthAnalysisRules;
-use crate::auth_analysis::model::{
-    AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
-};
+use crate::auth_analysis::model::{AuthorizationModel, Framework, HttpMethod, RouteRegistration};
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use std::path::Path;
 use tree_sitter::{Node, Tree};
 
-pub struct ExpressExtractor;
+pub struct KoaExtractor;
 
-impl AuthExtractor for ExpressExtractor {
+impl AuthExtractor for KoaExtractor {
     fn supports(&self, lang: &str, framework_ctx: Option<&FrameworkContext>) -> bool {
         matches!(lang, "javascript" | "typescript")
             && framework_ctx
-                .is_none_or(|ctx| ctx.frameworks.is_empty() || ctx.has(DetectedFramework::Express))
+                .is_none_or(|ctx| ctx.frameworks.is_empty() || ctx.has(DetectedFramework::Koa))
     }
 
     fn extract(
@@ -71,7 +69,7 @@ fn maybe_collect_route(
     let Some((object_name, method)) = parse_route_target(function, bytes) else {
         return;
     };
-    if !matches!(object_name.as_str(), "router" | "app") {
+    if !matches!(object_name.as_str(), "koaRouter" | "router" | "app" | "koa") {
         return;
     }
 
@@ -107,17 +105,17 @@ fn maybe_collect_route(
     };
 
     let middleware_nodes: Vec<Node<'_>> = named_args[1..handler_idx].to_vec();
-    let middleware_calls: Vec<CallSite> = middleware_nodes
+    let middleware_calls = middleware_nodes
         .iter()
         .map(|middleware| call_site_from_node(*middleware, bytes))
-        .collect();
-    let middleware: Vec<String> = middleware_calls
+        .collect::<Vec<_>>();
+    let middleware = middleware_calls
         .iter()
         .map(|call| call.name.clone())
-        .collect();
+        .collect::<Vec<_>>();
 
     model.routes.push(RouteRegistration {
-        framework: Framework::Express,
+        framework: Framework::Koa,
         method,
         path: route_path,
         middleware,

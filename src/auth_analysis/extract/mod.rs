@@ -4,7 +4,10 @@ use crate::utils::project::FrameworkContext;
 use std::path::Path;
 use tree_sitter::Tree;
 
+pub mod common;
 pub mod express;
+pub mod fastify;
+pub mod koa;
 
 pub trait AuthExtractor {
     fn supports(&self, lang: &str, framework_ctx: Option<&FrameworkContext>) -> bool;
@@ -25,7 +28,11 @@ pub fn extract_authorization_model(
     path: &Path,
     rules: &AuthAnalysisRules,
 ) -> AuthorizationModel {
-    let extractors: [&dyn AuthExtractor; 1] = [&express::ExpressExtractor];
+    let extractors: [&dyn AuthExtractor; 3] = [
+        &express::ExpressExtractor,
+        &koa::KoaExtractor,
+        &fastify::FastifyExtractor,
+    ];
     let mut model = AuthorizationModel::default();
 
     for extractor in extractors {

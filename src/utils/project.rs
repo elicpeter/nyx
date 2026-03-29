@@ -37,6 +37,8 @@ pub fn sanitize_project_name(name: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DetectedFramework {
     Express,
+    Koa,
+    Fastify,
     React,
     Flask,
     Django,
@@ -85,6 +87,16 @@ pub fn detect_frameworks(root: &Path) -> FrameworkContext {
         // Good enough for detection — no JSON parsing overhead.
         if content.contains("\"express\"") {
             fws.push(DetectedFramework::Express);
+        }
+        if (content.contains("\"koa\"")
+            || content.contains("\"@koa/router\"")
+            || content.contains("\"koa-router\""))
+            && !fws.contains(&DetectedFramework::Koa)
+        {
+            fws.push(DetectedFramework::Koa);
+        }
+        if content.contains("\"fastify\"") && !fws.contains(&DetectedFramework::Fastify) {
+            fws.push(DetectedFramework::Fastify);
         }
         if content.contains("\"react\"") {
             fws.push(DetectedFramework::React);
@@ -196,11 +208,13 @@ fn detect_frameworks_from_package_json() {
     let root = tmp.path();
     fs::write(
         root.join("package.json"),
-        r#"{"dependencies": {"express": "^4.18.0", "react": "^18.0.0"}}"#,
+        r#"{"dependencies": {"express": "^4.18.0", "koa": "^2.15.0", "fastify": "^4.0.0", "react": "^18.0.0"}}"#,
     )
     .unwrap();
     let ctx = detect_frameworks(root);
     assert!(ctx.has(DetectedFramework::Express));
+    assert!(ctx.has(DetectedFramework::Koa));
+    assert!(ctx.has(DetectedFramework::Fastify));
     assert!(ctx.has(DetectedFramework::React));
     assert!(!ctx.has(DetectedFramework::Flask));
 }
@@ -362,13 +376,15 @@ fn detect_frameworks_multiple_in_same_project() {
     // A project using both Express and React
     fs::write(
         root.join("package.json"),
-        r#"{"dependencies": {"express": "^4", "react": "^18"}}"#,
+        r#"{"dependencies": {"express": "^4", "@koa/router": "^12", "fastify": "^4", "react": "^18"}}"#,
     )
     .unwrap();
     let ctx = detect_frameworks(root);
     assert!(ctx.has(DetectedFramework::Express));
+    assert!(ctx.has(DetectedFramework::Koa));
+    assert!(ctx.has(DetectedFramework::Fastify));
     assert!(ctx.has(DetectedFramework::React));
-    assert_eq!(ctx.frameworks.len(), 2);
+    assert_eq!(ctx.frameworks.len(), 4);
 }
 
 #[test]
