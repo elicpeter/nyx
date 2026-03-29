@@ -17,12 +17,20 @@ async function getCsrfToken(): Promise<string> {
     csrfTokenPromise = fetch(`${BASE}/session`)
       .then(async (res) => {
         if (!res.ok) {
-          throw new ApiError(res.status, await res.text().catch(() => res.statusText));
+          throw new ApiError(
+            res.status,
+            await res.text().catch(() => res.statusText),
+          );
         }
 
         const text = await res.text();
-        const payload = text ? (JSON.parse(text) as { csrf_token?: unknown }) : {};
-        if (typeof payload.csrf_token !== 'string' || payload.csrf_token.length === 0) {
+        const payload = text
+          ? (JSON.parse(text) as { csrf_token?: unknown })
+          : {};
+        if (
+          typeof payload.csrf_token !== 'string' ||
+          payload.csrf_token.length === 0
+        ) {
           throw new ApiError(500, 'Missing CSRF token');
         }
 
@@ -39,7 +47,12 @@ async function getCsrfToken(): Promise<string> {
 
 function isMutatingMethod(method?: string): boolean {
   const upper = (method || 'GET').toUpperCase();
-  return upper === 'POST' || upper === 'PUT' || upper === 'PATCH' || upper === 'DELETE';
+  return (
+    upper === 'POST' ||
+    upper === 'PUT' ||
+    upper === 'PATCH' ||
+    upper === 'DELETE'
+  );
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {

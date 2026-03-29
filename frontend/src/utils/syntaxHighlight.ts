@@ -84,7 +84,8 @@ interface Token {
  */
 export function highlightSyntax(escapedHtml: string, lang: string): string {
   const rules = SYNTAX_RULES[lang];
-  if (!rules || escapedHtml.length > MAX_HIGHLIGHT_INPUT_CHARS) return escapedHtml;
+  if (!rules || escapedHtml.length > MAX_HIGHLIGHT_INPUT_CHARS)
+    return escapedHtml;
 
   const tokens: Token[] = [];
 
