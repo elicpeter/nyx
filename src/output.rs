@@ -265,7 +265,10 @@ mod tests {
             ("cfg-error-fallthrough", "dangerous call follows"),
             ("cfg-resource-leak", "not released"),
             ("cfg-lock-not-released", "Lock acquired"),
-            ("state-use-after-close", "after its resource handle was closed"),
+            (
+                "state-use-after-close",
+                "after its resource handle was closed",
+            ),
             ("state-double-close", "more than once"),
             ("state-resource-leak", "never closed"),
             ("state-resource-leak-possible", "may not be closed"),
@@ -355,7 +358,10 @@ mod tests {
         assert_eq!(loc["region"]["startColumn"], 5);
         // Path should be relative to scan_root
         let uri = loc["artifactLocation"]["uri"].as_str().unwrap();
-        assert!(!uri.starts_with("/scan_root"), "URI should be relative, got: {uri}");
+        assert!(
+            !uri.starts_with("/scan_root"),
+            "URI should be relative, got: {uri}"
+        );
         assert!(uri.contains("main.rs"));
     }
 
@@ -383,7 +389,9 @@ mod tests {
         // ruleId should be the base ID, not the suffixed version
         assert_eq!(results[0]["ruleId"], "taint-unsanitised-flow");
 
-        let rules = sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
+        let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap();
         // Only one rule entry for the base ID
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0]["id"], "taint-unsanitised-flow");
@@ -395,7 +403,9 @@ mod tests {
         let d1 = make_diag("rs.security.sqli", Severity::High);
         let d2 = make_diag("rs.security.sqli", Severity::Medium);
         let sarif = build_sarif(&[d1, d2], Path::new("/"));
-        let rules = sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
+        let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap();
         assert_eq!(rules.len(), 1, "duplicate rule IDs should be deduplicated");
         let results = sarif["runs"][0]["results"].as_array().unwrap();
         assert_eq!(results.len(), 2);
@@ -410,7 +420,10 @@ mod tests {
         diag.message = Some("Custom message from state analysis".into());
         let sarif = build_sarif(&[diag], Path::new("/scan_root"));
         let result = &sarif["runs"][0]["results"][0];
-        assert_eq!(result["message"]["text"], "Custom message from state analysis");
+        assert_eq!(
+            result["message"]["text"],
+            "Custom message from state analysis"
+        );
     }
 
     #[test]
@@ -430,10 +443,7 @@ mod tests {
         let mut diag = make_diag("rs.quality.unwrap", Severity::Low);
         diag.rollup = Some(RollupData {
             count: 3,
-            occurrences: vec![
-                Location { line: 5, col: 1 },
-                Location { line: 12, col: 3 },
-            ],
+            occurrences: vec![Location { line: 5, col: 1 }, Location { line: 12, col: 3 }],
         });
         let sarif = build_sarif(&[diag], Path::new("/scan_root"));
         let result = &sarif["runs"][0]["results"][0];
@@ -466,10 +476,11 @@ mod tests {
         let mut diag = make_diag("rule-x", Severity::High);
         diag.path = "/workspace/src/lib.rs".into();
         let sarif = build_sarif(&[diag], Path::new("/workspace"));
-        let uri = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
-            ["artifactLocation"]["uri"]
-            .as_str()
-            .unwrap();
+        let uri =
+            sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]
+                ["uri"]
+                .as_str()
+                .unwrap();
         assert_eq!(uri, "src/lib.rs");
     }
 
@@ -478,10 +489,11 @@ mod tests {
         let mut diag = make_diag("rule-x", Severity::High);
         diag.path = "/other/place/file.rs".into();
         let sarif = build_sarif(&[diag], Path::new("/workspace"));
-        let uri = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
-            ["artifactLocation"]["uri"]
-            .as_str()
-            .unwrap();
+        let uri =
+            sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]
+                ["uri"]
+                .as_str()
+                .unwrap();
         assert_eq!(uri, "/other/place/file.rs");
     }
 
@@ -520,7 +532,9 @@ mod tests {
         let d2 = make_diag("rule-beta", Severity::Medium);
         let d3 = make_diag("rule-gamma", Severity::Low);
         let sarif = build_sarif(&[d1, d2, d3], Path::new("/"));
-        let rules = sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap();
+        let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap();
         assert_eq!(rules.len(), 3);
         assert_eq!(rules[0]["id"], "rule-alpha");
         assert_eq!(rules[1]["id"], "rule-beta");
