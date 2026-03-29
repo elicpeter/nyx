@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -42,20 +43,7 @@ async fn start_scan(
     body: Option<Json<StartScanRequest>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let req = body.map(|b| b.0).unwrap_or_default();
-
-    let scan_root = if let Some(ref root) = req.scan_root {
-        let requested = std::path::Path::new(root)
-            .canonicalize()
-            .map_err(|_| bad_request("invalid scan_root"))?;
-        if requested != state.scan_root {
-            return Err(bad_request(
-                "scan_root must match the repository passed to nyx serve",
-            ));
-        }
-        requested
-    } else {
-        state.scan_root.clone()
-    };
+    let scan_root = resolve_requested_scan_root(req.scan_root.as_deref(), &state.scan_root)?;
 
     let config = state.config.read().unwrap().clone();
     let event_tx = state.event_tx.clone();
@@ -75,6 +63,26 @@ async fn start_scan(
             Json(serde_json::json!({ "error": msg })),
         )),
     }
+}
+
+fn resolve_requested_scan_root(
+    requested_root: Option<&str>,
+    configured_root: &Path,
+) -> Result<PathBuf, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(root) = requested_root {
+        let requested = Path::new(root)
+            .canonicalize()
+            .map_err(|_| bad_request("invalid scan_root"))?;
+        if requested != configured_root {
+            return Err(bad_request(
+                "scan_root must match the repository passed to nyx serve",
+            ));
+        }
+    }
+
+    // The request value is validation-only; scans always run against the
+    // canonical root configured when the server started.
+    Ok(configured_root.to_path_buf())
 }
 
 fn bad_request(message: &str) -> (StatusCode, Json<serde_json::Value>) {
@@ -552,5 +560,52 @@ fn scan_record_to_view(record: &ScanRecord) -> ScanView {
         files_scanned: record.files_scanned.map(|c| c as u64),
         timing,
         metrics: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_requested_scan_root_defaults_to_configured_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let configured = dir.path().canonicalize().unwrap();
+
+        let resolved = resolve_requested_scan_root(None, &configured).unwrap();
+
+        assert_eq!(resolved, configured);
+    }
+
+    #[test]
+    fn resolve_requested_scan_root_accepts_matching_root_but_uses_configured_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let configured = dir.path().canonicalize().unwrap();
+        let requested = dir.path().join(".");
+
+        let resolved =
+            resolve_requested_scan_root(Some(requested.to_string_lossy().as_ref()), &configured)
+                .unwrap();
+
+        assert_eq!(resolved, configured);
+    }
+
+    #[test]
+    fn resolve_requested_scan_root_rejects_different_root() {
+        let configured_dir = tempfile::tempdir().unwrap();
+        let other_dir = tempfile::tempdir().unwrap();
+        let configured = configured_dir.path().canonicalize().unwrap();
+
+        let err = resolve_requested_scan_root(
+            Some(other_dir.path().to_string_lossy().as_ref()),
+            &configured,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            err.1.0["error"],
+            "scan_root must match the repository passed to nyx serve"
+        );
     }
 }
