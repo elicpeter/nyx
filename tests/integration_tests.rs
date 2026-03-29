@@ -29,6 +29,20 @@ fn express_app() {
 }
 
 #[test]
+fn koa_app() {
+    let dir = fixture_path("koa_app");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn fastify_app() {
+    let dir = fixture_path("fastify_app");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
 fn auth_analysis_integration() {
     let dir = fixture_path("auth_analysis_integration");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
@@ -45,6 +59,13 @@ fn auth_analysis_frameworks_integration() {
 #[test]
 fn auth_analysis_noise_frameworks() {
     let dir = fixture_path("auth_analysis_noise_frameworks");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn auth_analysis_python_frameworks_integration() {
+    let dir = fixture_path("auth_analysis_python_frameworks_integration");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
@@ -501,6 +522,13 @@ fn internal_redirect_taint() {
 #[test]
 fn route_registration_noise() {
     let dir = fixture_path("route_registration_noise");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn route_registration_noise_frameworks() {
+    let dir = fixture_path("route_registration_noise_frameworks");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }

@@ -5,6 +5,8 @@ pub enum Framework {
     Express,
     Koa,
     Fastify,
+    Flask,
+    Django,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

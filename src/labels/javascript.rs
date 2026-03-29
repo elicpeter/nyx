@@ -1,5 +1,5 @@
 use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule, SinkGate};
-use crate::utils::project::FrameworkContext;
+use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -342,11 +342,88 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
 };
 
 /// Framework-conditional rules for JavaScript.
-pub fn framework_rules(_ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
-    // Express/React framework rules deferred:
-    // - express-validator check()/validationResult() are middleware validators,
-    //   not data-flow sanitizers — they don't strip taint from req.body.
-    // - dangerouslySetInnerHTML is already a static sink rule.
-    // - ResponseEntity-style response sinks need a broader cap model.
-    Vec::new()
+pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    let mut rules = Vec::new();
+
+    if ctx.has(DetectedFramework::Koa) {
+        rules.push(RuntimeLabelRule {
+            matchers: vec![
+                "ctx.request.body".into(),
+                "ctx.request.query".into(),
+                "ctx.request.querystring".into(),
+                "ctx.request.params".into(),
+                "ctx.request.headers".into(),
+                "ctx.request.header".into(),
+                "ctx.request.get".into(),
+                "ctx.query".into(),
+                "ctx.params".into(),
+                "ctx.headers".into(),
+                "ctx.header".into(),
+                "ctx.get".into(),
+                "ctx.cookies.get".into(),
+                "ctx.hostname".into(),
+                "ctx.ip".into(),
+                "ctx.path".into(),
+                "ctx.protocol".into(),
+                "ctx.url".into(),
+            ],
+            label: DataLabel::Source(Cap::all()),
+            case_sensitive: false,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["ctx.body".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["ctx.redirect".into()],
+            label: DataLabel::Sink(Cap::SSRF),
+            case_sensitive: false,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["ctx.set".into(), "ctx.append".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        });
+    }
+
+    if ctx.has(DetectedFramework::Fastify) {
+        rules.push(RuntimeLabelRule {
+            matchers: vec![
+                "request.body".into(),
+                "request.query".into(),
+                "request.params".into(),
+                "request.headers".into(),
+                "request.cookies".into(),
+                "request.hostname".into(),
+                "request.ip".into(),
+                "request.url".into(),
+                "request.raw.headers".into(),
+            ],
+            label: DataLabel::Source(Cap::all()),
+            case_sensitive: false,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["reply.send".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["reply.redirect".into()],
+            label: DataLabel::Sink(Cap::SSRF),
+            case_sensitive: false,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["reply.sendFile".into(), "reply.download".into()],
+            label: DataLabel::Sink(Cap::FILE_IO),
+            case_sensitive: false,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["reply.header".into(), "reply.headers".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: false,
+        });
+    }
+
+    rules
 }

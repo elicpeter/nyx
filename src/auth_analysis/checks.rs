@@ -16,9 +16,9 @@ pub struct AuthFinding {
 pub fn run_checks(model: &AuthorizationModel, rules: &AuthAnalysisRules) -> Vec<AuthFinding> {
     let mut findings = Vec::new();
     findings.extend(check_admin_routes(model, rules));
-    findings.extend(check_ownership_gaps(model));
-    findings.extend(check_partial_batch_authorization(model));
-    findings.extend(check_stale_authorization(model));
+    findings.extend(check_ownership_gaps(model, rules));
+    findings.extend(check_partial_batch_authorization(model, rules));
+    findings.extend(check_stale_authorization(model, rules));
     findings.extend(check_token_override_without_validation(model, rules));
     findings.sort_by(|a, b| a.span.cmp(&b.span).then_with(|| a.rule_id.cmp(&b.rule_id)));
     findings.dedup_by(|a, b| a.span == b.span && a.rule_id == b.rule_id);
@@ -49,7 +49,7 @@ fn check_admin_routes(model: &AuthorizationModel, rules: &AuthAnalysisRules) -> 
 
         if !has_admin && has_login {
             findings.push(AuthFinding {
-                rule_id: "js.auth.admin_route_missing_admin_check".into(),
+                rule_id: rules.rule_id("admin_route_missing_admin_check"),
                 severity: Severity::High,
                 span: route.handler_span,
                 message: format!(
@@ -63,7 +63,10 @@ fn check_admin_routes(model: &AuthorizationModel, rules: &AuthAnalysisRules) -> 
     findings
 }
 
-fn check_ownership_gaps(model: &AuthorizationModel) -> Vec<AuthFinding> {
+fn check_ownership_gaps(
+    model: &AuthorizationModel,
+    rules: &AuthAnalysisRules,
+) -> Vec<AuthFinding> {
     let mut findings = Vec::new();
 
     for unit in &model.units {
@@ -88,7 +91,7 @@ fn check_ownership_gaps(model: &AuthorizationModel) -> Vec<AuthFinding> {
                 }
                 if !has_prior_subject_auth(unit, op, &relevant_subjects) {
                     findings.push(AuthFinding {
-                        rule_id: "js.auth.missing_ownership_check".into(),
+                        rule_id: rules.rule_id("missing_ownership_check"),
                         severity: Severity::High,
                         span: op.span,
                         message: format!(
@@ -104,7 +107,10 @@ fn check_ownership_gaps(model: &AuthorizationModel) -> Vec<AuthFinding> {
     findings
 }
 
-fn check_partial_batch_authorization(model: &AuthorizationModel) -> Vec<AuthFinding> {
+fn check_partial_batch_authorization(
+    model: &AuthorizationModel,
+    rules: &AuthAnalysisRules,
+) -> Vec<AuthFinding> {
     let mut findings = Vec::new();
 
     for unit in &model.units {
@@ -132,7 +138,7 @@ fn check_partial_batch_authorization(model: &AuthorizationModel) -> Vec<AuthFind
 
             if partial_check {
                 findings.push(AuthFinding {
-                    rule_id: "js.auth.partial_batch_authorization".into(),
+                    rule_id: rules.rule_id("partial_batch_authorization"),
                     severity: Severity::High,
                     span: op.span,
                     message: format!(
@@ -147,7 +153,10 @@ fn check_partial_batch_authorization(model: &AuthorizationModel) -> Vec<AuthFind
     findings
 }
 
-fn check_stale_authorization(model: &AuthorizationModel) -> Vec<AuthFinding> {
+fn check_stale_authorization(
+    model: &AuthorizationModel,
+    rules: &AuthAnalysisRules,
+) -> Vec<AuthFinding> {
     let mut findings = Vec::new();
 
     for unit in &model.units {
@@ -174,7 +183,7 @@ fn check_stale_authorization(model: &AuthorizationModel) -> Vec<AuthFinding> {
 
             if !has_fresh_auth {
                 findings.push(AuthFinding {
-                    rule_id: "js.auth.stale_authorization".into(),
+                    rule_id: rules.rule_id("stale_authorization"),
                     severity: Severity::Medium,
                     span: op.span,
                     message: format!(
@@ -209,7 +218,11 @@ fn check_token_override_without_validation(
             continue;
         };
 
-        let override_pattern = final_write.text.contains("||")
+        let override_pattern = (final_write.text.contains("||")
+            || final_write
+                .text
+                .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                .any(|segment| segment.eq_ignore_ascii_case("or")))
             && final_write
                 .subjects
                 .iter()
@@ -247,7 +260,7 @@ fn check_token_override_without_validation(
                 missing.push("token recipient identity is not validated");
             }
             findings.push(AuthFinding {
-                rule_id: "js.auth.token_override_without_validation".into(),
+                rule_id: rules.rule_id("token_override_without_validation"),
                 severity: Severity::High,
                 span: final_write.span,
                 message: format!(

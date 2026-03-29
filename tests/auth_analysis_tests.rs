@@ -23,7 +23,10 @@ fn scan_all_fixtures() -> &'static Vec<Diag> {
 fn auth_diags_for(filename: &str) -> Vec<&'static Diag> {
     scan_all_fixtures()
         .iter()
-        .filter(|d| d.path.contains(filename) && d.id.starts_with("js.auth."))
+        .filter(|d| {
+            d.path.contains(filename)
+                && (d.id.starts_with("js.auth.") || d.id.starts_with("py.auth."))
+        })
         .collect()
 }
 
@@ -282,6 +285,110 @@ fn clean_token_acceptance_is_clean() {
 }
 
 #[test]
+fn flask_admin_route_missing_admin_check() {
+    assert_has(
+        "flask_admin_route_missing.py",
+        "py.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn flask_admin_route_with_admin_guard_is_clean() {
+    assert_absent(
+        "flask_admin_route_clean.py",
+        "py.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn flask_scoped_write_without_membership_check() {
+    assert_has(
+        "flask_scoped_write_missing.py",
+        "py.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn flask_clean_token_acceptance_is_clean() {
+    assert_absent(
+        "flask_token_clean.py",
+        "py.auth.token_override_without_validation",
+    );
+}
+
+#[test]
+fn django_view_admin_route_missing_admin_check() {
+    assert_has(
+        "django_view_admin_missing.py",
+        "py.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn django_view_admin_route_with_permission_guard_is_clean() {
+    assert_absent(
+        "django_view_admin_clean.py",
+        "py.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn django_scoped_read_without_membership_check() {
+    assert_has(
+        "django_scoped_read_missing.py",
+        "py.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn django_cbv_admin_route_with_permission_mixin_is_clean() {
+    assert_absent(
+        "django_cbv_admin_clean.py",
+        "py.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn django_cbv_scoped_write_without_membership_check() {
+    assert_has(
+        "django_cbv_scoped_write_missing.py",
+        "py.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn django_partial_batch_authorization_detected() {
+    assert_has(
+        "django_partial_batch.py",
+        "py.auth.partial_batch_authorization",
+    );
+}
+
+#[test]
+fn django_stale_session_backed_mutation() {
+    assert_has(
+        "django_stale_session_mutation.py",
+        "py.auth.stale_authorization",
+    );
+}
+
+#[test]
+fn django_token_flow_missing_expiry_check() {
+    assert_has(
+        "django_token_missing_expiry.py",
+        "py.auth.token_override_without_validation",
+    );
+}
+
+#[test]
+fn django_token_flow_missing_recipient_check() {
+    assert_has(
+        "django_token_missing_recipient.py",
+        "py.auth.token_override_without_validation",
+    );
+}
+
+#[test]
 fn auth_analysis_runs_in_ast_mode() {
     let cfg = common::test_config(AnalysisMode::Ast);
     let diags = nyx_scanner::scan_no_index(&auth_fixture_dir(), &cfg).expect("scan should succeed");
@@ -306,6 +413,20 @@ fn auth_analysis_runs_in_ast_mode() {
         }),
         "expected AST mode to emit Fastify js.auth findings"
     );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("flask_scoped_write_missing.py")
+                && diag.id == "py.auth.missing_ownership_check"
+        }),
+        "expected AST mode to emit Flask py.auth findings"
+    );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("django_cbv_scoped_write_missing.py")
+                && diag.id == "py.auth.missing_ownership_check"
+        }),
+        "expected AST mode to emit Django py.auth findings"
+    );
 }
 
 #[test]
@@ -315,6 +436,10 @@ fn auth_analysis_does_not_run_in_cfg_mode() {
     assert!(
         diags.iter().all(|diag| !diag.id.starts_with("js.auth.")),
         "CFG mode should not emit js.auth findings"
+    );
+    assert!(
+        diags.iter().all(|diag| !diag.id.starts_with("py.auth.")),
+        "CFG mode should not emit py.auth findings"
     );
     assert!(
         diags
@@ -327,5 +452,17 @@ fn auth_analysis_does_not_run_in_cfg_mode() {
             .iter()
             .all(|diag| !diag.path.contains("fastify_scoped_write_missing.js")),
         "CFG mode should not emit Fastify auth-analysis findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("flask_scoped_write_missing.py")),
+        "CFG mode should not emit Flask auth-analysis findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("django_cbv_scoped_write_missing.py")),
+        "CFG mode should not emit Django auth-analysis findings"
     );
 }

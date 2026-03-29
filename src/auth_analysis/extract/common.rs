@@ -26,7 +26,7 @@ fn collect_top_level_from_node(
     model: &mut AuthorizationModel,
 ) {
     match node.kind() {
-        "function_declaration" => {
+        "function_declaration" | "function_definition" => {
             model.units.push(build_function_unit(
                 node,
                 AnalysisUnitKind::Function,
@@ -35,15 +35,28 @@ fn collect_top_level_from_node(
                 rules,
             ));
         }
+        "decorated_definition" => {
+            if decorated_definition_child(node)
+                .is_some_and(|definition| definition.kind() == "function_definition")
+            {
+                model.units.push(build_function_unit(
+                    node,
+                    AnalysisUnitKind::Function,
+                    function_name(node, bytes),
+                    bytes,
+                    rules,
+                ));
+            }
+        }
         "lexical_declaration" | "variable_declaration" => {
             for idx in 0..node.named_child_count() {
                 let Some(child) = node.named_child(idx as u32) else {
                     continue;
                 };
-                if child.kind() == "variable_declarator" {
-                    if let Some(unit) = function_unit_from_var_declarator(child, bytes, rules) {
-                        model.units.push(unit);
-                    }
+                if child.kind() == "variable_declarator"
+                    && let Some(unit) = function_unit_from_var_declarator(child, bytes, rules)
+                {
+                    model.units.push(unit);
                 }
             }
         }
@@ -162,8 +175,18 @@ fn find_top_level_function_node_in_child<'tree>(
     bytes: &[u8],
 ) -> Option<Node<'tree>> {
     match node.kind() {
-        "function_declaration" => {
+        "function_declaration" | "function_definition" => {
             if function_name(node, bytes).as_deref() == Some(name) {
+                Some(node)
+            } else {
+                None
+            }
+        }
+        "decorated_definition" => {
+            let definition = decorated_definition_child(node)?;
+            if definition.kind() == "function_definition"
+                && function_name(node, bytes).as_deref() == Some(name)
+            {
                 Some(node)
             } else {
                 None
@@ -197,10 +220,9 @@ fn find_top_level_function_node_in_child<'tree>(
                 let Some(child) = node.named_child(idx as u32) else {
                     continue;
                 };
-                if !child.is_named() {
-                    continue;
-                }
-                if let Some(found) = find_top_level_function_node_in_child(child, name, bytes) {
+                if child.is_named()
+                    && let Some(found) = find_top_level_function_node_in_child(child, name, bytes)
+                {
                     return Some(found);
                 }
             }
@@ -217,7 +239,8 @@ pub fn build_function_unit(
     bytes: &[u8],
     rules: &AuthAnalysisRules,
 ) -> AnalysisUnit {
-    let params = function_params(node, bytes);
+    let definition = function_definition_node(node);
+    let params = function_params(definition, bytes);
     let line = node.start_position().row + 1;
     let mut state = UnitState::default();
     collect_unit_state(node, bytes, rules, &mut state);
@@ -268,8 +291,8 @@ fn collect_unit_state(
     state: &mut UnitState,
 ) {
     match node.kind() {
-        "call_expression" => collect_call(node, bytes, rules, state),
-        "if_statement" | "while_statement" | "do_statement" => {
+        "call_expression" | "call" => collect_call(node, bytes, rules, state),
+        "if_statement" | "elif_clause" | "while_statement" | "do_statement" => {
             if let Some(condition) = node.child_by_field_name("condition") {
                 collect_condition(condition, bytes, rules, state);
             }
@@ -309,6 +332,7 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
         .collect();
     let line = node.start_position().row + 1;
     let string_args: Vec<String> = args.iter().map(|arg| text(*arg, bytes)).collect();
+    let node_text = text(node, bytes);
     state.call_sites.push(CallSite {
         name: callee.clone(),
         args: string_args.clone(),
@@ -327,7 +351,7 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
         });
     }
 
-    let op_kind = if rules.is_token_lookup(&callee) {
+    let op_kind = if rules.is_token_lookup_call(&callee, &node_text) {
         Some(OperationKind::TokenLookup)
     } else if rules.is_mutation(&callee) {
         Some(OperationKind::Mutation)
@@ -344,7 +368,7 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
             subjects,
             span: span(node),
             line,
-            text: text(node, bytes),
+            text: node_text,
         });
     }
 }
@@ -398,11 +422,20 @@ fn classify_auth_check(callee: &str, rules: &AuthAnalysisRules) -> AuthCheckKind
         || matches_name(callee, "hasWorkspaceMembership")
         || matches_name(callee, "isMember")
         || matches_name(callee, "requireMembership")
+        || matches_name(callee, "check_membership")
+        || matches_name(callee, "has_membership")
+        || matches_name(callee, "require_membership")
+        || matches_name(callee, "ensure_membership")
     {
         AuthCheckKind::Membership
     } else if matches_name(callee, "checkOwnership")
         || matches_name(callee, "isOwner")
         || matches_name(callee, "requireOwnership")
+        || matches_name(callee, "check_ownership")
+        || matches_name(callee, "has_ownership")
+        || matches_name(callee, "require_ownership")
+        || matches_name(callee, "ensure_ownership")
+        || matches_name(callee, "is_owner")
     {
         AuthCheckKind::Ownership
     } else {
@@ -411,7 +444,8 @@ fn classify_auth_check(callee: &str, rules: &AuthAnalysisRules) -> AuthCheckKind
 }
 
 fn function_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
-    node.child_by_field_name("name")
+    function_definition_node(node)
+        .child_by_field_name("name")
         .map(|name| text(name, bytes))
         .filter(|name| !name.is_empty())
 }
@@ -433,6 +467,11 @@ fn collect_param_names(node: Node<'_>, bytes: &[u8], out: &mut Vec<String>) {
                 out.push(name);
             }
         }
+        "default_parameter" | "typed_parameter" | "typed_default_parameter" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                collect_param_names(name, bytes, out);
+            }
+        }
         _ => {
             for idx in 0..node.named_child_count() {
                 let Some(child) = node.named_child(idx as u32) else {
@@ -447,16 +486,20 @@ fn collect_param_names(node: Node<'_>, bytes: &[u8], out: &mut Vec<String>) {
 pub fn is_function_like(node: Node<'_>) -> bool {
     matches!(
         node.kind(),
-        "function_declaration" | "function_expression" | "arrow_function"
+        "function_declaration"
+            | "function_expression"
+            | "arrow_function"
+            | "function_definition"
+            | "decorated_definition"
     )
 }
 
 pub fn is_handler_reference(node: Node<'_>) -> bool {
-    is_function_like(node) || matches!(node.kind(), "identifier" | "member_expression")
+    is_function_like(node) || matches!(node.kind(), "identifier" | "member_expression" | "attribute")
 }
 
 pub fn call_site_from_node(node: Node<'_>, bytes: &[u8]) -> CallSite {
-    if node.kind() == "call_expression" {
+    if matches!(node.kind(), "call_expression" | "call") {
         let name = node
             .child_by_field_name("function")
             .map(|callee| callee_name(callee, bytes))
@@ -483,7 +526,7 @@ pub fn call_site_from_node(node: Node<'_>, bytes: &[u8]) -> CallSite {
 }
 
 pub fn call_sites_from_value(node: Node<'_>, bytes: &[u8]) -> Vec<CallSite> {
-    if node.kind() == "array" {
+    if matches!(node.kind(), "array" | "list" | "tuple") {
         named_children(node)
             .into_iter()
             .map(|child| call_site_from_node(child, bytes))
@@ -499,10 +542,36 @@ pub fn call_sites_from_value(node: Node<'_>, bytes: &[u8]) -> Vec<CallSite> {
     }
 }
 
+pub fn auth_check_from_call_site(
+    call: &CallSite,
+    line: usize,
+    rules: &AuthAnalysisRules,
+) -> Option<AuthCheck> {
+    let kind = if rules.is_admin_guard(&call.name, &call.args) {
+        AuthCheckKind::AdminGuard
+    } else if rules.is_login_guard(&call.name) {
+        AuthCheckKind::LoginGuard
+    } else if rules.is_authorization_check(&call.name) {
+        classify_auth_check(&call.name, rules)
+    } else {
+        return None;
+    };
+
+    Some(AuthCheck {
+        kind,
+        callee: call.name.clone(),
+        subjects: Vec::new(),
+        span: call.span,
+        line,
+        args: call.args.clone(),
+        condition_text: None,
+    })
+}
+
 pub fn extract_value_refs(node: Node<'_>, bytes: &[u8]) -> Vec<ValueRef> {
     match node.kind() {
-        "member_expression" => member_value_ref(node, bytes).into_iter().collect(),
-        "subscript_expression" => subscript_value_ref(node, bytes).into_iter().collect(),
+        "member_expression" | "attribute" => member_value_ref(node, bytes).into_iter().collect(),
+        "subscript_expression" | "subscript" => subscript_value_ref(node, bytes).into_iter().collect(),
         "identifier" => vec![ValueRef {
             source_kind: ValueSourceKind::Identifier,
             name: text(node, bytes),
@@ -557,10 +626,12 @@ fn classify_member_chain(chain: &[String]) -> ValueSourceKind {
         ValueSourceKind::RequestQuery
     } else if matches_session_context(chain) {
         ValueSourceKind::Session
-    } else if chain
-        .first()
-        .is_some_and(|segment| matches!(segment.as_str(), "invitation" | "token" | "invite"))
-    {
+    } else if chain.first().is_some_and(|segment| {
+        matches!(
+            segment.to_ascii_lowercase().as_str(),
+            "invitation" | "token" | "invite"
+        )
+    }) {
         ValueSourceKind::TokenField
     } else {
         ValueSourceKind::MemberField
@@ -568,48 +639,92 @@ fn classify_member_chain(chain: &[String]) -> ValueSourceKind {
 }
 
 fn matches_request_param(chain: &[String]) -> bool {
-    (chain.len() >= 3 && matches!(chain[0].as_str(), "req" | "request") && chain[1] == "params")
-        || (chain.len() >= 3 && chain[0] == "ctx" && chain[1] == "params")
+    let lower = lower_segments(chain);
+    (lower.len() >= 3 && matches!(lower[0].as_str(), "req" | "request") && lower[1] == "params")
+        || (lower.len() >= 3 && lower[0] == "ctx" && lower[1] == "params")
 }
 
 fn matches_request_body(chain: &[String]) -> bool {
-    (chain.len() >= 3 && matches!(chain[0].as_str(), "req" | "request") && chain[1] == "body")
-        || (chain.len() >= 4 && chain[0] == "ctx" && chain[1] == "request" && chain[2] == "body")
-        || (chain.len() >= 3 && chain[0] == "ctx" && chain[1] == "body")
+    let lower = lower_segments(chain);
+    (lower.len() >= 3 && matches!(lower[0].as_str(), "req" | "request") && lower[1] == "body")
+        || (lower.len() >= 3
+            && matches!(lower[0].as_str(), "req" | "request")
+            && matches!(lower[1].as_str(), "form" | "json" | "values" | "post" | "data"))
+        || (lower.len() >= 4
+            && lower[0] == "ctx"
+            && lower[1] == "request"
+            && lower[2] == "body")
+        || (lower.len() >= 3 && lower[0] == "ctx" && lower[1] == "body")
 }
 
 fn matches_request_query(chain: &[String]) -> bool {
-    (chain.len() >= 3 && matches!(chain[0].as_str(), "req" | "request") && chain[1] == "query")
-        || (chain.len() >= 3 && chain[0] == "ctx" && chain[1] == "query")
-        || (chain.len() >= 4 && chain[0] == "ctx" && chain[1] == "request" && chain[2] == "query")
+    let lower = lower_segments(chain);
+    (lower.len() >= 3 && matches!(lower[0].as_str(), "req" | "request") && lower[1] == "query")
+        || (lower.len() >= 3
+            && matches!(lower[0].as_str(), "req" | "request")
+            && matches!(lower[1].as_str(), "args" | "get"))
+        || (lower.len() >= 3 && lower[0] == "ctx" && lower[1] == "query")
+        || (lower.len() >= 4
+            && lower[0] == "ctx"
+            && lower[1] == "request"
+            && lower[2] == "query")
 }
 
 fn matches_session_context(chain: &[String]) -> bool {
-    (chain.len() >= 3
-        && matches!(chain[0].as_str(), "req" | "request")
-        && matches!(chain[1].as_str(), "session" | "user" | "currentUser"))
-        || (chain.len() >= 3
-            && chain[0] == "ctx"
-            && matches!(chain[1].as_str(), "session" | "state"))
+    let lower = lower_segments(chain);
+    (lower.len() >= 2 && lower[0] == "session")
+        || (lower.len() >= 2
+            && matches!(lower[0].as_str(), "req" | "request")
+            && matches!(lower[1].as_str(), "session" | "user" | "currentuser"))
+        || (lower.len() >= 3
+            && lower[0] == "self"
+            && lower[1] == "request"
+            && matches!(lower[2].as_str(), "session" | "user" | "currentuser"))
+        || (lower.len() >= 3
+            && lower[0] == "ctx"
+            && matches!(lower[1].as_str(), "session" | "state"))
 }
 
 fn subscript_value_ref(node: Node<'_>, bytes: &[u8]) -> Option<ValueRef> {
-    let object = node.child_by_field_name("object")?;
-    let index = node.child_by_field_name("index")?;
-    let base = text(object, bytes);
+    let object = node
+        .child_by_field_name("object")
+        .or_else(|| node.child_by_field_name("value"))?;
+    let index = node
+        .child_by_field_name("index")
+        .or_else(|| node.child_by_field_name("subscript"))?;
+    let base_chain = member_chain(object, bytes);
+    let base = if base_chain.is_empty() {
+        text(object, bytes)
+    } else {
+        base_chain.join(".")
+    };
     let index_text = text(index, bytes);
+    let field = Some(strip_quotes(&index_text));
+    let source_kind = if base_chain.is_empty() {
+        ValueSourceKind::ArrayIndex
+    } else {
+        match classify_member_chain(&base_chain) {
+            ValueSourceKind::MemberField => ValueSourceKind::ArrayIndex,
+            other => other,
+        }
+    };
+
     Some(ValueRef {
-        source_kind: ValueSourceKind::ArrayIndex,
-        name: format!("{base}[{index_text}]"),
+        source_kind,
+        name: if source_kind == ValueSourceKind::ArrayIndex {
+            format!("{base}[{index_text}]")
+        } else {
+            format!("{base}.{}", strip_quotes(&index_text))
+        },
         base: Some(base),
-        field: None,
+        field,
         index: Some(index_text),
         span: span(node),
     })
 }
 
 pub fn member_chain(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
-    if node.kind() != "member_expression" {
+    if !matches!(node.kind(), "member_expression" | "attribute") {
         let value = text(node, bytes);
         return if value.is_empty() {
             Vec::new()
@@ -619,10 +734,16 @@ pub fn member_chain(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
     }
 
     let mut chain = Vec::new();
-    if let Some(object) = node.child_by_field_name("object") {
+    if let Some(object) = node
+        .child_by_field_name("object")
+        .or_else(|| node.child_by_field_name("value"))
+    {
         chain.extend(member_chain(object, bytes));
     }
-    if let Some(property) = node.child_by_field_name("property") {
+    if let Some(property) = node
+        .child_by_field_name("property")
+        .or_else(|| node.child_by_field_name("attribute"))
+    {
         let property_text = text(property, bytes);
         if !property_text.is_empty() {
             chain.push(property_text);
@@ -634,7 +755,7 @@ pub fn member_chain(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
 pub fn callee_name(node: Node<'_>, bytes: &[u8]) -> String {
     match node.kind() {
         "identifier" | "property_identifier" => text(node, bytes),
-        "member_expression" => member_chain(node, bytes).join("."),
+        "member_expression" | "attribute" => member_chain(node, bytes).join("."),
         _ => text(node, bytes),
     }
 }
@@ -679,6 +800,14 @@ pub fn object_property_value<'tree>(
     None
 }
 
+pub fn decorated_definition_child(node: Node<'_>) -> Option<Node<'_>> {
+    node.child_by_field_name("definition")
+}
+
+pub fn function_definition_node(node: Node<'_>) -> Node<'_> {
+    decorated_definition_child(node).unwrap_or(node)
+}
+
 pub fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
     let mut children = Vec::new();
     for idx in 0..node.named_child_count() {
@@ -708,4 +837,8 @@ fn dedup_value_refs(values: &mut Vec<ValueRef>) {
         }
     }
     *values = deduped;
+}
+
+fn lower_segments(chain: &[String]) -> Vec<String> {
+    chain.iter().map(|segment| segment.to_ascii_lowercase()).collect()
 }

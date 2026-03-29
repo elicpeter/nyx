@@ -1350,6 +1350,62 @@ mod tests {
     }
 
     #[test]
+    fn classify_javascript_koa_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Koa],
+        };
+        let extras = javascript::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("javascript", "ctx.query", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("javascript", "ctx.cookies.get", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("javascript", "ctx.body", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("javascript", "ctx.redirect", Some(&extras)),
+            Some(DataLabel::Sink(Cap::SSRF)),
+        );
+
+        let empty = javascript::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("javascript", "ctx.query", Some(&empty)), None);
+    }
+
+    #[test]
+    fn classify_typescript_fastify_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Fastify],
+        };
+        let extras = typescript::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("typescript", "request.query", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("typescript", "reply.send", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("typescript", "reply.redirect", Some(&extras)),
+            Some(DataLabel::Sink(Cap::SSRF)),
+        );
+
+        let empty = typescript::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("typescript", "request.query", Some(&empty)), None);
+    }
+
+    #[test]
     fn classify_ruby_sinatra_template_sinks() {
         use crate::utils::project::{DetectedFramework, FrameworkContext};
 

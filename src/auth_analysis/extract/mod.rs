@@ -5,8 +5,10 @@ use std::path::Path;
 use tree_sitter::Tree;
 
 pub mod common;
+pub mod django;
 pub mod express;
 pub mod fastify;
+pub mod flask;
 pub mod koa;
 
 pub trait AuthExtractor {
@@ -28,10 +30,12 @@ pub fn extract_authorization_model(
     path: &Path,
     rules: &AuthAnalysisRules,
 ) -> AuthorizationModel {
-    let extractors: [&dyn AuthExtractor; 3] = [
+    let extractors: [&dyn AuthExtractor; 5] = [
         &express::ExpressExtractor,
         &koa::KoaExtractor,
         &fastify::FastifyExtractor,
+        &flask::FlaskExtractor,
+        &django::DjangoExtractor,
     ];
     let mut model = AuthorizationModel::default();
 
