@@ -78,6 +78,26 @@ pub fn triage_file_path(scan_root: &Path) -> std::path::PathBuf {
     scan_root.join(".nyx").join("triage.json")
 }
 
+/// Compute and validate the triage file path for a given scan root.
+///
+/// This ensures that the resulting path stays within the provided `scan_root`
+/// to avoid writing outside the intended project directory if `scan_root`
+/// is misconfigured or attacker-controlled.
+fn validated_triage_file_path(scan_root: &Path) -> Result<std::path::PathBuf, String> {
+    // Canonicalize the root to eliminate `.` / `..` components and follow symlinks.
+    let root_canon = scan_root
+        .canonicalize()
+        .map_err(|e| format!("failed to canonicalize scan root: {e}"))?;
+
+    let triage_path = triage_file_path(&root_canon);
+
+    if !triage_path.starts_with(&root_canon) {
+        return Err("triage file path escapes scan root".to_string());
+    }
+
+    Ok(triage_path)
+}
+
 /// Load triage decisions from `.nyx/triage.json`.
 /// Returns None if the file doesn't exist.
 pub fn load_triage_file(scan_root: &Path) -> Option<TriageFile> {
@@ -85,21 +105,21 @@ pub fn load_triage_file(scan_root: &Path) -> Option<TriageFile> {
 }
 
 pub fn load_triage_file_checked(scan_root: &Path) -> Result<Option<TriageFile>, String> {
-    let path = triage_file_path(scan_root);
+    let path = validated_triage_file_path(scan_root)?;
     if !path.exists() {
         return Ok(None);
     }
 
     let content = read_bounded_text_file(&path, MAX_TRIAGE_FILE_BYTES)?;
-    let parsed =
-        serde_json::from_str(&content).map_err(|e| format!("failed to parse triage file: {e}"))?;
+    let parsed = serde_json::from_str(&content)
+        .map_err(|e| format!("failed to parse triage file: {e}"))?;
     Ok(Some(parsed))
 }
 
 /// Save triage decisions to `.nyx/triage.json`.
 /// Creates the `.nyx` directory if it doesn't exist.
 pub fn save_triage_file(scan_root: &Path, file: &TriageFile) -> Result<(), String> {
-    let path = triage_file_path(scan_root);
+    let path = validated_triage_file_path(scan_root)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create .nyx directory: {e}"))?;
