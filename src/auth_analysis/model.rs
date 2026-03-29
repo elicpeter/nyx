@@ -12,6 +12,9 @@ pub enum Framework {
     Spring,
     Rails,
     Sinatra,
+    Axum,
+    ActixWeb,
+    Rocket,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

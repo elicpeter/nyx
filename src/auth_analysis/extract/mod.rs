@@ -4,6 +4,8 @@ use crate::utils::project::FrameworkContext;
 use std::path::Path;
 use tree_sitter::Tree;
 
+pub mod actix_web;
+pub mod axum;
 pub mod common;
 pub mod django;
 pub mod echo;
@@ -13,6 +15,7 @@ pub mod flask;
 pub mod gin;
 pub mod koa;
 pub mod rails;
+pub mod rocket;
 pub mod sinatra;
 pub mod spring;
 
@@ -35,7 +38,7 @@ pub fn extract_authorization_model(
     path: &Path,
     rules: &AuthAnalysisRules,
 ) -> AuthorizationModel {
-    let extractors: [&dyn AuthExtractor; 10] = [
+    let extractors: [&dyn AuthExtractor; 13] = [
         &express::ExpressExtractor,
         &koa::KoaExtractor,
         &fastify::FastifyExtractor,
@@ -46,6 +49,9 @@ pub fn extract_authorization_model(
         &spring::SpringExtractor,
         &rails::RailsExtractor,
         &sinatra::SinatraExtractor,
+        &axum::AxumExtractor,
+        &actix_web::ActixWebExtractor,
+        &rocket::RocketExtractor,
     ];
     let mut model = AuthorizationModel::default();
 

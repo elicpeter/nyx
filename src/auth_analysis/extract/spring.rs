@@ -122,7 +122,10 @@ fn maybe_collect_controller(
                 framework: Framework::Spring,
                 method: spec.method,
                 path: join_paths(&class_path, &spec.path),
-                middleware: middleware_calls.iter().map(|call| call.name.clone()).collect(),
+                middleware: middleware_calls
+                    .iter()
+                    .map(|call| call.name.clone())
+                    .collect(),
                 handler_span,
                 handler_params,
                 file: path.to_path_buf(),

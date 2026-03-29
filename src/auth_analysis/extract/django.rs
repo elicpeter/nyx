@@ -1,7 +1,7 @@
 use super::AuthExtractor;
 use super::common::{
-    auth_check_from_call_site, build_function_unit, call_site_from_node, decorated_definition_child,
-    member_chain, named_children, span, string_literal_value, text,
+    auth_check_from_call_site, build_function_unit, call_site_from_node,
+    decorated_definition_child, member_chain, named_children, span, string_literal_value, text,
 };
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name};
 use crate::auth_analysis::extract::common::{attach_route_handler, collect_top_level_units};
@@ -79,7 +79,10 @@ fn maybe_collect_django_path(
         return;
     };
     let args = named_children(arguments);
-    let Some(route_path) = args.first().and_then(|arg| string_literal_value(*arg, bytes)) else {
+    let Some(route_path) = args
+        .first()
+        .and_then(|arg| string_literal_value(*arg, bytes))
+    else {
         return;
     };
     let Some(handler_expr) = args.get(1).copied() else {
@@ -87,9 +90,7 @@ fn maybe_collect_django_path(
     };
 
     if let Some(class_name) = as_view_class_name(handler_expr, bytes) {
-        collect_class_based_routes(
-            root, &class_name, &route_path, bytes, path, rules, model,
-        );
+        collect_class_based_routes(root, &class_name, &route_path, bytes, path, rules, model);
         return;
     }
 
@@ -105,7 +106,13 @@ fn maybe_collect_django_path(
     };
 
     let middleware_calls = function_view_middleware(root, handler_expr, bytes);
-    inject_middleware_auth(model, handler.unit_idx, handler.line, &middleware_calls, rules);
+    inject_middleware_auth(
+        model,
+        handler.unit_idx,
+        handler.line,
+        &middleware_calls,
+        rules,
+    );
     let middleware = middleware_calls
         .iter()
         .map(|call| call.name.clone())
@@ -185,11 +192,12 @@ fn collect_class_based_routes(
     };
 
     for child in named_children(body) {
-        let method_node = if child.kind() == "function_definition" || child.kind() == "decorated_definition" {
-            Some(child)
-        } else {
-            None
-        };
+        let method_node =
+            if child.kind() == "function_definition" || child.kind() == "decorated_definition" {
+                Some(child)
+            } else {
+                None
+            };
         let Some(method_node) = method_node else {
             continue;
         };
@@ -353,7 +361,9 @@ fn function_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
     } else {
         node
     };
-    definition.child_by_field_name("name").map(|name| text(name, bytes))
+    definition
+        .child_by_field_name("name")
+        .map(|name| text(name, bytes))
 }
 
 fn as_view_class_name(handler_expr: Node<'_>, bytes: &[u8]) -> Option<String> {

@@ -111,11 +111,7 @@ fn maybe_collect_group_binding(
     );
 }
 
-fn maybe_collect_group_use(
-    node: Node<'_>,
-    bytes: &[u8],
-    groups: &mut HashMap<String, GroupSpec>,
-) {
+fn maybe_collect_group_use(node: Node<'_>, bytes: &[u8], groups: &mut HashMap<String, GroupSpec>) {
     let Some(function) = node.child_by_field_name("function") else {
         return;
     };

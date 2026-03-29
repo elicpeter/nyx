@@ -63,10 +63,7 @@ fn check_admin_routes(model: &AuthorizationModel, rules: &AuthAnalysisRules) -> 
     findings
 }
 
-fn check_ownership_gaps(
-    model: &AuthorizationModel,
-    rules: &AuthAnalysisRules,
-) -> Vec<AuthFinding> {
+fn check_ownership_gaps(model: &AuthorizationModel, rules: &AuthAnalysisRules) -> Vec<AuthFinding> {
     let mut findings = Vec::new();
 
     for unit in &model.units {

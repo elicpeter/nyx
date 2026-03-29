@@ -85,6 +85,13 @@ fn auth_analysis_go_java_frameworks_integration() {
 }
 
 #[test]
+fn auth_analysis_rust_frameworks_integration() {
+    let dir = fixture_path("auth_analysis_rust_frameworks_integration");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
 fn flask_app() {
     let dir = fixture_path("flask_app");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);

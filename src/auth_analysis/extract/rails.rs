@@ -3,7 +3,7 @@ use super::common::{
     auth_check_from_call_site, build_function_unit, call_name, call_site_from_node, function_name,
     named_children, span, text,
 };
-use crate::auth_analysis::config::{matches_name, strip_quotes, AuthAnalysisRules};
+use crate::auth_analysis::config::{AuthAnalysisRules, matches_name, strip_quotes};
 use crate::auth_analysis::model::{
     AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
 };
@@ -94,7 +94,11 @@ fn maybe_collect_controller(
     };
 
     let mut controller_namespace = namespace.to_vec();
-    controller_namespace.extend(name_segments[..name_segments.len().saturating_sub(1)].iter().cloned());
+    controller_namespace.extend(
+        name_segments[..name_segments.len().saturating_sub(1)]
+            .iter()
+            .cloned(),
+    );
     let controller_segment = underscore_segment(class_name.trim_end_matches("Controller"));
     let filter_directives = class_filter_directives(body, bytes);
     let controller_name = format!(
@@ -150,7 +154,10 @@ fn maybe_collect_controller(
             framework: Framework::Rails,
             method: infer_action_method(&action_name),
             path: route_path,
-            middleware: middleware_calls.iter().map(|call| call.name.clone()).collect(),
+            middleware: middleware_calls
+                .iter()
+                .map(|call| call.name.clone())
+                .collect(),
             handler_span,
             handler_params,
             file: path.to_path_buf(),
@@ -225,7 +232,9 @@ fn parse_filter_directive(node: Node<'_>, bytes: &[u8], skip: bool) -> Vec<Filte
 fn filter_calls_from_arg(node: Node<'_>, bytes: &[u8]) -> Vec<CallSite> {
     match node.kind() {
         "simple_symbol" | "hash_key_symbol" | "identifier" => vec![CallSite {
-            name: strip_quotes(&text(node, bytes)).trim_start_matches(':').to_string(),
+            name: strip_quotes(&text(node, bytes))
+                .trim_start_matches(':')
+                .to_string(),
             args: Vec::new(),
             span: span(node),
         }],
@@ -252,7 +261,10 @@ fn applicable_filters(filters: &[FilterDirective], action: &str) -> Vec<CallSite
         }
         if filter.skip {
             middleware.retain(|existing: &CallSite| existing.name != filter.call.name);
-        } else if !middleware.iter().any(|existing: &CallSite| existing.name == filter.call.name) {
+        } else if !middleware
+            .iter()
+            .any(|existing: &CallSite| existing.name == filter.call.name)
+        {
             middleware.push(filter.call.clone());
         }
     }

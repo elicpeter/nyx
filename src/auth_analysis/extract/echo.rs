@@ -110,11 +110,7 @@ fn maybe_collect_group_binding(
     );
 }
 
-fn maybe_collect_group_use(
-    node: Node<'_>,
-    bytes: &[u8],
-    groups: &mut HashMap<String, GroupSpec>,
-) {
+fn maybe_collect_group_use(node: Node<'_>, bytes: &[u8], groups: &mut HashMap<String, GroupSpec>) {
     let Some(function) = node.child_by_field_name("function") else {
         return;
     };
@@ -163,7 +159,11 @@ fn maybe_collect_route(
     let Some(route_path) = string_literal_value(path_node, bytes) else {
         return;
     };
-    let Some(handler_expr) = args.get(1).copied().filter(|arg| is_handler_reference(*arg)) else {
+    let Some(handler_expr) = args
+        .get(1)
+        .copied()
+        .filter(|arg| is_handler_reference(*arg))
+    else {
         return;
     };
     let Some(handler) = attach_route_handler(

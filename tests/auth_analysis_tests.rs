@@ -29,7 +29,8 @@ fn auth_diags_for(filename: &str) -> Vec<&'static Diag> {
                     || d.id.starts_with("py.auth.")
                     || d.id.starts_with("rb.auth.")
                     || d.id.starts_with("go.auth.")
-                    || d.id.starts_with("java.auth."))
+                    || d.id.starts_with("java.auth.")
+                    || d.id.starts_with("rs.auth."))
         })
         .collect()
 }
@@ -569,6 +570,70 @@ fn spring_scoped_read_without_membership_check() {
 }
 
 #[test]
+fn axum_admin_route_missing_admin_check() {
+    assert_has(
+        "axum_admin_route_missing.rs",
+        "rs.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn axum_admin_route_with_admin_guard_is_clean() {
+    assert_absent(
+        "axum_admin_route_clean.rs",
+        "rs.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn axum_partial_batch_authorization_detected() {
+    assert_has(
+        "axum_partial_batch.rs",
+        "rs.auth.partial_batch_authorization",
+    );
+}
+
+#[test]
+fn actix_scoped_write_without_membership_check() {
+    assert_has(
+        "actix_scoped_write_missing.rs",
+        "rs.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn actix_admin_route_with_admin_guard_is_clean() {
+    assert_absent(
+        "actix_admin_route_clean.rs",
+        "rs.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn rocket_admin_route_with_guard_is_clean() {
+    assert_absent(
+        "rocket_admin_route_clean.rs",
+        "rs.auth.admin_route_missing_admin_check",
+    );
+}
+
+#[test]
+fn rocket_stale_session_backed_mutation() {
+    assert_has(
+        "rocket_stale_session_mutation.rs",
+        "rs.auth.stale_authorization",
+    );
+}
+
+#[test]
+fn rocket_token_flow_missing_recipient_check() {
+    assert_has(
+        "rocket_token_missing_recipient.rs",
+        "rs.auth.token_override_without_validation",
+    );
+}
+
+#[test]
 fn auth_analysis_runs_in_ast_mode() {
     let cfg = common::test_config(AnalysisMode::Ast);
     let diags = nyx_scanner::scan_no_index(&auth_fixture_dir(), &cfg).expect("scan should succeed");
@@ -642,6 +707,13 @@ fn auth_analysis_runs_in_ast_mode() {
         }),
         "expected AST mode to emit Spring java.auth findings"
     );
+    assert!(
+        diags.iter().any(|diag| {
+            diag.path.contains("actix_scoped_write_missing.rs")
+                && diag.id == "rs.auth.missing_ownership_check"
+        }),
+        "expected AST mode to emit Rust rs.auth findings"
+    );
 }
 
 #[test]
@@ -667,6 +739,10 @@ fn auth_analysis_does_not_run_in_cfg_mode() {
     assert!(
         diags.iter().all(|diag| !diag.id.starts_with("java.auth.")),
         "CFG mode should not emit java.auth findings"
+    );
+    assert!(
+        diags.iter().all(|diag| !diag.id.starts_with("rs.auth.")),
+        "CFG mode should not emit rs.auth findings"
     );
     assert!(
         diags
@@ -721,5 +797,11 @@ fn auth_analysis_does_not_run_in_cfg_mode() {
             .iter()
             .all(|diag| !diag.path.contains("spring_scoped_read_missing.java")),
         "CFG mode should not emit Spring auth-analysis findings"
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|diag| !diag.path.contains("actix_scoped_write_missing.rs")),
+        "CFG mode should not emit Rust auth-analysis findings"
     );
 }

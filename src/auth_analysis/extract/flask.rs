@@ -4,9 +4,7 @@ use super::common::{
     string_literal_value, text,
 };
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name};
-use crate::auth_analysis::extract::common::{
-    collect_top_level_units, decorated_definition_child,
-};
+use crate::auth_analysis::extract::common::{collect_top_level_units, decorated_definition_child};
 use crate::auth_analysis::model::{
     AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
 };
@@ -111,7 +109,13 @@ fn maybe_collect_flask_route(
         ) else {
             continue;
         };
-        inject_middleware_auth(model, handler.unit_idx, handler.line, &middleware_calls, rules);
+        inject_middleware_auth(
+            model,
+            handler.unit_idx,
+            handler.line,
+            &middleware_calls,
+            rules,
+        );
 
         model.routes.push(RouteRegistration {
             framework: Framework::Flask,
@@ -173,7 +177,8 @@ fn parse_methods_keyword(arguments: Node<'_>, bytes: &[u8]) -> Option<Vec<HttpMe
     let value = keyword_argument_value(arguments, bytes, "methods")?;
     let mut methods = Vec::new();
     for child in named_children(value) {
-        if let Some(method) = string_literal_value(child, bytes).and_then(|text| http_method(&text)) {
+        if let Some(method) = string_literal_value(child, bytes).and_then(|text| http_method(&text))
+        {
             methods.push(method);
         }
     }

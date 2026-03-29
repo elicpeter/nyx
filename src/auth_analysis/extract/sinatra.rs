@@ -3,7 +3,7 @@ use super::common::{
     auth_check_from_call_site, build_function_unit, call_name, call_site_from_node,
     collect_top_level_units, named_children, span, string_literal_value,
 };
-use crate::auth_analysis::config::{matches_name, AuthAnalysisRules};
+use crate::auth_analysis::config::{AuthAnalysisRules, matches_name};
 use crate::auth_analysis::model::{
     AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
 };
@@ -93,7 +93,10 @@ fn maybe_collect_route(
         return;
     };
     let args = named_children(arguments);
-    let Some(route_path) = args.first().and_then(|arg| string_literal_value(*arg, bytes)) else {
+    let Some(route_path) = args
+        .first()
+        .and_then(|arg| string_literal_value(*arg, bytes))
+    else {
         return;
     };
     let Some(block) = child_block(node) else {
@@ -122,7 +125,10 @@ fn maybe_collect_route(
         framework: Framework::Sinatra,
         method,
         path: route_path,
-        middleware: before_filters.iter().map(|call| call.name.clone()).collect(),
+        middleware: before_filters
+            .iter()
+            .map(|call| call.name.clone())
+            .collect(),
         handler_span,
         handler_params,
         file: path.to_path_buf(),

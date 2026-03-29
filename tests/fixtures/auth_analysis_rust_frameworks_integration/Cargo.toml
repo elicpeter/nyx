@@ -1,0 +1,9 @@
+[package]
+name = "auth-analysis-rust-frameworks"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+actix-web = "4"
+rocket = "0.5"
