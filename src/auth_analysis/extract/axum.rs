@@ -157,8 +157,7 @@ fn parse_method_router<'tree>(node: Node<'tree>, bytes: &[u8]) -> Option<MethodR
     let function = node.child_by_field_name("function")?;
     let receiver = function
         .child_by_field_name("object")
-        .or_else(|| function.child_by_field_name("argument"))
-        ?;
+        .or_else(|| function.child_by_field_name("argument"))?;
     let mut spec = parse_method_router(receiver, bytes)?;
     match last.as_str() {
         "layer" | "route_layer" => {
