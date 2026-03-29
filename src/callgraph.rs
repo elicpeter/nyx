@@ -213,24 +213,25 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                     // If the callee was qualified (e.g. "env::var"), prefer candidates
                     // whose namespace contains the qualifier prefix.
                     if qualified != leaf {
-                        let qualifier = &qualified[..qualified.len() - leaf.len()]
-                            .trim_end_matches([':', '.']);
+                        let qualifier =
+                            &qualified[..qualified.len() - leaf.len()].trim_end_matches([':', '.']);
                         let narrowed: Vec<_> = candidates
                             .iter()
                             .filter(|k| k.namespace.contains(qualifier))
                             .cloned()
                             .collect();
                         if narrowed.len() == 1
-                            && let Some(&target_node) = index.get(&narrowed[0]) {
-                                graph.add_edge(
-                                    caller_node,
-                                    target_node,
-                                    CallEdge {
-                                        call_site: raw_callee.clone(),
-                                    },
-                                );
-                                continue;
-                            }
+                            && let Some(&target_node) = index.get(&narrowed[0])
+                        {
+                            graph.add_edge(
+                                caller_node,
+                                target_node,
+                                CallEdge {
+                                    call_site: raw_callee.clone(),
+                                },
+                            );
+                            continue;
+                        }
                     }
                     unresolved_ambiguous.push(AmbiguousCallee {
                         caller: caller_key.clone(),

@@ -481,19 +481,20 @@ pub fn collect_module_aliases(
     for block in &body.blocks {
         for inst in &block.body {
             if let SsaOp::Call { callee, args, .. } = &inst.op
-                && (callee == "require" || callee.ends_with(".require")) {
-                    // Check if the first argument is a known module string constant.
-                    if let Some(first_arg) = args.first()
-                        && let Some(&first_val) = first_arg.first()
-                            && let Some(ConstLattice::Str(module_name)) =
-                                const_values.get(&first_val)
-                                && KNOWN_MODULES.contains(&module_name.as_str()) {
-                                    aliases
-                                        .entry(inst.value)
-                                        .or_default()
-                                        .push(module_name.clone());
-                                }
+                && (callee == "require" || callee.ends_with(".require"))
+            {
+                // Check if the first argument is a known module string constant.
+                if let Some(first_arg) = args.first()
+                    && let Some(&first_val) = first_arg.first()
+                    && let Some(ConstLattice::Str(module_name)) = const_values.get(&first_val)
+                    && KNOWN_MODULES.contains(&module_name.as_str())
+                {
+                    aliases
+                        .entry(inst.value)
+                        .or_default()
+                        .push(module_name.clone());
                 }
+            }
         }
     }
 
@@ -536,15 +537,16 @@ pub fn collect_module_aliases(
             for inst in &block.body {
                 if let SsaOp::Assign(uses) = &inst.op
                     && uses.len() == 1
-                        && let Some(src_aliases) = aliases.get(&uses[0]).cloned() {
-                            let entry = aliases.entry(inst.value).or_default();
-                            for a in &src_aliases {
-                                if !entry.contains(a) {
-                                    entry.push(a.clone());
-                                    changed = true;
-                                }
-                            }
+                    && let Some(src_aliases) = aliases.get(&uses[0]).cloned()
+                {
+                    let entry = aliases.entry(inst.value).or_default();
+                    for a in &src_aliases {
+                        if !entry.contains(a) {
+                            entry.push(a.clone());
+                            changed = true;
                         }
+                    }
+                }
             }
         }
     }

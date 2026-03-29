@@ -678,14 +678,14 @@ impl<'a> ParsedFile<'a> {
                 .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SSRF)));
             if sink_has_ssrf
                 && let Some(ref callee) = sink_info.call.callee
-                    && (callee.ends_with("redirect") || callee.ends_with("Redirect"))
-                        && crate::cfg_analysis::guards::has_redirect_path_prefix(
-                            self.source.bytes,
-                            sink_info.ast.span,
-                        )
-                    {
-                        continue;
-                    }
+                && (callee.ends_with("redirect") || callee.ends_with("Redirect"))
+                && crate::cfg_analysis::guards::has_redirect_path_prefix(
+                    self.source.bytes,
+                    sink_info.ast.span,
+                )
+            {
+                continue;
+            }
 
             out.push(build_taint_diag(
                 finding,

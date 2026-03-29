@@ -5618,7 +5618,7 @@ mod cross_file_tests {
     use super::*;
     use crate::cfg::{AstMeta, BinOp, CallMeta, EdgeKind, NodeInfo, StmtKind, TaintMeta};
     use crate::labels::DataLabel;
-    
+
     use petgraph::prelude::*;
     use smallvec::smallvec;
 
