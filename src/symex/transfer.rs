@@ -944,7 +944,7 @@ mod tests {
     use crate::cfg::{BinOp, Cfg, NodeInfo, StmtKind};
     use crate::ssa::ir::{BlockId, SsaBlock, SsaInst, SsaValue, Terminator};
     use petgraph::graph::NodeIndex;
-    use smallvec::{SmallVec, smallvec};
+    use smallvec::smallvec;
 
     /// Create a minimal Cfg with a single node that has the given bin_op.
     fn cfg_with_node(bin_op: Option<BinOp>) -> (Cfg, NodeIndex) {

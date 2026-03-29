@@ -195,7 +195,7 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cfg::{AstMeta, CallMeta, EdgeKind, NodeInfo, StmtKind, TaintMeta};
+    use crate::cfg::{CallMeta, EdgeKind, NodeInfo, StmtKind, TaintMeta};
     use crate::cfg_analysis::rules;
     use crate::state::domain::ResourceLifecycle;
     use crate::state::symbol::SymbolInterner;

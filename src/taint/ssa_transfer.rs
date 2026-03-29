@@ -5618,7 +5618,7 @@ mod cross_file_tests {
     use super::*;
     use crate::cfg::{AstMeta, BinOp, CallMeta, EdgeKind, NodeInfo, StmtKind, TaintMeta};
     use crate::labels::DataLabel;
-    use crate::ssa::ir::*;
+    
     use petgraph::prelude::*;
     use smallvec::smallvec;
 
@@ -5780,7 +5780,7 @@ mod cross_file_tests {
 #[cfg(test)]
 mod binding_key_tests {
     use super::*;
-    use crate::taint::domain::{TaintOrigin, VarTaint};
+    use crate::taint::domain::VarTaint;
     use smallvec::smallvec;
     use std::collections::HashMap;
 
