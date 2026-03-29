@@ -78,6 +78,20 @@ pub fn triage_file_path(scan_root: &Path) -> std::path::PathBuf {
     scan_root.join(".nyx").join("triage.json")
 }
 
+/// Path to the triage sync file, ensuring it stays within the given scan root.
+fn triage_file_path_checked(scan_root: &Path) -> Result<std::path::PathBuf, String> {
+    // Canonicalize the scan root to avoid traversal via symlinks or relative components.
+    let canonical_root = scan_root
+        .canonicalize()
+        .map_err(|e| format!("failed to canonicalize scan root: {e}"))?;
+    let path = canonical_root.join(".nyx").join("triage.json");
+    // Ensure the resulting path is still within the (canonical) scan root directory.
+    if !path.starts_with(&canonical_root) {
+        return Err("triage file path escapes scan root".to_string());
+    }
+    Ok(path)
+}
+
 /// Compute and validate the triage file path for a given scan root.
 ///
 /// This ensures that the resulting path stays within the provided `scan_root`
@@ -85,21 +99,21 @@ pub fn triage_file_path(scan_root: &Path) -> std::path::PathBuf {
 /// is misconfigured or attacker-controlled.
 fn validated_triage_file_path(scan_root: &Path) -> Result<std::path::PathBuf, String> {
     // Canonicalize the root to eliminate `.` / `..` components and follow symlinks.
-    let root_canon = scan_root
+    let path = triage_file_path_checked(scan_root)?;
         .canonicalize()
         .map_err(|e| format!("failed to canonicalize scan root: {e}"))?;
 
     let triage_path = triage_file_path(&root_canon);
 
-    if !triage_path.starts_with(&root_canon) {
-        return Err("triage file path escapes scan root".to_string());
+    let parsed = serde_json::from_str(&content)
+        .map_err(|e| format!("failed to parse triage file: {e}"))?;
     }
 
     Ok(triage_path)
 }
 
 /// Load triage decisions from `.nyx/triage.json`.
-/// Returns None if the file doesn't exist.
+    let path = triage_file_path_checked(scan_root)?;
 pub fn load_triage_file(scan_root: &Path) -> Option<TriageFile> {
     load_triage_file_checked(scan_root).ok().flatten()
 }
