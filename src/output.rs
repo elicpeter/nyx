@@ -204,3 +204,345 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
         }]
     })
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::scan::{Diag, Location, RollupData};
+    use crate::patterns::{FindingCategory, Severity};
+
+    fn make_diag(id: &str, severity: Severity) -> Diag {
+        Diag {
+            path: "/scan_root/src/main.rs".into(),
+            line: 10,
+            col: 5,
+            severity,
+            id: id.into(),
+            category: FindingCategory::Security,
+            path_validated: false,
+            guard_kind: None,
+            message: None,
+            labels: vec![],
+            confidence: None,
+            evidence: None,
+            rank_score: None,
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+            rollup: None,
+        }
+    }
+
+    // ── severity_to_level ──────────────────────────────────────────────────
+
+    #[test]
+    fn severity_to_level_high_is_error() {
+        assert_eq!(severity_to_level(Severity::High), "error");
+    }
+
+    #[test]
+    fn severity_to_level_medium_is_warning() {
+        assert_eq!(severity_to_level(Severity::Medium), "warning");
+    }
+
+    #[test]
+    fn severity_to_level_low_is_note() {
+        assert_eq!(severity_to_level(Severity::Low), "note");
+    }
+
+    // ── cfg_rule_description ───────────────────────────────────────────────
+
+    #[test]
+    fn cfg_rule_description_known_ids() {
+        let cases = [
+            ("cfg-unguarded-sink", "without prior guard"),
+            ("cfg-unreachable-sink", "unreachable"),
+            ("cfg-auth-gap", "authentication"),
+            ("cfg-error-fallthrough", "dangerous call follows"),
+            ("cfg-resource-leak", "not released"),
+            ("cfg-lock-not-released", "Lock acquired"),
+            (
+                "state-use-after-close",
+                "after its resource handle was closed",
+            ),
+            ("state-double-close", "more than once"),
+            ("state-resource-leak", "never closed"),
+            ("state-resource-leak-possible", "may not be closed"),
+            ("state-unauthed-access", "without authentication"),
+        ];
+        for (id, fragment) in cases {
+            let desc = cfg_rule_description(id).unwrap_or_else(|| panic!("no desc for {id}"));
+            assert!(
+                desc.contains(fragment),
+                "Description for '{id}' should contain '{fragment}', got: {desc}"
+            );
+        }
+    }
+
+    #[test]
+    fn cfg_rule_description_unknown_id_returns_none() {
+        assert!(cfg_rule_description("unknown-rule-xyz").is_none());
+        assert!(cfg_rule_description("").is_none());
+    }
+
+    // ── rule_description ──────────────────────────────────────────────────
+
+    #[test]
+    fn rule_description_taint_prefix_returns_fallback() {
+        // Any taint-* ID without a registered pattern description falls back
+        // to the hardcoded message.
+        let desc = rule_description("taint-unsanitised-flow");
+        assert!(
+            desc.contains("Unsanitised"),
+            "expected taint fallback, got: {desc}"
+        );
+    }
+
+    #[test]
+    fn rule_description_taint_with_suffix_normalises_to_base() {
+        // IDs like "taint-unsanitised-flow:foo.rs:42" are stripped to base.
+        let desc = rule_description("taint-unsanitised-flow:foo.rs:42");
+        assert!(
+            desc.contains("Unsanitised"),
+            "expected taint fallback, got: {desc}"
+        );
+    }
+
+    #[test]
+    fn rule_description_cfg_known_id_returns_description() {
+        let desc = rule_description("cfg-auth-gap");
+        assert!(
+            desc.contains("authentication"),
+            "expected cfg-auth-gap description, got: {desc}"
+        );
+    }
+
+    #[test]
+    fn rule_description_unknown_returns_id_itself() {
+        let id = "totally-unknown-rule-zzzz";
+        let desc = rule_description(id);
+        assert_eq!(desc, id, "unknown rule ID should be returned as-is");
+    }
+
+    // ── build_sarif ───────────────────────────────────────────────────────
+
+    #[test]
+    fn build_sarif_empty_diags_produces_valid_structure() {
+        let sarif = build_sarif(&[], Path::new("/scan_root"));
+        assert_eq!(sarif["version"], "2.1.0");
+        assert!(sarif["runs"].is_array());
+        let run = &sarif["runs"][0];
+        assert_eq!(run["tool"]["driver"]["name"], "nyx");
+        assert_eq!(run["results"].as_array().unwrap().len(), 0);
+        assert_eq!(run["tool"]["driver"]["rules"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn build_sarif_single_diag_has_correct_fields() {
+        let diag = make_diag("rs.security.sql-injection", Severity::High);
+        let sarif = build_sarif(&[diag], Path::new("/scan_root"));
+
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+
+        let result = &results[0];
+        assert_eq!(result["ruleId"], "rs.security.sql-injection");
+        assert_eq!(result["level"], "error");
+
+        let loc = &result["locations"][0]["physicalLocation"];
+        assert_eq!(loc["region"]["startLine"], 10);
+        assert_eq!(loc["region"]["startColumn"], 5);
+        // Path should be relative to scan_root
+        let uri = loc["artifactLocation"]["uri"].as_str().unwrap();
+        assert!(
+            !uri.starts_with("/scan_root"),
+            "URI should be relative, got: {uri}"
+        );
+        assert!(uri.contains("main.rs"));
+    }
+
+    #[test]
+    fn build_sarif_severity_mapping() {
+        let diags = vec![
+            make_diag("rule-high", Severity::High),
+            make_diag("rule-medium", Severity::Medium),
+            make_diag("rule-low", Severity::Low),
+        ];
+        let sarif = build_sarif(&diags, Path::new("/"));
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results[0]["level"], "error");
+        assert_eq!(results[1]["level"], "warning");
+        assert_eq!(results[2]["level"], "note");
+    }
+
+    #[test]
+    fn build_sarif_taint_ids_normalised_to_base() {
+        let mut diag = make_diag("taint-unsanitised-flow", Severity::High);
+        diag.path = "/scan_root/src/main.rs".into();
+        let sarif = build_sarif(&[diag], Path::new("/scan_root"));
+
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        // ruleId should be the base ID, not the suffixed version
+        assert_eq!(results[0]["ruleId"], "taint-unsanitised-flow");
+
+        let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap();
+        // Only one rule entry for the base ID
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0]["id"], "taint-unsanitised-flow");
+    }
+
+    #[test]
+    fn build_sarif_duplicate_rule_ids_deduplicated() {
+        // Two findings with the same rule ID should produce only one rules entry.
+        let d1 = make_diag("rs.security.sqli", Severity::High);
+        let d2 = make_diag("rs.security.sqli", Severity::Medium);
+        let sarif = build_sarif(&[d1, d2], Path::new("/"));
+        let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap();
+        assert_eq!(rules.len(), 1, "duplicate rule IDs should be deduplicated");
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        // Both results reference ruleIndex 0
+        assert_eq!(results[0]["ruleIndex"], 0);
+        assert_eq!(results[1]["ruleIndex"], 0);
+    }
+
+    #[test]
+    fn build_sarif_message_override_from_diag() {
+        let mut diag = make_diag("state-resource-leak", Severity::Medium);
+        diag.message = Some("Custom message from state analysis".into());
+        let sarif = build_sarif(&[diag], Path::new("/scan_root"));
+        let result = &sarif["runs"][0]["results"][0];
+        assert_eq!(
+            result["message"]["text"],
+            "Custom message from state analysis"
+        );
+    }
+
+    #[test]
+    fn build_sarif_uses_rule_description_when_no_message() {
+        let diag = make_diag("cfg-auth-gap", Severity::High);
+        let sarif = build_sarif(&[diag], Path::new("/scan_root"));
+        let result = &sarif["runs"][0]["results"][0];
+        let msg = result["message"]["text"].as_str().unwrap();
+        assert!(
+            msg.contains("authentication"),
+            "should use cfg-auth-gap description, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn build_sarif_rollup_produces_related_locations() {
+        let mut diag = make_diag("rs.quality.unwrap", Severity::Low);
+        diag.rollup = Some(RollupData {
+            count: 3,
+            occurrences: vec![Location { line: 5, col: 1 }, Location { line: 12, col: 3 }],
+        });
+        let sarif = build_sarif(&[diag], Path::new("/scan_root"));
+        let result = &sarif["runs"][0]["results"][0];
+
+        // Properties should include rollup count
+        let props = &result["properties"];
+        assert_eq!(props["rollup"]["count"], 3);
+
+        // relatedLocations should have 2 entries
+        let related = result["relatedLocations"].as_array().unwrap();
+        assert_eq!(related.len(), 2);
+        assert_eq!(related[0]["physicalLocation"]["region"]["startLine"], 5);
+        assert_eq!(related[1]["physicalLocation"]["region"]["startLine"], 12);
+    }
+
+    #[test]
+    fn build_sarif_no_rollup_no_related_locations() {
+        let diag = make_diag("rs.security.sql-injection", Severity::High);
+        let sarif = build_sarif(&[diag], Path::new("/scan_root"));
+        let result = &sarif["runs"][0]["results"][0];
+        // relatedLocations key should not be present when there's no rollup
+        assert!(
+            result.get("relatedLocations").is_none(),
+            "relatedLocations should be absent without rollup"
+        );
+    }
+
+    #[test]
+    fn build_sarif_path_relative_to_scan_root() {
+        let mut diag = make_diag("rule-x", Severity::High);
+        diag.path = "/workspace/src/lib.rs".into();
+        let sarif = build_sarif(&[diag], Path::new("/workspace"));
+        let uri =
+            sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]
+                ["uri"]
+                .as_str()
+                .unwrap();
+        assert_eq!(uri, "src/lib.rs");
+    }
+
+    #[test]
+    fn build_sarif_path_outside_scan_root_kept_as_is() {
+        let mut diag = make_diag("rule-x", Severity::High);
+        diag.path = "/other/place/file.rs".into();
+        let sarif = build_sarif(&[diag], Path::new("/workspace"));
+        let uri =
+            sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]
+                ["uri"]
+                .as_str()
+                .unwrap();
+        assert_eq!(uri, "/other/place/file.rs");
+    }
+
+    #[test]
+    fn build_sarif_confidence_in_properties() {
+        let mut diag = make_diag("rule-conf", Severity::High);
+        diag.confidence = Some(crate::evidence::Confidence::High);
+        let sarif = build_sarif(&[diag], Path::new("/scan_root"));
+        let props = &sarif["runs"][0]["results"][0]["properties"];
+        let conf = props["confidence"].as_str().unwrap();
+        assert_eq!(conf, "High");
+    }
+
+    #[test]
+    fn build_sarif_category_in_properties() {
+        let mut diag = make_diag("rule-cat", Severity::Medium);
+        diag.category = FindingCategory::Reliability;
+        let sarif = build_sarif(&[diag], Path::new("/scan_root"));
+        let props = &sarif["runs"][0]["results"][0]["properties"];
+        assert_eq!(props["category"], "Reliability");
+    }
+
+    #[test]
+    fn build_sarif_schema_and_version_fields_present() {
+        let sarif = build_sarif(&[], Path::new("/"));
+        assert!(
+            sarif["$schema"].as_str().unwrap().contains("sarif"),
+            "schema should be a SARIF schema URL"
+        );
+        assert_eq!(sarif["version"], "2.1.0");
+    }
+
+    #[test]
+    fn build_sarif_multiple_distinct_rules_indexed_in_order() {
+        let d1 = make_diag("rule-alpha", Severity::High);
+        let d2 = make_diag("rule-beta", Severity::Medium);
+        let d3 = make_diag("rule-gamma", Severity::Low);
+        let sarif = build_sarif(&[d1, d2, d3], Path::new("/"));
+        let rules = sarif["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap();
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0]["id"], "rule-alpha");
+        assert_eq!(rules[1]["id"], "rule-beta");
+        assert_eq!(rules[2]["id"], "rule-gamma");
+
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results[0]["ruleIndex"], 0);
+        assert_eq!(results[1]["ruleIndex"], 1);
+        assert_eq!(results[2]["ruleIndex"], 2);
+    }
+}
