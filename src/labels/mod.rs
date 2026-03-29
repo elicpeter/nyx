@@ -452,6 +452,7 @@ pub struct LangAnalysisRules {
     pub extra_labels: Vec<RuntimeLabelRule>,
     pub terminators: Vec<String>,
     pub event_handlers: Vec<String>,
+    pub frameworks: Vec<crate::utils::project::DetectedFramework>,
 }
 
 /// Build `LangAnalysisRules` from a `Config` for a given language slug.
@@ -483,14 +484,18 @@ pub fn build_lang_rules(
     }
 
     // Append framework-conditional rules when frameworks are detected.
-    if let Some(ref fw_ctx) = config.framework_ctx {
+    let frameworks = if let Some(ref fw_ctx) = config.framework_ctx {
         extra_labels.extend(framework_rules_for_lang(lang_slug, fw_ctx));
-    }
+        fw_ctx.frameworks.clone()
+    } else {
+        Vec::new()
+    };
 
     LangAnalysisRules {
         extra_labels,
         terminators,
         event_handlers,
+        frameworks,
     }
 }
 
@@ -1427,5 +1432,81 @@ mod tests {
         // Without Sinatra, erb should not match
         let empty = ruby::framework_rules(&FrameworkContext::default());
         assert_eq!(classify("ruby", "erb", Some(&empty)), None);
+    }
+
+    #[test]
+    fn classify_rust_axum_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Axum],
+        };
+        let extras = rust::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("rust", "Path<String>", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "HeaderMap.get(\"x-user\")", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "Html(name)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("rust", "Redirect::to(next)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::SSRF)),
+        );
+
+        let empty = rust::framework_rules(&FrameworkContext::default());
+        assert_eq!(classify("rust", "Html(name)", Some(&empty)), None);
+    }
+
+    #[test]
+    fn classify_rust_actix_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::ActixWeb],
+        };
+        let extras = rust::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("rust", "web::Json<String>", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "HttpRequest.match_info()", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "HttpResponse.body(payload)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+    }
+
+    #[test]
+    fn classify_rust_rocket_runtime_rules() {
+        use crate::utils::project::{DetectedFramework, FrameworkContext};
+
+        let ctx = FrameworkContext {
+            frameworks: vec![DetectedFramework::Rocket],
+        };
+        let extras = rust::framework_rules(&ctx);
+
+        assert_eq!(
+            classify("rust", "CookieJar.get_private(\"sid\")", Some(&extras)),
+            Some(DataLabel::Source(Cap::all())),
+        );
+        assert_eq!(
+            classify("rust", "content::RawHtml(name)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::HTML_ESCAPE)),
+        );
+        assert_eq!(
+            classify("rust", "Redirect::to(next)", Some(&extras)),
+            Some(DataLabel::Sink(Cap::SSRF)),
+        );
     }
 }

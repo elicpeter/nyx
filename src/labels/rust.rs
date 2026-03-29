@@ -1,5 +1,5 @@
 use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule};
-use crate::utils::project::FrameworkContext;
+use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
 pub static RULES: &[LabelRule] = &[
@@ -131,12 +131,95 @@ pub static PARAM_CONFIG: ParamConfig = ParamConfig {
 };
 
 /// Framework-conditional rules for Rust.
-///
-/// Rust web framework source detection requires parameter-type analysis
-/// (e.g. `web::Json<T>` in actix-web), which is not yet supported.
-/// Sink detection for chained builders like `HttpResponse::Ok().body()`
-/// also requires deeper receiver resolution. This scaffolding exists
-/// for future expansion once those capabilities are added.
-pub fn framework_rules(_ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
-    Vec::new()
+pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
+    let mut rules = Vec::new();
+
+    if ctx.has(DetectedFramework::Axum) {
+        rules.push(RuntimeLabelRule {
+            matchers: vec![
+                "Path".into(),
+                "Query".into(),
+                "Json".into(),
+                "Form".into(),
+                "Multipart".into(),
+                "HeaderMap".into(),
+                "HeaderMap.get".into(),
+                "Request.headers".into(),
+                "Request.uri".into(),
+                "headers.get".into(),
+            ],
+            label: DataLabel::Source(Cap::all()),
+            case_sensitive: true,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["Html".into(), "IntoResponse".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: true,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["Redirect::to".into()],
+            label: DataLabel::Sink(Cap::SSRF),
+            case_sensitive: true,
+        });
+    }
+
+    if ctx.has(DetectedFramework::ActixWeb) {
+        rules.push(RuntimeLabelRule {
+            matchers: vec![
+                "web::Path".into(),
+                "web::Query".into(),
+                "web::Json".into(),
+                "web::Form".into(),
+                "web::Bytes".into(),
+                "HttpRequest".into(),
+                "HttpRequest.headers".into(),
+                "HttpRequest.cookie".into(),
+                "HttpRequest.match_info".into(),
+                "HttpRequest.query_string".into(),
+            ],
+            label: DataLabel::Source(Cap::all()),
+            case_sensitive: true,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec![
+                "HttpResponse.body".into(),
+                "HttpResponse.json".into(),
+                "HttpResponse.content_type".into(),
+                "body".into(),
+                "json".into(),
+            ],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: true,
+        });
+    }
+
+    if ctx.has(DetectedFramework::Rocket) {
+        rules.push(RuntimeLabelRule {
+            matchers: vec![
+                "Json".into(),
+                "Form".into(),
+                "LenientForm".into(),
+                "TempFile".into(),
+                "CookieJar".into(),
+                "CookieJar.get".into(),
+                "CookieJar.get_private".into(),
+                "Request.headers".into(),
+                "Request.cookies".into(),
+            ],
+            label: DataLabel::Source(Cap::all()),
+            case_sensitive: true,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["RawHtml".into(), "content::RawHtml".into(), "Html".into()],
+            label: DataLabel::Sink(Cap::HTML_ESCAPE),
+            case_sensitive: true,
+        });
+        rules.push(RuntimeLabelRule {
+            matchers: vec!["Redirect::to".into()],
+            label: DataLabel::Sink(Cap::SSRF),
+            case_sensitive: true,
+        });
+    }
+
+    rules
 }

@@ -22,6 +22,13 @@ fn rust_web_app() {
 }
 
 #[test]
+fn rust_framework_rules() {
+    let dir = fixture_path("rust_framework_rules");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
 fn express_app() {
     let dir = fixture_path("express_app");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);

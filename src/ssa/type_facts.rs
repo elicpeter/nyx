@@ -189,6 +189,8 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
             // Use ends_with for exact namespace-qualified matching.
             if callee.ends_with("reqwest::Client::new") || callee.ends_with("reqwest::get") {
                 Some(TypeKind::HttpClient)
+            } else if callee.contains("HttpResponse::") || callee.ends_with("Response::builder") {
+                Some(TypeKind::HttpResponse)
             } else if callee.ends_with("File::open") || callee.ends_with("File::create") {
                 Some(TypeKind::FileHandle)
             } else if callee.ends_with("Url::parse") {

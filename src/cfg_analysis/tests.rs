@@ -896,6 +896,7 @@ fn configured_terminator_stops_flow() {
         extra_labels: vec![],
         terminators: vec!["process.exit".into()],
         event_handlers: vec![],
+        frameworks: vec![],
     };
 
     let mut parser = tree_sitter::Parser::new();
@@ -1003,6 +1004,7 @@ fn config_sanitizer_suppresses_unguarded_sink() {
         }],
         terminators: vec![],
         event_handlers: vec![],
+        frameworks: vec![],
     };
 
     let mut parser = tree_sitter::Parser::new();

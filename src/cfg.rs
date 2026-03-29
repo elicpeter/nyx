@@ -15,7 +15,7 @@ use crate::labels::{
 };
 use crate::summary::FuncSummary;
 use crate::symbol::{FuncKey, Lang};
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use std::collections::{HashMap, HashSet};
 
 /// -------------------------------------------------------------------------
@@ -2476,8 +2476,13 @@ fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> V
                 if let Some(node) = child.child_by_field_name(field) {
                     let mut tmp = Vec::new();
                     collect_idents(node, code, &mut tmp);
-                    if let Some(first) = tmp.into_iter().next() {
-                        names.push(first);
+                    let candidate = if lang == "rust" {
+                        tmp.into_iter().last()
+                    } else {
+                        tmp.into_iter().next()
+                    };
+                    if let Some(name) = candidate {
+                        names.push(name);
                         found = true;
                         break;
                     }
@@ -2510,6 +2515,173 @@ fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> V
         }
     }
     names
+}
+
+fn rust_param_binding_name(param_text: &str) -> Option<String> {
+    let before_colon = param_text.split(':').next().unwrap_or(param_text).trim();
+    let tokens: Vec<&str> = before_colon
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .filter(|token| !token.is_empty() && !matches!(*token, "mut" | "ref"))
+        .collect();
+    tokens.last().map(|token| (*token).to_string())
+}
+
+fn rust_param_type_text(param: Node<'_>, code: &[u8]) -> Option<String> {
+    param
+        .child_by_field_name("type")
+        .and_then(|node| text_of(node, code))
+        .or_else(|| {
+            text_of(param, code).and_then(|text| {
+                text.split_once(':')
+                    .map(|(_, ty)| ty.trim().to_string())
+                    .filter(|ty| !ty.is_empty())
+            })
+        })
+}
+
+fn rust_route_attribute_bindings(func_node: Node<'_>, code: &[u8]) -> Vec<String> {
+    let Some(text) = text_of(func_node, code) else {
+        return Vec::new();
+    };
+    let mut bindings = Vec::new();
+
+    for line in text
+        .lines()
+        .map(str::trim)
+        .take_while(|line| line.starts_with("#["))
+    {
+        if !(line.starts_with("#[get")
+            || line.starts_with("#[post")
+            || line.starts_with("#[put")
+            || line.starts_with("#[delete")
+            || line.starts_with("#[patch"))
+        {
+            continue;
+        }
+
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '<' {
+                let mut token = String::new();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next == '>' {
+                        break;
+                    }
+                    token.push(next);
+                }
+                let token = token.trim();
+                if !token.is_empty() {
+                    bindings.push(token.to_string());
+                }
+            }
+        }
+    }
+
+    bindings
+}
+
+fn rust_framework_param_sources<'a>(
+    func_node: Node<'a>,
+    code: &'a [u8],
+    analysis_rules: Option<&crate::labels::LangAnalysisRules>,
+) -> Vec<(String, crate::labels::Cap, (usize, usize))> {
+    let Some(analysis_rules) = analysis_rules else {
+        return Vec::new();
+    };
+    let extra = analysis_rules.extra_labels.as_slice();
+    if extra.is_empty() {
+        return Vec::new();
+    }
+
+    let cfg = param_config("rust");
+    let params = func_node.child_by_field_name(cfg.params_field);
+    let Some(params) = params else {
+        return Vec::new();
+    };
+
+    let rocket_route_bindings = if analysis_rules
+        .frameworks
+        .contains(&crate::utils::project::DetectedFramework::Rocket)
+    {
+        rust_route_attribute_bindings(func_node, code)
+    } else {
+        Vec::new()
+    };
+
+    let mut sources = Vec::new();
+    let mut cursor = params.walk();
+    for child in params.children(&mut cursor) {
+        if cfg.self_param_kinds.contains(&child.kind()) || child.kind() != "parameter" {
+            continue;
+        }
+
+        let Some(param_text) = text_of(child, code) else {
+            continue;
+        };
+        let Some(binding) = rust_param_binding_name(&param_text) else {
+            continue;
+        };
+        let span = (child.start_byte(), child.end_byte());
+
+        let type_caps = rust_param_type_text(child, code).and_then(|type_text| {
+            match classify("rust", &type_text, Some(extra)) {
+                Some(DataLabel::Source(caps)) => Some(caps),
+                _ => None,
+            }
+        });
+        let route_caps = rocket_route_bindings
+            .iter()
+            .any(|name| name == &binding)
+            .then_some(crate::labels::Cap::all());
+
+        let Some(caps) = type_caps.or(route_caps) else {
+            continue;
+        };
+        if !sources
+            .iter()
+            .any(|(name, _, existing_span)| name == &binding && existing_span == &span)
+        {
+            sources.push((binding, caps, span));
+        }
+    }
+
+    sources
+}
+
+fn inject_framework_param_sources(
+    func_node: Node<'_>,
+    code: &[u8],
+    analysis_rules: Option<&crate::labels::LangAnalysisRules>,
+    graph: &mut Cfg,
+    entry: NodeIndex,
+    enclosing_func: Option<&str>,
+) -> Vec<NodeIndex> {
+    let sources = rust_framework_param_sources(func_node, code, analysis_rules);
+    if sources.is_empty() {
+        return vec![entry];
+    }
+
+    let mut preds = vec![entry];
+    for (binding, caps, span) in sources {
+        let idx = graph.add_node(NodeInfo {
+            kind: StmtKind::Seq,
+            taint: TaintMeta {
+                labels: smallvec![DataLabel::Source(caps)],
+                defines: Some(binding),
+                ..Default::default()
+            },
+            ast: AstMeta {
+                span,
+                enclosing_func: enclosing_func.map(|s| s.to_string()),
+            },
+            ..Default::default()
+        });
+        connect_all(graph, &preds, idx, EdgeKind::Seq);
+        preds = vec![idx];
+    }
+
+    preds
 }
 
 /// Check if a callee name matches any configured terminator.
@@ -3956,13 +4128,22 @@ fn build_sub<'a>(
             let fn_body_id = BodyId(*next_body_id);
             *next_body_id += 1;
 
+            let entry_preds = inject_framework_param_sources(
+                ast,
+                code,
+                analysis_rules,
+                &mut fn_graph,
+                fn_entry,
+                Some(&fn_name),
+            );
+
             let mut fn_call_ordinal: u32 = 0;
             let mut fn_breaks = Vec::new();
             let mut fn_continues = Vec::new();
             let mut fn_throws = Vec::new();
             let body_exits = build_sub(
                 body_ast,
-                &[fn_entry],
+                &entry_preds,
                 &mut fn_graph,
                 lang,
                 code,
