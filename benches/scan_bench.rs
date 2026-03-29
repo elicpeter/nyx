@@ -153,6 +153,7 @@ fn bench_state_analysis_only(c: &mut Criterion) {
                 &file_cfg.summaries,
                 None,
                 true,
+                &[],
             )
         });
     });

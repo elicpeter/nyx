@@ -20,6 +20,7 @@ use transfer::DefaultTransfer;
 ///
 /// Returns findings for use-after-close, double-close, resource leaks,
 /// and unauthenticated access to sensitive sinks.
+#[allow(clippy::too_many_arguments)]
 pub fn run_state_analysis(
     cfg: &Cfg,
     entry: NodeIndex,

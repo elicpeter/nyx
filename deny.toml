@@ -26,7 +26,6 @@ allow = [
 
     # --- compression / libs ---
     "bzip2-1.0.6",
-    "libpng",
     "libpng-2.0",
     "IJG",
     "FTL",
@@ -53,7 +52,6 @@ allow = [
     "PSF-2.0",
     "Python-2.0",
     "Python-2.0.1",
-    "Python-2.0.1+",
 
     # --- Artistic / Perl ---
     "Artistic-2.0",

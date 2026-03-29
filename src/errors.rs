@@ -199,13 +199,20 @@ fn nyx_error_config_validation_display_lists_all_errors() {
 
 #[test]
 fn nyx_result_ok_variant_propagates_value() {
-    let result: NyxResult<u32> = Ok(42);
-    assert_eq!(result.unwrap(), 42);
+    let value = 42;
+    let result: NyxResult<u32> = Ok(value);
+    match result {
+        Ok(actual) => assert_eq!(actual, value),
+        Err(err) => panic!("expected Ok result, got {err}"),
+    }
 }
 
 #[test]
 fn nyx_result_err_variant_contains_error() {
-    let result: NyxResult<u32> = Err(NyxError::Msg("oops".to_string()));
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("oops"));
+    let message = "oops".to_string();
+    let result: NyxResult<u32> = Err(NyxError::Msg(message.clone()));
+    match result {
+        Ok(value) => panic!("expected Err result, got Ok({value})"),
+        Err(err) => assert!(err.to_string().contains(&message)),
+    }
 }

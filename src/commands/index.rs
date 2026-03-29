@@ -108,6 +108,7 @@ pub fn build_index(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_index_with_observer(
     project_name: &str,
     project_path: &std::path::Path,

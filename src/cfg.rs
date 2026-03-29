@@ -215,9 +215,9 @@ pub struct LocalFuncSummary {
 pub type Cfg = Graph<NodeInfo, EdgeKind>;
 pub type FuncSummaries = HashMap<FuncKey, LocalFuncSummary>;
 
-/// -------------------------------------------------------------------------
-///  Per-body CFG types
-/// -------------------------------------------------------------------------
+// -------------------------------------------------------------------------
+// Per-body CFG types
+// -------------------------------------------------------------------------
 
 /// Opaque identifier for an executable body within a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

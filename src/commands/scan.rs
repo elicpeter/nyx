@@ -341,6 +341,7 @@ const MAX_SCC_FIXPOINT_ITERS: usize = 3;
 /// For batches with mutual recursion, iterates until summaries converge
 /// (max [`MAX_SCC_FIXPOINT_ITERS`]).  Updates `global_summaries` between
 /// batches so later callers see refined callee context.
+#[allow(clippy::too_many_arguments)]
 fn run_topo_batches(
     batches: &[FileBatch<'_>],
     orphans: &[&PathBuf],
@@ -1014,6 +1015,7 @@ pub fn scan_with_index_parallel(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn scan_with_index_parallel_observer(
     project: &str,
     pool: Arc<Pool<SqliteConnectionManager>>,

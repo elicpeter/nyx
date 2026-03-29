@@ -792,6 +792,10 @@ fn lower_all_functions_from_bodies(
 /// Maximum blocks for a callee body to be eligible for cross-file persistence.
 const MAX_CROSS_FILE_BODY_BLOCKS: usize = 100;
 
+type SsaArtifactSummaries =
+    std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>;
+type EligibleCalleeBodies = Vec<(String, usize, ssa_transfer::CalleeSsaBody)>;
+
 /// Extract both SSA summaries and eligible callee bodies from a file in a single
 /// lowering pass. Called from `ParsedFile::extract_ssa_summaries()` when
 /// cross-file symex is enabled.
@@ -805,10 +809,7 @@ pub(crate) fn extract_ssa_artifacts(
     namespace: &str,
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
-) -> (
-    std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
-    Vec<(String, usize, ssa_transfer::CalleeSsaBody)>,
-) {
+) -> (SsaArtifactSummaries, EligibleCalleeBodies) {
     let (summaries, bodies) = lower_all_functions(
         cfg,
         interner,

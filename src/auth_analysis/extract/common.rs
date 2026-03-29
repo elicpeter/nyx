@@ -911,9 +911,7 @@ pub fn member_chain(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
             .or_else(|| node.child_by_field_name("name"))
             .map(|method| text(method, bytes))
             .unwrap_or_default();
-        if chain.is_empty() && !method.is_empty() {
-            chain.push(method);
-        } else if !method.is_empty() {
+        if !method.is_empty() {
             chain.push(method);
         }
         return chain;
@@ -930,9 +928,7 @@ pub fn member_chain(node: Node<'_>, bytes: &[u8]) -> Vec<String> {
             .or_else(|| node.child_by_field_name("method"))
             .map(|method| text(method, bytes))
             .unwrap_or_default();
-        if chain.is_empty() && !method.is_empty() {
-            chain.push(method);
-        } else if !method.is_empty() {
+        if !method.is_empty() {
             chain.push(method);
         }
         return chain;
