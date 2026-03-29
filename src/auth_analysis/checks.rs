@@ -132,8 +132,9 @@ fn check_partial_batch_authorization(
                             })
                     })
             });
+            let full_collection_check = has_prior_collection_auth(unit, op, &batch_subjects);
 
-            if partial_check {
+            if partial_check && !full_collection_check {
                 findings.push(AuthFinding {
                     rule_id: rules.rule_id("partial_batch_authorization"),
                     severity: Severity::High,
@@ -298,6 +299,31 @@ fn has_prior_subject_auth(
         subjects
             .iter()
             .any(|subject| auth_check_covers_subject(check, subject))
+    })
+}
+
+fn has_prior_collection_auth(
+    unit: &AnalysisUnit,
+    op: &SensitiveOperation,
+    subjects: &[&ValueRef],
+) -> bool {
+    let relevant_checks = unit.auth_checks.iter().filter(|check| {
+        check.line <= op.line
+            && !matches!(
+                check.kind,
+                AuthCheckKind::LoginGuard
+                    | AuthCheckKind::TokenExpiry
+                    | AuthCheckKind::TokenRecipient
+            )
+    });
+
+    relevant_checks.into_iter().any(|check| {
+        subjects.iter().any(|subject| {
+            check.subjects.iter().any(|check_subject| {
+                check_subject.source_kind != ValueSourceKind::ArrayIndex
+                    && canonical_subject_name(check_subject) == subject.name
+            })
+        })
     })
 }
 

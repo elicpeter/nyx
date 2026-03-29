@@ -1,10 +1,11 @@
 use super::AuthExtractor;
 use super::common::{
-    auth_check_from_call_site, build_function_unit, function_name, named_children, span, text,
+    auth_check_from_call_site, build_function_unit, function_name, join_route_paths,
+    named_children, push_route_registration, span, text,
 };
 use crate::auth_analysis::config::AuthAnalysisRules;
 use crate::auth_analysis::model::{
-    AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
+    AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod,
 };
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use std::path::Path;
@@ -118,21 +119,20 @@ fn maybe_collect_controller(
             let handler_params = unit.params.clone();
             model.units.push(unit);
 
-            model.routes.push(RouteRegistration {
-                framework: Framework::Spring,
-                method: spec.method,
-                path: join_paths(&class_path, &spec.path),
-                middleware: middleware_calls
-                    .iter()
-                    .map(|call| call.name.clone())
-                    .collect(),
-                handler_span,
-                handler_params,
-                file: path.to_path_buf(),
-                line,
-                unit_idx,
-                middleware_calls: middleware_calls.clone(),
-            });
+            push_route_registration(
+                model,
+                Framework::Spring,
+                spec.method,
+                join_route_paths(&class_path, &spec.path),
+                path,
+                super::common::ResolvedHandler {
+                    unit_idx,
+                    span: handler_span,
+                    params: handler_params,
+                    line,
+                },
+                middleware_calls.clone(),
+            );
         }
     }
 }
@@ -315,13 +315,4 @@ fn quoted_strings(input: &str) -> Vec<String> {
     }
 
     out
-}
-
-fn join_paths(prefix: &str, route: &str) -> String {
-    match (prefix.trim_end_matches('/'), route.trim_start_matches('/')) {
-        ("", "") => "/".to_string(),
-        ("", route) => format!("/{route}"),
-        (prefix, "") => prefix.to_string(),
-        (prefix, route) => format!("{prefix}/{route}"),
-    }
 }

@@ -178,18 +178,40 @@ impl AuthAnalysisRules {
     }
 }
 
-pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
-    if !matches!(
-        lang_slug,
-        "javascript" | "typescript" | "python" | "ruby" | "go" | "java" | "rust"
-    ) {
-        return AuthAnalysisRules::disabled();
+fn auth_finding_prefix(lang_slug: &str) -> Option<&'static str> {
+    match lang_slug {
+        "javascript" | "typescript" => Some("js.auth"),
+        "python" => Some("py.auth"),
+        "ruby" => Some("rb.auth"),
+        "go" => Some("go.auth"),
+        "java" => Some("java.auth"),
+        "rust" => Some("rs.auth"),
+        _ => None,
     }
+}
+
+fn auth_config_slugs(lang_slug: &str) -> &'static [&'static str] {
+    match lang_slug {
+        "typescript" => &["javascript", "typescript"],
+        "javascript" => &["javascript"],
+        "python" => &["python"],
+        "ruby" => &["ruby"],
+        "go" => &["go"],
+        "java" => &["java"],
+        "rust" => &["rust"],
+        _ => &[],
+    }
+}
+
+pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
+    let Some(finding_prefix) = auth_finding_prefix(lang_slug) else {
+        return AuthAnalysisRules::disabled();
+    };
 
     let mut rules = if matches!(lang_slug, "python") {
         AuthAnalysisRules {
             enabled: true,
-            finding_prefix: "py.auth".into(),
+            finding_prefix: finding_prefix.into(),
             admin_path_patterns: vec!["/admin/".into()],
             admin_guard_names: vec![
                 "admin_required".into(),
@@ -279,7 +301,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
     } else if matches!(lang_slug, "ruby") {
         AuthAnalysisRules {
             enabled: true,
-            finding_prefix: "rb.auth".into(),
+            finding_prefix: finding_prefix.into(),
             admin_path_patterns: vec!["/admin/".into()],
             admin_guard_names: vec![
                 "require_admin".into(),
@@ -413,7 +435,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
     } else if matches!(lang_slug, "go") {
         AuthAnalysisRules {
             enabled: true,
-            finding_prefix: "go.auth".into(),
+            finding_prefix: finding_prefix.into(),
             admin_path_patterns: vec!["/admin/".into()],
             admin_guard_names: vec![
                 "RequireAdmin".into(),
@@ -500,7 +522,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
     } else if matches!(lang_slug, "java") {
         AuthAnalysisRules {
             enabled: true,
-            finding_prefix: "java.auth".into(),
+            finding_prefix: finding_prefix.into(),
             admin_path_patterns: vec!["/admin/".into()],
             admin_guard_names: vec![
                 "RequireAdmin".into(),
@@ -583,7 +605,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
     } else if matches!(lang_slug, "rust") {
         AuthAnalysisRules {
             enabled: true,
-            finding_prefix: "rs.auth".into(),
+            finding_prefix: finding_prefix.into(),
             admin_path_patterns: vec!["/admin/".into()],
             admin_guard_names: vec![
                 "require_admin".into(),
@@ -685,7 +707,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
     } else {
         AuthAnalysisRules {
             enabled: true,
-            finding_prefix: "js.auth".into(),
+            finding_prefix: finding_prefix.into(),
             admin_path_patterns: vec!["/admin/".into()],
             admin_guard_names: vec![
                 "requireAdmin".into(),
@@ -750,7 +772,10 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
         }
     };
 
-    if let Some(lang_cfg) = config.analysis.languages.get(lang_slug) {
+    for config_slug in auth_config_slugs(lang_slug) {
+        let Some(lang_cfg) = config.analysis.languages.get(*config_slug) else {
+            continue;
+        };
         rules.enabled = lang_cfg.auth.enabled;
         extend_unique(
             &mut rules.admin_path_patterns,
@@ -823,4 +848,64 @@ pub fn strip_quotes(input: &str) -> String {
         .trim_matches('"')
         .trim_matches('`')
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_auth_rules;
+    use crate::utils::config::{AuthAnalysisConfig, Config, LanguageAnalysisConfig};
+
+    #[test]
+    fn typescript_uses_javascript_rule_prefix() {
+        let cfg = Config::default();
+        let rules = build_auth_rules(&cfg, "typescript");
+        assert_eq!(
+            rules.rule_id("missing_ownership_check"),
+            "js.auth.missing_ownership_check"
+        );
+    }
+
+    #[test]
+    fn typescript_inherits_javascript_auth_overrides_and_applies_ts_specific_overlay() {
+        let mut cfg = Config::default();
+        cfg.analysis.languages.insert(
+            "javascript".into(),
+            LanguageAnalysisConfig {
+                auth: AuthAnalysisConfig {
+                    admin_guard_names: vec!["requirePlatformAdmin".into()],
+                    token_lookup_names: vec!["findInviteToken".into()],
+                    ..AuthAnalysisConfig::default()
+                },
+                ..LanguageAnalysisConfig::default()
+            },
+        );
+        cfg.analysis.languages.insert(
+            "typescript".into(),
+            LanguageAnalysisConfig {
+                auth: AuthAnalysisConfig {
+                    authorization_check_names: vec!["requireTypedOwnership".into()],
+                    ..AuthAnalysisConfig::default()
+                },
+                ..LanguageAnalysisConfig::default()
+            },
+        );
+
+        let rules = build_auth_rules(&cfg, "typescript");
+
+        assert!(
+            rules
+                .admin_guard_names
+                .contains(&"requirePlatformAdmin".to_string())
+        );
+        assert!(
+            rules
+                .token_lookup_names
+                .contains(&"findInviteToken".to_string())
+        );
+        assert!(
+            rules
+                .authorization_check_names
+                .contains(&"requireTypedOwnership".to_string())
+        );
+    }
 }

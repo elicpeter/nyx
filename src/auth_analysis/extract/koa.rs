@@ -1,10 +1,11 @@
 use super::AuthExtractor;
 use super::common::{
-    attach_route_handler, call_site_from_node, collect_top_level_units, is_handler_reference,
-    named_children, string_literal_value, text,
+    attach_route_handler, call_site_from_node, collect_top_level_units, http_method_from_name,
+    is_handler_reference, member_target, named_children, push_route_registration,
+    string_literal_value, visit_named_nodes,
 };
 use crate::auth_analysis::config::AuthAnalysisRules;
-use crate::auth_analysis::model::{AuthorizationModel, Framework, HttpMethod, RouteRegistration};
+use crate::auth_analysis::model::{AuthorizationModel, Framework};
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use std::path::Path;
 use tree_sitter::{Node, Tree};
@@ -29,29 +30,13 @@ impl AuthExtractor for KoaExtractor {
         let mut model = AuthorizationModel::default();
 
         collect_top_level_units(root, bytes, rules, &mut model);
-        collect_routes(root, root, bytes, path, rules, &mut model);
+        visit_named_nodes(root, &mut |node| {
+            if node.kind() == "call_expression" {
+                maybe_collect_route(root, node, bytes, path, rules, &mut model);
+            }
+        });
 
         model
-    }
-}
-
-fn collect_routes(
-    root: Node<'_>,
-    node: Node<'_>,
-    bytes: &[u8],
-    path: &Path,
-    rules: &AuthAnalysisRules,
-    model: &mut AuthorizationModel,
-) {
-    if node.kind() == "call_expression" {
-        maybe_collect_route(root, node, bytes, path, rules, model);
-    }
-
-    for idx in 0..node.named_child_count() {
-        let Some(child) = node.named_child(idx as u32) else {
-            continue;
-        };
-        collect_routes(root, child, bytes, path, rules, model);
     }
 }
 
@@ -66,7 +51,10 @@ fn maybe_collect_route(
     let Some(function) = node.child_by_field_name("function") else {
         return;
     };
-    let Some((object_name, method)) = parse_route_target(function, bytes) else {
+    let Some((object_name, method_name)) = member_target(function, bytes) else {
+        return;
+    };
+    let Some(method) = http_method_from_name(&method_name) else {
         return;
     };
     if !matches!(object_name.as_str(), "koaRouter" | "router" | "app" | "koa") {
@@ -104,46 +92,18 @@ fn maybe_collect_route(
         return;
     };
 
-    let middleware_nodes: Vec<Node<'_>> = named_args[1..handler_idx].to_vec();
-    let middleware_calls = middleware_nodes
+    let middleware_calls = named_args[1..handler_idx]
         .iter()
         .map(|middleware| call_site_from_node(*middleware, bytes))
         .collect::<Vec<_>>();
-    let middleware = middleware_calls
-        .iter()
-        .map(|call| call.name.clone())
-        .collect::<Vec<_>>();
 
-    model.routes.push(RouteRegistration {
-        framework: Framework::Koa,
+    push_route_registration(
+        model,
+        Framework::Koa,
         method,
-        path: route_path,
-        middleware,
-        handler_span: handler.span,
-        handler_params: handler.params,
-        file: path.to_path_buf(),
-        line: handler.line,
-        unit_idx: handler.unit_idx,
+        route_path,
+        path,
+        handler,
         middleware_calls,
-    });
-}
-
-fn parse_route_target(node: Node<'_>, bytes: &[u8]) -> Option<(String, HttpMethod)> {
-    if node.kind() != "member_expression" {
-        return None;
-    }
-    let object = node.child_by_field_name("object")?;
-    let property = node.child_by_field_name("property")?;
-    let method_name = text(property, bytes);
-    let method = match method_name.as_str() {
-        "get" => HttpMethod::Get,
-        "post" => HttpMethod::Post,
-        "put" => HttpMethod::Put,
-        "delete" => HttpMethod::Delete,
-        "patch" => HttpMethod::Patch,
-        "all" => HttpMethod::All,
-        "use" => HttpMethod::Use,
-        _ => return None,
-    };
-    Some((text(object, bytes), method))
+    );
 }

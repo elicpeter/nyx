@@ -1,13 +1,11 @@
 use super::AuthExtractor;
 use super::common::{
     attach_route_handler, auth_check_from_call_site, call_site_from_node, named_children,
-    string_literal_value, text,
+    push_route_registration, string_literal_value, text, visit_named_nodes,
 };
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name};
 use crate::auth_analysis::extract::common::{collect_top_level_units, decorated_definition_child};
-use crate::auth_analysis::model::{
-    AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
-};
+use crate::auth_analysis::model::{AuthorizationModel, CallSite, Framework, HttpMethod};
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use std::path::Path;
 use tree_sitter::{Node, Tree};
@@ -32,7 +30,11 @@ impl AuthExtractor for FlaskExtractor {
         let mut model = AuthorizationModel::default();
 
         collect_top_level_units(root, bytes, rules, &mut model);
-        collect_routes(root, root, bytes, path, rules, &mut model);
+        visit_named_nodes(root, &mut |node| {
+            if node.kind() == "decorated_definition" {
+                maybe_collect_flask_route(root, node, bytes, path, rules, &mut model);
+            }
+        });
 
         model
     }
@@ -42,26 +44,6 @@ impl AuthExtractor for FlaskExtractor {
 struct FlaskRouteSpec {
     method: HttpMethod,
     path: String,
-}
-
-fn collect_routes(
-    root: Node<'_>,
-    node: Node<'_>,
-    bytes: &[u8],
-    path: &Path,
-    rules: &AuthAnalysisRules,
-    model: &mut AuthorizationModel,
-) {
-    if node.kind() == "decorated_definition" {
-        maybe_collect_flask_route(root, node, bytes, path, rules, model);
-    }
-
-    for idx in 0..node.named_child_count() {
-        let Some(child) = node.named_child(idx as u32) else {
-            continue;
-        };
-        collect_routes(root, child, bytes, path, rules, model);
-    }
 }
 
 fn maybe_collect_flask_route(
@@ -93,11 +75,6 @@ fn maybe_collect_flask_route(
         return;
     }
 
-    let middleware_names: Vec<String> = middleware_calls
-        .iter()
-        .map(|call| call.name.clone())
-        .collect();
-
     for spec in route_specs {
         let Some(handler) = attach_route_handler(
             root,
@@ -117,18 +94,15 @@ fn maybe_collect_flask_route(
             rules,
         );
 
-        model.routes.push(RouteRegistration {
-            framework: Framework::Flask,
-            method: spec.method,
-            path: spec.path,
-            middleware: middleware_names.clone(),
-            handler_span: handler.span,
-            handler_params: handler.params,
-            file: path.to_path_buf(),
-            line: handler.line,
-            unit_idx: handler.unit_idx,
-            middleware_calls: middleware_calls.clone(),
-        });
+        push_route_registration(
+            model,
+            Framework::Flask,
+            spec.method,
+            spec.path,
+            path,
+            handler,
+            middleware_calls.clone(),
+        );
     }
 }
 

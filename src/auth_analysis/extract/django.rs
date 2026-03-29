@@ -1,12 +1,13 @@
 use super::AuthExtractor;
 use super::common::{
     auth_check_from_call_site, build_function_unit, call_site_from_node,
-    decorated_definition_child, member_chain, named_children, span, string_literal_value, text,
+    decorated_definition_child, member_chain, named_children, push_route_registration, span,
+    string_literal_value, text, visit_named_nodes,
 };
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name};
 use crate::auth_analysis::extract::common::{attach_route_handler, collect_top_level_units};
 use crate::auth_analysis::model::{
-    AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
+    AnalysisUnitKind, AuthorizationModel, CallSite, Framework, HttpMethod,
 };
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use std::path::Path;
@@ -32,29 +33,13 @@ impl AuthExtractor for DjangoExtractor {
         let mut model = AuthorizationModel::default();
 
         collect_top_level_units(root, bytes, rules, &mut model);
-        collect_routes(root, root, bytes, path, rules, &mut model);
+        visit_named_nodes(root, &mut |node| {
+            if node.kind() == "call" {
+                maybe_collect_django_path(root, node, bytes, path, rules, &mut model);
+            }
+        });
 
         model
-    }
-}
-
-fn collect_routes(
-    root: Node<'_>,
-    node: Node<'_>,
-    bytes: &[u8],
-    path: &Path,
-    rules: &AuthAnalysisRules,
-    model: &mut AuthorizationModel,
-) {
-    if node.kind() == "call" {
-        maybe_collect_django_path(root, node, bytes, path, rules, model);
-    }
-
-    for idx in 0..node.named_child_count() {
-        let Some(child) = node.named_child(idx as u32) else {
-            continue;
-        };
-        collect_routes(root, child, bytes, path, rules, model);
     }
 }
 
@@ -113,24 +98,21 @@ fn maybe_collect_django_path(
         &middleware_calls,
         rules,
     );
-    let middleware = middleware_calls
-        .iter()
-        .map(|call| call.name.clone())
-        .collect::<Vec<_>>();
-
     for method in function_view_methods(root, handler_expr, bytes) {
-        model.routes.push(RouteRegistration {
-            framework: Framework::Django,
+        push_route_registration(
+            model,
+            Framework::Django,
             method,
-            path: route_path.clone(),
-            middleware: middleware.clone(),
-            handler_span: handler.span,
-            handler_params: handler.params.clone(),
-            file: path.to_path_buf(),
-            line: handler.line,
-            unit_idx: handler.unit_idx,
-            middleware_calls: middleware_calls.clone(),
-        });
+            route_path.clone(),
+            path,
+            super::common::ResolvedHandler {
+                unit_idx: handler.unit_idx,
+                span: handler.span,
+                params: handler.params.clone(),
+                line: handler.line,
+            },
+            middleware_calls.clone(),
+        );
     }
 }
 
@@ -234,21 +216,20 @@ fn collect_class_based_routes(
         let handler_params = unit.params.clone();
         model.units.push(unit);
 
-        model.routes.push(RouteRegistration {
-            framework: Framework::Django,
-            method: http_method,
-            path: route_path.to_string(),
-            middleware: middleware_calls
-                .iter()
-                .map(|call| call.name.clone())
-                .collect(),
-            handler_span,
-            handler_params,
-            file: path.to_path_buf(),
-            line,
-            unit_idx,
+        push_route_registration(
+            model,
+            Framework::Django,
+            http_method,
+            route_path.to_string(),
+            path,
+            super::common::ResolvedHandler {
+                unit_idx,
+                span: handler_span,
+                params: handler_params,
+                line,
+            },
             middleware_calls,
-        });
+        );
     }
 }
 

@@ -62,6 +62,27 @@ fn assert_absent(filename: &str, rule_id: &str) {
     );
 }
 
+fn assert_no_auth_diags_for(diags: &[Diag], filename: &str) {
+    let matching: Vec<_> = diags
+        .iter()
+        .filter(|diag| {
+            diag.path.contains(filename)
+                && (diag.id.starts_with("js.auth.")
+                    || diag.id.starts_with("py.auth.")
+                    || diag.id.starts_with("rb.auth.")
+                    || diag.id.starts_with("go.auth.")
+                    || diag.id.starts_with("java.auth.")
+                    || diag.id.starts_with("rs.auth."))
+        })
+        .map(|diag| diag.id.clone())
+        .collect();
+    assert!(
+        matching.is_empty(),
+        "Did not expect auth findings in {filename}.\n  Got: {:?}",
+        matching
+    );
+}
+
 #[test]
 fn admin_route_missing_admin_check() {
     assert_has(
@@ -286,6 +307,22 @@ fn clean_token_acceptance_is_clean() {
     assert_absent(
         "token_clean.js",
         "js.auth.token_override_without_validation",
+    );
+}
+
+#[test]
+fn partial_batch_with_full_collection_authorization_is_clean() {
+    assert_absent(
+        "partial_batch_full_check_clean.js",
+        "js.auth.partial_batch_authorization",
+    );
+}
+
+#[test]
+fn typescript_auth_findings_use_javascript_prefix() {
+    assert_has(
+        "typed_admin_route_missing.ts",
+        "js.auth.admin_route_missing_admin_check",
     );
 }
 
@@ -634,6 +671,63 @@ fn rocket_token_flow_missing_recipient_check() {
 }
 
 #[test]
+fn generic_admin_route_check_is_consistent_across_languages() {
+    for (filename, rule_id) in [
+        (
+            "admin_route_missing.js",
+            "js.auth.admin_route_missing_admin_check",
+        ),
+        (
+            "flask_admin_route_missing.py",
+            "py.auth.admin_route_missing_admin_check",
+        ),
+        (
+            "rails_admin_route_missing.rb",
+            "rb.auth.admin_route_missing_admin_check",
+        ),
+        (
+            "gin_admin_route_missing.go",
+            "go.auth.admin_route_missing_admin_check",
+        ),
+        (
+            "spring_admin_route_missing.java",
+            "java.auth.admin_route_missing_admin_check",
+        ),
+        (
+            "axum_admin_route_missing.rs",
+            "rs.auth.admin_route_missing_admin_check",
+        ),
+    ] {
+        assert_has(filename, rule_id);
+    }
+}
+
+#[test]
+fn generic_ownership_check_is_consistent_across_languages() {
+    for (filename, rule_id) in [
+        ("scoped_write_missing.js", "js.auth.missing_ownership_check"),
+        (
+            "django_scoped_read_missing.py",
+            "py.auth.missing_ownership_check",
+        ),
+        (
+            "rails_scoped_write_missing.rb",
+            "rb.auth.missing_ownership_check",
+        ),
+        (
+            "spring_scoped_read_missing.java",
+            "java.auth.missing_ownership_check",
+        ),
+        (
+            "actix_scoped_write_missing.rs",
+            "rs.auth.missing_ownership_check",
+        ),
+    ] {
+        assert_has(filename, rule_id);
+    }
+}
+
+#[test]
 fn auth_analysis_runs_in_ast_mode() {
     let cfg = common::test_config(AnalysisMode::Ast);
     let diags = nyx_scanner::scan_no_index(&auth_fixture_dir(), &cfg).expect("scan should succeed");
@@ -804,4 +898,21 @@ fn auth_analysis_does_not_run_in_cfg_mode() {
             .all(|diag| !diag.path.contains("actix_scoped_write_missing.rs")),
         "CFG mode should not emit Rust auth-analysis findings"
     );
+}
+
+#[test]
+fn auth_analysis_does_not_run_in_taint_mode() {
+    let cfg = common::test_config(AnalysisMode::Taint);
+    let diags = nyx_scanner::scan_no_index(&auth_fixture_dir(), &cfg).expect("scan should succeed");
+    for filename in [
+        "admin_route_missing.js",
+        "typed_admin_route_missing.ts",
+        "flask_admin_route_missing.py",
+        "rails_admin_route_missing.rb",
+        "gin_admin_route_missing.go",
+        "spring_admin_route_missing.java",
+        "axum_admin_route_missing.rs",
+    ] {
+        assert_no_auth_diags_for(&diags, filename);
+    }
 }

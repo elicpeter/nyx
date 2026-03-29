@@ -1,8 +1,10 @@
 use crate::auth_analysis::config::{AuthAnalysisRules, matches_name, strip_quotes};
 use crate::auth_analysis::model::{
     AnalysisUnit, AnalysisUnitKind, AuthCheck, AuthCheckKind, AuthorizationModel, CallSite,
-    OperationKind, SensitiveOperation, ValueRef, ValueSourceKind,
+    Framework, HttpMethod, OperationKind, RouteRegistration, SensitiveOperation, ValueRef,
+    ValueSourceKind,
 };
+use std::path::Path;
 use tree_sitter::Node;
 
 pub fn collect_top_level_units(
@@ -117,6 +119,13 @@ pub struct ResolvedHandler {
     pub line: usize,
 }
 
+pub fn visit_named_nodes(node: Node<'_>, visit: &mut impl FnMut(Node<'_>)) {
+    visit(node);
+    for child in named_children(node) {
+        visit_named_nodes(child, visit);
+    }
+}
+
 pub fn attach_route_handler(
     root: Node<'_>,
     handler_expr: Node<'_>,
@@ -144,6 +153,36 @@ pub fn attach_route_handler(
         params,
         line,
     })
+}
+
+pub fn push_route_registration(
+    model: &mut AuthorizationModel,
+    framework: Framework,
+    method: HttpMethod,
+    path: String,
+    file: &Path,
+    handler: ResolvedHandler,
+    middleware_calls: Vec<CallSite>,
+) {
+    model.routes.push(RouteRegistration {
+        framework,
+        method,
+        path,
+        middleware: middleware_names(&middleware_calls),
+        handler_span: handler.span,
+        handler_params: handler.params,
+        file: file.to_path_buf(),
+        line: handler.line,
+        unit_idx: handler.unit_idx,
+        middleware_calls,
+    });
+}
+
+pub fn middleware_names(middleware_calls: &[CallSite]) -> Vec<String> {
+    middleware_calls
+        .iter()
+        .map(|call| call.name.clone())
+        .collect()
 }
 
 pub fn resolve_handler_node<'tree>(
@@ -1012,6 +1051,43 @@ pub fn call_name(node: Node<'_>, bytes: &[u8]) -> String {
         (Some(receiver), false) => format!("{receiver}.{method}"),
         (_, false) => method,
         _ => text(node, bytes),
+    }
+}
+
+pub fn member_target(node: Node<'_>, bytes: &[u8]) -> Option<(String, String)> {
+    let object = node
+        .child_by_field_name("object")
+        .or_else(|| node.child_by_field_name("operand"))
+        .or_else(|| node.child_by_field_name("value"))
+        .or_else(|| node.child_by_field_name("receiver"))
+        .or_else(|| node.child_by_field_name("argument"))?;
+    let property = node
+        .child_by_field_name("property")
+        .or_else(|| node.child_by_field_name("field"))
+        .or_else(|| node.child_by_field_name("attribute"))
+        .or_else(|| node.child_by_field_name("name"))?;
+    Some((text(object, bytes), text(property, bytes)))
+}
+
+pub fn http_method_from_name(name: &str) -> Option<HttpMethod> {
+    match name.to_ascii_lowercase().as_str() {
+        "get" => Some(HttpMethod::Get),
+        "post" => Some(HttpMethod::Post),
+        "put" => Some(HttpMethod::Put),
+        "delete" => Some(HttpMethod::Delete),
+        "patch" => Some(HttpMethod::Patch),
+        "all" | "any" => Some(HttpMethod::All),
+        "use" => Some(HttpMethod::Use),
+        _ => None,
+    }
+}
+
+pub fn join_route_paths(prefix: &str, route: &str) -> String {
+    match (prefix.trim_end_matches('/'), route.trim_start_matches('/')) {
+        ("", "") => "/".to_string(),
+        ("", route) => format!("/{route}"),
+        (prefix, "") => prefix.to_string(),
+        (prefix, route) => format!("{prefix}/{route}"),
     }
 }
 

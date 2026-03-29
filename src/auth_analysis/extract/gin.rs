@@ -1,12 +1,11 @@
 use super::AuthExtractor;
 use super::common::{
-    attach_route_handler, call_site_from_node, collect_top_level_units, is_handler_reference,
-    named_children, string_literal_value, text,
+    attach_route_handler, call_site_from_node, collect_top_level_units, http_method_from_name,
+    is_handler_reference, join_route_paths, member_target, named_children, push_route_registration,
+    string_literal_value, text, visit_named_nodes,
 };
 use crate::auth_analysis::config::AuthAnalysisRules;
-use crate::auth_analysis::model::{
-    AuthorizationModel, CallSite, Framework, HttpMethod, RouteRegistration,
-};
+use crate::auth_analysis::model::{AuthorizationModel, CallSite, Framework};
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,7 +32,16 @@ impl AuthExtractor for GinExtractor {
         let mut groups = HashMap::new();
 
         collect_top_level_units(root, bytes, rules, &mut model);
-        collect_nodes(root, root, bytes, path, rules, &mut groups, &mut model);
+        visit_named_nodes(root, &mut |node| match node.kind() {
+            "short_var_declaration" | "assignment_statement" => {
+                maybe_collect_group_binding(node, bytes, &mut groups)
+            }
+            "call_expression" => {
+                maybe_collect_group_use(node, bytes, &mut groups);
+                maybe_collect_route(root, node, bytes, path, rules, &groups, &mut model);
+            }
+            _ => {}
+        });
 
         model
     }
@@ -43,31 +51,6 @@ impl AuthExtractor for GinExtractor {
 struct GroupSpec {
     path_prefix: String,
     middleware_calls: Vec<CallSite>,
-}
-
-fn collect_nodes(
-    root: Node<'_>,
-    node: Node<'_>,
-    bytes: &[u8],
-    path: &Path,
-    rules: &AuthAnalysisRules,
-    groups: &mut HashMap<String, GroupSpec>,
-    model: &mut AuthorizationModel,
-) {
-    match node.kind() {
-        "short_var_declaration" | "assignment_statement" => {
-            maybe_collect_group_binding(node, bytes, groups)
-        }
-        "call_expression" => {
-            maybe_collect_group_use(node, bytes, groups);
-            maybe_collect_route(root, node, bytes, path, rules, groups, model);
-        }
-        _ => {}
-    }
-
-    for child in named_children(node) {
-        collect_nodes(root, child, bytes, path, rules, groups, model);
-    }
 }
 
 fn maybe_collect_group_binding(
@@ -105,7 +88,7 @@ fn maybe_collect_group_binding(
     groups.insert(
         group_name,
         GroupSpec {
-            path_prefix: join_paths(&base.path_prefix, &path_prefix),
+            path_prefix: join_route_paths(&base.path_prefix, &path_prefix),
             middleware_calls: combined,
         },
     );
@@ -115,7 +98,7 @@ fn maybe_collect_group_use(node: Node<'_>, bytes: &[u8], groups: &mut HashMap<St
     let Some(function) = node.child_by_field_name("function") else {
         return;
     };
-    let Some((object_name, method_name)) = selector_target(function, bytes) else {
+    let Some((object_name, method_name)) = member_target(function, bytes) else {
         return;
     };
     if method_name != "Use" {
@@ -144,7 +127,7 @@ fn maybe_collect_route(
     let Some(function) = node.child_by_field_name("function") else {
         return;
     };
-    let Some((object_name, method_name)) = selector_target(function, bytes) else {
+    let Some((object_name, method_name)) = member_target(function, bytes) else {
         return;
     };
     let Some(method) = http_method_from_name(&method_name) else {
@@ -186,38 +169,31 @@ fn maybe_collect_route(
     for middleware in &args[1..handler_idx] {
         middleware_calls.push(call_site_from_node(*middleware, bytes));
     }
-    let middleware = middleware_calls
-        .iter()
-        .map(|call| call.name.clone())
-        .collect::<Vec<_>>();
     let path_prefix = groups
         .get(&object_name)
         .map(|group| group.path_prefix.as_str())
         .unwrap_or("");
 
-    model.routes.push(RouteRegistration {
-        framework: Framework::Gin,
+    push_route_registration(
+        model,
+        Framework::Gin,
         method,
-        path: join_paths(path_prefix, &route_path),
-        middleware,
-        handler_span: handler.span,
-        handler_params: handler.params,
-        file: path.to_path_buf(),
-        line: handler.line,
-        unit_idx: handler.unit_idx,
+        join_route_paths(path_prefix, &route_path),
+        path,
+        handler,
         middleware_calls,
-    });
+    );
 }
 
 fn is_group_call(node: Node<'_>, bytes: &[u8]) -> bool {
     node.child_by_field_name("function")
-        .and_then(|function| selector_target(function, bytes))
+        .and_then(|function| member_target(function, bytes))
         .is_some_and(|(_, method_name)| method_name == "Group")
 }
 
 fn parse_group_call(node: Node<'_>, bytes: &[u8]) -> Option<(String, String, Vec<CallSite>)> {
     let function = node.child_by_field_name("function")?;
-    let (base_name, method_name) = selector_target(function, bytes)?;
+    let (base_name, method_name) = member_target(function, bytes)?;
     if method_name != "Group" {
         return None;
     }
@@ -232,34 +208,4 @@ fn parse_group_call(node: Node<'_>, bytes: &[u8]) -> Option<(String, String, Vec
         .map(|arg| call_site_from_node(*arg, bytes))
         .collect();
     Some((base_name, path, middleware_calls))
-}
-
-fn selector_target(node: Node<'_>, bytes: &[u8]) -> Option<(String, String)> {
-    if node.kind() != "selector_expression" {
-        return None;
-    }
-    let object = node.child_by_field_name("operand")?;
-    let field = node.child_by_field_name("field")?;
-    Some((text(object, bytes), text(field, bytes)))
-}
-
-fn http_method_from_name(name: &str) -> Option<HttpMethod> {
-    match name {
-        "GET" => Some(HttpMethod::Get),
-        "POST" => Some(HttpMethod::Post),
-        "PUT" => Some(HttpMethod::Put),
-        "DELETE" => Some(HttpMethod::Delete),
-        "PATCH" => Some(HttpMethod::Patch),
-        "Any" => Some(HttpMethod::All),
-        _ => None,
-    }
-}
-
-fn join_paths(prefix: &str, route: &str) -> String {
-    match (prefix.trim_end_matches('/'), route.trim_start_matches('/')) {
-        ("", "") => "/".to_string(),
-        ("", route) => format!("/{route}"),
-        (prefix, "") => prefix.to_string(),
-        (prefix, route) => format!("{prefix}/{route}"),
-    }
 }

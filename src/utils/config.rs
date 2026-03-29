@@ -1097,6 +1097,79 @@ cap = "html_escape"
 }
 
 #[test]
+fn analysis_auth_config_toml_roundtrip_supports_typescript_overlay() {
+    let toml_str = r#"
+[analysis.languages.javascript.auth]
+enabled = true
+admin_guard_names = ["requireAdmin"]
+
+[analysis.languages.typescript.auth]
+enabled = true
+authorization_check_names = ["requireTypedOwnership"]
+token_lookup_names = ["findInviteToken"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    let js = cfg.analysis.languages.get("javascript").unwrap();
+    let ts = cfg.analysis.languages.get("typescript").unwrap();
+    assert!(js.auth.enabled);
+    assert_eq!(js.auth.admin_guard_names, vec!["requireAdmin"]);
+    assert!(ts.auth.enabled);
+    assert_eq!(
+        ts.auth.authorization_check_names,
+        vec!["requireTypedOwnership"]
+    );
+    assert_eq!(ts.auth.token_lookup_names, vec!["findInviteToken"]);
+}
+
+#[test]
+fn merge_analysis_rules_preserves_per_language_auth_sections() {
+    let mut default_cfg = Config::default();
+    default_cfg.analysis.languages.insert(
+        "javascript".into(),
+        LanguageAnalysisConfig {
+            auth: AuthAnalysisConfig {
+                admin_guard_names: vec!["requireAdmin".into()],
+                ..AuthAnalysisConfig::default()
+            },
+            ..LanguageAnalysisConfig::default()
+        },
+    );
+
+    let mut user_cfg = Config::default();
+    user_cfg.analysis.languages.insert(
+        "javascript".into(),
+        LanguageAnalysisConfig {
+            auth: AuthAnalysisConfig {
+                token_lookup_names: vec!["findByToken".into()],
+                ..AuthAnalysisConfig::default()
+            },
+            ..LanguageAnalysisConfig::default()
+        },
+    );
+    user_cfg.analysis.languages.insert(
+        "typescript".into(),
+        LanguageAnalysisConfig {
+            auth: AuthAnalysisConfig {
+                authorization_check_names: vec!["requireTypedOwnership".into()],
+                ..AuthAnalysisConfig::default()
+            },
+            ..LanguageAnalysisConfig::default()
+        },
+    );
+
+    let merged = merge_configs(default_cfg, user_cfg);
+    let js = merged.analysis.languages.get("javascript").unwrap();
+    let ts = merged.analysis.languages.get("typescript").unwrap();
+
+    assert_eq!(js.auth.admin_guard_names, vec!["requireAdmin"]);
+    assert_eq!(js.auth.token_lookup_names, vec!["findByToken"]);
+    assert_eq!(
+        ts.auth.authorization_check_names,
+        vec!["requireTypedOwnership"]
+    );
+}
+
+#[test]
 fn load_creates_example_and_reads_user_overrides() {
     let cfg_dir = tempfile::tempdir().unwrap();
     let cfg_path = cfg_dir.path();
