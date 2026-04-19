@@ -140,6 +140,14 @@ static JAVA_AUTH: &[AuthRule] = &[AuthRule {
         "requireAuth",
         "hasPermission",
         "requireRole",
+        // Spring Security / JAX-RS annotation names (used by decorator
+        // detection — see `extract_auth_decorators` in src/cfg.rs).
+        "PreAuthorize",
+        "PostAuthorize",
+        "Secured",
+        "RolesAllowed",
+        "DenyAll",
+        "Authenticated",
     ],
 }];
 
@@ -164,6 +172,16 @@ static JS_AUTH: &[AuthRule] = &[AuthRule {
         "checkRole",
         "passport.authenticate",
         "jwt.verify",
+        // NestJS-style decorators and guard class names (seeded by decorator
+        // arg extraction in `extract_auth_decorators`). `UseGuards` alone is
+        // too generic — we still match on guard *argument* identifiers here.
+        "Authenticated",
+        "AuthGuard",
+        "JwtAuthGuard",
+        "JwtGuard",
+        "RolesGuard",
+        "SessionGuard",
+        "PassportAuthGuard",
     ],
 }];
 
@@ -189,6 +207,90 @@ static PYTHON_AUTH: &[AuthRule] = &[AuthRule {
         "permission_required",
         "has_permission",
         "check_permissions",
+        // Common decorator names used by Flask-Login / Django / custom views
+        // (consumed by `extract_auth_decorators` on function_definition nodes).
+        "admin_required",
+        "staff_member_required",
+        "user_passes_test",
+    ],
+}];
+
+static RUBY_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Devise / Rails controller-filter idioms (consumed by `before_action`
+        // decorator extraction).
+        "authenticate_user",
+        "authenticate_admin",
+        "require_user",
+        "require_admin",
+        "current_user",
+    ],
+}];
+
+static PHP_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Symfony Security attributes (`#[IsGranted(..)]`, `#[Security(..)]`)
+        // and common guard idioms.
+        "IsGranted",
+        "Security",
+    ],
+}];
+
+static CPP_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Custom C++ attributes — framework-defined, bare-name match.
+        "authenticated",
+        "require_auth",
+        "admin_only",
+    ],
+}];
+
+static RUST_AUTH: &[AuthRule] = &[AuthRule {
+    matchers: &[
+        "is_authenticated",
+        "require_auth",
+        "check_permission",
+        "is_admin",
+        "authorize",
+        "authenticate",
+        "require_login",
+        "check_auth",
+        "verify_token",
+        "validate_token",
+        // Custom proc-macro attributes — framework-defined, bare-name match.
+        "authenticated",
+        "require_auth",
+        "admin_only",
     ],
 }];
 
@@ -198,6 +300,10 @@ pub fn auth_rules(lang: Lang) -> &'static [AuthRule] {
         Lang::Java => JAVA_AUTH,
         Lang::JavaScript | Lang::TypeScript => JS_AUTH,
         Lang::Python => PYTHON_AUTH,
+        Lang::Ruby => RUBY_AUTH,
+        Lang::Php => PHP_AUTH,
+        Lang::Cpp => CPP_AUTH,
+        Lang::Rust => RUST_AUTH,
         _ => COMMON_AUTH,
     }
 }

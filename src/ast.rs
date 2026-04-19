@@ -728,6 +728,7 @@ impl<'a> ParsedFile<'a> {
                     global_summaries,
                     cfg.scanner.enable_auth_analysis,
                     &resource_method_summaries,
+                    &body.meta.auth_decorators,
                 );
 
                 for sf in &state_findings {

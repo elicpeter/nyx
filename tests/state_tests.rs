@@ -964,8 +964,163 @@ fn auth_require_role_protected() {
 }
 
 #[test]
-fn auth_decorator_python_aspirational() {
-    // @login_required decorator detection NOT implemented yet.
-    // The finding fires because decorator is not inspected.
-    assert_has("auth_decorator_python.py", "state-unauthed-access");
+fn auth_decorator_python_login_required() {
+    // @login_required seeds AuthLevel::Authed at function entry — the
+    // privileged sink inside should not trip state-unauthed-access.
+    assert_absent(
+        "auth_decorator_python_login_required.py",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_python_permission_required() {
+    // @permission_required with a string argument is also recognized.
+    assert_absent(
+        "auth_decorator_python_permission_required.py",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_python_admin_suppresses() {
+    // @admin_required classifies as AuthLevel::Admin and suppresses the sink.
+    assert_absent(
+        "auth_decorator_python_admin.py",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_python_non_auth_still_fires() {
+    // @app.route / @functools.lru_cache are NOT auth markers — the finding
+    // must still fire on the unprotected handler.
+    assert_has(
+        "auth_decorator_python_non_auth.py",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_js_use_guards() {
+    // @UseGuards(AuthGuard) — AuthGuard in the argument list is the real
+    // auth marker, matched by JS_AUTH matchers.
+    assert_absent(
+        "auth_decorator_js_use_guards.ts",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_js_non_auth_still_fires() {
+    // @Injectable / @Get are routing/DI decorators — not auth markers.
+    assert_has("auth_decorator_js_non_auth.ts", "state-unauthed-access");
+}
+
+#[test]
+fn auth_decorator_java_preauthorize() {
+    assert_absent(
+        "auth_decorator_java_preauthorize.java",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_java_non_auth_still_fires() {
+    // @Override is structural.
+    assert_has(
+        "auth_decorator_java_non_auth.java",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_ruby_before_action() {
+    // before_action :authenticate_user! at class-body scope protects every
+    // method in the class.
+    assert_absent(
+        "auth_decorator_ruby_before_action.rb",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_ruby_no_filter_still_fires() {
+    assert_has(
+        "auth_decorator_ruby_no_filter.rb",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_ruby_before_action_only_excludes() {
+    // `before_action :auth, only: [:create]` — method `index` is NOT in the
+    // only-list, so the filter does not apply and the sink fires.
+    assert_has(
+        "auth_decorator_ruby_before_action_only.rb",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_ruby_before_action_only_includes() {
+    // Same filter — method `create` IS in the only-list, so the filter
+    // applies and the sink does not fire.
+    assert_absent(
+        "auth_decorator_ruby_before_action_only_match.rb",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_ruby_before_action_except_fires() {
+    // `before_action :auth, except: [:index]` — method `index` IS in the
+    // except-list, so the filter is skipped and the sink fires.
+    assert_has(
+        "auth_decorator_ruby_before_action_except.rb",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_ruby_before_action_except_absent() {
+    // Same filter — method `create` is NOT in the except-list, so the filter
+    // applies and the sink does not fire.
+    assert_absent(
+        "auth_decorator_ruby_before_action_except_other.rb",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_rust_require_auth() {
+    assert_absent(
+        "auth_decorator_rust_require_auth.rs",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_rust_non_auth_still_fires() {
+    // #[inline] is NOT an auth attribute.
+    assert_has(
+        "auth_decorator_rust_non_auth.rs",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_php_is_granted() {
+    assert_absent(
+        "auth_decorator_php_is_granted.php",
+        "state-unauthed-access",
+    );
+}
+
+#[test]
+fn auth_decorator_cpp_authenticated() {
+    assert_absent(
+        "auth_decorator_cpp_authenticated.cpp",
+        "state-unauthed-access",
+    );
 }

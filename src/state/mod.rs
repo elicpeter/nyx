@@ -9,12 +9,41 @@ use crate::cfg::{Cfg, FuncSummaries};
 use crate::cfg_analysis::rules;
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
-use domain::ProductState;
+use domain::{AuthLevel, ProductState};
 use engine::MAX_TRACKED_VARS;
 use facts::StateFinding;
 use petgraph::graph::NodeIndex;
 use symbol::SymbolInterner;
 use transfer::DefaultTransfer;
+
+/// Classify decorator/annotation/attribute names against the language's auth
+/// rules and return the resulting `AuthLevel`.  Any admin-like match produces
+/// `Admin`; any generic auth match produces `Authed`; otherwise `Unauthed`.
+pub fn classify_auth_decorators(lang: Lang, decorators: &[String]) -> AuthLevel {
+    if decorators.is_empty() {
+        return AuthLevel::Unauthed;
+    }
+    let auth_rules = rules::auth_rules(lang);
+    let mut level = AuthLevel::Unauthed;
+    for dec in decorators {
+        let d = dec.to_ascii_lowercase();
+        // Admin patterns — match the same static list used by the call-site
+        // transfer so decorators and runtime checks agree on privilege.
+        if d.contains("admin") || d.contains("hasrole") || d.contains("superuser") {
+            return AuthLevel::Admin;
+        }
+        let matches = auth_rules.iter().any(|rule| {
+            rule.matchers.iter().any(|m| {
+                let ml = m.to_ascii_lowercase();
+                d == ml || d.ends_with(&ml)
+            })
+        });
+        if matches && level < AuthLevel::Authed {
+            level = AuthLevel::Authed;
+        }
+    }
+    level
+}
 
 /// Run state-model dataflow analysis on a single function's CFG.
 ///
@@ -30,6 +59,7 @@ pub fn run_state_analysis(
     _global_summaries: Option<&GlobalSummaries>,
     enable_auth: bool,
     resource_method_summaries: &[transfer::ResourceMethodSummary],
+    auth_decorators: &[String],
 ) -> Vec<StateFinding> {
     let _span = tracing::debug_span!("run_state_analysis").entered();
 
@@ -51,7 +81,13 @@ pub fn run_state_analysis(
         resource_method_summaries,
     };
 
-    let initial = ProductState::initial();
+    // Seed initial auth level from decorator-based authorization markers.
+    // Functions tagged with an auth decorator/annotation/attribute start in
+    // `Authed` (or `Admin`) instead of `Unauthed`, so the privileged-sink
+    // check in `extract_findings` suppresses findings framework-level auth
+    // already enforces.
+    let mut initial = ProductState::initial();
+    initial.auth.auth_level = classify_auth_decorators(lang, auth_decorators);
     let result = engine::run_forward(cfg, entry, &transfer, initial);
 
     facts::extract_findings(&result, cfg, &interner, lang, func_summaries, enable_auth)
