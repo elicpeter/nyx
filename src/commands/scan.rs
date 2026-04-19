@@ -374,21 +374,11 @@ fn run_topo_batches(
                     Vec<Diag>,
                     Vec<crate::summary::FuncSummary>,
                     Vec<(
-                        String,
-                        usize,
-                        String,
-                        Option<u32>,
-                        crate::symbol::FuncKind,
+                        crate::symbol::FuncKey,
                         crate::summary::ssa_summary::SsaFuncSummary,
                     )>,
                     Vec<(
-                        String,
-                        usize,
-                        String,
-                        String,
-                        String,
-                        Option<u32>,
-                        crate::symbol::FuncKind,
+                        crate::symbol::FuncKey,
                         crate::taint::ssa_transfer::CalleeSsaBody,
                     )>,
                 )> = batch
@@ -436,44 +426,17 @@ fn run_topo_batches(
                     .collect();
 
                 let mut ssa_count: usize = 0;
-                for (path, diags, summaries, ssa_summaries, _ssa_bodies) in batch_results {
+                for (_path, diags, summaries, ssa_summaries, _ssa_bodies) in batch_results {
                     iteration_diags.extend(diags);
-
-                    // Derive lang: prefer FuncSummary slug, fall back to file extension.
-                    let lang = summaries
-                        .first()
-                        .and_then(|s| crate::symbol::Lang::from_slug(&s.lang))
-                        .or_else(|| {
-                            path.extension()
-                                .and_then(|e| e.to_str())
-                                .and_then(crate::symbol::Lang::from_extension)
-                        });
 
                     for s in summaries {
                         let key = s.func_key(root_str_ref);
                         global_summaries.insert(key, s);
                     }
 
-                    if let Some(lang) = lang {
-                        if !ssa_summaries.is_empty() {
-                            let namespace = crate::symbol::normalize_namespace(
-                                &path.to_string_lossy(),
-                                root_str_ref,
-                            );
-                            for (name, arity, container, disambig, kind, ssa_sum) in ssa_summaries {
-                                let key = crate::symbol::FuncKey {
-                                    lang,
-                                    namespace: namespace.clone(),
-                                    container,
-                                    name,
-                                    arity: Some(arity),
-                                    disambig,
-                                    kind,
-                                };
-                                global_summaries.insert_ssa(key, ssa_sum);
-                                ssa_count += 1;
-                            }
-                        }
+                    for (key, ssa_sum) in ssa_summaries {
+                        global_summaries.insert_ssa(key, ssa_sum);
+                        ssa_count += 1;
                     }
                 }
 
@@ -774,45 +737,13 @@ pub(crate) fn scan_filesystem_with_observer(
 
                             // Insert SSA summaries keyed by FuncKey
                             if !r.ssa_summaries.is_empty() {
-                                let lang = first_lang
-                                    .as_deref()
-                                    .and_then(crate::symbol::Lang::from_slug)
-                                    .unwrap_or(crate::symbol::Lang::Rust);
-                                let namespace = crate::symbol::normalize_namespace(
-                                    &path.to_string_lossy(),
-                                    Some(&root_str),
-                                );
-                                for (name, arity, container, disambig, kind, ssa_sum) in
-                                    r.ssa_summaries
-                                {
-                                    let key = crate::symbol::FuncKey {
-                                        lang,
-                                        namespace: namespace.clone(),
-                                        container,
-                                        name,
-                                        arity: Some(arity),
-                                        disambig,
-                                        kind,
-                                    };
+                                for (key, ssa_sum) in r.ssa_summaries {
                                     local_gs.insert_ssa(key, ssa_sum);
                                 }
                             }
 
                             // Phase 30: Insert eligible callee bodies
-                            for (name, arity, lang_str, ns, container, disambig, kind, body) in
-                                r.ssa_bodies
-                            {
-                                let lang = crate::symbol::Lang::from_slug(&lang_str)
-                                    .unwrap_or(crate::symbol::Lang::Rust);
-                                let key = crate::symbol::FuncKey {
-                                    lang,
-                                    namespace: ns,
-                                    container,
-                                    name,
-                                    arity: Some(arity),
-                                    disambig,
-                                    kind,
-                                };
+                            for (key, body) in r.ssa_bodies {
                                 local_gs.insert_body(key, body);
                             }
 
@@ -1176,25 +1107,17 @@ pub fn scan_with_index_parallel_observer(
                                 }
                                 // Persist SSA summaries with full FuncKey metadata
                                 if !ssa_sums.is_empty() {
-                                    let lang_slug = func_sums
-                                        .first()
-                                        .map(|s| s.lang.clone())
-                                        .unwrap_or_default();
-                                    let namespace = crate::symbol::normalize_namespace(
-                                        &path.to_string_lossy(),
-                                        Some(&scan_root_ref.to_string_lossy()),
-                                    );
                                     let ssa_rows: Vec<_> = ssa_sums
                                         .into_iter()
-                                        .map(|(name, arity, container, disambig, kind, sum)| {
+                                        .map(|(key, sum)| {
                                             (
-                                                name,
-                                                arity,
-                                                lang_slug.clone(),
-                                                namespace.clone(),
-                                                container,
-                                                disambig,
-                                                kind,
+                                                key.name,
+                                                key.arity.unwrap_or(0),
+                                                key.lang.as_str().to_string(),
+                                                key.namespace,
+                                                key.container,
+                                                key.disambig,
+                                                key.kind,
                                                 sum,
                                             )
                                         })
@@ -1210,8 +1133,23 @@ pub fn scan_with_index_parallel_observer(
                                 }
                                 // Phase 30: Persist SSA callee bodies
                                 if !ssa_bodies.is_empty() {
+                                    let body_rows: Vec<_> = ssa_bodies
+                                        .into_iter()
+                                        .map(|(key, body)| {
+                                            (
+                                                key.name,
+                                                key.arity.unwrap_or(0),
+                                                key.lang.as_str().to_string(),
+                                                key.namespace,
+                                                key.container,
+                                                key.disambig,
+                                                key.kind,
+                                                body,
+                                            )
+                                        })
+                                        .collect();
                                     if let Err(e) =
-                                        idx.replace_ssa_bodies_for_file(path, &hash, &ssa_bodies)
+                                        idx.replace_ssa_bodies_for_file(path, &hash, &body_rows)
                                     {
                                         record_persist_error(
                                             &persist_errors_ref,

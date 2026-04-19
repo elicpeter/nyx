@@ -4223,12 +4223,16 @@ fn ssa_cross_function_taint_with_sanitizer_wrapper() {
         None,
     );
     // cleanHtml should have an SSA summary
-    assert!(
-        ssa_summaries.contains_key("cleanHtml"),
-        "cleanHtml should have an SSA summary, got keys: {:?}",
-        ssa_summaries.keys().collect::<Vec<_>>()
-    );
-    let clean_summary = &ssa_summaries["cleanHtml"];
+    let clean_summary = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "cleanHtml")
+        .map(|(_, v)| v)
+        .unwrap_or_else(|| {
+            panic!(
+                "cleanHtml should have an SSA summary, got keys: {:?}",
+                ssa_summaries.keys().map(|k| &k.name).collect::<Vec<_>>()
+            )
+        });
     assert!(
         !clean_summary.param_to_return.is_empty(),
         "cleanHtml should propagate param to return"
@@ -4260,11 +4264,11 @@ fn ssa_interproc_container_store_summary() {
         None,
     );
 
-    assert!(
-        ssa_summaries.contains_key("storeInto"),
-        "storeInto should have an SSA summary"
-    );
-    let store_summary = &ssa_summaries["storeInto"];
+    let store_summary = ssa_summaries
+        .iter()
+        .find(|(k, _)| k.name == "storeInto")
+        .map(|(_, v)| v)
+        .expect("storeInto should have an SSA summary");
     assert!(
         !store_summary.param_to_container_store.is_empty(),
         "storeInto should have param_to_container_store (value stored into arr)"
@@ -5093,4 +5097,135 @@ fn inline_return_taint_internal_source_does_not_widen_caps() {
         "C-1 regression: withSideEffect should produce exactly 1 finding (param flow), got {}",
         findings.len()
     );
+}
+
+/// Regression guard for the FuncKey-based re-keying of local SSA summaries
+/// and cached callee bodies.
+///
+/// Two class methods share the leaf name `process` in the same file.  If the
+/// summary map were keyed by bare name (or raw file-path namespace), the
+/// second lowering would overwrite the first — both methods would end up
+/// pointing at whichever summary was extracted last.
+///
+/// With canonical `FuncKey` identity (`container` discriminates them) both
+/// methods must appear as distinct entries with matching containers.
+#[test]
+fn same_name_methods_distinct_func_keys() {
+    let src = br#"
+class Sanitizer {
+    process(x) {
+        return escape(x);
+    }
+}
+
+class Worker {
+    process(x) {
+        eval(x);
+    }
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+
+    let (summaries, bodies) = super::extract_ssa_artifacts_from_file_cfg(
+        &file_cfg,
+        Lang::JavaScript,
+        "test.js",
+        &file_cfg.summaries,
+        None,
+    );
+
+    // Collect containers of every key named "process".
+    let mut containers: Vec<String> = summaries
+        .keys()
+        .filter(|k| k.name == "process")
+        .map(|k| k.container.clone())
+        .collect();
+    containers.sort();
+
+    assert_eq!(
+        containers,
+        vec!["Sanitizer".to_string(), "Worker".to_string()],
+        "FuncKey-based keying must produce one `process` summary per container; \
+         got {containers:?} from {:?}",
+        summaries.keys().collect::<Vec<_>>(),
+    );
+
+    // Same invariant on the cached-bodies map — inline analysis depends on
+    // being able to fetch the correct body by full FuncKey.
+    let mut body_containers: Vec<String> = bodies
+        .iter()
+        .filter(|(k, _)| k.name == "process")
+        .map(|(k, _)| k.container.clone())
+        .collect();
+    body_containers.sort();
+    assert_eq!(
+        body_containers,
+        vec!["Sanitizer".to_string(), "Worker".to_string()],
+        "callee-body cache must keep both same-name methods distinct; got {body_containers:?}",
+    );
+
+    // Cross-map agreement: every summary key must also be a body key.
+    // (Pass 2 looks up bodies and summaries with the same key.)
+    for key in summaries.keys() {
+        assert!(
+            bodies.iter().any(|(bk, _)| bk == key),
+            "summary key {key:?} missing from callee-body map"
+        );
+    }
+}
+
+/// Same-name *free function* overloads (not methods): two `helper` functions
+/// with identical names and arities at the same scope collide on
+/// `(name, arity)` but are disambiguated by `FuncKey.disambig` (body start
+/// byte).  Regression guard that neither overwrites the other in the SSA
+/// summary / callee-body maps.
+#[test]
+fn same_name_same_arity_functions_distinct_func_keys() {
+    // Two top-level `helper(x)` declarations in one file.  JS allows the
+    // later one to shadow the first at runtime, but our static summary
+    // extraction must retain *both* so cross-file callers of either body
+    // span still find their intended definition.
+    let src = br#"
+function helper(x) {
+    return escape(x);
+}
+
+function helper(x) {
+    eval(x);
+}
+"#;
+    let lang = tree_sitter::Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_lang(src, "javascript", lang);
+
+    let (summaries, bodies) = super::extract_ssa_artifacts_from_file_cfg(
+        &file_cfg,
+        Lang::JavaScript,
+        "test.js",
+        &file_cfg.summaries,
+        None,
+    );
+
+    let helper_keys: Vec<_> = summaries.keys().filter(|k| k.name == "helper").collect();
+    assert_eq!(
+        helper_keys.len(),
+        2,
+        "two same-name same-arity definitions must produce two distinct summary entries; \
+         got {} keys: {:?}",
+        helper_keys.len(),
+        helper_keys,
+    );
+
+    // Disambiguator must actually differ (body start bytes).
+    let disambigs: std::collections::HashSet<_> =
+        helper_keys.iter().map(|k| k.disambig).collect();
+    assert_eq!(
+        disambigs.len(),
+        2,
+        "FuncKey.disambig should differ for colliding same-name same-arity defs",
+    );
+
+    // And the body cache agrees.
+    let body_count = bodies.iter().filter(|(k, _)| k.name == "helper").count();
+    assert_eq!(body_count, 2, "callee-body cache must also keep both defs");
 }

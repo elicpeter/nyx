@@ -20,7 +20,7 @@ use crate::ssa::ir::*;
 use crate::state::lattice::Lattice;
 use crate::state::symbol::{SymbolId, SymbolInterner};
 use crate::summary::{CalleeResolution, GlobalSummaries};
-use crate::symbol::Lang;
+use crate::symbol::{FuncKey, Lang};
 use crate::taint::domain::{
     PredicateSummary, SmallBitSet, TaintOrigin, VarTaint, predicate_kind_bit,
 };
@@ -403,7 +403,12 @@ pub(crate) struct InlineResult {
 }
 
 /// Cache for context-sensitive inline analysis results.
-pub(crate) type InlineCache = HashMap<(String, ArgTaintSig), InlineResult>;
+///
+/// Keyed by the callee's canonical [`FuncKey`] rather than a bare string name
+/// so that same-name definitions (e.g. two `process/1` methods on different
+/// classes in the same file) never share or overwrite each other's cache
+/// entries.
+pub(crate) type InlineCache = HashMap<(FuncKey, ArgTaintSig), InlineResult>;
 
 /// Minimal CFG node metadata embedded in cross-file callee bodies.
 ///
@@ -488,14 +493,20 @@ pub struct SsaTaintTransfer<'a> {
     pub type_facts: Option<&'a crate::ssa::type_facts::TypeFactResult>,
     /// Precise per-function SSA summaries for intra-file callee resolution.
     /// Checked before legacy FuncSummary resolution.
-    pub ssa_summaries: Option<&'a HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>>,
+    ///
+    /// Keyed by canonical [`FuncKey`] — never bare function name — so
+    /// same-name functions in the same file cannot silently overwrite one
+    /// another.
+    pub ssa_summaries: Option<&'a HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>>,
     /// Extra label rules from user config (custom sources/sanitizers/sinks).
     /// Used as fallback when `resolve_callee` finds no summary for an inner
     /// arg callee — so label-only sanitizers still reduce sink caps.
     pub extra_labels: Option<&'a [RuntimeLabelRule]>,
     /// Pre-lowered + optimized SSA bodies for intra-file functions.
     /// When present, enables context-sensitive inline analysis at call sites.
-    pub callee_bodies: Option<&'a HashMap<String, CalleeSsaBody>>,
+    ///
+    /// Keyed by canonical [`FuncKey`] (same identity model as `ssa_summaries`).
+    pub callee_bodies: Option<&'a HashMap<FuncKey, CalleeSsaBody>>,
     /// Cache for context-sensitive inline results. Uses `RefCell` for interior
     /// mutability (safe: k=1 depth limit prevents re-entrancy during borrow).
     pub(crate) inline_cache: Option<&'a RefCell<InlineCache>>,
@@ -506,9 +517,14 @@ pub struct SsaTaintTransfer<'a> {
     /// Current inline analysis depth (0 = top-level caller). When >= 1,
     /// inline analysis falls back to summary resolution (k=1 bound).
     pub context_depth: u8,
-    /// Callback bindings: maps callee parameter name → actual function name.
-    /// Set during inline analysis when caller passes a function reference as arg.
-    pub callback_bindings: Option<&'a HashMap<String, String>>,
+    /// Callback bindings: maps callee parameter name → resolved callee
+    /// [`FuncKey`].
+    ///
+    /// Populated during inline analysis when the caller passes a function
+    /// reference as an argument.  The value is a full `FuncKey` so that when
+    /// the callee invokes the parameter the call resolves back to the exact
+    /// same definition without re-entering bare-name lookup.
+    pub callback_bindings: Option<&'a HashMap<String, FuncKey>>,
     /// Points-to analysis result: per-SSA-value abstract heap object sets.
     /// When present, container taint flows through heap objects instead of
     /// being merged directly into SSA values.
@@ -1386,9 +1402,24 @@ fn inline_analyse_callee(
 
     let callee_bodies = transfer.callee_bodies?;
     let cache_ref = transfer.inline_cache?;
-    // Use leaf name for callee_bodies lookup (keyed by bare function name).
+    // Resolve the call site to a canonical intra-file FuncKey.  Without a
+    // resolved key we cannot inline safely — bare-name lookup could pick the
+    // wrong same-name sibling (e.g. `A::process/1` vs `B::process/1`).
     let normalized = callee_leaf_name(callee);
-    let callee_body = callee_bodies.get(normalized)?;
+    let container_raw = callee_container_hint(callee);
+    let container_hint = if container_raw.is_empty() {
+        None
+    } else {
+        Some(container_raw)
+    };
+    let callee_key = resolve_local_func_key(
+        transfer.local_summaries,
+        transfer.lang,
+        transfer.namespace,
+        normalized,
+        container_hint,
+    )?;
+    let callee_body = callee_bodies.get(&callee_key)?;
 
     // Skip very large function bodies
     if callee_body.ssa.blocks.len() > MAX_INLINE_BLOCKS {
@@ -1398,10 +1429,10 @@ fn inline_analyse_callee(
     // Build cache key from actual argument taint
     let sig = build_arg_taint_sig(args, receiver, state);
 
-    // Check cache
+    // Check cache (keyed by FuncKey + arg signature)
     {
         let cache = cache_ref.borrow();
-        if let Some(cached) = cache.get(&(normalized.to_string(), sig.clone())) {
+        if let Some(cached) = cache.get(&(callee_key.clone(), sig.clone())) {
             return Some(cached.clone());
         }
     }
@@ -1467,27 +1498,44 @@ fn inline_analyse_callee(
     }
 
     // Detect callback arguments: when a call argument refers to a known function
-    // name (in callee_bodies or via label classification), record the mapping
-    // so the callee's analysis can resolve calls through the parameter.
-    let mut callback_bindings: HashMap<String, String> = HashMap::new();
-    if let Some(callee_bodies) = transfer.callee_bodies {
-        for block in &callee_body.ssa.blocks {
-            for inst in block.phis.iter().chain(block.body.iter()) {
-                if let SsaOp::Param { index } = &inst.op {
-                    if let Some(param_name) = inst.var_name.as_ref() {
-                        if *index < args.len() {
-                            // Look up the caller-side argument's var name
-                            for v in &args[*index] {
-                                if let Some(arg_var_name) = caller_ssa
-                                    .value_defs
-                                    .get(v.0 as usize)
-                                    .and_then(|vd| vd.var_name.as_deref())
-                                {
-                                    // Check if the argument name matches a known callee body
-                                    let norm = callee_leaf_name(arg_var_name);
-                                    if callee_bodies.contains_key(norm) {
+    // name (resolvable to a FuncKey in the local summaries index), record the
+    // mapping so the callee's analysis can resolve calls through the parameter.
+    //
+    // The binding value is a full `FuncKey` rather than a leaf string so the
+    // child transfer can look up `callee_bodies` / `ssa_summaries` / local
+    // summaries by canonical identity.
+    let mut callback_bindings: HashMap<String, FuncKey> = HashMap::new();
+    for block in &callee_body.ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            if let SsaOp::Param { index } = &inst.op {
+                if let Some(param_name) = inst.var_name.as_ref() {
+                    if *index < args.len() {
+                        for v in &args[*index] {
+                            if let Some(arg_var_name) = caller_ssa
+                                .value_defs
+                                .get(v.0 as usize)
+                                .and_then(|vd| vd.var_name.as_deref())
+                            {
+                                let norm = callee_leaf_name(arg_var_name);
+                                let hint_raw = callee_container_hint(arg_var_name);
+                                let hint = if hint_raw.is_empty() {
+                                    None
+                                } else {
+                                    Some(hint_raw)
+                                };
+                                if let Some(target_key) = resolve_local_func_key(
+                                    transfer.local_summaries,
+                                    transfer.lang,
+                                    transfer.namespace,
+                                    norm,
+                                    hint,
+                                ) {
+                                    if transfer
+                                        .callee_bodies
+                                        .is_some_and(|cb| cb.contains_key(&target_key))
+                                    {
                                         callback_bindings
-                                            .insert(param_name.clone(), norm.to_string());
+                                            .insert(param_name.clone(), target_key);
                                     }
                                 }
                             }
@@ -1550,10 +1598,10 @@ fn inline_analyse_callee(
 
     let result = InlineResult { return_taint };
 
-    // Cache the result
+    // Cache the result under the canonical FuncKey.
     {
         let mut cache = cache_ref.borrow_mut();
-        cache.insert((normalized.to_string(), sig), result.clone());
+        cache.insert((callee_key, sig), result.clone());
     }
 
     Some(result)
@@ -4508,6 +4556,58 @@ fn is_string_safe_for_ssrf(sf: &crate::abstract_interp::StringFact) -> bool {
     false
 }
 
+/// Resolve a bare or qualified callee string to a local [`FuncKey`] by
+/// scanning `local_summaries` (already FuncKey-keyed).
+///
+/// Resolution is deliberately identity-aware:
+///
+/// 1. Filter by `(lang, namespace, name)` — these always participate in the
+///    identity hash, so the candidate set is guaranteed to be the
+///    same-file same-leaf-name definitions.
+/// 2. If `container_hint` is supplied (e.g. the `obj` in `obj.method`),
+///    narrow to candidates whose [`FuncKey::container`] matches.
+/// 3. If exactly one candidate remains, return its key.
+///
+/// Returns `None` when zero or multiple candidates remain — callers should
+/// then fall through to their own ambiguity policy instead of accidentally
+/// picking an arbitrary definition.
+pub(crate) fn resolve_local_func_key(
+    local_summaries: &FuncSummaries,
+    lang: Lang,
+    _namespace: &str,
+    leaf_name: &str,
+    container_hint: Option<&str>,
+) -> Option<FuncKey> {
+    // `local_summaries` is file-local; every entry shares the same namespace
+    // (raw file path from `build_cfg`). We do not filter by namespace here so
+    // callers can pass whichever form they have (raw or normalized).
+    let mut candidates: Vec<&FuncKey> = local_summaries
+        .keys()
+        .filter(|k| k.name == leaf_name && k.lang == lang)
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    if candidates.len() > 1 {
+        if let Some(container) = container_hint {
+            let narrowed: Vec<&FuncKey> = candidates
+                .iter()
+                .copied()
+                .filter(|k| k.container == container)
+                .collect();
+            if narrowed.len() == 1 {
+                return Some(narrowed[0].clone());
+            }
+            candidates = narrowed;
+        }
+    }
+    if candidates.len() == 1 {
+        Some(candidates[0].clone())
+    } else {
+        None
+    }
+}
+
 // ── Callee Resolution (mirrors TaintTransfer::resolve_callee) ───────────
 
 struct ResolvedSummary {
@@ -4563,25 +4663,15 @@ fn resolve_callee(
     // -1) Callback resolution: if the callee name matches a parameter that was
     // bound to a specific function at the call site, resolve that function instead.
     if let Some(cb) = transfer.callback_bindings {
-        if let Some(real_func) = cb.get(normalized) {
-            // Try to resolve the actual function via SSA summaries
+        if let Some(real_key) = cb.get(normalized) {
+            // Try to resolve the actual function via FuncKey-keyed SSA summaries
             if let Some(ssa_sums) = transfer.ssa_summaries {
-                if let Some(ssa_sum) = ssa_sums.get(real_func.as_str()) {
+                if let Some(ssa_sum) = ssa_sums.get(real_key) {
                     return Some(convert_ssa_to_resolved(ssa_sum));
                 }
             }
-            // Try local summaries
-            let local_matches: Vec<_> = transfer
-                .local_summaries
-                .iter()
-                .filter(|(k, _)| {
-                    k.name == real_func.as_str()
-                        && k.lang == transfer.lang
-                        && k.namespace == transfer.namespace
-                })
-                .collect();
-            if local_matches.len() == 1 {
-                let (_, ls) = local_matches[0];
+            // Try local summaries (already FuncKey-keyed)
+            if let Some(ls) = transfer.local_summaries.get(real_key) {
                 return Some(ResolvedSummary {
                     source_caps: ls.source_caps,
                     sanitizer_caps: ls.sanitizer_caps,
@@ -4600,10 +4690,10 @@ fn resolve_callee(
                     source_to_callback: vec![],
                 });
             }
-            // Try label classification for the bound function
+            // Try label classification for the bound function (by leaf name)
             let labels = crate::labels::classify_all(
                 transfer.lang.as_str(),
-                real_func,
+                &real_key.name,
                 transfer.extra_labels,
             );
             if !labels.is_empty() {
@@ -4634,10 +4724,20 @@ fn resolve_callee(
         }
     }
 
-    // 0) Precise SSA summaries (intra-file, per-parameter transforms)
+    // 0) Precise SSA summaries (intra-file, per-parameter transforms).
+    //
+    // Resolve the callee string to a local `FuncKey` via the already-
+    // FuncKey-keyed `local_summaries` index, then consult `ssa_summaries` by
+    // the same key.  This preserves container/arity/disambig identity so two
+    // same-name definitions in the same file never share an SSA summary.
     if let Some(ssa_sums) = transfer.ssa_summaries {
-        if let Some(ssa_sum) = ssa_sums.get(normalized) {
-            return Some(convert_ssa_to_resolved(ssa_sum));
+        if let Some(key) =
+            resolve_local_func_key(transfer.local_summaries, transfer.lang, transfer.namespace,
+                normalized, container_hint)
+        {
+            if let Some(ssa_sum) = ssa_sums.get(&key) {
+                return Some(convert_ssa_to_resolved(ssa_sum));
+            }
         }
     }
 
@@ -4659,37 +4759,46 @@ fn resolve_callee(
         }
     }
 
-    // 1) Local (same-file)
-    let local_matches: Vec<_> = transfer
-        .local_summaries
-        .iter()
-        .filter(|(k, _)| {
-            k.name == normalized && k.lang == transfer.lang && k.namespace == transfer.namespace
-        })
-        .collect();
-
-    if local_matches.len() == 1 {
-        let (_, ls) = local_matches[0];
-        return Some(ResolvedSummary {
-            source_caps: ls.source_caps,
-            sanitizer_caps: ls.sanitizer_caps,
-            sink_caps: ls.sink_caps,
-            param_to_sink: ls
-                .tainted_sink_params
-                .iter()
-                .map(|&i| (i, ls.sink_caps))
-                .collect(),
-            propagates_taint: !ls.propagating_params.is_empty(),
-            propagating_params: ls.propagating_params.clone(),
-            param_container_to_return: vec![],
-            param_to_container_store: vec![],
-            return_type: None,
-            return_abstract: None,
-            source_to_callback: vec![],
-        });
-    }
-    if local_matches.len() > 1 {
-        return None;
+    // 1) Local (same-file) — lookup via canonical FuncKey.
+    if let Some(key) = resolve_local_func_key(
+        transfer.local_summaries,
+        transfer.lang,
+        transfer.namespace,
+        normalized,
+        container_hint,
+    ) {
+        if let Some(ls) = transfer.local_summaries.get(&key) {
+            return Some(ResolvedSummary {
+                source_caps: ls.source_caps,
+                sanitizer_caps: ls.sanitizer_caps,
+                sink_caps: ls.sink_caps,
+                param_to_sink: ls
+                    .tainted_sink_params
+                    .iter()
+                    .map(|&i| (i, ls.sink_caps))
+                    .collect(),
+                propagates_taint: !ls.propagating_params.is_empty(),
+                propagating_params: ls.propagating_params.clone(),
+                param_container_to_return: vec![],
+                param_to_container_store: vec![],
+                return_type: None,
+                return_abstract: None,
+                source_to_callback: vec![],
+            });
+        }
+    } else {
+        // Multiple same-name local candidates with no disambiguating
+        // container hint: refuse to pick one rather than fall through to a
+        // less precise global summary that might be the wrong definition.
+        let ambiguous_local = transfer
+            .local_summaries
+            .keys()
+            .filter(|k| k.name == normalized && k.lang == transfer.lang)
+            .count()
+            > 1;
+        if ambiguous_local {
+            return None;
+        }
     }
 
     // 2) Global same-language

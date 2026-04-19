@@ -62,9 +62,13 @@ pub struct SymexContext<'a> {
     /// field-sensitive symbolic heap (Phase 21).
     pub points_to: Option<&'a PointsToResult>,
     /// Pre-lowered intra-file function bodies for interprocedural symbolic
-    /// execution (Phase 24A).
-    pub callee_bodies:
-        Option<&'a std::collections::HashMap<String, crate::taint::ssa_transfer::CalleeSsaBody>>,
+    /// execution (Phase 24A). Keyed by canonical `FuncKey`.
+    pub callee_bodies: Option<
+        &'a std::collections::HashMap<
+            crate::symbol::FuncKey,
+            crate::taint::ssa_transfer::CalleeSsaBody,
+        >,
+    >,
     /// SCC membership: maps normalized function name → SCC index.
     /// Used by interprocedural symex for mutual recursion detection (Phase 24B).
     pub scc_membership: Option<&'a HashMap<String, usize>>,

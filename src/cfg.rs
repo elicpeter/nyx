@@ -249,6 +249,17 @@ pub struct BodyMeta {
     pub param_count: usize,
     pub span: (usize, usize),
     pub parent_body_id: Option<BodyId>,
+    /// Canonical identity for this body.
+    ///
+    /// `Some(..)` for named/anonymous function bodies, carrying the same
+    /// `FuncKey` under which `FileCfg::summaries` stores its
+    /// `LocalFuncSummary`.  `None` for the synthetic top-level body.
+    ///
+    /// All intra-file maps keyed on function identity (SSA summaries, callee
+    /// bodies, inline cache, callback bindings) use this key — never the bare
+    /// leaf `name`, which is collision-prone across (container, arity,
+    /// disambig, kind).
+    pub func_key: Option<FuncKey>,
 }
 
 /// A single executable body's CFG plus metadata.
@@ -4435,6 +4446,7 @@ fn build_sub<'a>(
                 disambig: fn_disambig,
                 kind: fn_kind,
             };
+            let body_func_key = key.clone();
             summaries.insert(
                 key,
                 LocalFuncSummary {
@@ -4468,6 +4480,7 @@ fn build_sub<'a>(
                     param_count,
                     span: (ast.start_byte(), ast.end_byte()),
                     parent_body_id: Some(current_body_id),
+                    func_key: Some(body_func_key),
                 },
                 graph: fn_graph,
                 entry: fn_entry,
@@ -5060,6 +5073,7 @@ pub(crate) fn build_cfg<'a>(
             param_count: 0,
             span: (0, code.len()),
             parent_body_id: None,
+            func_key: None,
         },
         graph: g,
         entry,

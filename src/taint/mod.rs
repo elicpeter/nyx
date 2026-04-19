@@ -10,7 +10,7 @@ use crate::labels::SourceKind;
 use crate::state::engine::MAX_TRACKED_VARS;
 use crate::state::symbol::SymbolInterner;
 use crate::summary::GlobalSummaries;
-use crate::symbol::Lang;
+use crate::symbol::{FuncKey, FuncKind, Lang};
 use path_state::PredicateKind;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::IntoNodeReferences;
@@ -201,9 +201,9 @@ fn analyse_body_with_seed(
     interop_edges: &[InteropEdge],
     extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
     ssa_summaries: Option<
-        &std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
+        &std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
     >,
-    callee_bodies: Option<&std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>>,
+    callee_bodies: Option<&std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>>,
     inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
     seed: Option<&HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>,
     import_bindings: Option<&crate::cfg::ImportBindings>,
@@ -326,9 +326,9 @@ fn analyse_multi_body(
     interop_edges: &[InteropEdge],
     extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
     ssa_summaries: Option<
-        &std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
+        &std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
     >,
-    callee_bodies: Option<&std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>>,
+    callee_bodies: Option<&std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>>,
     inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
     max_iterations: usize,
     import_bindings: Option<&crate::cfg::ImportBindings>,
@@ -500,10 +500,57 @@ fn lookup_formal_params(local_summaries: &FuncSummaries, func_name: &str) -> Vec
         .unwrap_or_default()
 }
 
+/// Resolve a bare function name + param count to a canonical [`FuncKey`] by
+/// consulting the already FuncKey-keyed `local_summaries`.
+///
+/// When exactly one `(name, arity)`-matching entry exists we use its full
+/// identity (container / disambig / kind preserved).  When zero or multiple
+/// match we fall back to a free-function key so the caller still has a
+/// well-formed key — this can only happen in legacy discovery paths that
+/// cannot see through same-name siblings, and those paths were already
+/// collision-prone before this refactor.  New intra-file analysis code
+/// should prefer [`BodyMeta::func_key`].
+fn lookup_canonical_func_key(
+    local_summaries: &FuncSummaries,
+    lang: Lang,
+    namespace: &str,
+    func_name: &str,
+    param_count: usize,
+) -> FuncKey {
+    // `local_summaries` is file-local, so every entry's namespace agrees with
+    // whatever `build_cfg` wrote (raw file path). We match by lang + name +
+    // arity and fall back to name-only — the caller's `namespace` argument is
+    // only used when we have to synthesise a key as a last resort.
+    let mut matches = local_summaries
+        .keys()
+        .filter(|k| k.lang == lang && k.name == func_name && k.arity == Some(param_count));
+    let first = matches.next().cloned();
+    if first.is_some() && matches.next().is_none() {
+        return first.unwrap();
+    }
+    if let Some(name_only) = local_summaries
+        .keys()
+        .find(|k| k.lang == lang && k.name == func_name)
+    {
+        return name_only.clone();
+    }
+    FuncKey {
+        lang,
+        namespace: namespace.to_string(),
+        container: String::new(),
+        name: func_name.to_string(),
+        arity: Some(param_count),
+        disambig: None,
+        kind: FuncKind::Function,
+    }
+}
+
 /// Extract precise SSA function summaries for all functions in a file.
 ///
 /// Lowers each function to SSA individually and runs per-parameter probing
-/// to produce an `SsaFuncSummary`. The resulting map is keyed by function name.
+/// to produce an `SsaFuncSummary`. The resulting map is keyed by canonical
+/// [`FuncKey`] so that same-name functions on different containers in the
+/// same file produce distinct summary entries.
 #[allow(dead_code)] // Used by tests; production code uses extract_ssa_artifacts
 pub(crate) fn extract_intra_file_ssa_summaries(
     cfg: &Cfg,
@@ -512,7 +559,7 @@ pub(crate) fn extract_intra_file_ssa_summaries(
     namespace: &str,
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
-) -> std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary> {
+) -> std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary> {
     let func_entries = find_function_entries(cfg);
     let mut summaries = std::collections::HashMap::new();
 
@@ -574,7 +621,14 @@ pub(crate) fn extract_intra_file_ssa_summaries(
             || !summary.param_to_container_store.is_empty()
             || summary.return_abstract.is_some()
         {
-            summaries.insert(func_name.clone(), summary);
+            let key = lookup_canonical_func_key(
+                local_summaries,
+                lang,
+                namespace,
+                func_name,
+                param_count,
+            );
+            summaries.insert(key, summary);
         }
     }
 
@@ -588,112 +642,14 @@ pub(crate) fn extract_intra_file_ssa_summaries(
     summaries
 }
 
-/// Lower all intra-file functions to SSA, producing both summaries and cached
-/// SSA bodies for context-sensitive inline analysis.
-///
-/// Reuses the lowered bodies for both summary extraction and later inline
-/// analysis, avoiding redundant lowering.
-fn lower_all_functions(
-    cfg: &Cfg,
-    interner: &SymbolInterner,
-    lang: Lang,
-    namespace: &str,
-    local_summaries: &FuncSummaries,
-    global_summaries: Option<&GlobalSummaries>,
-) -> (
-    std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
-    std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>,
-) {
-    let func_entries = find_function_entries(cfg);
-    let mut summaries = std::collections::HashMap::new();
-    let mut bodies = std::collections::HashMap::new();
-
-    for (func_name, func_entry) in &func_entries {
-        let formal_params = lookup_formal_params(local_summaries, func_name);
-        let mut func_ssa = match crate::ssa::lower_to_ssa_with_params(
-            cfg,
-            *func_entry,
-            Some(func_name),
-            false,
-            &formal_params,
-        ) {
-            Ok(ssa) => ssa,
-            Err(_) => continue,
-        };
-
-        // Param count = number of formal params (from CFG), falling back to
-        // counting all SsaOp::Param ops when no local summary is available.
-        let param_count = if !formal_params.is_empty() {
-            formal_params.len()
-        } else {
-            func_ssa
-                .blocks
-                .iter()
-                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
-                .filter(|i| matches!(i.op, crate::ssa::ir::SsaOp::Param { .. }))
-                .count()
-        };
-
-        // Extract summary from unoptimized SSA (matches original behavior)
-        if param_count > 0 {
-            let mod_aliases = compute_module_aliases_for_summary(&func_ssa, lang);
-            let mod_aliases_ref = if mod_aliases.is_empty() {
-                None
-            } else {
-                Some(&mod_aliases)
-            };
-            let summary = ssa_transfer::extract_ssa_func_summary(
-                &func_ssa,
-                cfg,
-                local_summaries,
-                global_summaries,
-                lang,
-                namespace,
-                interner,
-                param_count,
-                mod_aliases_ref,
-            );
-
-            if !summary.param_to_return.is_empty()
-                || !summary.param_to_sink.is_empty()
-                || !summary.source_caps.is_empty()
-                || !summary.param_container_to_return.is_empty()
-                || !summary.param_to_container_store.is_empty()
-                || summary.return_abstract.is_some()
-            {
-                summaries.insert(func_name.clone(), summary);
-            }
-        }
-
-        // Optimize for inline analysis (after summary extraction)
-        let opt = crate::ssa::optimize_ssa(&mut func_ssa, cfg, Some(lang));
-
-        // Cache the optimized body for inline analysis
-        bodies.insert(
-            func_name.clone(),
-            ssa_transfer::CalleeSsaBody {
-                ssa: func_ssa,
-                opt,
-                param_count,
-                node_meta: std::collections::HashMap::new(),
-                body_graph: None,
-            },
-        );
-    }
-
-    if !summaries.is_empty() {
-        tracing::debug!(
-            count = summaries.len(),
-            bodies = bodies.len(),
-            "lower_all_functions: produced summaries + cached bodies"
-        );
-    }
-
-    (summaries, bodies)
-}
-
 /// Lower all function bodies from `FileCfg` to produce SSA summaries + cached
 /// bodies.  Each body's own graph is used directly — no scope filtering needed.
+///
+/// Both returned maps are keyed by each body's canonical [`FuncKey`] (carried
+/// on [`crate::cfg::BodyMeta::func_key`]).  This is the most collision-
+/// resistant identity we have: same-name methods on different classes, same-
+/// name overloads with different arity, and anonymous bodies at distinct
+/// source spans all get distinct keys.
 fn lower_all_functions_from_bodies(
     file_cfg: &FileCfg,
     lang: Lang,
@@ -701,8 +657,8 @@ fn lower_all_functions_from_bodies(
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
 ) -> (
-    std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>,
-    std::collections::HashMap<String, ssa_transfer::CalleeSsaBody>,
+    std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+    std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
 ) {
     let mut summaries = std::collections::HashMap::new();
     let mut bodies = std::collections::HashMap::new();
@@ -738,6 +694,26 @@ fn lower_all_functions_from_bodies(
                 .count()
         };
 
+        // Canonical FuncKey: prefer the identity attached to the body at
+        // CFG-construction time; otherwise fall back to matching in
+        // `local_summaries`.
+        //
+        // `body.meta.func_key` carries the raw file-path namespace that
+        // `build_cfg` wrote. The caller passes `namespace` already normalized
+        // against `scan_root`, which is what FuncSummary keys use on the
+        // cross-file side (`FuncSummary::func_key`). Overriding the namespace
+        // here keeps both sides of `GlobalSummaries` agreement — otherwise
+        // `resolve_callee` resolves to the normalized FuncSummary key and
+        // misses the raw-path SSA entry.
+        let mut key = body
+            .meta
+            .func_key
+            .clone()
+            .unwrap_or_else(|| {
+                lookup_canonical_func_key(local_summaries, lang, namespace, &func_name, param_count)
+            });
+        key.namespace = namespace.to_string();
+
         if param_count > 0 {
             let mod_aliases = compute_module_aliases_for_summary(&func_ssa, lang);
             let mod_aliases_ref = if mod_aliases.is_empty() {
@@ -761,13 +737,13 @@ fn lower_all_functions_from_bodies(
             // An empty summary tells resolve_callee "this function exists and has
             // no taint effects" — preventing fallthrough to the less precise old
             // FuncSummary which may report false source_caps from internal sources.
-            summaries.insert(func_name.clone(), summary);
+            summaries.insert(key.clone(), summary);
         }
 
         let opt = crate::ssa::optimize_ssa(&mut func_ssa, &body.graph, Some(lang));
 
         bodies.insert(
-            func_name,
+            key,
             ssa_transfer::CalleeSsaBody {
                 ssa: func_ssa,
                 opt,
@@ -793,26 +769,22 @@ fn lower_all_functions_from_bodies(
 const MAX_CROSS_FILE_BODY_BLOCKS: usize = 100;
 
 type SsaArtifactSummaries =
-    std::collections::HashMap<String, crate::summary::ssa_summary::SsaFuncSummary>;
-type EligibleCalleeBodies = Vec<(String, usize, ssa_transfer::CalleeSsaBody)>;
+    std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>;
+type EligibleCalleeBodies = Vec<(FuncKey, ssa_transfer::CalleeSsaBody)>;
 
-/// Extract both SSA summaries and eligible callee bodies from a file in a single
-/// lowering pass. Called from `ParsedFile::extract_ssa_summaries()` when
-/// cross-file symex is enabled.
-///
-/// Returns: (ssa_summaries, ssa_bodies) where bodies are size-gated and have
-/// `node_meta` populated for cross-file use.
-pub(crate) fn extract_ssa_artifacts(
-    cfg: &Cfg,
-    interner: &SymbolInterner,
+/// FileCfg-based artifact extraction: iterates per-body (not per function
+/// entry) and lowers each body's graph with its recorded entry/params. This
+/// path is equivalent to what `analyse_file` uses at taint time, so the SSA
+/// summaries produced here line up exactly with what pass 2 will consult.
+pub(crate) fn extract_ssa_artifacts_from_file_cfg(
+    file_cfg: &FileCfg,
     lang: Lang,
     namespace: &str,
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
 ) -> (SsaArtifactSummaries, EligibleCalleeBodies) {
-    let (summaries, bodies) = lower_all_functions(
-        cfg,
-        interner,
+    let (summaries, bodies) = lower_all_functions_from_bodies(
+        file_cfg,
         lang,
         namespace,
         local_summaries,
@@ -821,17 +793,25 @@ pub(crate) fn extract_ssa_artifacts(
 
     let mut eligible_bodies = Vec::new();
     if crate::symex::cross_file_symex_enabled() {
-        for (name, mut body) in bodies {
-            // Size gate
+        for (key, mut body) in bodies {
             if body.ssa.blocks.len() > MAX_CROSS_FILE_BODY_BLOCKS {
                 continue;
             }
-            // Populate node metadata for cross-file use
-            if !ssa_transfer::populate_node_meta(&mut body, cfg) {
-                continue; // Failed to resolve all nodes — skip
+            // Populate node metadata against the per-body graph whose NodeIndex
+            // space the SSA was produced on — otherwise cross-file replay can't
+            // find the original CFG nodes.
+            let Some(body_cfg) = file_cfg.bodies.iter().find(|b| {
+                b.meta
+                    .func_key
+                    .as_ref()
+                    .is_some_and(|k| *k == key)
+            }) else {
+                continue;
+            };
+            if !ssa_transfer::populate_node_meta(&mut body, &body_cfg.graph) {
+                continue;
             }
-            let param_count = body.param_count;
-            eligible_bodies.push((name, param_count, body));
+            eligible_bodies.push((key, body));
         }
     }
 

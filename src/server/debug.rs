@@ -1017,30 +1017,7 @@ pub fn analyse_file_summaries(
 
     let mut global = crate::summary::merge_summaries(func_summaries, None);
 
-    // Match SSA summaries to existing keys by name + arity.
-    // Collect keys first to avoid borrow conflict.
-    let key_matches: Vec<_> = ssa_rows
-        .into_iter()
-        .filter_map(|(name, arity, container, _disambig, _kind, ssa_summary)| {
-            // Prefer a match that also agrees on container when we know one;
-            // fall back to bare (name, arity) for pre-container summaries.
-            let key = global
-                .iter()
-                .find(|(k, _)| {
-                    k.name == name
-                        && k.arity == Some(arity)
-                        && (container.is_empty() || k.container == container)
-                })
-                .or_else(|| {
-                    global
-                        .iter()
-                        .find(|(k, _)| k.name == name && k.arity == Some(arity))
-                })
-                .map(|(k, _)| k.clone())?;
-            Some((key, ssa_summary))
-        })
-        .collect();
-    for (key, ssa_summary) in key_matches {
+    for (key, ssa_summary) in ssa_rows {
         global.insert_ssa(key, ssa_summary);
     }
 

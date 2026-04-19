@@ -242,27 +242,18 @@ pub fn build_index_with_observer(
             }
 
             if !fused.ssa_summaries.is_empty() {
-                let lang_slug = fused
-                    .summaries
-                    .first()
-                    .map(|s| s.lang.clone())
-                    .unwrap_or_default();
-                let namespace = crate::symbol::normalize_namespace(
-                    &path.to_string_lossy(),
-                    Some(&project_path.to_string_lossy()),
-                );
                 let ssa_rows: Vec<_> = fused
                     .ssa_summaries
                     .into_iter()
-                    .map(|(name, arity, container, disambig, kind, sum)| {
+                    .map(|(key, sum)| {
                         (
-                            name,
-                            arity,
-                            lang_slug.clone(),
-                            namespace.clone(),
-                            container,
-                            disambig,
-                            kind,
+                            key.name,
+                            key.arity.unwrap_or(0),
+                            key.lang.as_str().to_string(),
+                            key.namespace,
+                            key.container,
+                            key.disambig,
+                            key.kind,
                             sum,
                         )
                     })

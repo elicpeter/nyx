@@ -555,119 +555,39 @@ impl<'a> ParsedFile<'a> {
     /// Extract SSA function summaries for all functions in this file.
     /// Extract SSA summaries and eligible callee bodies in a single lowering pass.
     ///
-    /// Returns `(ssa_summaries, ssa_bodies)` where each tuple carries the full
-    /// identity metadata (container / disambig / kind) needed to reconstruct
-    /// a precise [`crate::symbol::FuncKey`] when persisted and later reloaded.
-    ///
-    /// **Known limitation:** the intra-file SSA summary map is still keyed by
-    /// bare function `name`.  When two definitions in the same file share the
-    /// same name (e.g. a free `process` and a `Worker::process`), the second
-    /// lowering overwrites the first in `sum_map`.  The surrounding `FuncKey`
-    /// identity we attach here is looked up from the first `LocalFuncSummary`
-    /// matching that name, so cross-file resolution remains correct for the
-    /// surviving definition but the shadowed one is lost.
+    /// Returns two vectors keyed by canonical [`crate::symbol::FuncKey`].
+    /// The `FuncKey` identity preserves `(lang, namespace, container, name,
+    /// arity, disambig, kind)` — so two same-name definitions in this file
+    /// (e.g. a free `process` and a `Worker::process`, or overloads with
+    /// different arities) land on distinct entries instead of the later one
+    /// shadowing the earlier one.
     fn extract_ssa_artifacts(
         &self,
         global_summaries: Option<&GlobalSummaries>,
         scan_root: Option<&Path>,
     ) -> (
+        Vec<(crate::symbol::FuncKey, SsaFuncSummary)>,
         Vec<(
-            String,
-            usize,
-            String,
-            Option<u32>,
-            crate::symbol::FuncKind,
-            SsaFuncSummary,
-        )>,
-        Vec<(
-            String,
-            usize,
-            String,
-            String,
-            String,
-            Option<u32>,
-            crate::symbol::FuncKind,
+            crate::symbol::FuncKey,
             crate::taint::ssa_transfer::CalleeSsaBody,
         )>,
     ) {
-        use crate::state::symbol::SymbolInterner;
         let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
-        let lang_slug = caller_lang.as_str().to_string();
         let scan_root_str = scan_root.map(|p| p.to_string_lossy());
         let namespace = normalize_namespace(&self.source.file_path_str, scan_root_str.as_deref());
 
-        // Iterate per-body graphs for function lowering (not the old supergraph).
-        let mut sum_map = std::collections::HashMap::new();
-        let mut eligible_bodies = Vec::new();
-        for body in self.file_cfg.function_bodies() {
-            let _func_name = match &body.meta.name {
-                Some(n) => n.clone(),
-                None => continue,
-            };
-            let interner = SymbolInterner::from_cfg(&body.graph);
-            let (body_sums, body_bodies) = crate::taint::extract_ssa_artifacts(
-                &body.graph,
-                &interner,
-                caller_lang,
-                &namespace,
-                self.local_summaries(),
-                global_summaries,
-            );
-            sum_map.extend(body_sums);
-            eligible_bodies.extend(body_bodies);
-        }
+        // Use the FileCfg path (same one `analyse_file` uses at taint time) so
+        // the SSA summaries stored cross-file match exactly what pass 2 will
+        // resolve against — no NodeIndex-space or entry-detection drift.
+        let (summaries, bodies) = crate::taint::extract_ssa_artifacts_from_file_cfg(
+            &self.file_cfg,
+            caller_lang,
+            &namespace,
+            self.local_summaries(),
+            global_summaries,
+        );
 
-        // Lookup helper: find the first local summary matching `name` and
-        // return its identity triple.  Falls back to the free-function shape.
-        let identity_for = |name: &str| -> (String, Option<u32>, crate::symbol::FuncKind) {
-            self.local_summaries()
-                .iter()
-                .find(|(k, _)| k.name == name)
-                .map(|(_, ls)| (ls.container.clone(), ls.disambig, ls.kind))
-                .unwrap_or_else(|| (String::new(), None, crate::symbol::FuncKind::Function))
-        };
-
-        let ssa_summaries = sum_map
-            .into_iter()
-            .map(|(name, summary)| {
-                let (container, disambig, kind) = identity_for(&name);
-                let param_count = self
-                    .local_summaries()
-                    .iter()
-                    .find(|(k, _)| k.name == name)
-                    .map(|(_, ls)| ls.param_count)
-                    .unwrap_or_else(|| {
-                        summary
-                            .param_to_return
-                            .iter()
-                            .map(|(idx, _)| *idx)
-                            .chain(summary.param_to_sink.iter().map(|(idx, _)| *idx))
-                            .max()
-                            .map(|m| m + 1)
-                            .unwrap_or(0)
-                    });
-                (name, param_count, container, disambig, kind, summary)
-            })
-            .collect();
-
-        let ssa_bodies = eligible_bodies
-            .into_iter()
-            .map(|(name, param_count, body)| {
-                let (container, disambig, kind) = identity_for(&name);
-                (
-                    name,
-                    param_count,
-                    lang_slug.clone(),
-                    namespace.clone(),
-                    container,
-                    disambig,
-                    kind,
-                    body,
-                )
-            })
-            .collect();
-
-        (ssa_summaries, ssa_bodies)
+        (summaries.into_iter().collect(), bodies)
     }
 
     /// Run taint analysis, CFG structural analyses, and state-model analysis.
@@ -940,22 +860,9 @@ pub fn extract_all_summaries_from_bytes(
     scan_root: Option<&Path>,
 ) -> NyxResult<(
     Vec<FuncSummary>,
+    Vec<(crate::symbol::FuncKey, SsaFuncSummary)>,
     Vec<(
-        String,
-        usize,
-        String,
-        Option<u32>,
-        crate::symbol::FuncKind,
-        SsaFuncSummary,
-    )>,
-    Vec<(
-        String,
-        usize,
-        String,
-        String,
-        String,
-        Option<u32>,
-        crate::symbol::FuncKind,
+        crate::symbol::FuncKey,
         crate::taint::ssa_transfer::CalleeSsaBody,
     )>,
 )> {
@@ -1320,31 +1227,17 @@ pub fn run_rules_on_file(
 pub struct FusedResult {
     pub summaries: Vec<FuncSummary>,
     pub diags: Vec<Diag>,
-    /// SSA-derived per-parameter summaries.
-    ///
-    /// Tuple shape: `(func_name, param_count, container, disambig, kind, summary)`.
-    /// Carries enough identity data to reconstruct a precise [`crate::symbol::FuncKey`]
-    /// on reload — see `extract_ssa_artifacts` for the known intra-file name
-    /// collision limitation.
-    pub ssa_summaries: Vec<(
-        String,
-        usize,
-        String,
-        Option<u32>,
-        crate::symbol::FuncKind,
-        SsaFuncSummary,
-    )>,
+    /// SSA-derived per-parameter summaries keyed by canonical
+    /// [`crate::symbol::FuncKey`].  Keys preserve `(lang, namespace,
+    /// container, name, arity, disambig, kind)` so two same-name definitions
+    /// in the same file never collide.
+    pub ssa_summaries: Vec<(crate::symbol::FuncKey, SsaFuncSummary)>,
     pub cfg_nodes: usize,
-    /// Phase 30: eligible callee bodies for cross-file symex.
-    /// Tuple shape: `(func_name, param_count, lang_slug, namespace, container, disambig, kind, body)`.
+    /// Phase 30: eligible callee bodies for cross-file symex, keyed by
+    /// canonical [`crate::symbol::FuncKey`] (same identity model as
+    /// `ssa_summaries`).
     pub ssa_bodies: Vec<(
-        String,
-        usize,
-        String,
-        String,
-        String,
-        Option<u32>,
-        crate::symbol::FuncKind,
+        crate::symbol::FuncKey,
         crate::taint::ssa_transfer::CalleeSsaBody,
     )>,
 }

@@ -242,8 +242,8 @@ impl fmt::Display for CutoffReason {
 /// reentry counts use interior mutability so the context can be shared by
 /// immutable reference across recursive `execute_callee()` calls.
 pub struct InterprocCtx<'a> {
-    /// Pre-lowered intra-file function bodies.
-    pub callee_bodies: &'a HashMap<String, CalleeSsaBody>,
+    /// Pre-lowered intra-file function bodies, keyed by canonical `FuncKey`.
+    pub callee_bodies: &'a HashMap<crate::symbol::FuncKey, CalleeSsaBody>,
     /// Shared CFG (all intra-file functions share one Cfg graph).
     pub cfg: &'a Cfg,
     /// Source language.
@@ -612,9 +612,22 @@ pub fn execute_callee(
         }
     }
 
-    // Resolve callee
+    // Resolve callee by leaf name — finds first FuncKey with matching name
+    // (optionally agreeing on arity). Symex preserves its existing leaf-name
+    // semantics; disambiguation happens upstream in the taint engine.
     let normalized = callee_leaf_name(callee_name);
-    let (body, is_cross_file) = match ctx.callee_bodies.get(normalized) {
+    let arity_hint = arg_values.len();
+    let intra_match = ctx
+        .callee_bodies
+        .iter()
+        .find(|(k, _)| k.name == normalized && k.arity == Some(arity_hint))
+        .or_else(|| {
+            ctx.callee_bodies
+                .iter()
+                .find(|(k, _)| k.name == normalized)
+        })
+        .map(|(_, v)| v);
+    let (body, is_cross_file) = match intra_match {
         Some(b) => (b, false),
         None => {
             // Phase 30: Cross-file body resolution (gated + depth-limited)
