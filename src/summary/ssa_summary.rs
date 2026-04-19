@@ -57,4 +57,13 @@ pub struct SsaFuncSummary {
     /// where the function invokes a callback parameter with tainted data.
     #[serde(default)]
     pub source_to_callback: Vec<(usize, Cap)>,
+    /// How receiver (`self`/`this`) taint flows to the return value.
+    /// `None` when receiver taint does not reach the return.  Matches the
+    /// semantics of `param_to_return`'s `TaintTransform` for positional params.
+    #[serde(default)]
+    pub receiver_to_return: Option<TaintTransform>,
+    /// Caps that the receiver's taint reaches in internal sinks.
+    /// Empty when the receiver is not used as a sink payload inside the body.
+    #[serde(default)]
+    pub receiver_to_sink: Cap,
 }

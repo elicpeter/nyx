@@ -1389,7 +1389,6 @@ fn inline_analyse_callee(
     callee: &str,
     args: &[SmallVec<[SsaValue; 2]>],
     receiver: &Option<SsaValue>,
-    receiver_offset: usize,
     state: &SsaTaintState,
     transfer: &SsaTaintTransfer,
     cfg: &Cfg,
@@ -1446,22 +1445,27 @@ fn inline_analyse_callee(
 
     for block in &callee_body.ssa.blocks {
         for inst in block.phis.iter().chain(block.body.iter()) {
-            if let SsaOp::Param { index } = &inst.op {
-                if let Some(var_name) = inst.var_name.as_ref() {
-                    // Collect taint from the corresponding caller argument.
-                    // For zero-arg method calls, fallback to receiver taint for
-                    // param 0 (matches collect_args_taint fallback behavior).
-                    let mut combined_caps = Cap::empty();
-                    let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+            // Seed caps for positional params and for the receiver (SelfParam)
+            // via separate channels — args[i] ↔ Param{index=i}, receiver ↔ SelfParam.
+            let source_values: Option<&SmallVec<[SsaValue; 2]>> = match &inst.op {
+                SsaOp::Param { index } => args.get(*index),
+                SsaOp::SelfParam => {
+                    // receiver is a single optional SsaValue — wrap for uniform iteration.
+                    // We match it in a separate branch below since it isn't a slice.
+                    None
+                }
+                _ => continue,
+            };
+            let Some(var_name) = inst.var_name.as_ref() else {
+                continue;
+            };
+            let mut combined_caps = Cap::empty();
+            let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
-                    // Map callee's param position (0-based, excluding receiver
-                    // slot) to caller's arg-vec position by applying the
-                    // receiver offset. When the caller is a CallMethod,
-                    // args[0] is the receiver; the callee's Param{index=0} is
-                    // its first real parameter, which lives at args[1].
-                    let caller_pos = *index + receiver_offset;
-                    if caller_pos < args.len() {
-                        for v in &args[caller_pos] {
+            match &inst.op {
+                SsaOp::Param { .. } => {
+                    if let Some(arg_vals) = source_values {
+                        for v in arg_vals {
                             if let Some(taint) = state.get(*v) {
                                 combined_caps |= taint.caps;
                                 for orig in &taint.origins {
@@ -1473,33 +1477,34 @@ fn inline_analyse_callee(
                                 }
                             }
                         }
-                    } else if *index == 0 && receiver_offset == 0 && args.is_empty() {
-                        // Zero-arg method call: seed param 0 from receiver
-                        if let Some(rv) = receiver {
-                            if let Some(taint) = state.get(*rv) {
-                                combined_caps |= taint.caps;
-                                for orig in &taint.origins {
-                                    if combined_origins.len() < MAX_ORIGINS
-                                        && !combined_origins.iter().any(|o| o.node == orig.node)
-                                    {
-                                        combined_origins.push(*orig);
-                                    }
+                    }
+                }
+                SsaOp::SelfParam => {
+                    if let Some(rv) = receiver {
+                        if let Some(taint) = state.get(*rv) {
+                            combined_caps |= taint.caps;
+                            for orig in &taint.origins {
+                                if combined_origins.len() < MAX_ORIGINS
+                                    && !combined_origins.iter().any(|o| o.node == orig.node)
+                                {
+                                    combined_origins.push(*orig);
                                 }
                             }
                         }
                     }
-
-                    if !combined_caps.is_empty() {
-                        param_seed.insert(
-                            BindingKey::new(var_name.as_str()),
-                            VarTaint {
-                                caps: combined_caps,
-                                origins: combined_origins,
-                                uses_summary: false,
-                            },
-                        );
-                    }
                 }
+                _ => unreachable!(),
+            }
+
+            if !combined_caps.is_empty() {
+                param_seed.insert(
+                    BindingKey::new(var_name.as_str()),
+                    VarTaint {
+                        caps: combined_caps,
+                        origins: combined_origins,
+                        uses_summary: false,
+                    },
+                );
             }
         }
     }
@@ -1516,9 +1521,8 @@ fn inline_analyse_callee(
         for inst in block.phis.iter().chain(block.body.iter()) {
             if let SsaOp::Param { index } = &inst.op {
                 if let Some(param_name) = inst.var_name.as_ref() {
-                    let caller_pos = *index + receiver_offset;
-                    if caller_pos < args.len() {
-                        for v in &args[caller_pos] {
+                    if *index < args.len() {
+                        for v in &args[*index] {
                             if let Some(arg_var_name) = caller_ssa
                                 .value_defs
                                 .get(v.0 as usize)
@@ -1839,10 +1843,6 @@ fn transfer_inst(
                 }
             }
 
-            // CFG-level receiver offset: 1 when the receiver was prepended to
-            // arg_uses during CFG construction (CallMethod), 0 otherwise.
-            let cfg_receiver_offset: usize = if info.call.receiver.is_some() { 1 } else { 0 };
-
             // Resolve callee summary — always attempt, even when explicit
             // labels are present. Labels take precedence for source caps, but
             // summary propagation and sanitizer behaviour must still apply
@@ -1866,7 +1866,6 @@ fn transfer_inst(
                     callee,
                     args,
                     receiver,
-                    cfg_receiver_offset,
                     state,
                     transfer,
                     cfg,
@@ -1897,12 +1896,9 @@ fn transfer_inst(
             // Pass arity (SSA positional-arg count) so same-name/different-arity
             // overloads are not conflated during cross-file resolution.
             //
-            // Subtract the receiver slot: when the CFG classified this as a
-            // method-style call, arg_uses[0] is the receiver and args[0] mirrors
-            // it, so `args.len()` is (positional-arity + 1).  The callee's own
-            // `FuncKey::arity` is the positional count, so we need to compare
-            // apples-to-apples.
-            let arity_hint = args.len().saturating_sub(cfg_receiver_offset);
+            // Receiver is now a separate channel on SsaOp::Call.receiver, so
+            // `args.len()` is already the positional arity.
+            let arity_hint = args.len();
             let callee_summary = resolve_callee_hinted(
                 transfer,
                 callee,
@@ -1981,13 +1977,8 @@ fn transfer_inst(
                     } else {
                         &resolved.propagating_params
                     };
-                    let (prop_caps, prop_origins) = collect_args_taint(
-                        args,
-                        receiver,
-                        state,
-                        effective_params,
-                        cfg_receiver_offset,
-                    );
+                    let (prop_caps, prop_origins) =
+                        collect_args_taint(args, receiver, state, effective_params);
                     return_bits |= prop_caps;
                     for orig in &prop_origins {
                         if return_origins.len() < MAX_ORIGINS
@@ -2050,7 +2041,7 @@ fn transfer_inst(
             if !sanitizer_bits.is_empty() {
                 // Collect uses taint then strip bits
                 let (use_caps, use_origins) =
-                    collect_args_taint(args, receiver, state, &[], cfg_receiver_offset);
+                    collect_args_taint(args, receiver, state, &[]);
                 return_bits |= use_caps;
                 for orig in &use_origins {
                     if return_origins.len() < MAX_ORIGINS
@@ -2153,7 +2144,7 @@ fn transfer_inst(
 
                     // No labels and no summary — default propagation (gen/kill)
                     let (use_caps, use_origins) =
-                        collect_args_taint(args, receiver, state, &[], cfg_receiver_offset);
+                        collect_args_taint(args, receiver, state, &[]);
                     if return_bits.is_empty() {
                         return_bits = use_caps;
                         return_origins = use_origins;
@@ -2422,9 +2413,13 @@ fn transfer_inst(
             // `x = source()`.  The fresh SsaValue carries zero caps.
         }
 
-        SsaOp::Param { .. } => {
+        SsaOp::Param { .. } | SsaOp::SelfParam => {
             // Seed from enclosing/parent body scope (multi-body analysis).
             // Look up via BindingKey (name-based, interner-independent).
+            //
+            // `SelfParam` receives the same treatment as positional `Param`:
+            // both represent inbound values whose taint comes from the
+            // surrounding scope via the global seed map.
             if let Some(seed) = &transfer.global_seed {
                 if let Some(var_name) = ssa
                     .value_defs
@@ -3251,17 +3246,17 @@ fn collect_block_events(
 
 /// Collect taint from call arguments.
 ///
-/// `receiver_offset` is the number of entries at the front of `args` that
-/// correspond to the receiver (prepended by CFG construction for CallMethod
-/// nodes).  Use `info.call.receiver.is_some()` to compute this — NOT the
-/// SSA-level `receiver` field, which may be `None` when the receiver variable
-/// is out of scope (e.g., Java class fields).
+/// `args` contains **positional arguments only** — the receiver is a separate
+/// channel and is passed via `receiver`.  `propagating_params` indexes directly
+/// into `args` using callee positional-parameter indices (no receiver offset).
+///
+/// When `propagating_params` is empty, taint is collected from the receiver
+/// (if any) and from all positional args.
 fn collect_args_taint(
     args: &[SmallVec<[SsaValue; 2]>],
     receiver: &Option<SsaValue>,
     state: &SsaTaintState,
     propagating_params: &[usize],
-    receiver_offset: usize,
 ) -> (Cap, SmallVec<[TaintOrigin; 2]>) {
     let mut combined_caps = Cap::empty();
     let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
@@ -3295,10 +3290,11 @@ fn collect_args_taint(
             }
         }
     } else {
-        // Collect only from propagating param positions
+        // Collect only from propagating param positions.  Positional only —
+        // receiver-to-return propagation is handled by `receiver_to_return` on
+        // the summary, not by this path.
         for &param_idx in propagating_params {
-            let adj = param_idx + receiver_offset;
-            if let Some(arg_vals) = args.get(adj) {
+            if let Some(arg_vals) = args.get(param_idx) {
                 for &v in arg_vals {
                     if let Some(taint) = state.get(v) {
                         combined_caps |= taint.caps;
@@ -3536,13 +3532,11 @@ fn try_container_propagation(
                 None => return false,
             };
 
-            // For Go append, value args start after the slice (arg 0).
-            // For CallMethod languages (Java, Ruby, PHP, Rust), the receiver
-            // is prepended to arg_uses[0] by the CFG builder, so real args
-            // start at index 1.
+            // For Go `append`, args[0] is the slice itself and value args
+            // follow at index 1.  For method-style container ops the receiver
+            // is a separate channel on `SsaOp::Call.receiver`, so `args`
+            // contains positional arguments only.
             let arg_offset = if lang == Lang::Go && receiver.is_none() {
-                1usize
-            } else if receiver.is_some() {
                 1usize
             } else {
                 0
@@ -3613,9 +3607,10 @@ fn try_container_propagation(
             };
 
             // Resolve index argument to HeapSlot.
+            // For Go container ops, args[0] is the container itself (value args
+            // start at 1).  For method-style calls the receiver is a separate
+            // channel, so `args` holds positional arguments from index 0.
             let arg_offset = if lang == Lang::Go && receiver.is_none() {
-                1usize
-            } else if receiver.is_some() {
                 1usize
             } else {
                 0
@@ -3751,14 +3746,12 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
     let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
     // The sink-label path needs an arity hint so we do not match a
     // same-name/different-arity overload in another namespace.
-    // When `info.call.arg_uses` is populated, its length (adjusted for any
-    // prepended CallMethod receiver) is the positional argument count.
+    // `arg_uses.len()` is the positional-argument count — the receiver is a
+    // separate channel on `info.call.receiver`, not prepended to `arg_uses`.
     let arity_hint = if info.call.arg_uses.is_empty() {
         None
     } else {
-        let raw = info.call.arg_uses.len();
-        let adjust = if info.call.receiver.is_some() { 1 } else { 0 };
-        Some(raw.saturating_sub(adjust))
+        Some(info.call.arg_uses.len())
     };
     info.call
         .callee
@@ -3815,20 +3808,13 @@ fn collect_tainted_sink_values(
     // Collect SSA values used by this instruction
     let used_values = inst_use_values(inst);
 
-    // Receiver offset: for CallMethod nodes the receiver identifier is
-    // prepended to arg_uses[0] during CFG construction (cfg.rs push_node),
-    // regardless of whether the receiver could be resolved to an SSA value.
-    // Use `info.call.receiver` (always set for CallMethod) instead of the
-    // SSA-level `receiver` field so the offset is correct even when the
-    // receiver variable is out of scope (e.g., Java class fields).
-    let receiver_offset: usize = if info.call.receiver.is_some() { 1 } else { 0 };
-
-    // Priority 1: gated sink filtering (CFG-level sink_payload_args)
+    // Priority 1: gated sink filtering (CFG-level sink_payload_args).
+    // `sink_payload_args` indexes into positional args (no receiver offset);
+    // the receiver is a separate channel via `SsaOp::Call.receiver`.
     if let Some(ref positions) = info.call.sink_payload_args {
         if let SsaOp::Call { args, .. } = &inst.op {
             for &pos in positions {
-                let adj = pos + receiver_offset;
-                if let Some(arg_vals) = args.get(adj) {
+                if let Some(arg_vals) = args.get(pos) {
                     for &v in arg_vals {
                         if let Some(taint) = state.get(v) {
                             if (taint.caps & sink_caps) != Cap::empty() {
@@ -3845,9 +3831,9 @@ fn collect_tainted_sink_values(
     }
 
     // Priority 2: summary-based per-parameter sink filtering.
-    // param_to_sink indices refer to the callee's formal parameter positions.
-    // For CallMethod nodes the receiver is prepended to args[0] (see cfg.rs
-    // push_node), so we offset using receiver_offset computed above.
+    // `param_to_sink` indices refer to the callee's positional parameter
+    // positions and map directly onto `args`.  The receiver channel is
+    // handled via `receiver_to_sink` in the summary.
     if !param_to_sink.is_empty() {
         if let SsaOp::Call { args, .. } = &inst.op {
             for &(param_idx, per_param_caps) in param_to_sink {
@@ -3855,8 +3841,7 @@ fn collect_tainted_sink_values(
                 if effective_caps.is_empty() {
                     continue;
                 }
-                let adj = param_idx + receiver_offset;
-                if let Some(arg_vals) = args.get(adj) {
+                if let Some(arg_vals) = args.get(param_idx) {
                     for &v in arg_vals {
                         if let Some(taint) = state.get(v) {
                             if (taint.caps & effective_caps) != Cap::empty()
@@ -4033,9 +4018,12 @@ fn inst_use_values(inst: &SsaInst) -> Vec<SsaValue> {
             }
             vals
         }
-        SsaOp::Source | SsaOp::Const(_) | SsaOp::Param { .. } | SsaOp::CatchParam | SsaOp::Nop => {
-            Vec::new()
-        }
+        SsaOp::Source
+        | SsaOp::Const(_)
+        | SsaOp::Param { .. }
+        | SsaOp::SelfParam
+        | SsaOp::CatchParam
+        | SsaOp::Nop => Vec::new(),
     }
 }
 
@@ -4693,6 +4681,11 @@ struct ResolvedSummary {
     return_abstract: Option<crate::abstract_interp::AbstractValue>,
     /// Internal source taint flows to a call of parameter N with these caps.
     source_to_callback: Vec<(usize, Cap)>,
+    /// How receiver (`self`/`this`) taint flows to the return value.
+    /// Matches `SsaFuncSummary::receiver_to_return` semantics.
+    receiver_to_return: Option<crate::summary::ssa_summary::TaintTransform>,
+    /// Caps that receiver taint reaches at internal sinks.
+    receiver_to_sink: Cap,
 }
 
 fn resolve_callee(
@@ -4775,6 +4768,10 @@ fn resolve_callee_hinted(
                     return_type: None,
                     return_abstract: None,
                     source_to_callback: vec![],
+
+                    receiver_to_return: None,
+
+                    receiver_to_sink: Cap::empty(),
                 });
             }
             // Try label classification for the bound function (by leaf name)
@@ -4806,6 +4803,10 @@ fn resolve_callee_hinted(
                     return_type: None,
                     return_abstract: None,
                     source_to_callback: vec![],
+
+                    receiver_to_return: None,
+
+                    receiver_to_sink: Cap::empty(),
                 });
             }
         }
@@ -4871,6 +4872,10 @@ fn resolve_callee_hinted(
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             });
         }
     } else {
@@ -4915,6 +4920,10 @@ fn resolve_callee_hinted(
                         return_type: None,
                         return_abstract: None,
                         source_to_callback: vec![],
+
+                        receiver_to_return: None,
+
+                        receiver_to_sink: Cap::empty(),
                     });
                 }
             }
@@ -4948,6 +4957,10 @@ fn resolve_callee_hinted(
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             });
         }
     }
@@ -4993,6 +5006,8 @@ fn convert_ssa_to_resolved(
         return_type: ssa_sum.return_type.clone(),
         return_abstract: ssa_sum.return_abstract.clone(),
         source_to_callback: ssa_sum.source_to_callback.clone(),
+        receiver_to_return: ssa_sum.receiver_to_return.clone(),
+        receiver_to_sink: ssa_sum.receiver_to_sink,
     }
 }
 
@@ -5087,7 +5102,10 @@ fn reconstruct_flow_path(
             if prev.cfg_node == inst.cfg_node {
                 // Still follow the chain, just don't add a duplicate step
                 match &inst.op {
-                    SsaOp::Source | SsaOp::Param { .. } | SsaOp::CatchParam => break,
+                    SsaOp::Source
+                    | SsaOp::Param { .. }
+                    | SsaOp::SelfParam
+                    | SsaOp::CatchParam => break,
                     SsaOp::Assign(uses) => {
                         current = pick_tainted_operand(uses, origin, ssa);
                         continue;
@@ -5108,7 +5126,7 @@ fn reconstruct_flow_path(
         }
 
         match &inst.op {
-            SsaOp::Source | SsaOp::Param { .. } | SsaOp::CatchParam => {
+            SsaOp::Source | SsaOp::Param { .. } | SsaOp::SelfParam | SsaOp::CatchParam => {
                 steps.push(FlowStepRaw {
                     cfg_node: inst.cfg_node,
                     var_name: inst.var_name.clone(),
@@ -5578,6 +5596,8 @@ pub fn extract_ssa_func_summary(
         return_type,
         return_abstract,
         source_to_callback,
+        receiver_to_return: None,
+        receiver_to_sink: Cap::empty(),
     }
 }
 
@@ -5759,7 +5779,10 @@ pub(crate) fn extract_container_flow_summary(
                     _ => continue,
                 };
 
-                // Resolve container SSA value (same logic as try_container_propagation)
+                // Resolve container SSA value.  With the new call ABI, the
+                // receiver is a separate channel and `args` contains only
+                // positional arguments.  For Go, container ops are plain
+                // function calls (no receiver), so args[0] is the container.
                 let container_val = if let Some(v) = *receiver {
                     Some(v)
                 } else if lang == Lang::Go {
@@ -5784,17 +5807,20 @@ pub(crate) fn extract_container_flow_summary(
                     None => continue,
                 };
 
-                // Trace container to param
+                // Trace container to positional param (SelfParam → None, so
+                // when the container is the receiver we skip — the caller
+                // tracks that via `receiver_to_container_store` if needed).
                 let container_param =
                     match trace_to_param(container_val, ssa, &inst_map, &mut HashSet::new()) {
                         Some(idx) => idx,
                         None => continue,
                     };
 
-                // Compute arg offset (receiver-based languages prepend receiver to args)
+                // Go container ops are plain function calls with the container
+                // at args[0]; value args start at args[1].  Other languages
+                // place the container on the receiver channel so args holds
+                // only value args starting at index 0.
                 let arg_offset = if lang == Lang::Go && receiver.is_none() {
-                    1usize
-                } else if receiver.is_some() {
                     1usize
                 } else {
                     0

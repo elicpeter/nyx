@@ -274,9 +274,11 @@ fn eval_inst(inst: &SsaInst, values: &HashMap<SsaValue, ConstLattice>) -> ConstL
             values.get(&uses[0]).cloned().unwrap_or(ConstLattice::Top)
         }
         SsaOp::Assign(_) => ConstLattice::Varying, // expression with multiple uses
-        SsaOp::Call { .. } | SsaOp::Source | SsaOp::Param { .. } | SsaOp::CatchParam => {
-            ConstLattice::Varying
-        }
+        SsaOp::Call { .. }
+        | SsaOp::Source
+        | SsaOp::Param { .. }
+        | SsaOp::SelfParam
+        | SsaOp::CatchParam => ConstLattice::Varying,
         SsaOp::Phi(_) => ConstLattice::Varying, // phis in body shouldn't happen
         SsaOp::Nop => ConstLattice::Varying,
     }
@@ -297,9 +299,12 @@ fn inst_uses(inst: &SsaInst) -> Vec<SsaValue> {
             }
             vals
         }
-        SsaOp::Source | SsaOp::Const(_) | SsaOp::Param { .. } | SsaOp::CatchParam | SsaOp::Nop => {
-            Vec::new()
-        }
+        SsaOp::Source
+        | SsaOp::Const(_)
+        | SsaOp::Param { .. }
+        | SsaOp::SelfParam
+        | SsaOp::CatchParam
+        | SsaOp::Nop => Vec::new(),
     }
 }
 

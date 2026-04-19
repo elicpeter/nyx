@@ -273,6 +273,7 @@ pub fn analyze_types(
                 }
                 SsaOp::Source => TypeFact::from_kind(TypeKind::String),
                 SsaOp::Param { .. } => TypeFact::unknown(),
+                SsaOp::SelfParam => TypeFact::from_kind(TypeKind::Object),
                 SsaOp::CatchParam => TypeFact::from_kind(TypeKind::Object),
                 SsaOp::Call { callee, .. } => {
                     if let Some(ty) = lang.and_then(|l| constructor_type(l, callee)) {

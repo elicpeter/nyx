@@ -73,6 +73,7 @@ impl fmt::Display for SsaBody {
                         }
                     }
                     SsaOp::Param { index } => write!(f, "param({index})")?,
+                    SsaOp::SelfParam => write!(f, "self_param()")?,
                     SsaOp::CatchParam => write!(f, "catch_param()")?,
                     SsaOp::Nop => write!(f, "nop")?,
                 }

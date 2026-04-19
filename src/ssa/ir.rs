@@ -31,8 +31,17 @@ pub enum SsaOp {
     /// Constant / literal value (no taint).
     /// The optional string carries the raw source text when captured during lowering.
     Const(Option<String>),
-    /// Function parameter.
+    /// Function parameter (positional).  Index is the 0-based positional
+    /// parameter index, *excluding* any implicit receiver (`self`/`this`).
+    /// The receiver, when present, is represented by [`SsaOp::SelfParam`].
     Param { index: usize },
+    /// Implicit method receiver (`self` in Rust/Python, `this` in
+    /// JS/TS/Java/PHP).  Emitted in block 0 of a function body whenever the
+    /// body has a receiver (either an explicit `self` formal parameter or an
+    /// implicit `this` reference).  Having a dedicated IR node keeps
+    /// receiver taint tracking entirely separate from positional-parameter
+    /// taint, eliminating off-by-receiver arithmetic at call sites.
+    SelfParam,
     /// Catch-clause exception binding.
     CatchParam,
     /// Non-defining node (e.g. If condition evaluation, Entry, Exit).

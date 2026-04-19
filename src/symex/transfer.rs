@@ -101,6 +101,11 @@ pub fn transfer_inst(
             state.set(inst.value, SymbolicValue::Symbol(inst.value));
         }
 
+        SsaOp::SelfParam => {
+            // Implicit method receiver — symbolic input, not tainted by default.
+            state.set(inst.value, SymbolicValue::Symbol(inst.value));
+        }
+
         SsaOp::CatchParam => {
             if let Some(exc_val) = state.take_exception_context() {
                 // Phase 25: on an exception path — seed from exception context
@@ -1540,6 +1545,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -1597,6 +1606,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -1654,6 +1667,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -1706,6 +1723,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -1758,6 +1779,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -1942,6 +1967,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -2009,6 +2038,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -2077,6 +2110,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -2096,6 +2133,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -2115,6 +2156,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -2182,6 +2227,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -2251,6 +2300,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );
@@ -2269,6 +2322,10 @@ mod tests {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             ..Default::default()
             },
         );

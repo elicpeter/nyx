@@ -2412,7 +2412,7 @@ fn push_node<'a>(
 
     // Extract per-argument identifiers for Call nodes.
     // Also extract for gated-sink nodes so payload-arg filtering works.
-    let mut arg_uses = if kind == StmtKind::Call || sink_payload_args.is_some() {
+    let arg_uses = if kind == StmtKind::Call || sink_payload_args.is_some() {
         call_ast
             .map(|cn| extract_arg_uses(cn, code))
             .unwrap_or_default()
@@ -2481,10 +2481,11 @@ fn push_node<'a>(
         }
     }
 
-    // For method-style calls, extract the receiver identifier and prepend it
-    // to arg_uses at position 0. This allows `collect_propagating_uses_taint`
-    // to apply an offset so that `propagating_params[0]` maps to the first
-    // real argument (not the receiver).
+    // For method-style calls, extract the receiver identifier as a separate
+    // channel on `CallMeta.receiver`.  The receiver is **not** prepended to
+    // `arg_uses`: `arg_uses` contains positional-argument identifiers only,
+    // and the receiver is carried as its own typed channel end-to-end
+    // (SSA `SsaOp::Call.receiver`, summary `receiver_to_return`/`receiver_to_sink`).
     //
     // Two cases:
     // 1. Kind::CallMethod — native method call AST (Java method_invocation,
@@ -2506,12 +2507,9 @@ fn push_node<'a>(
                     && matches!(rn.kind(), "identifier" | "variable_name")
                     && let Some(recv_text) = text_of(rn, code)
                 {
-                    arg_uses.insert(0, vec![recv_text.clone()]);
                     Some(recv_text)
                 } else if recv_node.is_some() {
-                    root_receiver_text(cn, lang, code).inspect(|recv_text| {
-                        arg_uses.insert(0, vec![recv_text.clone()]);
-                    })
+                    root_receiver_text(cn, lang, code)
                 } else {
                     None
                 }
@@ -2529,9 +2527,7 @@ fn push_node<'a>(
                 };
                 if let Some(rn) = recv_node {
                     if matches!(rn.kind(), "identifier" | "variable_name" | "this" | "self") {
-                        text_of(rn, code).inspect(|recv_text| {
-                            arg_uses.insert(0, vec![recv_text.clone()]);
-                        })
+                        text_of(rn, code)
                     } else {
                         // Complex receiver (nested attribute, chained call, subscript).
                         // Drill to the leftmost plain identifier; when the chain is
@@ -2539,9 +2535,6 @@ fn push_node<'a>(
                         // identifier (e.g. `request` for `request.args.get`).
                         root_member_receiver(rn, code)
                             .or_else(|| root_receiver_text(rn, lang, code))
-                            .inspect(|recv_text| {
-                                arg_uses.insert(0, vec![recv_text.clone()]);
-                            })
                     }
                 } else {
                     None
@@ -5301,10 +5294,9 @@ pub(crate) fn build_cfg<'a>(
 ///
 /// * `arity` — positional argument count.  `None` when `extract_arg_uses`
 ///   bailed out on splats/keyword-args (length 0 does not distinguish
-///   zero-arg calls from unknown; we treat 0 as a concrete zero).  For
-///   method calls the receiver is prepended to `arg_uses` at position 0,
-///   so the raw positional arity is `arg_uses.len() - 1`; otherwise it's
-///   `arg_uses.len()`.
+///   zero-arg calls from unknown; we treat 0 as a concrete zero).  The
+///   receiver is a separate channel via `CallMeta.receiver` and is not
+///   represented in `arg_uses`, so `arity == arg_uses.len()` for calls.
 /// * `receiver` — forwarded verbatim from `CallMeta.receiver` (already
 ///   normalized to the root identifier).
 /// * `qualifier` — derived from the raw callee when it contains `::` or
@@ -5318,16 +5310,10 @@ fn build_callee_site(
 
     let receiver = info.call.receiver.clone();
 
-    let arity = {
-        let raw = info.call.arg_uses.len();
-        if receiver.is_some() {
-            // Receiver is stored at arg_uses[0]; subtract it.
-            Some(raw.saturating_sub(1))
-        } else if info.kind == StmtKind::Call {
-            Some(raw)
-        } else {
-            None
-        }
+    let arity = if info.kind == StmtKind::Call || receiver.is_some() {
+        Some(info.call.arg_uses.len())
+    } else {
+        None
     };
 
     let qualifier = if receiver.is_some() {
@@ -6875,15 +6861,15 @@ def outer(cmd):
             })
             .expect("subprocess.run call node should exist");
 
-        // receiver (`subprocess`) is prepended to arg_uses[0]; `cmd` is at [1].
-        // Keyword args must not appear in positional slots.
+        // Receiver (`subprocess`) is a separate channel on `CallMeta.receiver`;
+        // `arg_uses` holds positional arguments only. Keyword args must not
+        // appear in positional slots.
         assert_eq!(
             call_node.call.arg_uses.len(),
-            2,
-            "arg_uses should be [receiver, cmd] — no kwargs in positional slots"
+            1,
+            "arg_uses should be [cmd] — receiver is separate, kwargs are not positional"
         );
-        assert_eq!(call_node.call.arg_uses[0], vec!["subprocess".to_string()]);
-        assert_eq!(call_node.call.arg_uses[1], vec!["cmd".to_string()]);
+        assert_eq!(call_node.call.arg_uses[0], vec!["cmd".to_string()]);
         assert_eq!(call_node.call.receiver.as_deref(), Some("subprocess"));
 
         let kwargs = &call_node.call.kwargs;

@@ -491,10 +491,26 @@ fn identify_external_uses(
     external
 }
 
-/// Reorder external variables so that formal function parameters come first
-/// in their declaration order, followed by remaining external vars in
-/// alphabetical order. This ensures `SsaOp::Param { index }` indices 0..N
-/// correspond to call-site argument positions rather than alphabetical order.
+/// True iff `name` is a language-reserved method receiver identifier
+/// (Rust/Python `self`, JS/TS/Java/PHP/C++ `this`).
+///
+/// Receivers get their own IR node ([`SsaOp::SelfParam`]) and are therefore
+/// tracked as a distinct channel from positional parameters.  Keeping the
+/// check localised to one helper ensures the set of receiver names stays
+/// consistent across lowering and summary extraction.
+pub(crate) fn is_receiver_name(name: &str) -> bool {
+    matches!(name, "self" | "this")
+}
+
+/// Reorder external variables so the receiver (`self`/`this`) comes first,
+/// followed by formal positional parameters in declaration order, followed
+/// by remaining external vars in alphabetical order.
+///
+/// This fixed order is what the synthetic-parameter injection step relies
+/// on to emit one [`SsaOp::SelfParam`] (for the leading receiver slot, when
+/// present) followed by a contiguous run of [`SsaOp::Param { index }`] values
+/// whose indices 0..N correspond exactly to positional call-site argument
+/// positions — no receiver offset required anywhere downstream.
 fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec<String> {
     if formal_params.is_empty() {
         return external; // no reordering — preserve existing alphabetical sort
@@ -502,15 +518,34 @@ fn reorder_external_vars(external: Vec<String>, formal_params: &[String]) -> Vec
     let ext_set: HashSet<&str> = external.iter().map(|s| s.as_str()).collect();
     let formal_set: HashSet<&str> = formal_params.iter().map(|s| s.as_str()).collect();
     let mut result = Vec::with_capacity(external.len());
-    // Formal params first, in declaration order (only those present in external set)
+    // Receiver first (highest priority), regardless of whether it appears in
+    // formal_params or was discovered purely as an external reference.
+    // Languages with explicit self (Rust/Python) put it in formal_params;
+    // languages with implicit this (JS/TS/Java/PHP) have it only as an
+    // external reference.  Either way, SelfParam should be emitted first.
+    if ext_set.contains("self") {
+        result.push("self".to_string());
+    } else if ext_set.contains("this") {
+        result.push("this".to_string());
+    }
+    // Formal positional params next (declaration order), skipping any
+    // receiver that was already emitted above.
     for p in formal_params {
+        if is_receiver_name(p) {
+            continue;
+        }
         if ext_set.contains(p.as_str()) {
             result.push(p.clone());
         }
     }
-    // Remaining external vars alphabetically (external is already sorted)
+    // Remaining external vars alphabetically (external is already sorted),
+    // excluding anything already placed.
+    let placed: HashSet<String> = result.iter().cloned().collect();
     for v in external {
-        if !formal_set.contains(v.as_str()) {
+        if placed.contains(&v) {
+            continue;
+        }
+        if !formal_set.contains(v.as_str()) && !is_receiver_name(&v) {
             result.push(v);
         }
     }
@@ -1146,7 +1181,8 @@ fn rename_variables(
     if !external_vars.is_empty() {
         let entry_cfg_node = blocks_nodes[0][0];
         let mut synthetic_body = Vec::with_capacity(external_vars.len());
-        for (i, var) in external_vars.iter().enumerate() {
+        let mut positional_idx: usize = 0;
+        for var in external_vars.iter() {
             let v = SsaValue(next_value);
             next_value += 1;
             value_defs.push(ValueDef {
@@ -1154,9 +1190,18 @@ fn rename_variables(
                 cfg_node: entry_cfg_node,
                 block: BlockId(0),
             });
+            let op = if is_receiver_name(var) {
+                SsaOp::SelfParam
+            } else {
+                let op = SsaOp::Param {
+                    index: positional_idx,
+                };
+                positional_idx += 1;
+                op
+            };
             synthetic_body.push(SsaInst {
                 value: v,
-                op: SsaOp::Param { index: i },
+                op,
                 cfg_node: entry_cfg_node,
                 var_name: Some(var.clone()),
                 span: (0, 0),

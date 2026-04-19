@@ -316,6 +316,7 @@ fn op_view(op: &SsaOp) -> (String, Vec<String>) {
             ("Const".into(), ops)
         }
         SsaOp::Param { index } => ("Param".into(), vec![format!("{}", index)]),
+        SsaOp::SelfParam => ("SelfParam".into(), vec![]),
         SsaOp::CatchParam => ("CatchParam".into(), vec![]),
         SsaOp::Nop => ("Nop".into(), vec![]),
     }
@@ -1252,6 +1253,10 @@ function consume() {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             },
         );
 

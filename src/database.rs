@@ -1887,6 +1887,10 @@ fn ssa_summaries_round_trip() {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             },
         ),
         (
@@ -1907,6 +1911,10 @@ fn ssa_summaries_round_trip() {
                 return_type: None,
                 return_abstract: None,
                 source_to_callback: vec![],
+
+                receiver_to_return: None,
+
+                receiver_to_sink: Cap::empty(),
             },
         ),
     ];
@@ -1975,6 +1983,10 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             return_type: None,
             return_abstract: None,
             source_to_callback: vec![],
+
+            receiver_to_return: None,
+
+            receiver_to_sink: Cap::empty(),
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1)
@@ -2000,6 +2012,10 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             return_type: None,
             return_abstract: None,
             source_to_callback: vec![],
+
+            receiver_to_return: None,
+
+            receiver_to_sink: Cap::empty(),
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2)
@@ -2046,6 +2062,10 @@ fn clear_drops_ssa_summaries_table() {
             return_type: None,
             return_abstract: None,
             source_to_callback: vec![],
+
+            receiver_to_return: None,
+
+            receiver_to_sink: Cap::empty(),
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
@@ -2297,6 +2317,10 @@ fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     }
 }
 

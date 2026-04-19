@@ -421,6 +421,10 @@ fn ssa_summary_serde_round_trip_identity() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
@@ -443,6 +447,10 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
@@ -462,6 +470,10 @@ fn ssa_summary_serde_round_trip_add_bits() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
@@ -485,6 +497,10 @@ fn ssa_summary_serde_round_trip_all_variants() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
@@ -513,6 +529,10 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     gs.insert_ssa(key.clone(), v1.clone());
@@ -529,6 +549,10 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     gs.insert_ssa(key.clone(), v2.clone());
@@ -565,6 +589,10 @@ fn global_summaries_merge_with_ssa_entries() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     let sum_b = SsaFuncSummary {
@@ -577,6 +605,10 @@ fn global_summaries_merge_with_ssa_entries() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
 
@@ -613,6 +645,10 @@ fn global_summaries_is_empty_considers_ssa() {
             return_type: None,
             return_abstract: None,
             source_to_callback: vec![],
+
+            receiver_to_return: None,
+
+            receiver_to_sink: Cap::empty(),
         ..Default::default()
         },
     );
@@ -632,6 +668,10 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
@@ -666,6 +706,10 @@ fn ssa_summary_serde_round_trip_container_fields() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
@@ -709,6 +753,10 @@ fn ssa_summary_serde_round_trip_return_abstract() {
             bits: BitFact::top(),
         }),
         source_to_callback: vec![],
+
+        receiver_to_return: None,
+
+        receiver_to_sink: Cap::empty(),
     ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
@@ -1207,6 +1255,10 @@ fn global_summaries_resolve_body_requires_body_present() {
             return_type: None,
             return_abstract: None,
             source_to_callback: vec![],
+
+            receiver_to_return: None,
+
+            receiver_to_sink: Cap::empty(),
         ..Default::default()
         },
     );

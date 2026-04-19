@@ -412,6 +412,10 @@ mod tests {
                         return_type: None,
                         return_abstract: None,
                         source_to_callback: vec![],
+
+                        receiver_to_return: None,
+
+                        receiver_to_sink: Cap::empty(),
                     },
                 )],
             )
@@ -606,6 +610,10 @@ mod tests {
                         return_type: None,
                         return_abstract: None,
                         source_to_callback: vec![],
+
+                        receiver_to_return: None,
+
+                        receiver_to_sink: Cap::empty(),
                     },
                 )],
             )
