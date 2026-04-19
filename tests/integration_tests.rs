@@ -603,3 +603,21 @@ fn python_subprocess_shell_true_tainted() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
+
+/// Python `subprocess.run([cmd], shell=False)` — shell kwarg present but not
+/// dangerous.  The gate must not fire and no taint flow should be reported.
+#[test]
+fn python_subprocess_shell_false_safe() {
+    let dir = fixture_path("python_subprocess_shell_false_safe");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Python `subprocess.run([cmd])` — no shell kwarg (default shell=False).
+/// The gate must not fire and no taint flow should be reported.
+#[test]
+fn python_subprocess_shell_default_safe() {
+    let dir = fixture_path("python_subprocess_shell_default_safe");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}

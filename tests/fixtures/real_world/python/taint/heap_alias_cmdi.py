@@ -8,5 +8,5 @@ def run():
     a = []
     b = a
     a.append(request.args.get('cmd'))
-    subprocess.call(b)
+    subprocess.call(b, shell=True)
     return 'done'

@@ -149,9 +149,6 @@ pub static RULES: &[LabelRule] = &[
         matchers: &[
             "os.system",
             "os.popen",
-            "subprocess.call",
-            "subprocess.run",
-            "subprocess.Popen",
             "subprocess.check_output",
             "subprocess.check_call",
         ],

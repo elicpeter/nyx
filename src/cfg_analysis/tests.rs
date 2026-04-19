@@ -1816,14 +1816,14 @@ function run() {
 
 #[test]
 fn python_array_with_tainted_element_produces_finding() {
-    // subprocess.run([user_input, "-la"]) with one tainted element must report
+    // subprocess.run([user_input, "-la"], shell=True) with one tainted element must report
     let src = br#"
 import subprocess
 import sys
 
 def run():
     user_input = sys.argv[1]
-    subprocess.run([user_input, "-la"])
+    subprocess.run([user_input, "-la"], shell=True)
 "#;
 
     let findings = parse_and_run_all(src, "python", Language::from(tree_sitter_python::LANGUAGE));

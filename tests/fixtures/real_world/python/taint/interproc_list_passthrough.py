@@ -11,4 +11,4 @@ def add_to_list(items, value):
 def interproc():
     cmds = []
     result = add_to_list(cmds, request.args.get('cmd'))
-    subprocess.run(result)
+    subprocess.run(result, shell=True)

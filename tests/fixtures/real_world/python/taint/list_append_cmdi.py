@@ -7,5 +7,5 @@ app = Flask(__name__)
 def run_cmd():
     commands = []
     commands.append(request.args.get('cmd'))
-    subprocess.call(commands)
+    subprocess.call(commands, shell=True)
     return 'done'
