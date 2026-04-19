@@ -1021,10 +1021,21 @@ pub fn analyse_file_summaries(
     // Collect keys first to avoid borrow conflict.
     let key_matches: Vec<_> = ssa_rows
         .into_iter()
-        .filter_map(|(name, arity, ssa_summary)| {
+        .filter_map(|(name, arity, container, _disambig, _kind, ssa_summary)| {
+            // Prefer a match that also agrees on container when we know one;
+            // fall back to bare (name, arity) for pre-container summaries.
             let key = global
                 .iter()
-                .find(|(k, _)| k.name == name && k.arity == Some(arity))
+                .find(|(k, _)| {
+                    k.name == name
+                        && k.arity == Some(arity)
+                        && (container.is_empty() || k.container == container)
+                })
+                .or_else(|| {
+                    global
+                        .iter()
+                        .find(|(k, _)| k.name == name && k.arity == Some(arity))
+                })
                 .map(|(k, _)| k.clone())?;
             Some((key, ssa_summary))
         })
@@ -1223,6 +1234,7 @@ function consume() {
             namespace: "src/helper.js".into(),
             name: "getInput".into(),
             arity: Some(0),
+        ..Default::default()
         };
         global.insert_ssa(
             key,

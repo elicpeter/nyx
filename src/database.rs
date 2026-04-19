@@ -44,9 +44,12 @@ pub mod index {
             name TEXT NOT NULL,
             arity INTEGER NOT NULL DEFAULT -1,
             lang TEXT NOT NULL,
+            container TEXT NOT NULL DEFAULT '',
+            disambig INTEGER,
+            kind TEXT NOT NULL DEFAULT 'fn',
             summary TEXT NOT NULL,
             updated_at INTEGER NOT NULL,
-            UNIQUE(project, file_path, name, arity)
+            UNIQUE(project, file_path, name, container, arity, disambig, kind)
         );
 
         CREATE TABLE IF NOT EXISTS ssa_function_summaries (
@@ -58,9 +61,12 @@ pub mod index {
             arity INTEGER NOT NULL DEFAULT -1,
             lang TEXT NOT NULL,
             namespace TEXT NOT NULL DEFAULT '',
+            container TEXT NOT NULL DEFAULT '',
+            disambig INTEGER,
+            kind TEXT NOT NULL DEFAULT 'fn',
             summary TEXT NOT NULL,
             updated_at INTEGER NOT NULL,
-            UNIQUE(project, file_path, name, arity)
+            UNIQUE(project, file_path, name, container, arity, disambig, kind)
         );
 
         CREATE TABLE IF NOT EXISTS ssa_function_bodies (
@@ -72,9 +78,12 @@ pub mod index {
             arity INTEGER NOT NULL DEFAULT -1,
             lang TEXT NOT NULL,
             namespace TEXT NOT NULL DEFAULT '',
+            container TEXT NOT NULL DEFAULT '',
+            disambig INTEGER,
+            kind TEXT NOT NULL DEFAULT 'fn',
             body TEXT NOT NULL,
             updated_at INTEGER NOT NULL,
-            UNIQUE(project, file_path, name, arity)
+            UNIQUE(project, file_path, name, container, arity, disambig, kind)
         );
 
         CREATE TABLE IF NOT EXISTS scans (
@@ -233,53 +242,79 @@ pub mod index {
                 conn.pragma_update(None, "mmap_size", "268435456")?; // 256 MB
                 conn.execute_batch(SCHEMA)?;
 
-                // Migrate: if the function_summaries table has the old schema
-                // (missing `arity` column), drop and recreate it.
-                let has_arity: bool = conn
+                // Migrate: if the function_summaries table is missing any required
+                // column (arity for older schemas; container/disambig/kind for the
+                // richer FuncKey identity), drop and recreate it so the data layout
+                // matches the current model.
+                let fn_cols: std::collections::HashSet<String> = conn
                     .prepare("PRAGMA table_info(function_summaries)")
                     .and_then(|mut s| {
                         let cols: Vec<String> = s
                             .query_map([], |r| r.get::<_, String>(1))?
                             .filter_map(Result::ok)
                             .collect();
-                        Ok(cols.iter().any(|c| c == "arity"))
+                        Ok(cols.into_iter().collect())
                     })
-                    .unwrap_or(true);
+                    .unwrap_or_default();
 
-                if !has_arity {
-                    tracing::info!("migrating function_summaries: adding arity column");
+                let fn_ok = fn_cols.contains("arity")
+                    && fn_cols.contains("container")
+                    && fn_cols.contains("disambig")
+                    && fn_cols.contains("kind");
+
+                if !fn_ok {
+                    tracing::info!(
+                        "migrating function_summaries: recreating table with identity columns"
+                    );
                     conn.execute_batch("DROP TABLE IF EXISTS function_summaries;")?;
-                    conn.execute_batch(
-                        "CREATE TABLE IF NOT EXISTS function_summaries (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            project TEXT NOT NULL,
-                            file_path TEXT NOT NULL,
-                            file_hash BLOB NOT NULL,
-                            name TEXT NOT NULL,
-                            arity INTEGER NOT NULL DEFAULT -1,
-                            lang TEXT NOT NULL,
-                            summary TEXT NOT NULL,
-                            updated_at INTEGER NOT NULL,
-                            UNIQUE(project, file_path, name, arity)
-                        );",
-                    )?;
+                    conn.execute_batch(SCHEMA)?;
                 }
 
-                // Migrate: verify SSA tables have expected columns; if not, recreate.
-                let ssa_has_namespace: bool = conn
+                // Migrate: verify SSA tables carry namespace + container/disambig/kind.
+                let ssa_cols: std::collections::HashSet<String> = conn
                     .prepare("PRAGMA table_info(ssa_function_summaries)")
                     .and_then(|mut s| {
                         let cols: Vec<String> = s
                             .query_map([], |r| r.get::<_, String>(1))?
                             .filter_map(Result::ok)
                             .collect();
-                        Ok(cols.iter().any(|c| c == "namespace"))
+                        Ok(cols.into_iter().collect())
                     })
-                    .unwrap_or(true);
+                    .unwrap_or_default();
 
-                if !ssa_has_namespace {
+                let ssa_ok = ssa_cols.contains("namespace")
+                    && ssa_cols.contains("container")
+                    && ssa_cols.contains("disambig")
+                    && ssa_cols.contains("kind");
+
+                if !ssa_ok {
                     tracing::info!("migrating ssa_function_summaries: recreating tables");
                     conn.execute_batch("DROP TABLE IF EXISTS ssa_function_summaries;")?;
+                    conn.execute_batch("DROP TABLE IF EXISTS ssa_function_bodies;")?;
+                    conn.execute_batch(SCHEMA)?;
+                }
+
+                // ssa_function_bodies may have been created with the old column set
+                // even when ssa_function_summaries is current (e.g. partial
+                // migrations).  Check and recreate independently.
+                let body_cols: std::collections::HashSet<String> = conn
+                    .prepare("PRAGMA table_info(ssa_function_bodies)")
+                    .and_then(|mut s| {
+                        let cols: Vec<String> = s
+                            .query_map([], |r| r.get::<_, String>(1))?
+                            .filter_map(Result::ok)
+                            .collect();
+                        Ok(cols.into_iter().collect())
+                    })
+                    .unwrap_or_default();
+
+                let body_ok = body_cols.contains("namespace")
+                    && body_cols.contains("container")
+                    && body_cols.contains("disambig")
+                    && body_cols.contains("kind");
+
+                if !body_ok {
+                    tracing::info!("migrating ssa_function_bodies: recreating table");
                     conn.execute_batch("DROP TABLE IF EXISTS ssa_function_bodies;")?;
                     conn.execute_batch(SCHEMA)?;
                 }
@@ -589,13 +624,15 @@ pub mod index {
             {
                 let mut stmt = tx.prepare(
                     "INSERT OR REPLACE INTO function_summaries
-                        (project, file_path, file_hash, name, arity, lang, summary, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        (project, file_path, file_hash, name, arity, lang,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 )?;
 
                 for s in summaries {
                     let json = serde_json::to_string(s)
                         .map_err(|e| NyxError::Msg(format!("summary serialise: {e}")))?;
+                    let disambig_sql = s.disambig.map(|d| d as i64);
                     stmt.execute(params![
                         self.project,
                         path_str,
@@ -603,6 +640,9 @@ pub mod index {
                         s.name,
                         s.param_count as i64,
                         s.lang,
+                        s.container,
+                        disambig_sql,
+                        s.kind.as_str(),
                         json,
                         now
                     ])?;
@@ -614,6 +654,11 @@ pub mod index {
         }
 
         /// Atomically replace all SSA function summaries for a single file.
+        ///
+        /// The input tuple is
+        /// `(name, arity, lang, namespace, container, disambig, kind, summary)` —
+        /// matching the fields required to reconstruct a full [`crate::symbol::FuncKey`]
+        /// on load.
         pub fn replace_ssa_summaries_for_file(
             &mut self,
             file_path: &Path,
@@ -623,6 +668,9 @@ pub mod index {
                 usize,
                 String,
                 String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
                 crate::summary::ssa_summary::SsaFuncSummary,
             )],
         ) -> NyxResult<()> {
@@ -638,13 +686,16 @@ pub mod index {
             {
                 let mut stmt = tx.prepare(
                     "INSERT OR REPLACE INTO ssa_function_summaries
-                        (project, file_path, file_hash, name, arity, lang, namespace, summary, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 )?;
 
-                for (name, arity, lang, namespace, summary) in summaries {
+                for (name, arity, lang, namespace, container, disambig, kind, summary) in summaries
+                {
                     let json = serde_json::to_string(summary)
                         .map_err(|e| NyxError::Msg(format!("SSA summary serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
                     stmt.execute(params![
                         self.project,
                         path_str,
@@ -653,6 +704,9 @@ pub mod index {
                         *arity as i64,
                         lang,
                         namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
                         json,
                         now
                     ])?;
@@ -715,7 +769,7 @@ pub mod index {
         /// Load every SSA function summary for this project.
         ///
         /// Returns rows with full metadata for `FuncKey` reconstruction:
-        /// `(file_path, name, lang, arity, namespace, SsaFuncSummary)`.
+        /// `(file_path, name, lang, arity, namespace, container, disambig, kind, SsaFuncSummary)`.
         pub fn load_all_ssa_summaries(
             &self,
         ) -> NyxResult<
@@ -725,15 +779,29 @@ pub mod index {
                 String,
                 i64,
                 String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
                 crate::summary::ssa_summary::SsaFuncSummary,
             )>,
         > {
             let mut stmt = self.c().prepare(
-                "SELECT file_path, name, lang, arity, namespace, summary
+                "SELECT file_path, name, lang, arity, namespace,
+                        container, disambig, kind, summary
                  FROM ssa_function_summaries WHERE project = ?1",
             )?;
 
-            let rows: Vec<(String, String, String, i64, String, String)> = stmt
+            let rows: Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<i64>,
+                String,
+                String,
+            )> = stmt
                 .query_map([&self.project], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -742,6 +810,9 @@ pub mod index {
                         row.get::<_, i64>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
                     ))
                 })?
                 .filter_map(|r| match r {
@@ -757,8 +828,11 @@ pub mod index {
                 use rayon::prelude::*;
                 let results: Vec<_> = rows
                     .par_iter()
-                    .filter_map(|(fp, name, lang, arity, ns, json)| {
-                        serde_json::from_str::<crate::summary::ssa_summary::SsaFuncSummary>(json)
+                    .filter_map(
+                        |(fp, name, lang, arity, ns, container, disambig, kind, json)| {
+                            serde_json::from_str::<crate::summary::ssa_summary::SsaFuncSummary>(
+                                json,
+                            )
                             .map_err(|e| {
                                 tracing::warn!("failed to deserialize SSA summary JSON: {e}");
                                 e
@@ -771,15 +845,19 @@ pub mod index {
                                     lang.clone(),
                                     *arity,
                                     ns.clone(),
+                                    container.clone(),
+                                    disambig.map(|d| d as u32),
+                                    crate::symbol::FuncKind::from_slug(kind),
                                     s,
                                 )
                             })
-                    })
+                        },
+                    )
                     .collect();
                 Ok(results)
             } else {
                 let mut out = Vec::with_capacity(rows.len());
-                for (fp, name, lang, arity, ns, json) in &rows {
+                for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
                     match serde_json::from_str::<crate::summary::ssa_summary::SsaFuncSummary>(json)
                     {
                         Ok(s) => {
@@ -789,6 +867,9 @@ pub mod index {
                                 lang.clone(),
                                 *arity,
                                 ns.clone(),
+                                container.clone(),
+                                disambig.map(|d| d as u32),
+                                crate::symbol::FuncKind::from_slug(kind),
                                 s,
                             ));
                         }
@@ -832,6 +913,7 @@ pub mod index {
         ///
         /// Phase 30: persists cross-file callee bodies for interprocedural symex.
         /// Bodies are serialized as JSON TEXT, matching the ssa_function_summaries pattern.
+        /// Input tuple: `(name, arity, lang, namespace, container, disambig, kind, body)`.
         pub fn replace_ssa_bodies_for_file(
             &mut self,
             file_path: &Path,
@@ -841,6 +923,9 @@ pub mod index {
                 usize,
                 String,
                 String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
                 crate::taint::ssa_transfer::CalleeSsaBody,
             )],
         ) -> NyxResult<()> {
@@ -856,13 +941,15 @@ pub mod index {
             {
                 let mut stmt = tx.prepare(
                     "INSERT OR REPLACE INTO ssa_function_bodies
-                        (project, file_path, file_hash, name, arity, lang, namespace, body, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, body, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 )?;
 
-                for (name, arity, lang, namespace, body) in bodies {
+                for (name, arity, lang, namespace, container, disambig, kind, body) in bodies {
                     let json = serde_json::to_string(body)
                         .map_err(|e| NyxError::Msg(format!("SSA body serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
                     stmt.execute(params![
                         self.project,
                         path_str,
@@ -871,6 +958,9 @@ pub mod index {
                         *arity as i64,
                         lang,
                         namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
                         json,
                         now
                     ])?;
@@ -884,7 +974,7 @@ pub mod index {
         /// Load every SSA callee body for this project.
         ///
         /// Returns rows with full metadata for `FuncKey` reconstruction:
-        /// `(file_path, name, lang, arity, namespace, CalleeSsaBody)`.
+        /// `(file_path, name, lang, arity, namespace, container, disambig, kind, CalleeSsaBody)`.
         pub fn load_all_ssa_bodies(
             &self,
         ) -> NyxResult<
@@ -894,15 +984,29 @@ pub mod index {
                 String,
                 i64,
                 String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
                 crate::taint::ssa_transfer::CalleeSsaBody,
             )>,
         > {
             let mut stmt = self.c().prepare(
-                "SELECT file_path, name, lang, arity, namespace, body
+                "SELECT file_path, name, lang, arity, namespace,
+                        container, disambig, kind, body
                  FROM ssa_function_bodies WHERE project = ?1",
             )?;
 
-            let rows: Vec<(String, String, String, i64, String, String)> = stmt
+            let rows: Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<i64>,
+                String,
+                String,
+            )> = stmt
                 .query_map([&self.project], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -911,6 +1015,9 @@ pub mod index {
                         row.get::<_, i64>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
                     ))
                 })?
                 .filter_map(|r| match r {
@@ -926,29 +1033,34 @@ pub mod index {
                 use rayon::prelude::*;
                 let results: Vec<_> = rows
                     .par_iter()
-                    .filter_map(|(fp, name, lang, arity, ns, json)| {
-                        serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json)
-                            .map_err(|e| {
-                                tracing::warn!("failed to deserialize SSA body JSON: {e}");
-                                e
-                            })
-                            .ok()
-                            .map(|b| {
-                                (
-                                    fp.clone(),
-                                    name.clone(),
-                                    lang.clone(),
-                                    *arity,
-                                    ns.clone(),
-                                    b,
-                                )
-                            })
-                    })
+                    .filter_map(
+                        |(fp, name, lang, arity, ns, container, disambig, kind, json)| {
+                            serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json)
+                                .map_err(|e| {
+                                    tracing::warn!("failed to deserialize SSA body JSON: {e}");
+                                    e
+                                })
+                                .ok()
+                                .map(|b| {
+                                    (
+                                        fp.clone(),
+                                        name.clone(),
+                                        lang.clone(),
+                                        *arity,
+                                        ns.clone(),
+                                        container.clone(),
+                                        disambig.map(|d| d as u32),
+                                        crate::symbol::FuncKind::from_slug(kind),
+                                        b,
+                                    )
+                                })
+                        },
+                    )
                     .collect();
                 Ok(results)
             } else {
                 let mut out = Vec::with_capacity(rows.len());
-                for (fp, name, lang, arity, ns, json) in &rows {
+                for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
                     match serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json) {
                         Ok(b) => {
                             out.push((
@@ -957,6 +1069,9 @@ pub mod index {
                                 lang.clone(),
                                 *arity,
                                 ns.clone(),
+                                container.clone(),
+                                disambig.map(|d| d as u32),
+                                crate::symbol::FuncKind::from_slug(kind),
                                 b,
                             ));
                         }
@@ -1759,6 +1874,9 @@ fn ssa_summaries_round_trip() {
             1_usize,
             "python".to_string(),
             "app.py".to_string(),
+            String::new(),
+            None,
+            crate::symbol::FuncKind::Function,
             SsaFuncSummary {
                 param_to_return: vec![(0, TaintTransform::Identity)],
                 param_to_sink: vec![],
@@ -1776,6 +1894,9 @@ fn ssa_summaries_round_trip() {
             1_usize,
             "python".to_string(),
             "app.py".to_string(),
+            String::new(),
+            None,
+            crate::symbol::FuncKind::Function,
             SsaFuncSummary {
                 param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
                 param_to_sink: vec![(0, Cap::SQL_QUERY)],
@@ -1797,9 +1918,9 @@ fn ssa_summaries_round_trip() {
     assert_eq!(loaded.len(), 2);
 
     // Check first summary
-    let (_, name1, lang1, arity1, ns1, sum1) = loaded
+    let (_, name1, lang1, arity1, ns1, _, _, _, sum1) = loaded
         .iter()
-        .find(|(_, n, _, _, _, _)| n == "process")
+        .find(|(_, n, _, _, _, _, _, _, _)| n == "process")
         .unwrap();
     assert_eq!(name1, "process");
     assert_eq!(lang1, "python");
@@ -1809,9 +1930,9 @@ fn ssa_summaries_round_trip() {
     assert!(sum1.param_to_sink.is_empty());
 
     // Check second summary
-    let (_, name2, _, _, _, sum2) = loaded
+    let (_, name2, _, _, _, _, _, _, sum2) = loaded
         .iter()
-        .find(|(_, n, _, _, _, _)| n == "sanitize")
+        .find(|(_, n, _, _, _, _, _, _, _)| n == "sanitize")
         .unwrap();
     assert_eq!(name2, "sanitize");
     assert_eq!(
@@ -1841,6 +1962,9 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
         1_usize,
         "python".to_string(),
         "lib.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         SsaFuncSummary {
             param_to_return: vec![(0, TaintTransform::Identity)],
             param_to_sink: vec![],
@@ -1863,6 +1987,9 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
         2_usize,
         "python".to_string(),
         "lib.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         SsaFuncSummary {
             param_to_return: vec![(0, TaintTransform::StripBits(Cap::SHELL_ESCAPE))],
             param_to_sink: vec![],
@@ -1906,6 +2033,9 @@ fn clear_drops_ssa_summaries_table() {
         1_usize,
         "python".to_string(),
         "test.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         SsaFuncSummary {
             param_to_return: vec![(0, TaintTransform::Identity)],
             param_to_sink: vec![],
@@ -2006,6 +2136,9 @@ fn ssa_bodies_round_trip() {
         1_usize,
         "python".to_string(),
         "helper.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         body,
     )];
 
@@ -2014,7 +2147,7 @@ fn ssa_bodies_round_trip() {
     let loaded = idx.load_all_ssa_bodies().unwrap();
     assert_eq!(loaded.len(), 1);
 
-    let (fp, name, lang, arity, ns, loaded_body) = &loaded[0];
+    let (fp, name, lang, arity, ns, _, _, _, loaded_body) = &loaded[0];
     assert_eq!(fp, &f.to_string_lossy().to_string());
     assert_eq!(name, "transform");
     assert_eq!(lang, "python");
@@ -2041,12 +2174,15 @@ fn ssa_bodies_replace_on_rescan() {
         1_usize,
         "python".to_string(),
         "h.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_callee_body(2, 1),
     )];
     idx.replace_ssa_bodies_for_file(&f, &hash1, &bodies1)
         .unwrap();
     assert_eq!(idx.load_all_ssa_bodies().unwrap().len(), 1);
-    assert_eq!(idx.load_all_ssa_bodies().unwrap()[0].5.ssa.blocks.len(), 2);
+    assert_eq!(idx.load_all_ssa_bodies().unwrap()[0].8.ssa.blocks.len(), 2);
 
     // Store v2 with 5 blocks — should replace, not accumulate
     let hash2 = index::Indexer::digest_bytes(b"v2");
@@ -2055,6 +2191,9 @@ fn ssa_bodies_replace_on_rescan() {
         1_usize,
         "python".to_string(),
         "h.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_callee_body(5, 1),
     )];
     idx.replace_ssa_bodies_for_file(&f, &hash2, &bodies2)
@@ -2062,7 +2201,7 @@ fn ssa_bodies_replace_on_rescan() {
 
     let loaded = idx.load_all_ssa_bodies().unwrap();
     assert_eq!(loaded.len(), 1, "should replace, not accumulate");
-    assert_eq!(loaded[0].5.ssa.blocks.len(), 5);
+    assert_eq!(loaded[0].8.ssa.blocks.len(), 5);
 }
 
 #[test]
@@ -2093,6 +2232,9 @@ fn ssa_bodies_with_node_meta_round_trip() {
         0_usize,
         "python".to_string(),
         "h.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         body,
     )];
     idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
@@ -2100,7 +2242,7 @@ fn ssa_bodies_with_node_meta_round_trip() {
     let loaded = idx.load_all_ssa_bodies().unwrap();
     assert_eq!(loaded.len(), 1);
 
-    let meta = &loaded[0].5.node_meta;
+    let meta = &loaded[0].8.node_meta;
     assert_eq!(meta.len(), 1);
     assert_eq!(meta[&0].bin_op, Some(crate::cfg::BinOp::Add));
     assert!(matches!(meta[&0].labels[0], DataLabel::Sink(cap) if cap == Cap::SQL_QUERY));
@@ -2125,6 +2267,9 @@ fn ssa_bodies_removed_on_file_delete() {
         0_usize,
         "python".to_string(),
         "h.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_callee_body(1, 0),
     )];
     idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
@@ -2184,6 +2329,7 @@ fn populate_project(
         propagates_taint: true,
         tainted_sink_params: vec![],
         callees: vec![],
+        ..Default::default()
     };
     idx.replace_summaries_for_file(&f, &hash, &[func_summary])
         .unwrap();
@@ -2194,6 +2340,9 @@ fn populate_project(
         1_usize,
         "python".to_string(),
         "app.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_ssa_summary(),
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &ssa_sums)
@@ -2205,6 +2354,9 @@ fn populate_project(
         1_usize,
         "python".to_string(),
         "app.py".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_callee_body(1, 1),
     )];
     idx.replace_ssa_bodies_for_file(&f, &hash, &bodies).unwrap();
@@ -2448,6 +2600,9 @@ fn missing_ssa_namespace_column_triggers_recreate() {
         1_usize,
         "python".to_string(),
         "ns".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_ssa_summary(),
     )];
     // This would fail if the namespace column doesn't exist
@@ -2556,6 +2711,9 @@ fn partial_failure_does_not_drop_valid_rows() {
         1_usize,
         "python".to_string(),
         "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_ssa_summary(),
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
@@ -2664,6 +2822,9 @@ fn multiple_projects_isolated() {
         0_usize,
         "python".to_string(),
         "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_ssa_summary(),
     )];
     idx1.replace_ssa_summaries_for_file(&f1, &hash1, &sums1)
@@ -2677,6 +2838,9 @@ fn multiple_projects_isolated() {
         0_usize,
         "python".to_string(),
         "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_ssa_summary(),
     )];
     idx2.replace_ssa_summaries_for_file(&f2, &hash2, &sums2)
@@ -2717,6 +2881,9 @@ fn version_reset_wipes_all_projects() {
         0_usize,
         "python".to_string(),
         "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_ssa_summary(),
     )];
     idx1.replace_ssa_summaries_for_file(&f1, &hash1, &sums1)
@@ -2730,6 +2897,9 @@ fn version_reset_wipes_all_projects() {
         0_usize,
         "python".to_string(),
         "".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
         make_test_ssa_summary(),
     )];
     idx2.replace_ssa_summaries_for_file(&f2, &hash2, &sums2)

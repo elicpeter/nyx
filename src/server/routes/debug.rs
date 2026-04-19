@@ -315,7 +315,9 @@ fn load_global_summaries_from_pool(
     let ssa_rows = indexer.load_all_ssa_summaries().ok()?;
 
     let mut global = crate::summary::merge_summaries(func_summaries, Some(&root_str));
-    for (_file_path, name, lang_str, arity, namespace, summary) in ssa_rows {
+    for (_file_path, name, lang_str, arity, namespace, container, disambig, kind, summary) in
+        ssa_rows
+    {
         let lang = crate::symbol::Lang::from_slug(&lang_str).unwrap_or(crate::symbol::Lang::Rust);
         let key = crate::symbol::FuncKey {
             lang,
@@ -324,12 +326,15 @@ fn load_global_summaries_from_pool(
             } else {
                 namespace
             },
+            container,
             name,
             arity: if arity >= 0 {
                 Some(arity as usize)
             } else {
                 None
             },
+            disambig,
+            kind,
         };
         global.insert_ssa(key, summary);
     }
@@ -381,6 +386,7 @@ mod tests {
                     propagates_taint: false,
                     tainted_sink_params: vec![],
                     callees: vec![],
+                ..Default::default()
                 }],
             )
             .unwrap();
@@ -393,6 +399,9 @@ mod tests {
                     0,
                     "javascript".into(),
                     "src/helper.js".into(),
+                    String::new(),
+                    None,
+                    crate::symbol::FuncKind::Function,
                     SsaFuncSummary {
                         param_to_return: vec![],
                         param_to_sink: vec![],
@@ -571,6 +580,7 @@ mod tests {
                     propagates_taint: false,
                     tainted_sink_params: vec![],
                     callees: vec![],
+                ..Default::default()
                 }],
             )
             .unwrap();
@@ -583,6 +593,9 @@ mod tests {
                     0,
                     "rust".into(),
                     "src/lib.rs".into(),
+                    String::new(),
+                    None,
+                    crate::symbol::FuncKind::Function,
                     SsaFuncSummary {
                         param_to_return: vec![],
                         param_to_sink: vec![],
@@ -606,6 +619,7 @@ mod tests {
             namespace: "src/lib.rs".into(),
             name: "helper".into(),
             arity: Some(0),
+        ..Default::default()
         };
 
         assert!(global.get(&key).is_some());

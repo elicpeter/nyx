@@ -254,8 +254,17 @@ pub fn build_index_with_observer(
                 let ssa_rows: Vec<_> = fused
                     .ssa_summaries
                     .into_iter()
-                    .map(|(name, arity, sum)| {
-                        (name, arity, lang_slug.clone(), namespace.clone(), sum)
+                    .map(|(name, arity, container, disambig, kind, sum)| {
+                        (
+                            name,
+                            arity,
+                            lang_slug.clone(),
+                            namespace.clone(),
+                            container,
+                            disambig,
+                            kind,
+                            sum,
+                        )
                     })
                     .collect();
                 idx.replace_ssa_summaries_for_file(&path, &hash, &ssa_rows)?;

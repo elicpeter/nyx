@@ -555,19 +555,38 @@ impl<'a> ParsedFile<'a> {
     /// Extract SSA function summaries for all functions in this file.
     /// Extract SSA summaries and eligible callee bodies in a single lowering pass.
     ///
-    /// Returns `(ssa_summaries, ssa_bodies)` where bodies include lang/namespace
-    /// metadata needed for cross-file FuncKey construction.
+    /// Returns `(ssa_summaries, ssa_bodies)` where each tuple carries the full
+    /// identity metadata (container / disambig / kind) needed to reconstruct
+    /// a precise [`crate::symbol::FuncKey`] when persisted and later reloaded.
+    ///
+    /// **Known limitation:** the intra-file SSA summary map is still keyed by
+    /// bare function `name`.  When two definitions in the same file share the
+    /// same name (e.g. a free `process` and a `Worker::process`), the second
+    /// lowering overwrites the first in `sum_map`.  The surrounding `FuncKey`
+    /// identity we attach here is looked up from the first `LocalFuncSummary`
+    /// matching that name, so cross-file resolution remains correct for the
+    /// surviving definition but the shadowed one is lost.
     fn extract_ssa_artifacts(
         &self,
         global_summaries: Option<&GlobalSummaries>,
         scan_root: Option<&Path>,
     ) -> (
-        Vec<(String, usize, SsaFuncSummary)>,
+        Vec<(
+            String,
+            usize,
+            String,
+            Option<u32>,
+            crate::symbol::FuncKind,
+            SsaFuncSummary,
+        )>,
         Vec<(
             String,
             usize,
             String,
             String,
+            String,
+            Option<u32>,
+            crate::symbol::FuncKind,
             crate::taint::ssa_transfer::CalleeSsaBody,
         )>,
     ) {
@@ -598,9 +617,20 @@ impl<'a> ParsedFile<'a> {
             eligible_bodies.extend(body_bodies);
         }
 
+        // Lookup helper: find the first local summary matching `name` and
+        // return its identity triple.  Falls back to the free-function shape.
+        let identity_for = |name: &str| -> (String, Option<u32>, crate::symbol::FuncKind) {
+            self.local_summaries()
+                .iter()
+                .find(|(k, _)| k.name == name)
+                .map(|(_, ls)| (ls.container.clone(), ls.disambig, ls.kind))
+                .unwrap_or_else(|| (String::new(), None, crate::symbol::FuncKind::Function))
+        };
+
         let ssa_summaries = sum_map
             .into_iter()
             .map(|(name, summary)| {
+                let (container, disambig, kind) = identity_for(&name);
                 let param_count = self
                     .local_summaries()
                     .iter()
@@ -616,18 +646,22 @@ impl<'a> ParsedFile<'a> {
                             .map(|m| m + 1)
                             .unwrap_or(0)
                     });
-                (name, param_count, summary)
+                (name, param_count, container, disambig, kind, summary)
             })
             .collect();
 
         let ssa_bodies = eligible_bodies
             .into_iter()
             .map(|(name, param_count, body)| {
+                let (container, disambig, kind) = identity_for(&name);
                 (
                     name,
                     param_count,
                     lang_slug.clone(),
                     namespace.clone(),
+                    container,
+                    disambig,
+                    kind,
                     body,
                 )
             })
@@ -906,12 +940,22 @@ pub fn extract_all_summaries_from_bytes(
     scan_root: Option<&Path>,
 ) -> NyxResult<(
     Vec<FuncSummary>,
-    Vec<(String, usize, SsaFuncSummary)>,
+    Vec<(
+        String,
+        usize,
+        String,
+        Option<u32>,
+        crate::symbol::FuncKind,
+        SsaFuncSummary,
+    )>,
     Vec<(
         String,
         usize,
         String,
         String,
+        String,
+        Option<u32>,
+        crate::symbol::FuncKind,
         crate::taint::ssa_transfer::CalleeSsaBody,
     )>,
 )> {
@@ -1276,16 +1320,31 @@ pub fn run_rules_on_file(
 pub struct FusedResult {
     pub summaries: Vec<FuncSummary>,
     pub diags: Vec<Diag>,
-    /// SSA-derived per-parameter summaries: (func_name, param_count, summary).
-    pub ssa_summaries: Vec<(String, usize, SsaFuncSummary)>,
+    /// SSA-derived per-parameter summaries.
+    ///
+    /// Tuple shape: `(func_name, param_count, container, disambig, kind, summary)`.
+    /// Carries enough identity data to reconstruct a precise [`crate::symbol::FuncKey`]
+    /// on reload — see `extract_ssa_artifacts` for the known intra-file name
+    /// collision limitation.
+    pub ssa_summaries: Vec<(
+        String,
+        usize,
+        String,
+        Option<u32>,
+        crate::symbol::FuncKind,
+        SsaFuncSummary,
+    )>,
     pub cfg_nodes: usize,
     /// Phase 30: eligible callee bodies for cross-file symex.
-    /// (func_name, param_count, lang_slug, namespace, body).
+    /// Tuple shape: `(func_name, param_count, lang_slug, namespace, container, disambig, kind, body)`.
     pub ssa_bodies: Vec<(
         String,
         usize,
         String,
         String,
+        String,
+        Option<u32>,
+        crate::symbol::FuncKind,
         crate::taint::ssa_transfer::CalleeSsaBody,
     )>,
 }

@@ -210,6 +210,14 @@ pub struct LocalFuncSummary {
     pub tainted_sink_params: Vec<usize>,
     /// Callee identifiers found inside this function body.
     pub callees: Vec<String>,
+    /// Identity discriminator: enclosing container path, `""` for free
+    /// top-level functions.  Copied into `FuncSummary.container` at export.
+    pub container: String,
+    /// Identity discriminator: byte offset / occurrence index for disambiguating
+    /// same-name siblings (closures, duplicate defs).
+    pub disambig: Option<u32>,
+    /// Structural role of this definition.
+    pub kind: crate::symbol::FuncKind,
 }
 
 pub type Cfg = Graph<NodeInfo, EdgeKind>;
@@ -2517,6 +2525,129 @@ fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> V
     names
 }
 
+/// Walk up from a function definition node and build a container path.
+///
+/// Records the names of enclosing classes / impls / modules / namespaces /
+/// structs — and, for anonymous / nested functions, the name of an enclosing
+/// named function — joined with `::`.  Also returns a `FuncKind` guess
+/// reflecting the structural role.
+///
+/// Returns `(container, kind)`.
+fn compute_container_and_kind(
+    func_node: Node<'_>,
+    ast_kind: &str,
+    fn_name: &str,
+    code: &[u8],
+) -> (String, crate::symbol::FuncKind) {
+    use crate::symbol::FuncKind;
+
+    // Lambda / arrow / anonymous function ⇒ Closure regardless of context.
+    let mut kind = if ast_kind == "lambda_expression"
+        || ast_kind == "arrow_function"
+        || ast_kind == "function_expression"
+        || ast_kind == "anonymous_function"
+        || ast_kind == "closure_expression"
+        || fn_name.starts_with("<anon@")
+    {
+        FuncKind::Closure
+    } else {
+        FuncKind::Function
+    };
+
+    let mut segments: Vec<String> = Vec::new();
+    let mut inside_class = false;
+    let mut cursor = func_node.parent();
+
+    while let Some(parent) = cursor {
+        let pk = parent.kind();
+
+        // Class / struct / impl / interface / namespace / module containers.
+        let container_name_field: Option<&str> = match pk {
+            // JS / TS / Python / Ruby / PHP / Java / Kotlin / C++ classes
+            "class_declaration"
+            | "class_definition"
+            | "class_specifier"
+            | "class"
+            | "interface_declaration"
+            | "interface_body"
+            | "enum_declaration"
+            | "trait_item"
+            | "trait_declaration"
+            | "enum_item"
+            | "struct_specifier"
+            | "struct_item" => Some("name"),
+            // Rust impl blocks — pick the type name, not the trait name.
+            "impl_item" => Some("type"),
+            // Go / C++ / PHP namespaces and modules.
+            "namespace_definition"
+            | "namespace_declaration"
+            | "module_declaration"
+            | "module" => Some("name"),
+            _ => None,
+        };
+
+        if let Some(field) = container_name_field {
+            if let Some(name_node) = parent.child_by_field_name(field) {
+                if let Some(text) = text_of(name_node, code) {
+                    segments.push(text);
+                    inside_class |= matches!(
+                        pk,
+                        "class_declaration"
+                            | "class_definition"
+                            | "class_specifier"
+                            | "class"
+                            | "interface_declaration"
+                            | "interface_body"
+                            | "trait_item"
+                            | "trait_declaration"
+                            | "impl_item"
+                            | "struct_item"
+                            | "struct_specifier"
+                    );
+                }
+            }
+        } else if pk == "function_declaration"
+            || pk == "function_definition"
+            || pk == "method_declaration"
+            || pk == "method_definition"
+            || pk == "function_item"
+            || pk == "arrow_function"
+            || pk == "lambda_expression"
+            || pk == "function_expression"
+        {
+            // Nested definition — record the outer function's name and
+            // classify self as Closure even if we got a real name.
+            if let Some(name_node) = parent.child_by_field_name("name") {
+                if let Some(text) = text_of(name_node, code) {
+                    segments.push(text);
+                }
+            }
+            if !matches!(kind, FuncKind::Closure) {
+                kind = FuncKind::Closure;
+            }
+        }
+
+        cursor = parent.parent();
+    }
+
+    // Upgrade to Method/Constructor when inside a class-like container.
+    if inside_class && matches!(kind, FuncKind::Function) {
+        kind = if fn_name == "__init__"
+            || fn_name == "constructor"
+            || fn_name == "initialize"
+            || fn_name == "new"
+        {
+            FuncKind::Constructor
+        } else {
+            FuncKind::Method
+        };
+    }
+
+    segments.reverse();
+    let container = segments.join("::");
+    (container, kind)
+}
+
 fn rust_param_binding_name(param_text: &str) -> Option<String> {
     let before_colon = param_text.split(':').next().unwrap_or(param_text).trim();
     let tokens: Vec<&str> = before_colon
@@ -4097,6 +4228,15 @@ fn build_sub<'a>(
             let param_names = extract_param_names(ast, lang, code);
             let param_count = param_names.len();
 
+            // ── 1b) Compute identity discriminators ───────────────────────────
+            let (fn_container, fn_kind) =
+                compute_container_and_kind(ast, ast.kind(), &fn_name, code);
+            // Disambiguator: function body start byte.  Always populated so
+            // two same-name, same-container definitions never collide (e.g.
+            // duplicate defs in a file, overload-like patterns, nested defs
+            // with identical names in sibling scopes).
+            let fn_disambig: Option<u32> = Some(ast.start_byte() as u32);
+
             // ── 2) Create a separate body graph for this function ─────────────
             let (mut fn_graph, fn_entry, fn_exit) =
                 create_body_graph(ast.start_byte(), ast.end_byte(), Some(&fn_name));
@@ -4289,8 +4429,11 @@ fn build_sub<'a>(
             let key = FuncKey {
                 lang: Lang::from_slug(lang).unwrap_or(Lang::Rust),
                 namespace: file_path.to_owned(),
+                container: fn_container.clone(),
                 name: fn_name.clone(),
                 arity: Some(param_count),
+                disambig: fn_disambig,
+                kind: fn_kind,
             };
             summaries.insert(
                 key,
@@ -4305,6 +4448,9 @@ fn build_sub<'a>(
                     propagating_params,
                     tainted_sink_params,
                     callees,
+                    container: fn_container,
+                    disambig: fn_disambig,
+                    kind: fn_kind,
                 },
             );
 
@@ -4964,6 +5110,9 @@ pub(crate) fn export_summaries(
             propagates_taint: false,
             tainted_sink_params: local.tainted_sink_params.clone(),
             callees: local.callees.clone(),
+            container: local.container.clone(),
+            disambig: local.disambig,
+            kind: local.kind,
         })
         .collect()
 }

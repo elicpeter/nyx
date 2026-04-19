@@ -10,7 +10,7 @@
 )]
 
 use crate::abstract_interp::{self, AbstractState};
-use crate::callgraph::callee_leaf_name;
+use crate::callgraph::{callee_container_hint, callee_leaf_name};
 use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
 use crate::constraint;
 use crate::interop::InteropEdge;
@@ -4540,6 +4540,14 @@ fn resolve_callee(
 ) -> Option<ResolvedSummary> {
     // Use leaf name for map/index lookups (FuncKey.name is always leaf).
     let normalized = callee_leaf_name(callee);
+    // Prefix-segment container hint: `obj.method` → `obj`, `Class::foo` → `Class`.
+    // `None` when the callee is already unqualified.
+    let container_raw = callee_container_hint(callee);
+    let container_hint = if container_raw.is_empty() {
+        None
+    } else {
+        Some(container_raw)
+    };
 
     // -2) Import alias resolution: if the callee matches an aliased import
     // (e.g. `fetchUserCmd` → `getInput` from `./source`), resolve using the
@@ -4635,7 +4643,13 @@ fn resolve_callee(
 
     // 0.5) Cross-file SSA summaries (GlobalSummaries.ssa_by_key)
     if let Some(gs) = transfer.global_summaries {
-        match gs.resolve_callee_key(normalized, transfer.lang, transfer.namespace, None) {
+        match gs.resolve_callee_key_with_container(
+            normalized,
+            transfer.lang,
+            transfer.namespace,
+            container_hint,
+            None,
+        ) {
             CalleeResolution::Resolved(target_key) => {
                 if let Some(ssa_sum) = gs.get_ssa(&target_key) {
                     return Some(convert_ssa_to_resolved(ssa_sum));
@@ -4680,7 +4694,13 @@ fn resolve_callee(
 
     // 2) Global same-language
     if let Some(gs) = transfer.global_summaries {
-        match gs.resolve_callee_key(normalized, transfer.lang, transfer.namespace, None) {
+        match gs.resolve_callee_key_with_container(
+            normalized,
+            transfer.lang,
+            transfer.namespace,
+            container_hint,
+            None,
+        ) {
             CalleeResolution::Resolved(target_key) => {
                 if let Some(fs) = gs.get(&target_key) {
                     return Some(ResolvedSummary {
@@ -4714,7 +4734,7 @@ fn resolve_callee(
             && (edge.from.caller_func.is_empty() || edge.from.caller_func == caller_func)
             && (edge.from.ordinal == 0 || edge.from.ordinal == call_ordinal)
             && let Some(gs) = transfer.global_summaries
-            && let Some(fs) = gs.get(&edge.to)
+            && let Some(fs) = gs.get_for_interop(&edge.to)
         {
             return Some(ResolvedSummary {
                 source_caps: fs.source_caps(),

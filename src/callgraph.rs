@@ -132,6 +132,25 @@ pub(crate) fn callee_leaf_name(raw: &str) -> &str {
     after_colons.rsplit('.').next().unwrap_or(after_colons)
 }
 
+/// Extract the segment *immediately before* the leaf as a container hint.
+///
+/// For `"OrderService::process"` this yields `"OrderService"`; for
+/// `"obj.method"`, `"obj"`.  When the raw name is unqualified (`"send"`) the
+/// hint is empty.  The intent is to give [`resolve_callee_key_with_container`]
+/// enough context to pick the right method when two classes in the same file
+/// define the same leaf name.
+pub(crate) fn callee_container_hint(raw: &str) -> &str {
+    if let Some(pos) = raw.rfind("::") {
+        let prefix = &raw[..pos];
+        return prefix.rsplit("::").next().unwrap_or(prefix);
+    }
+    if let Some(pos) = raw.rfind('.') {
+        let prefix = &raw[..pos];
+        return prefix.rsplit('.').next().unwrap_or(prefix);
+    }
+    ""
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Call-graph construction
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,13 +187,21 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             let leaf = callee_leaf_name(raw_callee);
             // Two-segment form for disambiguation when the leaf is ambiguous.
             let qualified = normalize_callee_name(raw_callee);
+            // Container hint: prefix-before-leaf if the raw callee is qualified.
+            let container = callee_container_hint(raw_callee);
+            let container_hint = if container.is_empty() {
+                None
+            } else {
+                Some(container)
+            };
             // TODO(C-3): pass arity_hint once callee arity is stored on FuncSummary.callees
             let arity_hint: Option<usize> = None;
 
-            match summaries.resolve_callee_key(
+            match summaries.resolve_callee_key_with_container(
                 leaf,
                 caller_key.lang,
                 &caller_key.namespace,
+                container_hint,
                 arity_hint,
             ) {
                 CalleeResolution::Resolved(target_key) => {
@@ -464,6 +491,7 @@ mod tests {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: callees.into_iter().map(String::from).collect(),
+            ..Default::default()
         }
     }
 
@@ -522,12 +550,14 @@ mod tests {
             namespace: "src/a.rs".into(),
             name: "caller".into(),
             arity: Some(0),
+        ..Default::default()
         };
         let helper_a_key = FuncKey {
             lang: Lang::Rust,
             namespace: "src/a.rs".into(),
             name: "helper".into(),
             arity: Some(0),
+        ..Default::default()
         };
 
         let caller_node = cg.index[&caller_key];
@@ -563,12 +593,14 @@ mod tests {
             namespace: "handler.py".into(),
             name: "foo".into(),
             arity: Some(0),
+        ..Default::default()
         };
         let caller_key = FuncKey {
             lang: Lang::Python,
             namespace: "app.py".into(),
             name: "main".into(),
             arity: Some(0),
+        ..Default::default()
         };
 
         let caller_node = cg.index[&caller_key];
@@ -598,12 +630,14 @@ mod tests {
             namespace: "lib.rs".into(),
             name: "helper".into(),
             arity: Some(1),
+        ..Default::default()
         };
         let key2 = FuncKey {
             lang: Lang::Rust,
             namespace: "lib.rs".into(),
             name: "helper".into(),
             arity: Some(2),
+        ..Default::default()
         };
         assert!(cg.index.contains_key(&key1));
         assert!(cg.index.contains_key(&key2));
@@ -629,12 +663,14 @@ mod tests {
             namespace: "lib.rs".into(),
             name: "a".into(),
             arity: Some(0),
+        ..Default::default()
         };
         let key_b = FuncKey {
             lang: Lang::Rust,
             namespace: "lib.rs".into(),
             name: "b".into(),
             arity: Some(0),
+        ..Default::default()
         };
 
         let scc_a = analysis.node_to_scc[&cg.index[&key_a]];
@@ -700,6 +736,7 @@ mod tests {
             namespace: "lib.rs".into(),
             name: name.into(),
             arity: Some(0),
+        ..Default::default()
         };
 
         let scc_of = |name: &str| analysis.node_to_scc[&cg.index[&key(name)]];
@@ -740,6 +777,7 @@ mod tests {
                 namespace: "util.js".into(),
                 name: "js_func".into(),
                 arity: Some(1),
+            ..Default::default()
             },
         }];
 
@@ -750,12 +788,14 @@ mod tests {
             namespace: "handler.py".into(),
             name: "process".into(),
             arity: Some(0),
+        ..Default::default()
         };
         let target_key = FuncKey {
             lang: Lang::JavaScript,
             namespace: "util.js".into(),
             name: "js_func".into(),
             arity: Some(1),
+        ..Default::default()
         };
 
         let caller_node = cg.index[&caller_key];
@@ -789,6 +829,7 @@ mod tests {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
+        ..Default::default()
         };
 
         let root = "/home/user/proj";
@@ -817,6 +858,7 @@ mod tests {
             namespace: "util.rs".into(),
             name: "main".into(),
             arity: Some(0),
+        ..Default::default()
         };
         let caller_node = cg.index[&caller_key];
 
@@ -1037,12 +1079,14 @@ mod tests {
             namespace: "src/main.rs".into(),
             name: "caller".into(),
             arity: Some(0),
+        ..Default::default()
         };
         let send_http_key = FuncKey {
             lang: Lang::Rust,
             namespace: "src/http.rs".into(),
             name: "send".into(),
             arity: Some(0),
+        ..Default::default()
         };
 
         let caller_node = cg.index[&caller_key];
@@ -1074,6 +1118,7 @@ mod tests {
             namespace: "src/main.rs".into(),
             name: "caller".into(),
             arity: Some(0),
+        ..Default::default()
         };
         let caller_node = cg.index[&caller_key];
 

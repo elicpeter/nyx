@@ -373,12 +373,22 @@ fn run_topo_batches(
                     std::path::PathBuf,
                     Vec<Diag>,
                     Vec<crate::summary::FuncSummary>,
-                    Vec<(String, usize, crate::summary::ssa_summary::SsaFuncSummary)>,
+                    Vec<(
+                        String,
+                        usize,
+                        String,
+                        Option<u32>,
+                        crate::symbol::FuncKind,
+                        crate::summary::ssa_summary::SsaFuncSummary,
+                    )>,
                     Vec<(
                         String,
                         usize,
                         String,
                         String,
+                        String,
+                        Option<u32>,
+                        crate::symbol::FuncKind,
                         crate::taint::ssa_transfer::CalleeSsaBody,
                     )>,
                 )> = batch
@@ -450,12 +460,15 @@ fn run_topo_batches(
                                 &path.to_string_lossy(),
                                 root_str_ref,
                             );
-                            for (name, arity, ssa_sum) in ssa_summaries {
+                            for (name, arity, container, disambig, kind, ssa_sum) in ssa_summaries {
                                 let key = crate::symbol::FuncKey {
                                     lang,
                                     namespace: namespace.clone(),
+                                    container,
                                     name,
                                     arity: Some(arity),
+                                    disambig,
+                                    kind,
                                 };
                                 global_summaries.insert_ssa(key, ssa_sum);
                                 ssa_count += 1;
@@ -769,26 +782,36 @@ pub(crate) fn scan_filesystem_with_observer(
                                     &path.to_string_lossy(),
                                     Some(&root_str),
                                 );
-                                for (name, arity, ssa_sum) in r.ssa_summaries {
+                                for (name, arity, container, disambig, kind, ssa_sum) in
+                                    r.ssa_summaries
+                                {
                                     let key = crate::symbol::FuncKey {
                                         lang,
                                         namespace: namespace.clone(),
+                                        container,
                                         name,
                                         arity: Some(arity),
+                                        disambig,
+                                        kind,
                                     };
                                     local_gs.insert_ssa(key, ssa_sum);
                                 }
                             }
 
                             // Phase 30: Insert eligible callee bodies
-                            for (name, arity, lang_str, ns, body) in r.ssa_bodies {
+                            for (name, arity, lang_str, ns, container, disambig, kind, body) in
+                                r.ssa_bodies
+                            {
                                 let lang = crate::symbol::Lang::from_slug(&lang_str)
                                     .unwrap_or(crate::symbol::Lang::Rust);
                                 let key = crate::symbol::FuncKey {
                                     lang,
                                     namespace: ns,
+                                    container,
                                     name,
                                     arity: Some(arity),
+                                    disambig,
+                                    kind,
                                 };
                                 local_gs.insert_body(key, body);
                             }
@@ -1163,8 +1186,17 @@ pub fn scan_with_index_parallel_observer(
                                     );
                                     let ssa_rows: Vec<_> = ssa_sums
                                         .into_iter()
-                                        .map(|(name, arity, sum)| {
-                                            (name, arity, lang_slug.clone(), namespace.clone(), sum)
+                                        .map(|(name, arity, container, disambig, kind, sum)| {
+                                            (
+                                                name,
+                                                arity,
+                                                lang_slug.clone(),
+                                                namespace.clone(),
+                                                container,
+                                                disambig,
+                                                kind,
+                                                sum,
+                                            )
                                         })
                                         .collect();
                                     if let Err(e) =
@@ -1247,7 +1279,9 @@ pub fn scan_with_index_parallel_observer(
                 ssa_summaries = ssa_rows.len(),
                 "loaded SSA summaries from DB"
             );
-            for (file_path, name, lang_str, arity, namespace, ssa_sum) in ssa_rows {
+            for (file_path, name, lang_str, arity, namespace, container, disambig, kind, ssa_sum) in
+                ssa_rows
+            {
                 let lang =
                     crate::symbol::Lang::from_slug(&lang_str).unwrap_or(crate::symbol::Lang::Rust);
                 // Use persisted namespace; fall back to normalized file_path
@@ -1259,12 +1293,15 @@ pub fn scan_with_index_parallel_observer(
                 let key = crate::symbol::FuncKey {
                     lang,
                     namespace: ns,
+                    container,
                     name,
                     arity: if arity >= 0 {
                         Some(arity as usize)
                     } else {
                         None
                     },
+                    disambig,
+                    kind,
                 };
                 gs.insert_ssa(key, ssa_sum);
             }
@@ -1275,7 +1312,18 @@ pub fn scan_with_index_parallel_observer(
             match idx.load_all_ssa_bodies() {
                 Ok(body_rows) => {
                     let count = body_rows.len();
-                    for (file_path, name, lang_str, arity, namespace, body) in body_rows {
+                    for (
+                        file_path,
+                        name,
+                        lang_str,
+                        arity,
+                        namespace,
+                        container,
+                        disambig,
+                        kind,
+                        body,
+                    ) in body_rows
+                    {
                         let lang = crate::symbol::Lang::from_slug(&lang_str)
                             .unwrap_or(crate::symbol::Lang::Rust);
                         let ns = if namespace.is_empty() {
@@ -1286,12 +1334,15 @@ pub fn scan_with_index_parallel_observer(
                         let key = crate::symbol::FuncKey {
                             lang,
                             namespace: ns,
+                            container,
                             name,
                             arity: if arity >= 0 {
                                 Some(arity as usize)
                             } else {
                                 None
                             },
+                            disambig,
+                            kind,
                         };
                         gs.insert_body(key, body);
                     }

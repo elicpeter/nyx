@@ -2,7 +2,7 @@ pub mod ssa_summary;
 
 use crate::labels::Cap;
 use crate::summary::ssa_summary::SsaFuncSummary;
-use crate::symbol::{FuncKey, Lang, normalize_namespace};
+use crate::symbol::{FuncKey, FuncKind, Lang, normalize_namespace};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -33,7 +33,7 @@ use std::collections::HashMap;
 ///   internal sinks.  Today the taint engine treats the whole call as a
 ///   single "tainted or not" question; this field future‑proofs the summary
 ///   for per‑argument precision.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FuncSummary {
     /// Function name as it appears in the source (`my_func`, not the full path).
     pub name: String,
@@ -80,6 +80,22 @@ pub struct FuncSummary {
     /// Names of functions/methods/macros called inside this function body.
     /// Stored for future call‑graph / topological‑sort analysis.
     pub callees: Vec<String>,
+
+    // ── Identity discriminators (Phase: function-identity overhaul) ──────
+    /// Enclosing container path (class / impl / module / outer function),
+    /// segments joined with `::`.  Empty for free top-level functions.
+    #[serde(default)]
+    pub container: String,
+
+    /// Numeric discriminator for same-name siblings (closure byte offset,
+    /// nested-function occurrence index).  `None` when no sibling collision.
+    #[serde(default)]
+    pub disambig: Option<u32>,
+
+    /// Structural role of this definition.  Defaults to `Function` when
+    /// deserialising legacy JSON.
+    #[serde(default)]
+    pub kind: FuncKind,
 }
 
 // ── Cap conversion helpers ──────────────────────────────────────────────
@@ -113,8 +129,11 @@ impl FuncSummary {
         FuncKey {
             lang: Lang::from_slug(&self.lang).unwrap_or(Lang::Rust),
             namespace: normalize_namespace(&self.file_path, scan_root),
+            container: self.container.clone(),
             name: self.name.clone(),
             arity: Some(self.param_count),
+            disambig: self.disambig,
+            kind: self.kind,
         }
     }
 }
@@ -148,7 +167,14 @@ pub enum CalleeResolution {
 #[derive(Default)]
 pub struct GlobalSummaries {
     by_key: HashMap<FuncKey, FuncSummary>,
+    /// Bare leaf-name index — kept for compatibility with callers that only
+    /// see an unqualified call string.  A single name may map to many keys
+    /// across containers / files / arities.
     by_lang_name: HashMap<(Lang, String), Vec<FuncKey>>,
+    /// Container-qualified index: keyed on `"{container}::{name}"` (or just
+    /// `name` for free functions).  Used to resolve calls when the call-site
+    /// can supply a receiver / container hint (e.g. `OrderService::process`).
+    by_lang_qualified: HashMap<(Lang, String), Vec<FuncKey>>,
     /// Precise SSA-derived per-parameter summaries, keyed by `FuncKey`.
     /// These take precedence over `FuncSummary` during callee resolution.
     ssa_by_key: HashMap<FuncKey, SsaFuncSummary>,
@@ -164,9 +190,16 @@ impl GlobalSummaries {
 
     /// Insert or merge a summary.  If an exact `FuncKey` match exists,
     /// merge conservatively (OR caps/booleans, union params/callees).
+    ///
+    /// Exact-key merging is still safe here because `FuncKey` is now
+    /// structurally precise (lang + namespace + container + name + arity +
+    /// disambig + kind) — two summaries that hash to the same key really do
+    /// describe the same function (e.g. parallel fold/reduce produced two
+    /// partial views of one definition).
     pub fn insert(&mut self, key: FuncKey, summary: FuncSummary) {
         let lang = key.lang;
         let name = key.name.clone();
+        let qualified = key.qualified_name();
 
         self.by_key
             .entry(key.clone())
@@ -195,7 +228,12 @@ impl GlobalSummaries {
 
         let keys = self.by_lang_name.entry((lang, name)).or_default();
         if !keys.contains(&key) {
-            keys.push(key);
+            keys.push(key.clone());
+        }
+
+        let q_keys = self.by_lang_qualified.entry((lang, qualified)).or_default();
+        if !q_keys.contains(&key) {
+            q_keys.push(key);
         }
     }
 
@@ -204,10 +242,58 @@ impl GlobalSummaries {
         self.by_key.get(key)
     }
 
+    /// Interop / external-edge lookup: tolerant of `disambig` being `None`.
+    ///
+    /// Interop edges originate outside the source code (user-specified JSON,
+    /// language-bridge config) and cannot know a callee's internal byte-offset
+    /// disambiguator.  When the query key has `disambig = None` we fall back to
+    /// scanning for a single match on `(lang, namespace, container, name,
+    /// arity, kind)`.  If exactly one matches it is returned; otherwise we
+    /// return `None` to preserve determinism (ambiguity is treated as unknown).
+    pub fn get_for_interop(&self, key: &FuncKey) -> Option<&FuncSummary> {
+        if let Some(hit) = self.by_key.get(key) {
+            return Some(hit);
+        }
+        if key.disambig.is_some() {
+            return None;
+        }
+        let mut matches = self.by_key.iter().filter(|(k, _)| {
+            k.lang == key.lang
+                && k.namespace == key.namespace
+                && k.container == key.container
+                && k.name == key.name
+                && k.arity == key.arity
+                && k.kind == key.kind
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            None
+        } else {
+            Some(first.1)
+        }
+    }
+
     /// All same-language matches for a bare function name.
     pub fn lookup_same_lang(&self, lang: Lang, name: &str) -> Vec<(&FuncKey, &FuncSummary)> {
         self.by_lang_name
             .get(&(lang, name.to_string()))
+            .map(|keys| {
+                keys.iter()
+                    .filter_map(|k| self.by_key.get(k).map(|v| (k, v)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Container-qualified lookup.  `qualified` should be
+    /// `"Container::name"` (use [`FuncKey::qualified_name`]) or `"name"`.
+    pub fn lookup_qualified(
+        &self,
+        lang: Lang,
+        qualified: &str,
+    ) -> Vec<(&FuncKey, &FuncSummary)> {
+        self.by_lang_qualified
+            .get(&(lang, qualified.to_string()))
             .map(|keys| {
                 keys.iter()
                     .filter_map(|k| self.by_key.get(k).map(|v| (k, v)))
@@ -325,6 +411,60 @@ impl GlobalSummaries {
         caller_namespace: &str,
         arity_hint: Option<usize>,
     ) -> CalleeResolution {
+        self.resolve_callee_key_with_container(
+            callee,
+            caller_lang,
+            caller_namespace,
+            None,
+            arity_hint,
+        )
+    }
+
+    /// Resolve a callee name with an optional container/receiver hint.
+    ///
+    /// `container_hint` is the receiver type / enclosing class inferred at the
+    /// call site (e.g. `"OrderService"` for `orderService.process(...)`).
+    /// When supplied, candidates whose [`FuncKey::container`] matches are
+    /// preferred over arbitrary same-name matches.  This is what allows the
+    /// new identity model to disambiguate two `process/1` methods living on
+    /// different classes in the same file.
+    ///
+    /// Resolution order:
+    /// 1. If `container_hint` is `Some` and the qualified lookup returns
+    ///    exactly one (arity-matched, if hint provided) candidate → resolved.
+    /// 2. Otherwise fall back to bare-name lookup (existing logic) with
+    ///    arity + namespace disambiguation.
+    /// 3. If still ambiguous, and `container_hint` is `Some`, filter the
+    ///    ambiguous set by container; if that narrows to one → resolved.
+    pub fn resolve_callee_key_with_container(
+        &self,
+        callee: &str,
+        caller_lang: Lang,
+        caller_namespace: &str,
+        container_hint: Option<&str>,
+        arity_hint: Option<usize>,
+    ) -> CalleeResolution {
+        // Step 1 — if we have a container hint, try the qualified index first.
+        if let Some(container) = container_hint {
+            let qual = if container.is_empty() {
+                callee.to_string()
+            } else {
+                format!("{container}::{callee}")
+            };
+            let q_candidates = self.lookup_qualified(caller_lang, &qual);
+            let q_filtered: Vec<&FuncKey> = match arity_hint {
+                Some(a) => q_candidates
+                    .iter()
+                    .filter(|(k, _)| k.arity == Some(a))
+                    .map(|(k, _)| *k)
+                    .collect(),
+                None => q_candidates.iter().map(|(k, _)| *k).collect(),
+            };
+            if q_filtered.len() == 1 {
+                return CalleeResolution::Resolved(q_filtered[0].clone());
+            }
+        }
+
         let candidates = self.lookup_same_lang(caller_lang, callee);
         if candidates.is_empty() {
             return CalleeResolution::NotFound;
@@ -345,6 +485,18 @@ impl GlobalSummaries {
             0 => CalleeResolution::NotFound,
             1 => CalleeResolution::Resolved(filtered[0].clone()),
             _ => {
+                // Container hint: narrow by matching container first.
+                if let Some(container) = container_hint {
+                    let same_container: Vec<&FuncKey> = filtered
+                        .iter()
+                        .filter(|k| k.container == container)
+                        .copied()
+                        .collect();
+                    if same_container.len() == 1 {
+                        return CalleeResolution::Resolved(same_container[0].clone());
+                    }
+                }
+
                 // Namespace disambiguation: prefer same-namespace match.
                 let same_ns: Vec<&FuncKey> = filtered
                     .iter()
@@ -354,7 +506,21 @@ impl GlobalSummaries {
                 match same_ns.len() {
                     1 => CalleeResolution::Resolved(same_ns[0].clone()),
                     0 => CalleeResolution::Ambiguous(filtered.into_iter().cloned().collect()),
-                    _ => CalleeResolution::Ambiguous(same_ns.into_iter().cloned().collect()),
+                    _ => {
+                        // Same-namespace narrowed to multiple — try container
+                        // again within that subset.
+                        if let Some(container) = container_hint {
+                            let narrowed: Vec<&FuncKey> = same_ns
+                                .iter()
+                                .filter(|k| k.container == container)
+                                .copied()
+                                .collect();
+                            if narrowed.len() == 1 {
+                                return CalleeResolution::Resolved(narrowed[0].clone());
+                            }
+                        }
+                        CalleeResolution::Ambiguous(same_ns.into_iter().cloned().collect())
+                    }
                 }
             }
         }

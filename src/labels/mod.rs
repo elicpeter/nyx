@@ -67,6 +67,12 @@ bitflags! {
     }
 }
 
+impl Default for Cap {
+    fn default() -> Self {
+        Cap::empty()
+    }
+}
+
 impl serde::Serialize for Cap {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_u16(self.bits())

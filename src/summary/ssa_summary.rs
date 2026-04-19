@@ -21,7 +21,7 @@ pub enum TaintTransform {
 /// This is more precise than the legacy `FuncSummary` bitmask approach
 /// because it can express per-parameter transforms (e.g., "param 0 flows
 /// to return but loses HTML_ESCAPE bits").
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SsaFuncSummary {
     /// Per-parameter flows to return value: (param_index, transform).
     pub param_to_return: Vec<(usize, TaintTransform)>,

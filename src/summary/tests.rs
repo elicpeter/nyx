@@ -14,6 +14,7 @@ fn make(name: &str, src: u16, san: u16, sink: u16) -> FuncSummary {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+        ..Default::default()
     }
 }
 
@@ -34,6 +35,7 @@ fn merge_unions_conservatively() {
         namespace: "test.rs".into(),
         name: "foo".into(),
         arity: Some(0),
+    ..Default::default()
     };
     let foo = merged.get(&key).unwrap();
 
@@ -61,6 +63,7 @@ fn same_lang_different_namespace_no_merge() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+    ..Default::default()
     };
     let b = FuncSummary {
         name: "helper".into(),
@@ -75,6 +78,7 @@ fn same_lang_different_namespace_no_merge() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+    ..Default::default()
     };
 
     let global = merge_summaries(vec![a, b], None);
@@ -85,12 +89,14 @@ fn same_lang_different_namespace_no_merge() {
         namespace: "file_a.rs".into(),
         name: "helper".into(),
         arity: Some(0),
+    ..Default::default()
     };
     let key_b = FuncKey {
         lang: Lang::Rust,
         namespace: "file_b.rs".into(),
         name: "helper".into(),
         arity: Some(0),
+    ..Default::default()
     };
     assert!(global.get(&key_a).is_some());
     assert!(global.get(&key_b).is_some());
@@ -114,6 +120,7 @@ fn same_lang_same_namespace_merges() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+    ..Default::default()
     };
     let b = FuncSummary {
         name: "helper".into(),
@@ -128,6 +135,7 @@ fn same_lang_same_namespace_merges() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+    ..Default::default()
     };
 
     let global = merge_summaries(vec![a, b], None);
@@ -136,6 +144,7 @@ fn same_lang_same_namespace_merges() {
         namespace: "lib.rs".into(),
         name: "helper".into(),
         arity: Some(0),
+    ..Default::default()
     };
     let merged = global.get(&key).unwrap();
     assert_eq!(merged.source_caps, 0x01);
@@ -159,6 +168,7 @@ fn cross_lang_name_collision_stays_separate() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+    ..Default::default()
     };
     let c = FuncSummary {
         name: "process_data".into(),
@@ -173,6 +183,7 @@ fn cross_lang_name_collision_stays_separate() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+    ..Default::default()
     };
 
     let global = merge_summaries(vec![py, c], None);
@@ -182,12 +193,14 @@ fn cross_lang_name_collision_stays_separate() {
         namespace: "handler.py".into(),
         name: "process_data".into(),
         arity: Some(0),
+    ..Default::default()
     };
     let c_key = FuncKey {
         lang: Lang::C,
         namespace: "handler.c".into(),
         name: "process_data".into(),
         arity: Some(1),
+    ..Default::default()
     };
 
     assert!(global.get(&py_key).is_some());
@@ -212,6 +225,7 @@ fn lookup_same_lang_returns_all_matches() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+    ..Default::default()
     };
     let b = FuncSummary {
         name: "helper".into(),
@@ -226,6 +240,7 @@ fn lookup_same_lang_returns_all_matches() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
+    ..Default::default()
     };
 
     let global = merge_summaries(vec![a, b], None);
@@ -252,6 +267,7 @@ fn u16_caps_round_trip_serde() {
         propagates_taint: false,
         tainted_sink_params: vec![0],
         callees: vec!["query".into()],
+    ..Default::default()
     };
 
     let json = serde_json::to_string(&summary).unwrap();
@@ -306,6 +322,7 @@ fn merge_propagating_params_union() {
         namespace: "test.rs".into(),
         name: "foo".into(),
         arity: Some(0),
+    ..Default::default()
     };
     let foo = merged.get(&key).unwrap();
     assert_eq!(foo.propagating_params, vec![0, 1]);
@@ -370,6 +387,7 @@ fn snapshot_caps_detects_change() {
         namespace: "test.rs".into(),
         name: "bar".into(),
         arity: Some(0),
+    ..Default::default()
     };
     let updated = FuncSummary {
         sink_caps: 0x08,
@@ -402,6 +420,7 @@ fn ssa_summary_serde_round_trip_identity() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -423,6 +442,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -441,6 +461,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -463,6 +484,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -477,6 +499,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         namespace: "app.py".into(),
         name: "process".into(),
         arity: Some(1),
+    ..Default::default()
     };
 
     let v1 = SsaFuncSummary {
@@ -489,6 +512,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
     gs.insert_ssa(key.clone(), v1.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v1));
@@ -504,6 +528,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
     gs.insert_ssa(key.clone(), v2.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v2));
@@ -519,12 +544,14 @@ fn global_summaries_merge_with_ssa_entries() {
         namespace: "a.py".into(),
         name: "foo".into(),
         arity: Some(1),
+    ..Default::default()
     };
     let key_b = FuncKey {
         lang: Lang::Python,
         namespace: "b.py".into(),
         name: "bar".into(),
         arity: Some(2),
+    ..Default::default()
     };
 
     let sum_a = SsaFuncSummary {
@@ -537,6 +564,7 @@ fn global_summaries_merge_with_ssa_entries() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
     let sum_b = SsaFuncSummary {
         param_to_return: vec![],
@@ -548,6 +576,7 @@ fn global_summaries_merge_with_ssa_entries() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
 
     gs1.insert_ssa(key_a.clone(), sum_a.clone());
@@ -569,6 +598,7 @@ fn global_summaries_is_empty_considers_ssa() {
         namespace: "lib.rs".into(),
         name: "f".into(),
         arity: Some(1),
+    ..Default::default()
     };
     gs.insert_ssa(
         key,
@@ -582,6 +612,7 @@ fn global_summaries_is_empty_considers_ssa() {
             return_type: None,
             return_abstract: None,
             source_to_callback: vec![],
+        ..Default::default()
         },
     );
 
@@ -600,6 +631,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -633,6 +665,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
         return_type: None,
         return_abstract: None,
         source_to_callback: vec![],
+    ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -675,6 +708,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
             bits: BitFact::top(),
         }),
         source_to_callback: vec![],
+    ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -992,6 +1026,7 @@ fn global_summaries_insert_body_exact_key_replacement() {
         namespace: "helper.py".into(),
         name: "transform".into(),
         arity: Some(2),
+    ..Default::default()
     };
 
     let body1 = make_callee_body(3, 2);
@@ -1013,6 +1048,7 @@ fn global_summaries_get_body_not_found() {
         namespace: "missing.py".into(),
         name: "nope".into(),
         arity: Some(0),
+    ..Default::default()
     };
     assert!(gs.get_body(&key).is_none());
 }
@@ -1027,12 +1063,14 @@ fn global_summaries_merge_includes_bodies() {
         namespace: "a.py".into(),
         name: "func_a".into(),
         arity: Some(1),
+    ..Default::default()
     };
     let key2 = FuncKey {
         lang: crate::symbol::Lang::Python,
         namespace: "b.py".into(),
         name: "func_b".into(),
         arity: Some(2),
+    ..Default::default()
     };
 
     // Need to also insert regular summaries so the by_lang_name index is populated
@@ -1059,6 +1097,7 @@ fn global_summaries_resolve_callee_body_exact_match() {
         namespace: "util.py".into(),
         name: "helper".into(),
         arity: Some(1),
+    ..Default::default()
     };
 
     gs.insert(key.clone(), make("helper", 0, 0, 0));
@@ -1089,12 +1128,14 @@ fn global_summaries_resolve_callee_body_ambiguous_returns_none() {
         namespace: "a.py".into(),
         name: "helper".into(),
         arity: Some(1),
+    ..Default::default()
     };
     let key2 = FuncKey {
         lang: crate::symbol::Lang::Python,
         namespace: "b.py".into(),
         name: "helper".into(),
         arity: Some(1),
+    ..Default::default()
     };
 
     gs.insert(key1.clone(), make("helper", 0, 0, 0));
@@ -1119,12 +1160,14 @@ fn global_summaries_resolve_callee_body_namespace_disambiguates() {
         namespace: "a.py".into(),
         name: "helper".into(),
         arity: Some(1),
+    ..Default::default()
     };
     let key2 = FuncKey {
         lang: crate::symbol::Lang::Python,
         namespace: "b.py".into(),
         name: "helper".into(),
         arity: Some(1),
+    ..Default::default()
     };
 
     gs.insert(key1.clone(), make("helper", 0, 0, 0));
@@ -1148,6 +1191,7 @@ fn global_summaries_resolve_body_requires_body_present() {
         namespace: "util.py".into(),
         name: "helper".into(),
         arity: Some(1),
+    ..Default::default()
     };
     gs.insert(key.clone(), make("helper", 0, 0, 0));
     gs.insert_ssa(
@@ -1162,6 +1206,7 @@ fn global_summaries_resolve_body_requires_body_present() {
             return_type: None,
             return_abstract: None,
             source_to_callback: vec![],
+        ..Default::default()
         },
     );
     // Don't insert body
@@ -1171,5 +1216,262 @@ fn global_summaries_resolve_body_requires_body_present() {
     assert!(
         resolved.is_none(),
         "should return None when key resolves but no body stored"
+    );
+}
+
+// ── Identity-model regression tests ─────────────────────────────────────
+// Each test below encodes one ambiguity the old `(file, name, arity)` key
+// couldn't express.  They guard the new `(lang, namespace, container, name,
+// arity, disambig, kind)` model and the container-aware resolver.
+
+fn fs_with(
+    namespace: &str,
+    container: &str,
+    name: &str,
+    arity: usize,
+    kind: FuncKind,
+    disambig: Option<u32>,
+    sink_bits: u16,
+) -> (FuncKey, FuncSummary) {
+    let key = FuncKey {
+        lang: Lang::Java,
+        namespace: namespace.into(),
+        container: container.into(),
+        name: name.into(),
+        arity: Some(arity),
+        disambig,
+        kind,
+    };
+    let summary = FuncSummary {
+        name: name.into(),
+        file_path: namespace.into(),
+        lang: "java".into(),
+        param_count: arity,
+        sink_caps: sink_bits,
+        container: container.into(),
+        disambig,
+        kind,
+        ..Default::default()
+    };
+    (key, summary)
+}
+
+#[test]
+fn same_name_methods_on_different_classes_stay_distinct() {
+    let mut gs = GlobalSummaries::new();
+    let (k1, s1) = fs_with(
+        "src/svc.java",
+        "OrderService",
+        "process",
+        1,
+        FuncKind::Method,
+        Some(100),
+        0x01,
+    );
+    let (k2, s2) = fs_with(
+        "src/svc.java",
+        "UserService",
+        "process",
+        1,
+        FuncKind::Method,
+        Some(500),
+        0x02,
+    );
+    gs.insert(k1.clone(), s1);
+    gs.insert(k2.clone(), s2);
+
+    assert_eq!(gs.get(&k1).unwrap().sink_caps, 0x01);
+    assert_eq!(gs.get(&k2).unwrap().sink_caps, 0x02);
+
+    let order = gs.resolve_callee_key_with_container(
+        "process",
+        Lang::Java,
+        "src/other.java",
+        Some("OrderService"),
+        Some(1),
+    );
+    assert_eq!(order, CalleeResolution::Resolved(k1));
+
+    let user = gs.resolve_callee_key_with_container(
+        "process",
+        Lang::Java,
+        "src/other.java",
+        Some("UserService"),
+        Some(1),
+    );
+    assert_eq!(user, CalleeResolution::Resolved(k2));
+}
+
+#[test]
+fn free_function_and_method_with_same_name_resolve_separately() {
+    let mut gs = GlobalSummaries::new();
+    let (kf, sf) = fs_with(
+        "src/app.java",
+        "",
+        "process",
+        1,
+        FuncKind::Function,
+        Some(10),
+        0x10,
+    );
+    let (km, sm) = fs_with(
+        "src/app.java",
+        "Worker",
+        "process",
+        1,
+        FuncKind::Method,
+        Some(200),
+        0x20,
+    );
+    gs.insert(kf.clone(), sf);
+    gs.insert(km.clone(), sm);
+
+    let free = gs.resolve_callee_key_with_container(
+        "process",
+        Lang::Java,
+        "src/app.java",
+        None,
+        Some(1),
+    );
+    let method = gs.resolve_callee_key_with_container(
+        "process",
+        Lang::Java,
+        "src/app.java",
+        Some("Worker"),
+        Some(1),
+    );
+    assert_eq!(method, CalleeResolution::Resolved(km));
+
+    // Without container hint and two same-name candidates: ambiguous.
+    match free {
+        CalleeResolution::Ambiguous(cands) => {
+            assert_eq!(cands.len(), 2, "both keys should be reported as candidates");
+            assert!(cands.contains(&kf));
+        }
+        other => panic!("expected Ambiguous, got {other:?}"),
+    }
+}
+
+#[test]
+fn disambig_separates_same_name_closures_in_same_container() {
+    let mut gs = GlobalSummaries::new();
+    let (k1, s1) = fs_with(
+        "src/f.js".as_ref(),
+        "outer",
+        "<anon>",
+        0,
+        FuncKind::Closure,
+        Some(123),
+        0x01,
+    );
+    let (k2, s2) = fs_with(
+        "src/f.js".as_ref(),
+        "outer",
+        "<anon>",
+        0,
+        FuncKind::Closure,
+        Some(456),
+        0x02,
+    );
+    gs.insert(k1.clone(), s1);
+    gs.insert(k2.clone(), s2);
+
+    assert_ne!(k1, k2);
+    assert_eq!(gs.get(&k1).unwrap().sink_caps, 0x01);
+    assert_eq!(gs.get(&k2).unwrap().sink_caps, 0x02);
+}
+
+#[test]
+fn interop_lookup_tolerates_missing_disambig() {
+    // Interop edges written by external configuration don't know byte offsets.
+    // `get_for_interop` should still find a single matching key when disambig
+    // is None and the rest of the identity uniquely identifies a summary.
+    let mut gs = GlobalSummaries::new();
+    let (k, s) = fs_with(
+        "lib.go",
+        "",
+        "fetch_env",
+        0,
+        FuncKind::Function,
+        Some(7777),
+        0x04,
+    );
+    // Go summaries are actually keyed with Lang::Go; use a distinct key here.
+    let go_key = FuncKey {
+        lang: Lang::Go,
+        namespace: "lib.go".into(),
+        container: String::new(),
+        name: "fetch_env".into(),
+        arity: Some(0),
+        disambig: Some(7777),
+        kind: FuncKind::Function,
+    };
+    let go_sum = FuncSummary {
+        name: "fetch_env".into(),
+        file_path: "lib.go".into(),
+        lang: "go".into(),
+        ..s
+    };
+    gs.insert(go_key, go_sum);
+    let _ = k; // unused: only needed for symmetry with fs_with signature
+
+    let interop_query = FuncKey {
+        lang: Lang::Go,
+        namespace: "lib.go".into(),
+        container: String::new(),
+        name: "fetch_env".into(),
+        arity: Some(0),
+        disambig: None,
+        kind: FuncKind::Function,
+    };
+    let hit = gs
+        .get_for_interop(&interop_query)
+        .expect("interop lookup should tolerate missing disambig");
+    assert_eq!(hit.sink_caps, 0x04);
+}
+
+#[test]
+fn interop_lookup_returns_none_when_disambig_none_matches_many() {
+    // If multiple summaries share (lang, ns, container, name, arity, kind)
+    // and only disambig distinguishes them, the relaxed interop lookup must
+    // return None rather than picking arbitrarily.
+    let mut gs = GlobalSummaries::new();
+    let mk = |disambig: u32, bits: u16| {
+        let k = FuncKey {
+            lang: Lang::Go,
+            namespace: "lib.go".into(),
+            container: String::new(),
+            name: "dup".into(),
+            arity: Some(0),
+            disambig: Some(disambig),
+            kind: FuncKind::Function,
+        };
+        let s = FuncSummary {
+            name: "dup".into(),
+            file_path: "lib.go".into(),
+            lang: "go".into(),
+            sink_caps: bits,
+            disambig: Some(disambig),
+            ..Default::default()
+        };
+        (k, s)
+    };
+    let (k1, s1) = mk(1, 0x01);
+    let (k2, s2) = mk(2, 0x02);
+    gs.insert(k1, s1);
+    gs.insert(k2, s2);
+
+    let ambiguous_query = FuncKey {
+        lang: Lang::Go,
+        namespace: "lib.go".into(),
+        container: String::new(),
+        name: "dup".into(),
+        arity: Some(0),
+        disambig: None,
+        kind: FuncKind::Function,
+    };
+    assert!(
+        gs.get_for_interop(&ambiguous_query).is_none(),
+        "disambig=None must not pick arbitrarily when multiple keys match"
     );
 }
