@@ -1893,12 +1893,16 @@ fn transfer_inst(
             let mut resolved_container_store: Vec<(usize, usize)> = Vec::new();
 
             // Resolve callee summary (used for both taint propagation and container fields)
-            // Pass arity (SSA positional-arg count) so same-name/different-arity
+            // Pass arity (positional-arg count) so same-name/different-arity
             // overloads are not conflated during cross-file resolution.
             //
-            // Receiver is now a separate channel on SsaOp::Call.receiver, so
-            // `args.len()` is already the positional arity.
-            let arity_hint = args.len();
+            // Use `info.call.arg_uses.len()` rather than `args.len()`: `args`
+            // may include an extra "implicit" trailing group built by SSA
+            // lowering to surface chained-call taint (see `build_call_args` in
+            // `ssa/lower.rs`), which inflates `args.len()` beyond the real
+            // positional arity.  The CFG's `arg_uses` is the authoritative
+            // positional-arg list.
+            let arity_hint = info.call.arg_uses.len();
             let callee_summary = resolve_callee_hinted(
                 transfer,
                 callee,
@@ -2996,19 +3000,15 @@ fn collect_block_events(
         if sink_caps.is_empty() {
             // Callback pattern: check if callee has source_to_callback and the
             // actual callback argument has a matching param_to_sink.
-            if let SsaOp::Call {
-                callee,
-                args: call_args,
-                ..
-            } = &inst.op
-            {
+            if let SsaOp::Call { callee, .. } = &inst.op {
                 let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
+                // Use arg_uses.len() for arity (see transfer_inst's Call arm).
                 if let Some(resolved) = resolve_callee_hinted(
                     transfer,
                     callee,
                     caller_func,
                     info.call.call_ordinal,
-                    Some(call_args.len()),
+                    Some(info.call.arg_uses.len()),
                 ) {
                     for &(cb_idx, src_caps) in &resolved.source_to_callback {
                         let cb_name = info.arg_callees.get(cb_idx).and_then(|ac| ac.as_ref());

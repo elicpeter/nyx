@@ -125,33 +125,66 @@ pub fn extract_witness(
 /// When the sink expression is a `Call`, find the most informative tainted
 /// argument to use for witness generation instead of the opaque return value.
 ///
-/// Prefers string-renderable tainted arguments over non-renderable ones.
+/// Scores each tainted arg by structural richness — args containing protective
+/// transforms (`Encode`/`Decode`), string composition (`Concat`/`BinOp(Add)`),
+/// or string methods (`Replace`/`Substr`/etc.) outrank bare `Call(...)`
+/// wrappers (which typically come from prepended receivers or opaque property
+/// access). This preserves transform-mismatch witnesses when a receiver is
+/// present among the sink's args.
+///
 /// Returns the original expression unchanged if it's not a `Call` or no
 /// tainted argument is found.
 fn unwrap_sink_call_arg<'a>(expr: &'a SymbolicValue, state: &SymbolicState) -> &'a SymbolicValue {
     if let SymbolicValue::Call(_, args) = expr {
-        // Prefer a string-renderable tainted arg
         let best = args
             .iter()
-            .filter(|a| {
-                let t = collect_tainted_symbols(a, state);
-                !t.is_empty()
-            })
-            .find(|a| is_string_renderable(a));
+            .filter(|a| !collect_tainted_symbols(a, state).is_empty())
+            .max_by_key(|a| arg_richness(a));
 
-        // Fall back to any tainted arg
-        let fallback = || {
-            args.iter().find(|a| {
-                let t = collect_tainted_symbols(a, state);
-                !t.is_empty()
-            })
-        };
-
-        if let Some(arg) = best.or_else(fallback) {
+        if let Some(arg) = best {
             return arg;
         }
     }
     expr
+}
+
+/// Score a symbolic expression by how informative it is as a witness target.
+///
+/// Higher = more informative. Protective transforms and string composition
+/// rank highest because they carry the semantic structure users care about
+/// (sanitization class, injection shape). Opaque `Call(...)` wrappers rank
+/// lowest because they are typically receivers or property-access proxies
+/// that merely thread a tainted symbol through a wrapper.
+fn arg_richness(expr: &SymbolicValue) -> u32 {
+    match expr {
+        SymbolicValue::Encode(_, _) | SymbolicValue::Decode(_, _) => 100,
+        SymbolicValue::Concat(_, _) => 90,
+        SymbolicValue::BinOp(super::value::Op::Add, l, r)
+            if is_string_renderable(l) || is_string_renderable(r) =>
+        {
+            85
+        }
+        SymbolicValue::Replace(_, _, _)
+        | SymbolicValue::Substr(_, _, _)
+        | SymbolicValue::Trim(_)
+        | SymbolicValue::ToLower(_)
+        | SymbolicValue::ToUpper(_) => 80,
+        SymbolicValue::Symbol(_) => 50,
+        SymbolicValue::ConcreteStr(_) => 40,
+        SymbolicValue::Call(_, inner) => {
+            // Pass-through single-arg Calls (property access) inherit their
+            // inner richness minus a small penalty so a true composite is
+            // still preferred over a wrapped symbol.
+            if inner.len() == 1 {
+                arg_richness(&inner[0]).saturating_sub(5)
+            } else {
+                20
+            }
+        }
+        SymbolicValue::Phi(_) => 15,
+        SymbolicValue::BinOp(_, _, _) => 10,
+        SymbolicValue::StrLen(_) | SymbolicValue::Concrete(_) | SymbolicValue::Unknown => 0,
+    }
 }
 
 /// Derive the sink's capability bits from CFG node labels.

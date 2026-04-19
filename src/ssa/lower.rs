@@ -774,17 +774,24 @@ fn rename_variables(
                     // captures the final call's args. Variables used by intermediate
                     // calls (like `url` in fetch) are in info.taint.uses but not arg_uses.
                     // Add them as an extra group so sink detection can see them.
+                    //
+                    // Exclude the receiver ident: it's carried on its own typed
+                    // channel (`SsaOp::Call.receiver`).  Callers that care about
+                    // positional arity must read it from `info.call.arg_uses.len()`,
+                    // not `args.len()`, since this implicit group inflates args.
                     let arg_uses_flat: HashSet<&str> = info
                         .call
                         .arg_uses
                         .iter()
                         .flat_map(|g| g.iter().map(|s| s.as_str()))
                         .collect();
+                    let receiver_ident = info.call.receiver.as_deref();
                     let implicit: SmallVec<[SsaValue; 2]> = info
                         .taint
                         .uses
                         .iter()
                         .filter(|u| !arg_uses_flat.contains(u.as_str()))
+                        .filter(|u| Some(u.as_str()) != receiver_ident)
                         .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
                         .collect();
                     if !implicit.is_empty() {
