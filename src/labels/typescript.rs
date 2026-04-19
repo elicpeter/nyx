@@ -259,6 +259,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         case_sensitive: false,
         payload_args: &[1],
         keyword_name: None,
+        dangerous_kwargs: &[],
     },
     SinkGate {
         callee_matcher: "parseFromString",
@@ -269,6 +270,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         case_sensitive: false,
         payload_args: &[0],
         keyword_name: None,
+        dangerous_kwargs: &[],
     },
 ];
 

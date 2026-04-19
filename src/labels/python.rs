@@ -239,7 +239,7 @@ pub static RULES: &[LabelRule] = &[
 ];
 
 pub static GATED_SINKS: &[SinkGate] = &[
-    // subprocess.Popen(cmd, shell=True) — only dangerous when shell=True
+    // Legacy single-kwarg gate retained for back-compat: Popen(cmd, shell=True).
     SinkGate {
         callee_matcher: "Popen",
         arg_index: 0,
@@ -249,6 +249,43 @@ pub static GATED_SINKS: &[SinkGate] = &[
         case_sensitive: true,
         payload_args: &[0],
         keyword_name: Some("shell"),
+        dangerous_kwargs: &[],
+    },
+    // subprocess.run(cmd, shell=True) — multi-kwarg gate using the new
+    // presence-aware mechanism.  Payload is arg 1 (after receiver offset
+    // applied by the CFG layer when the call is modelled method-style).
+    SinkGate {
+        callee_matcher: "subprocess.run",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[("shell", &["True", "true"])],
+    },
+    SinkGate {
+        callee_matcher: "subprocess.call",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[("shell", &["True", "true"])],
+    },
+    SinkGate {
+        callee_matcher: "subprocess.Popen",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[("shell", &["True", "true"])],
     },
 ];
 

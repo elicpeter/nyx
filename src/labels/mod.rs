@@ -47,6 +47,21 @@ pub struct SinkGate {
     /// activation value is extracted from the named keyword argument instead
     /// of the positional argument at `arg_index`.
     pub keyword_name: Option<&'static str>,
+    /// Multi-keyword activation rules.  Each entry is `(kwarg_name, values)`
+    /// where any listed value makes the call dangerous.  Gate semantics when
+    /// non-empty:
+    ///   * A listed kwarg with a matching literal value → activate.
+    ///   * A listed kwarg present with a non-literal (dynamic) value →
+    ///     activate conservatively.
+    ///   * A listed kwarg present but with an explicitly safe literal → does
+    ///     not by itself activate.
+    ///   * No listed kwarg present → does not activate (matches the language
+    ///     default, e.g. Python `shell=False` implicit for `subprocess.run`).
+    ///
+    /// When both `keyword_name` and `dangerous_kwargs` are set, `keyword_name`
+    /// wins (back-compat for existing single-kwarg gates).  `&[]` is the
+    /// default and disables this branch.
+    pub dangerous_kwargs: &'static [(&'static str, &'static [&'static str])],
 }
 
 bitflags! {
@@ -774,6 +789,7 @@ pub fn classify_gated_sink(
     callee_text: &str,
     const_arg_at: impl Fn(usize) -> Option<String>,
     const_keyword_arg: impl Fn(&str) -> Option<String>,
+    kwarg_present: impl Fn(&str) -> bool,
 ) -> Option<(DataLabel, &'static [usize])> {
     let gates = GATED_REGISTRY.get(lang).or_else(|| {
         let key = lang.to_ascii_lowercase();
@@ -787,8 +803,39 @@ pub fn classify_gated_sink(
         if !match_suffix_cs(callee_bytes, matcher, gate.case_sensitive) {
             continue;
         }
-        // Matched a gated callee — inspect the activation argument.
-        // Use keyword extraction if gate has keyword_name, else positional.
+
+        // Multi-kwarg gate path.  Takes precedence over positional / single-kwarg
+        // inspection when populated.  Semantics are presence-aware: an absent
+        // kwarg is treated as the language default (safe) and does not alone
+        // activate the gate.
+        if !gate.dangerous_kwargs.is_empty() && gate.keyword_name.is_none() {
+            let mut any_dangerous = false;
+            let mut any_dynamic_present = false;
+            for (name, values) in gate.dangerous_kwargs {
+                if !kwarg_present(name) {
+                    continue; // absent → takes language default (safe)
+                }
+                match const_keyword_arg(name) {
+                    Some(v) => {
+                        let lower = v.to_ascii_lowercase();
+                        if values.iter().any(|dv| lower == dv.to_ascii_lowercase()) {
+                            any_dangerous = true;
+                            break;
+                        }
+                        // Present with a safe literal — continue checking other kwargs.
+                    }
+                    None => {
+                        any_dynamic_present = true;
+                    }
+                }
+            }
+            if any_dangerous || any_dynamic_present {
+                return Some((gate.label, gate.payload_args));
+            }
+            return None; // all listed kwargs absent or safe-literal → suppress
+        }
+
+        // Single-kwarg / positional gate path (original semantics).
         let activation_value = if let Some(kw) = gate.keyword_name {
             const_keyword_arg(kw)
         } else {
@@ -1146,6 +1193,11 @@ mod tests {
         None
     }
 
+    /// No-op kwarg presence check for tests that don't exercise the multi-kwarg path.
+    fn no_kw_present(_: &str) -> bool {
+        false
+    }
+
     #[test]
     fn gated_sink_dangerous_exact() {
         let result = classify_gated_sink(
@@ -1153,6 +1205,7 @@ mod tests {
             "setAttribute",
             |_| Some("href".to_string()),
             no_kw,
+            no_kw_present,
         );
         assert_eq!(
             result,
@@ -1167,6 +1220,7 @@ mod tests {
             "setAttribute",
             |_| Some("onclick".to_string()),
             no_kw,
+            no_kw_present,
         );
         assert_eq!(
             result,
@@ -1181,13 +1235,20 @@ mod tests {
             "setAttribute",
             |_| Some("class".to_string()),
             no_kw,
+            no_kw_present,
         );
         assert_eq!(result, None);
     }
 
     #[test]
     fn gated_sink_dynamic_conservative() {
-        let result = classify_gated_sink("javascript", "setAttribute", |_| None, no_kw);
+        let result = classify_gated_sink(
+            "javascript",
+            "setAttribute",
+            |_| None,
+            no_kw,
+            no_kw_present,
+        );
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
@@ -1196,8 +1257,13 @@ mod tests {
 
     #[test]
     fn gated_sink_no_match() {
-        let result =
-            classify_gated_sink("rust", "setAttribute", |_| Some("href".to_string()), no_kw);
+        let result = classify_gated_sink(
+            "rust",
+            "setAttribute",
+            |_| Some("href".to_string()),
+            no_kw,
+            no_kw_present,
+        );
         assert_eq!(result, None);
     }
 
@@ -1209,6 +1275,7 @@ mod tests {
             "setAttribute",
             |_| Some("href".to_string()),
             no_kw,
+            no_kw_present,
         );
         let (_, payload_args) = result.unwrap();
         assert_eq!(payload_args, &[1]);
@@ -1225,6 +1292,7 @@ mod tests {
                 }
             },
             no_kw,
+            no_kw_present,
         );
         let (_, payload_args) = result.unwrap();
         assert_eq!(payload_args, &[0]);
@@ -1243,6 +1311,7 @@ mod tests {
                 }
             },
             no_kw,
+            no_kw_present,
         );
         assert_eq!(result, None);
     }
@@ -1260,6 +1329,7 @@ mod tests {
                     None
                 }
             },
+            |kw| kw == "shell",
         );
         assert_eq!(
             result,
@@ -1280,13 +1350,89 @@ mod tests {
                     None
                 }
             },
+            |kw| kw == "shell",
         );
         assert_eq!(result, None);
     }
 
     #[test]
     fn gated_sink_python_popen_no_shell_conservative() {
-        let result = classify_gated_sink("python", "Popen", |_| None, |_| None);
+        let result =
+            classify_gated_sink("python", "Popen", |_| None, |_| None, no_kw_present);
+        assert_eq!(
+            result,
+            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))
+        );
+    }
+
+    // ── New multi-kwarg gate path (dangerous_kwargs) tests ─────────────────
+
+    /// `subprocess.run(cmd, shell=True)` → activates via multi-kwarg gate.
+    #[test]
+    fn gated_sink_subprocess_run_shell_true() {
+        let result = classify_gated_sink(
+            "python",
+            "subprocess.run",
+            |_| None,
+            |kw| {
+                if kw == "shell" {
+                    Some("True".to_string())
+                } else {
+                    None
+                }
+            },
+            |kw| kw == "shell",
+        );
+        assert_eq!(
+            result,
+            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))
+        );
+    }
+
+    /// `subprocess.run(cmd, shell=False)` → explicit safe literal suppresses the gate.
+    #[test]
+    fn gated_sink_subprocess_run_shell_false() {
+        let result = classify_gated_sink(
+            "python",
+            "subprocess.run",
+            |_| None,
+            |kw| {
+                if kw == "shell" {
+                    Some("False".to_string())
+                } else {
+                    None
+                }
+            },
+            |kw| kw == "shell",
+        );
+        assert_eq!(result, None);
+    }
+
+    /// `subprocess.run(cmd)` → no shell kwarg → presence-aware gate suppresses.
+    /// This is the behavioural difference from the legacy `Popen` gate path.
+    #[test]
+    fn gated_sink_subprocess_run_shell_absent_suppresses() {
+        let result = classify_gated_sink(
+            "python",
+            "subprocess.run",
+            |_| None,
+            |_| None,
+            no_kw_present,
+        );
+        assert_eq!(result, None);
+    }
+
+    /// `subprocess.run(cmd, shell=flag)` → shell kwarg present but dynamic →
+    /// conservative activate.
+    #[test]
+    fn gated_sink_subprocess_run_shell_dynamic_conservative() {
+        let result = classify_gated_sink(
+            "python",
+            "subprocess.run",
+            |_| None,
+            |_| None, // dynamic: no literal available
+            |kw| kw == "shell",
+        );
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))

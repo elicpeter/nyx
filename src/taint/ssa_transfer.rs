@@ -1389,6 +1389,7 @@ fn inline_analyse_callee(
     callee: &str,
     args: &[SmallVec<[SsaValue; 2]>],
     receiver: &Option<SsaValue>,
+    receiver_offset: usize,
     state: &SsaTaintState,
     transfer: &SsaTaintTransfer,
     cfg: &Cfg,
@@ -1453,8 +1454,14 @@ fn inline_analyse_callee(
                     let mut combined_caps = Cap::empty();
                     let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
-                    if *index < args.len() {
-                        for v in &args[*index] {
+                    // Map callee's param position (0-based, excluding receiver
+                    // slot) to caller's arg-vec position by applying the
+                    // receiver offset. When the caller is a CallMethod,
+                    // args[0] is the receiver; the callee's Param{index=0} is
+                    // its first real parameter, which lives at args[1].
+                    let caller_pos = *index + receiver_offset;
+                    if caller_pos < args.len() {
+                        for v in &args[caller_pos] {
                             if let Some(taint) = state.get(*v) {
                                 combined_caps |= taint.caps;
                                 for orig in &taint.origins {
@@ -1466,7 +1473,7 @@ fn inline_analyse_callee(
                                 }
                             }
                         }
-                    } else if *index == 0 && args.is_empty() {
+                    } else if *index == 0 && receiver_offset == 0 && args.is_empty() {
                         // Zero-arg method call: seed param 0 from receiver
                         if let Some(rv) = receiver {
                             if let Some(taint) = state.get(*rv) {
@@ -1509,8 +1516,9 @@ fn inline_analyse_callee(
         for inst in block.phis.iter().chain(block.body.iter()) {
             if let SsaOp::Param { index } = &inst.op {
                 if let Some(param_name) = inst.var_name.as_ref() {
-                    if *index < args.len() {
-                        for v in &args[*index] {
+                    let caller_pos = *index + receiver_offset;
+                    if caller_pos < args.len() {
+                        for v in &args[caller_pos] {
                             if let Some(arg_var_name) = caller_ssa
                                 .value_defs
                                 .get(v.0 as usize)
@@ -1854,9 +1862,17 @@ fn transfer_inst(
             // return taint — otherwise falls through to summary for cases like
             // receiver-only method calls where summary propagation is needed.
             if transfer.inline_cache.is_some() && transfer.context_depth < 1 {
-                if let Some(result) =
-                    inline_analyse_callee(callee, args, receiver, state, transfer, cfg, ssa, inst)
-                {
+                if let Some(result) = inline_analyse_callee(
+                    callee,
+                    args,
+                    receiver,
+                    cfg_receiver_offset,
+                    state,
+                    transfer,
+                    cfg,
+                    ssa,
+                    inst,
+                ) {
                     if let Some(ref ret) = result.return_taint {
                         resolved_callee = true;
                         return_bits |= ret.caps;
@@ -1880,12 +1896,19 @@ fn transfer_inst(
             // Resolve callee summary (used for both taint propagation and container fields)
             // Pass arity (SSA positional-arg count) so same-name/different-arity
             // overloads are not conflated during cross-file resolution.
+            //
+            // Subtract the receiver slot: when the CFG classified this as a
+            // method-style call, arg_uses[0] is the receiver and args[0] mirrors
+            // it, so `args.len()` is (positional-arity + 1).  The callee's own
+            // `FuncKey::arity` is the positional count, so we need to compare
+            // apples-to-apples.
+            let arity_hint = args.len().saturating_sub(cfg_receiver_offset);
             let callee_summary = resolve_callee_hinted(
                 transfer,
                 callee,
                 caller_func,
                 info.call.call_ordinal,
-                Some(args.len()),
+                Some(arity_hint),
             );
 
             // Capture container fields and return type regardless of whether
@@ -1921,7 +1944,7 @@ fn transfer_inst(
                         oc,
                         caller_func,
                         info.call.call_ordinal,
-                        Some(args.len()),
+                        Some(arity_hint),
                     ) {
                         if resolved_container_to_return.is_empty() {
                             resolved_container_to_return =
@@ -2272,7 +2295,7 @@ fn transfer_inst(
                         oc,
                         caller_func,
                         info.call.call_ordinal,
-                        Some(args.len()),
+                        Some(arity_hint),
                     ) {
                         if !oc_sum.propagates_taint && oc_sum.source_caps.is_empty() {
                             // Outer callee blocks taint: no param→return flow,

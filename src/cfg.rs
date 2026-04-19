@@ -99,6 +99,15 @@ pub struct CallMeta {
     /// When `Some`, only variables from these `arg_uses` positions are checked
     /// for taint.  `None` = all arguments are payload (default).
     pub sink_payload_args: Option<Vec<usize>>,
+    /// Keyword/named arguments attached to this call, in source order.
+    ///
+    /// Each entry is `(keyword_name, uses)` where `uses` are the identifier
+    /// references from the keyword's value expression (same shape as an entry
+    /// in `arg_uses`).  Populated for languages that expose named arguments
+    /// at the call site (e.g. Python `func(shell=True)`, Ruby hash-arg style).
+    /// Empty for languages without named arguments and for calls that use
+    /// only positional arguments.
+    pub kwargs: Vec<(String, Vec<String>)>,
 }
 
 /// Taint-classification and variable-flow metadata.
@@ -396,6 +405,36 @@ fn root_receiver_text(n: Node, lang: &str, code: &[u8]) -> Option<String> {
         }
         _ => text_of(n, code),
     }
+}
+
+/// Walk a member-expression / attribute chain down to its root identifier.
+///
+/// Unlike [`root_receiver_text`], which returns the raw text of a nested
+/// attribute (yielding `"request.args.get"` for the attribute node covering
+/// `request.args.get`), this drills through `object`/`value` fields until it
+/// hits a terminal identifier and returns just that leaf.
+///
+/// Used when JS/Python `obj.method(x)` is classified as `Kind::CallFn` with a
+/// dotted function child: we want the leftmost segment (`request` in
+/// `request.args.get("q")`) as the structured receiver for Phase-10 type
+/// resolution.  Returns `None` when the chain does not resolve to a plain
+/// identifier (e.g. call expressions, subscripts, `this`/`self`, etc.).
+fn root_member_receiver(n: Node, code: &[u8]) -> Option<String> {
+    let mut cur = n;
+    // Bounded walk — tree-sitter can nest deeply but we only need a handful
+    // of hops for real code.
+    for _ in 0..16 {
+        match cur.kind() {
+            "identifier" | "variable_name" | "this" | "self" => {
+                return text_of(cur, code);
+            }
+            "member_expression" | "attribute" => {
+                cur = cur.child_by_field_name("object")?;
+            }
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// Check if a callee represents an RAII-managed factory whose resources are
@@ -1072,17 +1111,63 @@ fn extract_const_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) -
     let args = call_node.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
     for child in args.named_children(&mut cursor) {
-        if child.kind() == "keyword_argument" {
+        if child.kind() == "keyword_argument" || child.kind() == "named_argument" {
             // keyword_argument has a "name" field and a "value" field in Python tree-sitter
-            let name_node = child.child_by_field_name("name")?;
-            let name_text = text_of(name_node, code)?;
-            if name_text == keyword_name {
-                let value_node = child.child_by_field_name("value")?;
-                return text_of(value_node, code).map(|s| s.to_string());
+            let Some(name_node) = child.child_by_field_name("name") else {
+                continue;
+            };
+            let Some(name_text) = text_of(name_node, code) else {
+                continue;
+            };
+            if name_text != keyword_name {
+                continue;
             }
+            let value_node = child.child_by_field_name("value")?;
+            // Only return a literal — identifiers / calls / complex exprs are
+            // "dynamic" and must be reported as `None` so the gate can
+            // distinguish literal-safe from dynamic.
+            return match value_node.kind() {
+                "true" | "false" | "none" | "integer" | "float" | "string"
+                | "string_literal" | "identifier" => text_of(value_node, code).map(|s| s.to_string()),
+                _ => None,
+            }
+            .filter(|_| {
+                // identifiers are only "literal" when they're the Python
+                // booleans True/False/None (tree-sitter-python classifies
+                // these as identifiers in older grammar versions).
+                match value_node.kind() {
+                    "identifier" => text_of(value_node, code)
+                        .as_deref()
+                        .is_some_and(|s| matches!(s, "True" | "False" | "None")),
+                    _ => true,
+                }
+            });
         }
     }
     None
+}
+
+/// Return `true` if the call node has a keyword/named argument whose name
+/// matches `keyword_name` (regardless of whether the value is a literal).
+/// Used by gated-sink classification to distinguish an absent kwarg (language
+/// default) from a present-but-dynamic kwarg (conservative).
+fn has_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) -> bool {
+    let Some(args) = call_node.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = args.walk();
+    for child in args.named_children(&mut cursor) {
+        if child.kind() != "keyword_argument" && child.kind() != "named_argument" {
+            continue;
+        }
+        let Some(name_node) = child.child_by_field_name("name") else {
+            continue;
+        };
+        if text_of(name_node, code).as_deref() == Some(keyword_name) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Recursively find a call-expression node within an AST subtree (up to
@@ -1424,18 +1509,21 @@ fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>> {
     let mut result = Vec::new();
     let mut cursor = args_node.walk();
     for child in args_node.named_children(&mut cursor) {
-        // If we encounter a spread/splat/keyword arg, positional mapping is
-        // unreliable — bail out and return empty (caller falls back to flat uses).
         let kind = child.kind();
+        // Named / keyword arguments are tracked separately in `CallMeta.kwargs`
+        // and do not participate in positional indexing — skip them here so
+        // `arg_uses` remains strictly positional.  Splats (spread/dict splat)
+        // still invalidate positional mapping; bail out in that case.
         if kind == "spread_element"
             || kind == "dictionary_splat"
             || kind == "list_splat"
-            || kind == "keyword_argument"
             || kind == "splat_argument"
             || kind == "hash_splat_argument"
-            || kind == "named_argument"
         {
             return Vec::new();
+        }
+        if kind == "keyword_argument" || kind == "named_argument" {
+            continue;
         }
         let mut idents = Vec::new();
         let mut paths = Vec::new();
@@ -1446,6 +1534,50 @@ fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>> {
         result.push(combined);
     }
     result
+}
+
+/// Extract keyword / named argument bindings for a call node.
+///
+/// Returns `Vec<(name, uses)>` where `uses` are the identifier references
+/// from the keyword's value expression, in the same shape used by
+/// `arg_uses` entries.  Empty for calls with no named arguments, or for
+/// languages whose grammar does not produce `keyword_argument` / `named_argument`
+/// children (C, Java, Go, …).
+fn extract_kwargs(call_node: Node, code: &[u8]) -> Vec<(String, Vec<String>)> {
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        let kind = child.kind();
+        if kind != "keyword_argument" && kind != "named_argument" {
+            continue;
+        }
+        // Python `keyword_argument` uses `name`/`value`; Ruby `named_argument`
+        // uses `name`/`value` as well (with `:` syntax in source).  Fall back
+        // to the first/last named children if fields are absent.
+        let named_count = child.named_child_count();
+        let name_node = child
+            .child_by_field_name("name")
+            .or_else(|| child.named_child(0));
+        let value_node = child
+            .child_by_field_name("value")
+            .or_else(|| child.named_child(named_count.saturating_sub(1) as u32));
+        let (Some(nn), Some(vn)) = (name_node, value_node) else {
+            continue;
+        };
+        let Some(name) = text_of(nn, code) else {
+            continue;
+        };
+        let mut idents = Vec::new();
+        let mut paths = Vec::new();
+        collect_idents_with_paths(vn, code, &mut idents, &mut paths);
+        let mut combined = paths;
+        combined.extend(idents);
+        out.push((name, combined));
+    }
+    out
 }
 
 /// Like `first_call_ident`, but also checks if `n` itself is a call node.
@@ -2240,6 +2372,7 @@ fn push_node<'a>(
                 &text,
                 |idx| extract_const_string_arg(cn, idx, code),
                 |kw| extract_const_keyword_arg(cn, kw, code),
+                |kw| has_keyword_arg(cn, kw, code),
             ) {
                 labels.push(gated_label);
                 if !payload.is_empty() {
@@ -2283,6 +2416,15 @@ fn push_node<'a>(
         call_ast
             .map(|cn| extract_arg_uses(cn, code))
             .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    // Extract keyword / named arguments for Call and gated-sink nodes.
+    // Languages whose grammar doesn't produce `keyword_argument` / `named_argument`
+    // children return an empty Vec, so this costs nothing for C/Java/Go/etc.
+    let kwargs = if kind == StmtKind::Call || sink_payload_args.is_some() {
+        call_ast.map(|cn| extract_kwargs(cn, code)).unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -2339,36 +2481,73 @@ fn push_node<'a>(
         }
     }
 
-    // For CallMethod nodes, extract the receiver identifier and prepend it
+    // For method-style calls, extract the receiver identifier and prepend it
     // to arg_uses at position 0. This allows `collect_propagating_uses_taint`
     // to apply an offset so that `propagating_params[0]` maps to the first
     // real argument (not the receiver).
-    let receiver = if let Some(cn) = call_ast
-        && matches!(lookup(lang, cn.kind()), Kind::CallMethod)
-    {
-        let recv_node = cn
-            .child_by_field_name("object")
-            .or_else(|| cn.child_by_field_name("receiver"))
-            .or_else(|| cn.child_by_field_name("scope"));
-        if let Some(rn) = recv_node
-            && matches!(rn.kind(), "identifier" | "variable_name")
-            && let Some(recv_text) = text_of(rn, code)
-        {
-            // Prepend receiver as arg_uses[0]
-            arg_uses.insert(0, vec![recv_text.clone()]);
-            Some(recv_text)
-        } else if recv_node.is_some() {
-            // Complex receiver (e.g. chained call: name.replace(...).replace(...))
-            // Use root_receiver_text to find the root identifier so taint can
-            // flow through the chain.
-            root_receiver_text(cn, lang, code).inspect(|recv_text| {
-                arg_uses.insert(0, vec![recv_text.clone()]);
-            })
-        } else {
-            // No explicit receiver (e.g. Java `buildQuery(filter)` — implicit
-            // `this` call). Don't prepend anything to arg_uses so that
-            // arg positions align with the callee's formal parameter indices.
-            None
+    //
+    // Two cases:
+    // 1. Kind::CallMethod — native method call AST (Java method_invocation,
+    //    Rust method_call_expression, Ruby call, PHP member_call_expression).
+    //    Receiver is exposed via "object"/"receiver"/"scope" field on the call.
+    // 2. Kind::CallFn whose function child is a member_expression (JS/TS) or
+    //    attribute (Python).  These grammars model `obj.method(x)` as a plain
+    //    call_expression/call with a dotted-name function child.  Without this
+    //    branch the structured `receiver` stays `None` and Phase-10 type-qualified
+    //    resolution loses its anchor.
+    let receiver = if let Some(cn) = call_ast {
+        match lookup(lang, cn.kind()) {
+            Kind::CallMethod => {
+                let recv_node = cn
+                    .child_by_field_name("object")
+                    .or_else(|| cn.child_by_field_name("receiver"))
+                    .or_else(|| cn.child_by_field_name("scope"));
+                if let Some(rn) = recv_node
+                    && matches!(rn.kind(), "identifier" | "variable_name")
+                    && let Some(recv_text) = text_of(rn, code)
+                {
+                    arg_uses.insert(0, vec![recv_text.clone()]);
+                    Some(recv_text)
+                } else if recv_node.is_some() {
+                    root_receiver_text(cn, lang, code).inspect(|recv_text| {
+                        arg_uses.insert(0, vec![recv_text.clone()]);
+                    })
+                } else {
+                    None
+                }
+            }
+            Kind::CallFn => {
+                // JS/TS `obj.method(x)`: call_expression.function = member_expression.
+                // Python `obj.method(x)`: call.function = attribute.
+                // Pull the receiver from the object/attribute-owner field.
+                let func_child = cn.child_by_field_name("function");
+                let recv_node = match func_child {
+                    Some(fc) if fc.kind() == "member_expression" || fc.kind() == "attribute" => {
+                        fc.child_by_field_name("object")
+                    }
+                    _ => None,
+                };
+                if let Some(rn) = recv_node {
+                    if matches!(rn.kind(), "identifier" | "variable_name" | "this" | "self") {
+                        text_of(rn, code).inspect(|recv_text| {
+                            arg_uses.insert(0, vec![recv_text.clone()]);
+                        })
+                    } else {
+                        // Complex receiver (nested attribute, chained call, subscript).
+                        // Drill to the leftmost plain identifier; when the chain is
+                        // purely member_expression/attribute nodes, we want the base
+                        // identifier (e.g. `request` for `request.args.get`).
+                        root_member_receiver(rn, code)
+                            .or_else(|| root_receiver_text(rn, lang, code))
+                            .inspect(|recv_text| {
+                                arg_uses.insert(0, vec![recv_text.clone()]);
+                            })
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     } else {
         None
@@ -2425,6 +2604,7 @@ fn push_node<'a>(
             arg_uses,
             receiver,
             sink_payload_args,
+            kwargs,
         },
         taint: TaintMeta {
             labels,
@@ -6235,6 +6415,7 @@ mod cfg_tests {
                 arg_uses: vec![vec!["a".into()]],
                 receiver: Some("obj".into()),
                 sink_payload_args: Some(vec![1, 2]),
+                kwargs: vec![("shell".into(), vec!["True".into()])],
             },
             taint: TaintMeta {
                 labels: {
@@ -6265,6 +6446,7 @@ mod cfg_tests {
             cloned.call.sink_payload_args,
             original.call.sink_payload_args
         );
+        assert_eq!(cloned.call.kwargs, original.call.kwargs);
         assert_eq!(cloned.taint.labels.len(), original.taint.labels.len());
         assert_eq!(cloned.taint.const_text, original.taint.const_text);
         assert_eq!(cloned.taint.defines, original.taint.defines);
@@ -6552,10 +6734,10 @@ mod cfg_tests {
             "helper is not a method call — no receiver"
         );
 
-        // JS `obj.method(x)` is a CallFn in tree-sitter-javascript, so the
-        // receiver is baked into the callee string rather than surfacing
-        // through the structured `receiver` field.  For JS we expect the
-        // `qualifier` fallback to pick up `"obj"` from the dotted name.
+        // JS `obj.method(x)` is a CallFn in tree-sitter-javascript whose
+        // `function` child is a `member_expression`.  push_node now unwraps
+        // that member expression and populates the structured `receiver`
+        // field directly, so `qualifier` stays `None`.
         let method_site = outer
             .callees
             .iter()
@@ -6567,10 +6749,74 @@ mod cfg_tests {
             "method has 1 positional arg"
         );
         assert_eq!(
-            method_site.qualifier.as_deref(),
+            method_site.receiver.as_deref(),
             Some("obj"),
-            "qualifier should capture `obj` from `obj.method` when the \
-             CFG classifies the call as CallFn rather than CallMethod"
+            "js CallFn over member_expression should populate structured receiver"
+        );
+        assert_eq!(
+            method_site.qualifier, None,
+            "qualifier is suppressed once receiver is populated"
+        );
+    }
+
+    /// JS `obj.method(x)` is modeled as `call_expression` whose `function`
+    /// child is a `member_expression`.  Kind::CallFn push_node must surface
+    /// the receiver identifier through `CallMeta.receiver`.
+    #[test]
+    fn local_summary_callees_js_method_receiver() {
+        let src = br"
+            function outer(obj, x) {
+                obj.method(x);
+            }
+        ";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        let (_key, outer) = file_cfg
+            .summaries
+            .iter()
+            .find(|(k, _)| k.name == "outer")
+            .expect("js outer summary should exist");
+
+        let method_site = outer
+            .callees
+            .iter()
+            .find(|c| c.name.ends_with("method"))
+            .expect("js method call should be recorded");
+        assert_eq!(method_site.arity, Some(1));
+        assert_eq!(
+            method_site.receiver.as_deref(),
+            Some("obj"),
+            "js CallFn over member_expression should populate structured receiver"
+        );
+    }
+
+    /// Python `obj.method(x)` is modeled as `call` whose `function` child is
+    /// an `attribute`.  Kind::CallFn push_node must surface the receiver
+    /// identifier through `CallMeta.receiver`.
+    #[test]
+    fn local_summary_callees_python_method_receiver() {
+        let src = b"
+def outer(obj, x):
+    obj.method(x)
+";
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+        let (_key, outer) = file_cfg
+            .summaries
+            .iter()
+            .find(|(k, _)| k.name == "outer")
+            .expect("python outer summary should exist");
+
+        let method_site = outer
+            .callees
+            .iter()
+            .find(|c| c.name.ends_with("method"))
+            .expect("python method call should be recorded");
+        assert_eq!(method_site.arity, Some(1));
+        assert_eq!(
+            method_site.receiver.as_deref(),
+            Some("obj"),
+            "python CallFn over attribute should populate structured receiver"
         );
     }
 
@@ -6605,6 +6851,70 @@ class Outer {
             method_site.receiver.as_deref(),
             Some("obj"),
             "java CallMethod should populate the structured receiver field"
+        );
+    }
+
+    /// Python keyword arguments should be captured separately from positional
+    /// `arg_uses` and surfaced through `CallMeta.kwargs` as `(name, uses)`.
+    #[test]
+    fn call_node_kwargs_populated_for_python() {
+        let src = b"
+def outer(cmd):
+    subprocess.run(cmd, shell=True, check=False)
+";
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
+        let call_node = cfg
+            .node_weights()
+            .find(|n| {
+                n.kind == StmtKind::Call
+                    && n.call
+                        .callee
+                        .as_deref()
+                        .is_some_and(|c| c.ends_with("run"))
+            })
+            .expect("subprocess.run call node should exist");
+
+        // receiver (`subprocess`) is prepended to arg_uses[0]; `cmd` is at [1].
+        // Keyword args must not appear in positional slots.
+        assert_eq!(
+            call_node.call.arg_uses.len(),
+            2,
+            "arg_uses should be [receiver, cmd] — no kwargs in positional slots"
+        );
+        assert_eq!(call_node.call.arg_uses[0], vec!["subprocess".to_string()]);
+        assert_eq!(call_node.call.arg_uses[1], vec!["cmd".to_string()]);
+        assert_eq!(call_node.call.receiver.as_deref(), Some("subprocess"));
+
+        let kwargs = &call_node.call.kwargs;
+        assert_eq!(kwargs.len(), 2, "two keyword arguments expected");
+        assert_eq!(kwargs[0].0, "shell");
+        assert_eq!(kwargs[1].0, "check");
+    }
+
+    /// Languages without keyword-argument grammar should leave `kwargs` empty.
+    #[test]
+    fn call_node_kwargs_empty_for_javascript() {
+        let src = br"
+            function outer(cmd) {
+                child_process.exec(cmd, { shell: true });
+            }
+        ";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        let call_node = cfg
+            .node_weights()
+            .find(|n| {
+                n.kind == StmtKind::Call
+                    && n.call
+                        .callee
+                        .as_deref()
+                        .is_some_and(|c| c.ends_with("exec"))
+            })
+            .expect("child_process.exec call node should exist");
+        assert!(
+            call_node.call.kwargs.is_empty(),
+            "JS object-literal arg is not a keyword_argument — kwargs should stay empty"
         );
     }
 

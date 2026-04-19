@@ -592,3 +592,14 @@ fn cross_file_info_leak() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
+
+/// Python `subprocess.run(cmd, shell=True)` where `cmd` is user-controlled —
+/// the multi-kwarg SHELL_ESCAPE gate activates.  Validates end-to-end wiring
+/// of `CallMeta.kwargs` through `classify_gated_sink`'s `dangerous_kwargs`
+/// path (presence-aware shell=True → dangerous).
+#[test]
+fn python_subprocess_shell_true_tainted() {
+    let dir = fixture_path("python_subprocess_shell_true");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
