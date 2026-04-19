@@ -45,7 +45,8 @@ fn merge_unions_conservatively() {
     assert!(foo.propagates_any());
     assert_eq!(foo.propagating_params, vec![0]);
     assert_eq!(foo.tainted_sink_params, vec![0]);
-    assert_eq!(foo.callees, vec!["bar".to_string()]);
+    assert_eq!(foo.callees.len(), 1);
+    assert_eq!(foo.callees[0].name, "bar");
 }
 
 #[test]
@@ -1474,4 +1475,116 @@ fn interop_lookup_returns_none_when_disambig_none_matches_many() {
         gs.get_for_interop(&ambiguous_query).is_none(),
         "disambig=None must not pick arbitrarily when multiple keys match"
     );
+}
+
+// ── CalleeSite metadata ─────────────────────────────────────────────────
+
+#[test]
+fn callee_site_bare_constructor() {
+    let site = CalleeSite::bare("helper");
+    assert_eq!(site.name, "helper");
+    assert_eq!(site.arity, None);
+    assert_eq!(site.receiver, None);
+    assert_eq!(site.qualifier, None);
+    assert_eq!(site.ordinal, 0);
+}
+
+#[test]
+fn callee_site_str_into_coercion() {
+    // Tests that `"name".into()` still works for building callee lists in
+    // test code, despite the field now being `Vec<CalleeSite>`.
+    let v: Vec<CalleeSite> = vec!["foo".into(), "bar".into()];
+    assert_eq!(v.len(), 2);
+    assert_eq!(v[0].name, "foo");
+    assert_eq!(v[1].name, "bar");
+}
+
+#[test]
+fn callee_site_structured_roundtrip() {
+    let summary = FuncSummary {
+        name: "parent".into(),
+        file_path: "x.rs".into(),
+        lang: "rust".into(),
+        param_count: 0,
+        callees: vec![
+            CalleeSite {
+                name: "obj.method".into(),
+                arity: Some(2),
+                receiver: Some("obj".into()),
+                qualifier: None,
+                ordinal: 1,
+            },
+            CalleeSite {
+                name: "env::var".into(),
+                arity: Some(1),
+                receiver: None,
+                qualifier: Some("env".into()),
+                ordinal: 2,
+            },
+        ],
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: FuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.callees.len(), 2);
+    assert_eq!(back.callees[0].name, "obj.method");
+    assert_eq!(back.callees[0].arity, Some(2));
+    assert_eq!(back.callees[0].receiver.as_deref(), Some("obj"));
+    assert_eq!(back.callees[0].ordinal, 1);
+    assert_eq!(back.callees[1].qualifier.as_deref(), Some("env"));
+}
+
+#[test]
+fn legacy_callees_string_array_deserializes() {
+    // Old on-disk rows stored callees as a plain Vec<String>.
+    // The custom deserializer must lift those into CalleeSite { name, .. }
+    // without other metadata so persisted indexes keep working.
+    let json = r#"{
+        "name": "legacy",
+        "file_path": "legacy.rs",
+        "lang": "rust",
+        "param_count": 0,
+        "param_names": [],
+        "source_caps": 0,
+        "sanitizer_caps": 0,
+        "sink_caps": 0,
+        "propagating_params": [],
+        "tainted_sink_params": [],
+        "callees": ["foo", "bar::baz"]
+    }"#;
+    let s: FuncSummary = serde_json::from_str(json).unwrap();
+    assert_eq!(s.callees.len(), 2);
+    assert_eq!(s.callees[0].name, "foo");
+    assert_eq!(s.callees[0].arity, None);
+    assert_eq!(s.callees[1].name, "bar::baz");
+    assert_eq!(s.callees[1].receiver, None);
+}
+
+#[test]
+fn mixed_callee_form_deserializes() {
+    // Interop / partial-migration rows may mix legacy strings with
+    // structured entries in the same array — deserializer accepts both.
+    let json = r#"{
+        "name": "mixed",
+        "file_path": "m.rs",
+        "lang": "rust",
+        "param_count": 0,
+        "param_names": [],
+        "source_caps": 0,
+        "sanitizer_caps": 0,
+        "sink_caps": 0,
+        "propagating_params": [],
+        "tainted_sink_params": [],
+        "callees": [
+            "legacy_fn",
+            {"name": "new_fn", "arity": 3, "receiver": "obj"}
+        ]
+    }"#;
+    let s: FuncSummary = serde_json::from_str(json).unwrap();
+    assert_eq!(s.callees.len(), 2);
+    assert_eq!(s.callees[0].name, "legacy_fn");
+    assert_eq!(s.callees[0].arity, None);
+    assert_eq!(s.callees[1].name, "new_fn");
+    assert_eq!(s.callees[1].arity, Some(3));
+    assert_eq!(s.callees[1].receiver.as_deref(), Some("obj"));
 }

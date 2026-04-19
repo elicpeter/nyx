@@ -182,20 +182,31 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
     for (caller_key, summary) in summaries.iter() {
         let caller_node = index[caller_key];
 
-        for raw_callee in &summary.callees {
+        for site in &summary.callees {
+            let raw_callee = site.name.as_str();
             // Use leaf name for the initial lookup (FuncKey.name is always leaf).
             let leaf = callee_leaf_name(raw_callee);
-            // Two-segment form for disambiguation when the leaf is ambiguous.
+            // Two-segment form for diagnostics / fallback disambiguation.
             let qualified = normalize_callee_name(raw_callee);
-            // Container hint: prefix-before-leaf if the raw callee is qualified.
-            let container = callee_container_hint(raw_callee);
-            let container_hint = if container.is_empty() {
-                None
-            } else {
-                Some(container)
-            };
-            // TODO(C-3): pass arity_hint once callee arity is stored on FuncSummary.callees
-            let arity_hint: Option<usize> = None;
+            // Container hint: prefer the structured receiver/qualifier captured
+            // at CFG time; fall back to the legacy prefix heuristic for
+            // backward-compatible summaries persisted without the richer form.
+            let container_owned: Option<String> = site
+                .receiver
+                .clone()
+                .or_else(|| site.qualifier.clone())
+                .or_else(|| {
+                    let raw = callee_container_hint(raw_callee);
+                    if raw.is_empty() {
+                        None
+                    } else {
+                        Some(raw.to_string())
+                    }
+                });
+            let container_hint = container_owned.as_deref();
+            // Structured arity carried per call site — used to disambiguate
+            // same-name/different-arity overloads during resolution.
+            let arity_hint: Option<usize> = site.arity;
 
             match summaries.resolve_callee_key_with_container(
                 leaf,
@@ -210,7 +221,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                             caller_node,
                             target_node,
                             CallEdge {
-                                call_site: raw_callee.clone(),
+                                call_site: raw_callee.to_string(),
                             },
                         );
                     }
@@ -225,14 +236,14 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                             caller_node,
                             target_node,
                             CallEdge {
-                                call_site: raw_callee.clone(),
+                                call_site: raw_callee.to_string(),
                             },
                         );
                         continue;
                     }
                     unresolved_not_found.push(UnresolvedCallee {
                         caller: caller_key.clone(),
-                        callee_name: raw_callee.clone(),
+                        callee_name: raw_callee.to_string(),
                     });
                 }
                 CalleeResolution::Ambiguous(candidates) => {
@@ -254,7 +265,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                                 caller_node,
                                 target_node,
                                 CallEdge {
-                                    call_site: raw_callee.clone(),
+                                    call_site: raw_callee.to_string(),
                                 },
                             );
                             continue;
@@ -262,7 +273,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                     }
                     unresolved_ambiguous.push(AmbiguousCallee {
                         caller: caller_key.clone(),
-                        callee_name: raw_callee.clone(),
+                        callee_name: raw_callee.to_string(),
                         candidates,
                     });
                 }
@@ -467,7 +478,7 @@ pub fn scc_file_batches<'a>(
 mod tests {
     use super::*;
     use crate::interop::CallSiteKey;
-    use crate::summary::{FuncSummary, merge_summaries};
+    use crate::summary::{CalleeSite, FuncSummary, merge_summaries};
     use crate::symbol::Lang;
 
     /// Helper to create a minimal FuncSummary.
@@ -490,7 +501,10 @@ mod tests {
             propagating_params: vec![],
             propagates_taint: false,
             tainted_sink_params: vec![],
-            callees: callees.into_iter().map(String::from).collect(),
+            callees: callees
+                .into_iter()
+                .map(crate::summary::CalleeSite::bare)
+                .collect(),
             ..Default::default()
         }
     }
@@ -1137,6 +1151,220 @@ mod tests {
         let gs = merge_summaries(vec![helper, caller], None);
         let cg = build_call_graph(&gs, &[]);
 
+        assert_eq!(cg.graph.edge_count(), 1);
+        assert!(cg.unresolved_not_found.is_empty());
+        assert!(cg.unresolved_ambiguous.is_empty());
+    }
+
+    // ── structured-metadata disambiguation (Phase: callee metadata) ──────
+
+    /// Helper: build a summary whose callees carry structured CalleeSite
+    /// metadata — used by the tests below to exercise arity / receiver /
+    /// qualifier propagation into resolution.
+    fn summary_with_sites(
+        name: &str,
+        file_path: &str,
+        lang: &str,
+        param_count: usize,
+        sites: Vec<CalleeSite>,
+    ) -> FuncSummary {
+        FuncSummary {
+            name: name.into(),
+            file_path: file_path.into(),
+            lang: lang.into(),
+            param_count,
+            param_names: vec![],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: 0,
+            propagating_params: vec![],
+            propagates_taint: false,
+            tainted_sink_params: vec![],
+            callees: sites,
+            ..Default::default()
+        }
+    }
+
+    /// Arity in the structured `CalleeSite` must disambiguate two same-name
+    /// overloads in the same namespace that previously could only be
+    /// distinguished after caller-namespace narrowing.
+    #[test]
+    fn arity_hint_disambiguates_same_name_overloads() {
+        // Two `encode` functions in the same file, different arities.
+        let encode1 = make_summary("encode", "src/codec.rs", "rust", 1, vec![]);
+        let encode2 = make_summary("encode", "src/codec.rs", "rust", 2, vec![]);
+        // Caller lives in *another* file so namespace does not disambiguate —
+        // the only signal is the per-call-site arity.
+        let caller = summary_with_sites(
+            "driver",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "encode".into(),
+                arity: Some(2),
+                ..Default::default()
+            }],
+        );
+
+        let gs = merge_summaries(vec![encode1, encode2, caller], None);
+        let cg = build_call_graph(&gs, &[]);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "driver".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        let encode2_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/codec.rs".into(),
+            name: "encode".into(),
+            arity: Some(2),
+            ..Default::default()
+        };
+        let caller_node = cg.index[&caller_key];
+        let encode2_node = cg.index[&encode2_key];
+        let edges: Vec<_> = cg.graph.edges(caller_node).collect();
+        assert_eq!(edges.len(), 1, "arity hint should pick the 2-arg overload");
+        assert_eq!(edges[0].target(), encode2_node);
+        assert!(cg.unresolved_ambiguous.is_empty());
+    }
+
+    /// Without an arity hint the same setup would be genuinely ambiguous.
+    /// This is the negative control for the arity disambiguation test above.
+    #[test]
+    fn no_arity_hint_stays_ambiguous() {
+        let encode1 = make_summary("encode", "src/codec.rs", "rust", 1, vec![]);
+        let encode2 = make_summary("encode", "src/codec.rs", "rust", 2, vec![]);
+        // Legacy-style callee entry with no structured metadata.
+        let caller = summary_with_sites(
+            "driver",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite::bare("encode")],
+        );
+
+        let gs = merge_summaries(vec![encode1, encode2, caller], None);
+        let cg = build_call_graph(&gs, &[]);
+        assert_eq!(cg.graph.edge_count(), 0, "no arity hint → ambiguous");
+        assert_eq!(cg.unresolved_ambiguous.len(), 1);
+    }
+
+    /// Structured `receiver` field should route to the correct container
+    /// when two classes in the same file define the same method name.
+    #[test]
+    fn receiver_field_disambiguates_methods() {
+        // Two `process` methods on two classes in the same file.
+        let mut fs_order = make_summary("process", "src/app.rs", "rust", 1, vec![]);
+        fs_order.container = "OrderService".into();
+        let mut fs_user = make_summary("process", "src/app.rs", "rust", 1, vec![]);
+        fs_user.container = "UserService".into();
+
+        // Caller in another file uses the structured receiver field rather
+        // than baking the receiver into the callee name string.
+        let caller = summary_with_sites(
+            "main",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "process".into(),
+                arity: Some(1),
+                receiver: Some("OrderService".into()),
+                ..Default::default()
+            }],
+        );
+
+        let gs = merge_summaries(vec![fs_order, fs_user, caller], None);
+        let cg = build_call_graph(&gs, &[]);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "main".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        let order_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/app.rs".into(),
+            container: "OrderService".into(),
+            name: "process".into(),
+            arity: Some(1),
+            ..Default::default()
+        };
+        let caller_node = cg.index[&caller_key];
+        let order_node = cg.index[&order_key];
+        let edges: Vec<_> = cg.graph.edges(caller_node).collect();
+        assert_eq!(
+            edges.len(),
+            1,
+            "structured receiver should route to OrderService::process"
+        );
+        assert_eq!(edges[0].target(), order_node);
+    }
+
+    /// The `qualifier` field carries the non-method qualifier (`env` in
+    /// `env::var`) directly, removing the need to re-parse the raw string.
+    #[test]
+    fn qualifier_field_disambiguates_non_method_calls() {
+        let var_env = make_summary("var", "src/env.rs", "rust", 1, vec![]);
+        // A same-named function that would otherwise be a tie-breaker target.
+        let var_local = make_summary("var", "src/locals.rs", "rust", 1, vec![]);
+        let caller = summary_with_sites(
+            "main",
+            "src/main.rs",
+            "rust",
+            0,
+            vec![CalleeSite {
+                name: "env::var".into(),
+                arity: Some(1),
+                qualifier: Some("env".into()),
+                ..Default::default()
+            }],
+        );
+
+        let gs = merge_summaries(vec![var_env, var_local, caller], None);
+        let cg = build_call_graph(&gs, &[]);
+
+        let caller_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/main.rs".into(),
+            name: "main".into(),
+            arity: Some(0),
+            ..Default::default()
+        };
+        let env_key = FuncKey {
+            lang: Lang::Rust,
+            namespace: "src/env.rs".into(),
+            name: "var".into(),
+            arity: Some(1),
+            ..Default::default()
+        };
+        let caller_node = cg.index[&caller_key];
+        let env_node = cg.index[&env_key];
+        let edges: Vec<_> = cg.graph.edges(caller_node).collect();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(
+            edges[0].target(),
+            env_node,
+            "qualifier `env` should select src/env.rs::var"
+        );
+    }
+
+    /// When the legacy `Vec<String>` form is loaded from an old database row,
+    /// resolution should still work for unambiguous callers (no regression).
+    #[test]
+    fn legacy_string_callees_still_resolve() {
+        let helper = make_summary("helper", "src/lib.rs", "rust", 0, vec![]);
+        // make_summary already returns CalleeSite::bare entries — i.e. the
+        // "lifted legacy" form with no arity or receiver metadata.
+        let caller = make_summary("main", "src/lib.rs", "rust", 0, vec!["helper"]);
+        let gs = merge_summaries(vec![helper, caller], None);
+        let cg = build_call_graph(&gs, &[]);
         assert_eq!(cg.graph.edge_count(), 1);
         assert!(cg.unresolved_not_found.is_empty());
         assert!(cg.unresolved_ambiguous.is_empty());

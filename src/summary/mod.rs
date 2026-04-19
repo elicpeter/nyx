@@ -3,8 +3,101 @@ pub mod ssa_summary;
 use crate::labels::Cap;
 use crate::summary::ssa_summary::SsaFuncSummary;
 use crate::symbol::{FuncKey, FuncKind, Lang, normalize_namespace};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
+
+// ── Callee site metadata ────────────────────────────────────────────────
+
+/// Richer per-call-site metadata preserved in a function's summary.
+///
+/// Replaces the legacy `Vec<String>` callee list.  Carries enough structure
+/// to disambiguate same-name overloads and method calls at resolution time
+/// without having to re-parse the raw callee string.
+///
+/// * `name` — the raw callee text as it appeared in source
+///   (`"obj.method"`, `"env::var"`, `"helper"`). Preserved for diagnostics.
+/// * `arity` — number of positional arguments at the call site.  `None`
+///   when splats / keyword-args / rest-params make the count unreliable.
+/// * `receiver` — structured receiver identifier for method calls
+///   (e.g. `"obj"` in `obj.method()`).  Carries the root receiver for
+///   chained calls; `None` for non-method or complex receivers.
+/// * `qualifier` — the segment immediately before the leaf for non-method
+///   qualified calls (e.g. `"env"` in `env::var`).  Extracted once at CFG
+///   time rather than re-parsed downstream.
+/// * `ordinal` — the per-function call ordinal matching
+///   `CallMeta.call_ordinal`, allowing cross-file consumers to address a
+///   specific call site rather than just a callee name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct CalleeSite {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arity: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualifier: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ordinal: u32,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
+impl CalleeSite {
+    /// Construct a bare call-site reference from a name, with no other metadata.
+    pub fn bare(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+}
+
+impl From<String> for CalleeSite {
+    fn from(name: String) -> Self {
+        Self {
+            name,
+            ..Default::default()
+        }
+    }
+}
+
+impl From<&str> for CalleeSite {
+    fn from(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Deserialize a `Vec<CalleeSite>` while tolerating the legacy
+/// on-disk form where callees were a plain array of strings.
+///
+/// Accepts:
+///   * `[{"name": "foo", "arity": 1, ...}, ...]`  ← current structured form
+///   * `["foo", "bar", ...]`                       ← legacy string form
+fn deserialize_callee_sites<'de, D>(de: D) -> Result<Vec<CalleeSite>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Structured(CalleeSite),
+        Bare(String),
+    }
+
+    let raw: Vec<Entry> = Vec::deserialize(de)?;
+    Ok(raw
+        .into_iter()
+        .map(|e| match e {
+            Entry::Structured(s) => s,
+            Entry::Bare(name) => CalleeSite::bare(name),
+        })
+        .collect())
+}
 
 /// Serialisable summary of a single function's taint behaviour.
 ///
@@ -77,9 +170,16 @@ pub struct FuncSummary {
     /// Indices of parameters that flow to internal sinks (0‑based).
     pub tainted_sink_params: Vec<usize>,
 
-    /// Names of functions/methods/macros called inside this function body.
-    /// Stored for future call‑graph / topological‑sort analysis.
-    pub callees: Vec<String>,
+    /// Per-call-site metadata for every function/method/macro invoked
+    /// inside this body (`CalleeSite`).  Carries arity, receiver,
+    /// qualifier, and call ordinal so downstream resolution does not have
+    /// to re-parse the raw callee string.
+    ///
+    /// A custom deserializer tolerates legacy on-disk rows whose callees
+    /// field was a plain `Vec<String>`; those are lifted to
+    /// `CalleeSite { name, .. }` with no additional metadata.
+    #[serde(default, deserialize_with = "deserialize_callee_sites")]
+    pub callees: Vec<CalleeSite>,
 
     // ── Identity discriminators (Phase: function-identity overhaul) ──────
     /// Enclosing container path (class / impl / module / outer function),
@@ -219,7 +319,13 @@ impl GlobalSummaries {
                     }
                 }
                 for c in &summary.callees {
-                    if !existing.callees.contains(c) {
+                    if !existing.callees.iter().any(|e| {
+                        e.name == c.name
+                            && e.arity == c.arity
+                            && e.receiver == c.receiver
+                            && e.qualifier == c.qualifier
+                            && e.ordinal == c.ordinal
+                    }) {
                         existing.callees.push(c.clone());
                     }
                 }

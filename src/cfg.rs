@@ -208,8 +208,11 @@ pub struct LocalFuncSummary {
     pub propagating_params: Vec<usize>,
     /// Which parameter indices flow to internal sinks.
     pub tainted_sink_params: Vec<usize>,
-    /// Callee identifiers found inside this function body.
-    pub callees: Vec<String>,
+    /// Per-call-site metadata for every call inside this function body.
+    /// Each entry carries the callee's raw name plus arity, receiver,
+    /// qualifier, and ordinal so callers can resolve overloads and
+    /// method-call targets without re-parsing.
+    pub callees: Vec<crate::summary::CalleeSite>,
     /// Identity discriminator: enclosing container path, `""` for free
     /// top-level functions.  Copied into `FuncSummary.container` at export.
     pub container: String,
@@ -4331,15 +4334,26 @@ fn build_sub<'a>(
             let mut fn_src_bits = Cap::empty();
             let mut fn_sani_bits = Cap::empty();
             let mut fn_sink_bits = Cap::empty();
-            let mut callees = Vec::<String>::new();
+            let mut callees = Vec::<crate::summary::CalleeSite>::new();
             let mut tainted_sink_params: Vec<usize> = Vec::new();
 
             for idx in fn_graph.node_indices() {
                 let info = &fn_graph[idx];
-                if let Some(callee) = &info.call.callee
-                    && !callees.contains(callee)
-                {
-                    callees.push(callee.clone());
+                if let Some(callee) = &info.call.callee {
+                    let site = build_callee_site(callee, info);
+                    // Dedup by (name, arity, receiver, qualifier, ordinal).  A
+                    // single function may legitimately contain multiple distinct
+                    // calls to the same callee (e.g. different ordinals or
+                    // different receivers); all of those are kept.
+                    if !callees.iter().any(|c| {
+                        c.name == site.name
+                            && c.arity == site.arity
+                            && c.receiver == site.receiver
+                            && c.qualifier == site.qualifier
+                            && c.ordinal == site.ordinal
+                    }) {
+                        callees.push(site);
+                    }
                 }
                 for lbl in &info.taint.labels {
                     match *lbl {
@@ -5099,6 +5113,63 @@ pub(crate) fn build_cfg<'a>(
         bodies,
         summaries,
         import_bindings,
+    }
+}
+
+/// Build a `CalleeSite` carrying the richer per-call-site metadata for a
+/// CFG node.
+///
+/// * `arity` — positional argument count.  `None` when `extract_arg_uses`
+///   bailed out on splats/keyword-args (length 0 does not distinguish
+///   zero-arg calls from unknown; we treat 0 as a concrete zero).  For
+///   method calls the receiver is prepended to `arg_uses` at position 0,
+///   so the raw positional arity is `arg_uses.len() - 1`; otherwise it's
+///   `arg_uses.len()`.
+/// * `receiver` — forwarded verbatim from `CallMeta.receiver` (already
+///   normalized to the root identifier).
+/// * `qualifier` — derived from the raw callee when it contains `::` or
+///   `.`.  For method calls the qualifier is redundant with `receiver`
+///   and is left `None`.
+fn build_callee_site(
+    callee: &str,
+    info: &NodeInfo,
+) -> crate::summary::CalleeSite {
+    use crate::summary::CalleeSite;
+
+    let receiver = info.call.receiver.clone();
+
+    let arity = {
+        let raw = info.call.arg_uses.len();
+        if receiver.is_some() {
+            // Receiver is stored at arg_uses[0]; subtract it.
+            Some(raw.saturating_sub(1))
+        } else if info.kind == StmtKind::Call {
+            Some(raw)
+        } else {
+            None
+        }
+    };
+
+    let qualifier = if receiver.is_some() {
+        None
+    } else if let Some(pos) = callee.rfind("::") {
+        let prefix = &callee[..pos];
+        Some(prefix.rsplit("::").next().unwrap_or(prefix).to_string())
+            .filter(|s| !s.is_empty())
+    } else if let Some(pos) = callee.rfind('.') {
+        let prefix = &callee[..pos];
+        Some(prefix.rsplit('.').next().unwrap_or(prefix).to_string())
+            .filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+
+    CalleeSite {
+        name: callee.to_string(),
+        arity,
+        receiver,
+        qualifier,
+        ordinal: info.call.call_ordinal,
     }
 }
 
@@ -6439,5 +6510,134 @@ mod cfg_tests {
             "expected 'name' in params, got: {:?}",
             params
         );
+    }
+
+    // ── callee-site metadata extraction ──────────────────────────────────
+
+    /// Callees collected into `LocalFuncSummary` should now carry structured
+    /// arity, receiver, and qualifier fields — not just a bare name.
+    #[test]
+    fn local_summary_callees_carry_arity_and_receiver() {
+        // Two calls: one is a plain function call with 2 args, the other is
+        // a method call on an explicit receiver.
+        let src = br"
+            function outer(x, y) {
+                helper(x, y);
+                obj.method(x);
+            }
+        ";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        let summaries = &file_cfg.summaries;
+
+        // Pull the outer function's summary.
+        let (_key, outer) = summaries
+            .iter()
+            .find(|(k, _)| k.name == "outer")
+            .expect("outer summary should exist");
+
+        // Both calls should be recorded.
+        let helper_site = outer
+            .callees
+            .iter()
+            .find(|c| c.name == "helper")
+            .expect("helper call should be recorded with structured metadata");
+        assert_eq!(
+            helper_site.arity,
+            Some(2),
+            "helper has 2 positional args at the call site"
+        );
+        assert_eq!(
+            helper_site.receiver, None,
+            "helper is not a method call — no receiver"
+        );
+
+        // JS `obj.method(x)` is a CallFn in tree-sitter-javascript, so the
+        // receiver is baked into the callee string rather than surfacing
+        // through the structured `receiver` field.  For JS we expect the
+        // `qualifier` fallback to pick up `"obj"` from the dotted name.
+        let method_site = outer
+            .callees
+            .iter()
+            .find(|c| c.name.ends_with("method"))
+            .expect("method call should be recorded");
+        assert_eq!(
+            method_site.arity,
+            Some(1),
+            "method has 1 positional arg"
+        );
+        assert_eq!(
+            method_site.qualifier.as_deref(),
+            Some("obj"),
+            "qualifier should capture `obj` from `obj.method` when the \
+             CFG classifies the call as CallFn rather than CallMethod"
+        );
+    }
+
+    /// Java `obj.method(x)` IS classified as CallMethod (via
+    /// `method_invocation`), so the structured `receiver` field
+    /// should be populated directly rather than falling through to
+    /// the `qualifier` dotted-name fallback.
+    #[test]
+    fn local_summary_callees_java_method_receiver() {
+        let src = br"
+class Outer {
+    void outer(Bar obj, int x) {
+        obj.method(x);
+    }
+}
+";
+        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "java", ts_lang);
+        let (_key, outer) = file_cfg
+            .summaries
+            .iter()
+            .find(|(k, _)| k.name == "outer")
+            .expect("java outer summary should exist");
+
+        let method_site = outer
+            .callees
+            .iter()
+            .find(|c| c.name.ends_with("method"))
+            .expect("java method call should be recorded");
+        assert_eq!(method_site.arity, Some(1));
+        assert_eq!(
+            method_site.receiver.as_deref(),
+            Some("obj"),
+            "java CallMethod should populate the structured receiver field"
+        );
+    }
+
+    /// Ordinals on callees should match `CallMeta.call_ordinal` so
+    /// downstream consumers can address a specific call site.
+    #[test]
+    fn local_summary_callees_have_distinct_ordinals() {
+        let src = br"
+            function outer() {
+                a();
+                a();
+                b();
+            }
+        ";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        let (_key, outer) = file_cfg
+            .summaries
+            .iter()
+            .find(|(k, _)| k.name == "outer")
+            .unwrap();
+
+        // Dedup key is (name, arity, receiver, qualifier, ordinal) — the two
+        // `a()` sites have different ordinals, so both must appear.
+        let a_sites: Vec<_> = outer.callees.iter().filter(|c| c.name == "a").collect();
+        assert_eq!(
+            a_sites.len(),
+            2,
+            "two a() calls should produce two entries with distinct ordinals, got: {:?}",
+            a_sites
+        );
+        let ord0 = a_sites[0].ordinal;
+        let ord1 = a_sites[1].ordinal;
+        assert_ne!(ord0, ord1, "ordinals must differ across sites");
     }
 }

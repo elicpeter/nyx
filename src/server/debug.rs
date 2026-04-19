@@ -745,8 +745,25 @@ pub struct FuncSummaryView {
     pub propagates_taint: bool,
     pub propagating_params: Vec<usize>,
     pub tainted_sink_params: Vec<usize>,
-    pub callees: Vec<String>,
+    pub callees: Vec<CalleeSiteView>,
     pub ssa_summary: Option<SsaSummaryView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CalleeSiteView {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arity: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualifier: Option<String>,
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub ordinal: u32,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Serialize)]
@@ -807,7 +824,17 @@ impl FuncSummaryView {
             propagates_taint: summary.propagates_taint,
             propagating_params: summary.propagating_params.clone(),
             tainted_sink_params: summary.tainted_sink_params.clone(),
-            callees: summary.callees.clone(),
+            callees: summary
+                .callees
+                .iter()
+                .map(|c| CalleeSiteView {
+                    name: c.name.clone(),
+                    arity: c.arity,
+                    receiver: c.receiver.clone(),
+                    qualifier: c.qualifier.clone(),
+                    ordinal: c.ordinal,
+                })
+                .collect(),
             ssa_summary: ssa_view,
         }
     }

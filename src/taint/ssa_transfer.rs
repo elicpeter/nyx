@@ -1878,8 +1878,15 @@ fn transfer_inst(
             let mut resolved_container_store: Vec<(usize, usize)> = Vec::new();
 
             // Resolve callee summary (used for both taint propagation and container fields)
-            let callee_summary =
-                resolve_callee(transfer, callee, caller_func, info.call.call_ordinal);
+            // Pass arity (SSA positional-arg count) so same-name/different-arity
+            // overloads are not conflated during cross-file resolution.
+            let callee_summary = resolve_callee_hinted(
+                transfer,
+                callee,
+                caller_func,
+                info.call.call_ordinal,
+                Some(args.len()),
+            );
 
             // Capture container fields and return type regardless of whether
             // inline analysis handled the call
@@ -1909,9 +1916,13 @@ fn transfer_inst(
             // container fields that depend on the wrapping function's summary.
             if resolved_container_store.is_empty() {
                 if let Some(ref oc) = info.call.outer_callee {
-                    if let Some(ref resolved) =
-                        resolve_callee(transfer, oc, caller_func, info.call.call_ordinal)
-                    {
+                    if let Some(ref resolved) = resolve_callee_hinted(
+                        transfer,
+                        oc,
+                        caller_func,
+                        info.call.call_ordinal,
+                        Some(args.len()),
+                    ) {
                         if resolved_container_to_return.is_empty() {
                             resolved_container_to_return =
                                 resolved.param_container_to_return.clone();
@@ -2256,9 +2267,13 @@ fn transfer_inst(
             // arguments — clear return_bits.
             if !return_bits.is_empty() && has_source_label {
                 if let Some(ref oc) = info.call.outer_callee {
-                    if let Some(ref oc_sum) =
-                        resolve_callee(transfer, oc, caller_func, info.call.call_ordinal)
-                    {
+                    if let Some(ref oc_sum) = resolve_callee_hinted(
+                        transfer,
+                        oc,
+                        caller_func,
+                        info.call.call_ordinal,
+                        Some(args.len()),
+                    ) {
                         if !oc_sum.propagates_taint && oc_sum.source_caps.is_empty() {
                             // Outer callee blocks taint: no param→return flow,
                             // no internal sources reaching return.
@@ -2964,13 +2979,19 @@ fn collect_block_events(
             // Callback pattern: check if callee has source_to_callback and the
             // actual callback argument has a matching param_to_sink.
             if let SsaOp::Call {
-                callee, args: _, ..
+                callee,
+                args: call_args,
+                ..
             } = &inst.op
             {
                 let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
-                if let Some(resolved) =
-                    resolve_callee(transfer, callee, caller_func, info.call.call_ordinal)
-                {
+                if let Some(resolved) = resolve_callee_hinted(
+                    transfer,
+                    callee,
+                    caller_func,
+                    info.call.call_ordinal,
+                    Some(call_args.len()),
+                ) {
                     for &(cb_idx, src_caps) in &resolved.source_to_callback {
                         let cb_name = info.arg_callees.get(cb_idx).and_then(|ac| ac.as_ref());
                         if let Some(cb_callee) = cb_name {
@@ -3705,10 +3726,29 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
     }
 
     let caller_func = info.ast.enclosing_func.as_deref().unwrap_or("");
+    // The sink-label path needs an arity hint so we do not match a
+    // same-name/different-arity overload in another namespace.
+    // When `info.call.arg_uses` is populated, its length (adjusted for any
+    // prepended CallMethod receiver) is the positional argument count.
+    let arity_hint = if info.call.arg_uses.is_empty() {
+        None
+    } else {
+        let raw = info.call.arg_uses.len();
+        let adjust = if info.call.receiver.is_some() { 1 } else { 0 };
+        Some(raw.saturating_sub(adjust))
+    };
     info.call
         .callee
         .as_ref()
-        .and_then(|c| resolve_callee(transfer, c, caller_func, info.call.call_ordinal))
+        .and_then(|c| {
+            resolve_callee_hinted(
+                transfer,
+                c,
+                caller_func,
+                info.call.call_ordinal,
+                arity_hint,
+            )
+        })
         .filter(|r| !r.sink_caps.is_empty())
         .map(|r| SinkInfo {
             caps: r.sink_caps,
@@ -4638,6 +4678,23 @@ fn resolve_callee(
     caller_func: &str,
     call_ordinal: u32,
 ) -> Option<ResolvedSummary> {
+    resolve_callee_hinted(transfer, callee, caller_func, call_ordinal, None)
+}
+
+/// Like [`resolve_callee`] but accepts an `arity_hint` that narrows the
+/// candidate set to functions with a matching parameter count.
+///
+/// Used by the call-graph / SSA-transfer paths when the caller knows the
+/// number of positional arguments at this site — this eliminates false
+/// resolution to same-name siblings with different arities (e.g.
+/// `encode(x)` vs `encode(x, opts)` in the same namespace).
+fn resolve_callee_hinted(
+    transfer: &SsaTaintTransfer,
+    callee: &str,
+    caller_func: &str,
+    call_ordinal: u32,
+    arity_hint: Option<usize>,
+) -> Option<ResolvedSummary> {
     // Use leaf name for map/index lookups (FuncKey.name is always leaf).
     let normalized = callee_leaf_name(callee);
     // Prefix-segment container hint: `obj.method` → `obj`, `Class::foo` → `Class`.
@@ -4655,8 +4712,15 @@ fn resolve_callee(
     // so that downstream steps see the canonical symbol name.
     if let Some(bindings) = transfer.import_bindings {
         if let Some(binding) = bindings.get(normalized) {
-            // Recursively resolve using the original name.
-            return resolve_callee(transfer, &binding.original, caller_func, call_ordinal);
+            // Recursively resolve using the original name, preserving the
+            // arity hint (the import alias does not change call arity).
+            return resolve_callee_hinted(
+                transfer,
+                &binding.original,
+                caller_func,
+                call_ordinal,
+                arity_hint,
+            );
         }
     }
 
@@ -4748,7 +4812,7 @@ fn resolve_callee(
             transfer.lang,
             transfer.namespace,
             container_hint,
-            None,
+            arity_hint,
         ) {
             CalleeResolution::Resolved(target_key) => {
                 if let Some(ssa_sum) = gs.get_ssa(&target_key) {
@@ -4808,7 +4872,7 @@ fn resolve_callee(
             transfer.lang,
             transfer.namespace,
             container_hint,
-            None,
+            arity_hint,
         ) {
             CalleeResolution::Resolved(target_key) => {
                 if let Some(fs) = gs.get(&target_key) {
