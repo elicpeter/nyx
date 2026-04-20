@@ -1,6 +1,6 @@
 use crate::interop::InteropEdge;
 use crate::rust_resolve::RustUseMap;
-use crate::summary::{CalleeResolution, GlobalSummaries};
+use crate::summary::{CalleeQuery, CalleeResolution, GlobalSummaries};
 use crate::symbol::{FuncKey, Lang};
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
@@ -211,8 +211,8 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             // through the `use`-map aware resolver first.  When the call has
             // a structured receiver it is a method call — the qualifier is
             // an impl/trait name, not a module path — so we fall back to the
-            // generic container-hint resolver.  All other languages skip
-            // the use-map branch entirely.
+            // structured resolver.  All other languages skip the use-map
+            // branch entirely.
             let use_rust_path =
                 caller_key.lang == Lang::Rust && site.receiver.is_none();
             let resolution = if use_rust_path {
@@ -224,29 +224,46 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                     rust_use_map.as_ref(),
                 )
             } else {
-                // Non-Rust, or Rust method call with a receiver.  Preserve
-                // the legacy container-hint path verbatim so receiver-driven
-                // disambiguation still works for `obj.method()` style calls
-                // (including Rust method calls on impl blocks).
-                let container_owned: Option<String> = site
-                    .receiver
+                // Non-Rust, or Rust method call with a receiver: route
+                // through the qualified-first resolver.  We deliberately
+                // categorize each hint so the resolver can apply the right
+                // policy:
+                //
+                //   * `namespace_qualifier` — structured module/namespace
+                //     prefix (`env` in `env::var`, `http` in `http.Get`).
+                //   * `receiver_var` — syntactic receiver variable (e.g.
+                //     `obj` in `obj.method`); used only as a last tie-break.
+                //   * `caller_container` — caller's own class/impl, so bare
+                //     `foo()` inside a method resolves to the same class.
+                //
+                // The raw text-parsed container (legacy
+                // `callee_container_hint`) is only consulted when the
+                // structured `CalleeSite` fields are absent (e.g. old
+                // summaries loaded from SQLite without `qualifier`).
+                let parsed_container = {
+                    let raw = callee_container_hint(raw_callee);
+                    if raw.is_empty() { None } else { Some(raw.to_string()) }
+                };
+                let namespace_qualifier = site
+                    .qualifier
                     .clone()
-                    .or_else(|| site.qualifier.clone())
-                    .or_else(|| {
-                        let raw = callee_container_hint(raw_callee);
-                        if raw.is_empty() {
-                            None
-                        } else {
-                            Some(raw.to_string())
-                        }
-                    });
-                summaries.resolve_callee_key_with_container(
-                    leaf,
-                    caller_key.lang,
-                    &caller_key.namespace,
-                    container_owned.as_deref(),
-                    arity_hint,
-                )
+                    .or_else(|| if site.receiver.is_none() { parsed_container.clone() } else { None });
+                let receiver_var = site.receiver.clone();
+                let caller_container: Option<&str> = if caller_key.container.is_empty() {
+                    None
+                } else {
+                    Some(caller_key.container.as_str())
+                };
+                summaries.resolve_callee(&CalleeQuery {
+                    name: leaf,
+                    caller_lang: caller_key.lang,
+                    caller_namespace: &caller_key.namespace,
+                    caller_container,
+                    receiver_type: None,
+                    namespace_qualifier: namespace_qualifier.as_deref(),
+                    receiver_var: receiver_var.as_deref(),
+                    arity: arity_hint,
+                })
             };
 
             match resolution {

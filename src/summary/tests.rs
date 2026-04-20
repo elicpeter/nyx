@@ -1992,3 +1992,468 @@ fn rust_fields_roundtrip_through_json() {
         vec!["crate::auth::session".to_string()]
     );
 }
+
+// ── Qualified-first callee resolution (adversarial) ─────────────────────
+//
+// Each test here stages a same-leaf-name collision that the old leaf-only
+// resolver would either silently pick wrong or flag as ambiguous.  Under
+// the new `CalleeQuery` path, qualified identity (receiver type /
+// namespace qualifier / caller container) must win before any bare-leaf
+// fallback kicks in.
+
+fn method_summary(
+    namespace: &str,
+    container: &str,
+    name: &str,
+    arity: usize,
+    sink_bits: u16,
+) -> (FuncKey, FuncSummary) {
+    fs_with(
+        namespace,
+        container,
+        name,
+        arity,
+        FuncKind::Method,
+        Some((namespace.len() + container.len() + name.len()) as u32),
+        sink_bits,
+    )
+}
+
+fn free_summary(
+    namespace: &str,
+    name: &str,
+    arity: usize,
+    sink_bits: u16,
+) -> (FuncKey, FuncSummary) {
+    fs_with(
+        namespace,
+        "",
+        name,
+        arity,
+        FuncKind::Function,
+        Some((namespace.len() + name.len()) as u32),
+        sink_bits,
+    )
+}
+
+#[test]
+fn query_prefers_receiver_type_over_leaf_collision() {
+    // Two classes in different files both expose `send/1`.  A free
+    // function also named `send/1` sits in yet another file to make the
+    // leaf-name index ambiguous.  The caller lives outside all three.
+    let mut gs = GlobalSummaries::new();
+    let (k_http, s_http) = method_summary("src/http.java", "HttpClient", "send", 1, 0x01);
+    let (k_queue, s_queue) = method_summary("src/queue.java", "MessageQueue", "send", 1, 0x02);
+    let (k_free, s_free) = free_summary("src/util.java", "send", 1, 0x04);
+    gs.insert(k_http.clone(), s_http);
+    gs.insert(k_queue.clone(), s_queue);
+    gs.insert(k_free.clone(), s_free);
+
+    // With `receiver_type = HttpClient`, resolution MUST land on the
+    // HttpClient method even though `MessageQueue::send/1` and the free
+    // function `send/1` would both match the leaf name.
+    let resolved = gs.resolve_callee(&CalleeQuery {
+        name: "send",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.java",
+        caller_container: None,
+        receiver_type: Some("HttpClient"),
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(resolved, CalleeResolution::Resolved(k_http.clone()));
+
+    // Old behaviour-parity regression: `resolve_callee_key_with_container`
+    // (now a thin wrapper) used to treat `MessageQueue` as an authoritative
+    // qualifier that *only* picked on exact match.  The new resolver must
+    // still do that — swap to `MessageQueue` and we get its method back.
+    let resolved_queue = gs.resolve_callee(&CalleeQuery {
+        name: "send",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.java",
+        caller_container: None,
+        receiver_type: Some("MessageQueue"),
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(resolved_queue, CalleeResolution::Resolved(k_queue));
+    // And the leaf-name index *does* know about the free function: no
+    // hint → ambiguous (not a silent mis-resolve).
+    let bare = gs.resolve_callee_key("send", Lang::Java, "src/app.java", Some(1));
+    match bare {
+        CalleeResolution::Ambiguous(cands) => {
+            assert_eq!(cands.len(), 3);
+            assert!(cands.contains(&k_http));
+            assert!(cands.contains(&k_free));
+        }
+        other => panic!("bare leaf lookup with 3 candidates must be Ambiguous, got {other:?}"),
+    }
+}
+
+#[test]
+fn query_authoritative_receiver_miss_does_not_fall_through_to_leaf() {
+    // When `receiver_type = HttpClient` is supplied but no
+    // `HttpClient::send` exists, the resolver MUST NOT silently pick a
+    // same-leaf collision in another container — that would be the
+    // classic "resolved by leaf name" bug the refactor aims to prevent.
+    let mut gs = GlobalSummaries::new();
+    let (k_queue, s_queue) = method_summary("src/queue.java", "MessageQueue", "send", 1, 0x02);
+    let (k_free, s_free) = free_summary("src/util.java", "send", 1, 0x04);
+    gs.insert(k_queue.clone(), s_queue);
+    gs.insert(k_free.clone(), s_free);
+
+    let resolved = gs.resolve_callee(&CalleeQuery {
+        name: "send",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.java",
+        caller_container: None,
+        receiver_type: Some("HttpClient"),
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    match resolved {
+        CalleeResolution::Ambiguous(cands) => {
+            // Candidates list reports the leaf-name matches so callers
+            // can diagnose, but we refused to pick one of them.
+            assert!(cands.contains(&k_queue));
+            assert!(cands.contains(&k_free));
+        }
+        other => panic!(
+            "authoritative receiver_type miss must return Ambiguous (never silently resolve to a \
+             different container), got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn query_namespace_qualifier_resolves_env_var_style_call() {
+    // Rust / C++-style namespace qualifiers should land on the module
+    // that exposes the leaf, even when same-leaf functions live in
+    // unrelated modules.
+    let mut gs = GlobalSummaries::new();
+    let (k_env, s_env) = fs_with(
+        "src/env.rs",
+        "env",
+        "var",
+        1,
+        FuncKind::Function,
+        Some(1),
+        0x01,
+    );
+    // Force the insertion to use Rust lang by shadowing fs_with's Java default.
+    let k_env = FuncKey {
+        lang: Lang::Rust,
+        ..k_env
+    };
+    let s_env = FuncSummary {
+        lang: "rust".into(),
+        ..s_env
+    };
+    let (k_other, s_other) = fs_with(
+        "src/other.rs",
+        "config",
+        "var",
+        1,
+        FuncKind::Function,
+        Some(2),
+        0x02,
+    );
+    let k_other = FuncKey {
+        lang: Lang::Rust,
+        ..k_other
+    };
+    let s_other = FuncSummary {
+        lang: "rust".into(),
+        ..s_other
+    };
+    gs.insert(k_env.clone(), s_env);
+    gs.insert(k_other.clone(), s_other);
+
+    // `env::var` → namespace_qualifier = "env" → env::var wins.
+    let resolved = gs.resolve_callee(&CalleeQuery {
+        name: "var",
+        caller_lang: Lang::Rust,
+        caller_namespace: "src/consumer.rs",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: Some("env"),
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(resolved, CalleeResolution::Resolved(k_env.clone()));
+
+    // `config::var` → namespace_qualifier = "config" → config::var wins.
+    let resolved_cfg = gs.resolve_callee(&CalleeQuery {
+        name: "var",
+        caller_lang: Lang::Rust,
+        caller_namespace: "src/consumer.rs",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: Some("config"),
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(resolved_cfg, CalleeResolution::Resolved(k_other));
+
+    // Bare `var(...)` call (no qualifier) across namespaces → Ambiguous.
+    let bare = gs.resolve_callee_key("var", Lang::Rust, "src/consumer.rs", Some(1));
+    assert!(matches!(bare, CalleeResolution::Ambiguous(_)));
+}
+
+#[test]
+fn query_caller_container_resolves_self_call() {
+    // Bare `helper()` from inside `OrderService::place` must resolve to
+    // the `OrderService::helper` method rather than a same-name helper
+    // exposed by an unrelated class in a different file.
+    let mut gs = GlobalSummaries::new();
+    let (k_order, s_order) = method_summary("src/order.java", "OrderService", "helper", 0, 0xA);
+    let (k_user, s_user) = method_summary("src/user.java", "UserService", "helper", 0, 0xB);
+    gs.insert(k_order.clone(), s_order);
+    gs.insert(k_user.clone(), s_user);
+
+    let resolved = gs.resolve_callee(&CalleeQuery {
+        name: "helper",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/order.java",
+        caller_container: Some("OrderService"),
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(0),
+    });
+    assert_eq!(resolved, CalleeResolution::Resolved(k_order.clone()));
+
+    // Swap the caller to `UserService` and we should land on its helper.
+    let resolved_user = gs.resolve_callee(&CalleeQuery {
+        name: "helper",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/user.java",
+        caller_container: Some("UserService"),
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(0),
+    });
+    assert_eq!(resolved_user, CalleeResolution::Resolved(k_user));
+
+    // With no caller-container hint (free call from module-level code),
+    // the resolver must not pick either class's helper blindly.
+    let no_hint = gs.resolve_callee(&CalleeQuery {
+        name: "helper",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/main.java",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(0),
+    });
+    assert!(matches!(no_hint, CalleeResolution::Ambiguous(_)));
+}
+
+#[test]
+fn query_leaf_same_namespace_still_resolves_intra_file_calls() {
+    // Two definitions share a leaf name but live in different files.
+    // A same-namespace call (intra-file) must resolve to the local one
+    // without requiring any structured hint — this is the common case
+    // for bare top-level function calls.
+    let mut gs = GlobalSummaries::new();
+    let (k_a, s_a) = free_summary("src/a.js", "helper", 1, 0x01);
+    let (k_b, s_b) = free_summary("src/b.js", "helper", 1, 0x02);
+    gs.insert(k_a.clone(), s_a);
+    gs.insert(k_b.clone(), s_b);
+
+    // Caller in a.js → resolves to a.js::helper.
+    let resolved = gs.resolve_callee(&CalleeQuery {
+        name: "helper",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/a.js",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(resolved, CalleeResolution::Resolved(k_a));
+
+    // Caller in a third file → ambiguous (we refuse to guess).
+    let cross = gs.resolve_callee(&CalleeQuery {
+        name: "helper",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/c.js",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    match cross {
+        CalleeResolution::Ambiguous(cands) => {
+            assert_eq!(cands.len(), 2);
+            assert!(cands.contains(&k_b));
+        }
+        other => panic!("cross-file bare leaf should be Ambiguous, got {other:?}"),
+    }
+}
+
+#[test]
+fn query_arity_filter_is_hard() {
+    // Same container and leaf, different arities — resolution must
+    // honour the arity filter before any qualifier-based tie-break.
+    let mut gs = GlobalSummaries::new();
+    let (k_1arg, s_1arg) = method_summary("src/svc.py", "Svc", "render", 1, 0x01);
+    let (k_2arg, s_2arg) = method_summary("src/svc.py", "Svc", "render", 2, 0x02);
+    gs.insert(k_1arg.clone(), s_1arg);
+    gs.insert(k_2arg.clone(), s_2arg);
+
+    let one = gs.resolve_callee(&CalleeQuery {
+        name: "render",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/caller.py",
+        caller_container: None,
+        receiver_type: Some("Svc"),
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(one, CalleeResolution::Resolved(k_1arg));
+
+    let two = gs.resolve_callee(&CalleeQuery {
+        name: "render",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/caller.py",
+        caller_container: None,
+        receiver_type: Some("Svc"),
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(2),
+    });
+    assert_eq!(two, CalleeResolution::Resolved(k_2arg));
+
+    // With a non-existent arity, arity filter prunes everything and we
+    // get NotFound — not a "closest match" guess.
+    let mismatched = gs.resolve_callee(&CalleeQuery {
+        name: "render",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/caller.py",
+        caller_container: None,
+        receiver_type: Some("Svc"),
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(5),
+    });
+    match mismatched {
+        CalleeResolution::NotFound | CalleeResolution::Ambiguous(_) => {}
+        CalleeResolution::Resolved(k) => {
+            panic!("arity mismatch must not resolve; got {k:?}")
+        }
+    }
+}
+
+#[test]
+fn query_receiver_var_is_soft_tiebreak_not_primary() {
+    // Adversarial case: a variable named "obj" exists and a class
+    // happens to also be called "obj".  The old resolver used the
+    // variable name as container_hint #1, which could mis-pick when
+    // the qualified index had a coincidental hit.  The new resolver
+    // treats `receiver_var` as a *soft* tie-break — it only fires
+    // after same-namespace unique-leaf resolution fails.
+    let mut gs = GlobalSummaries::new();
+    let (k_same_ns, s_same_ns) = free_summary("src/app.js", "method", 1, 0xAA);
+    let (k_other_class, s_other_class) =
+        method_summary("src/other.js", "obj", "method", 1, 0xBB);
+    gs.insert(k_same_ns.clone(), s_same_ns);
+    gs.insert(k_other_class.clone(), s_other_class);
+
+    // Caller lives in app.js → intra-file unique-leaf wins, regardless
+    // of the variable-named `obj` coincidence in other.js.
+    let intra = gs.resolve_callee(&CalleeQuery {
+        name: "method",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.js",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: Some("obj"),
+        arity: Some(1),
+    });
+    assert_eq!(intra, CalleeResolution::Resolved(k_same_ns));
+
+    // Caller in a third file where no same-namespace match exists →
+    // receiver_var tie-break fires and picks `obj::method`.
+    let cross = gs.resolve_callee(&CalleeQuery {
+        name: "method",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/elsewhere.js",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: Some("obj"),
+        arity: Some(1),
+    });
+    assert_eq!(cross, CalleeResolution::Resolved(k_other_class));
+}
+
+#[test]
+fn query_qualifier_miss_refuses_to_guess_leaf() {
+    // `namespace_qualifier = "Missing"` does not exist as a container.
+    // We have two leaf candidates.  The resolver must NOT fall back
+    // and pick one of them silently.  (It may return the leaf set
+    // as Ambiguous for diagnostics.)
+    let mut gs = GlobalSummaries::new();
+    let (k_a, s_a) = free_summary("src/a.go", "run", 1, 0x1);
+    let (k_b, s_b) = free_summary("src/b.go", "run", 1, 0x2);
+    gs.insert(k_a.clone(), s_a);
+    gs.insert(k_b.clone(), s_b);
+
+    let resolved = gs.resolve_callee(&CalleeQuery {
+        name: "run",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/caller.go",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: Some("Missing"),
+        receiver_var: None,
+        arity: Some(1),
+    });
+    match resolved {
+        CalleeResolution::Ambiguous(cands) => {
+            assert_eq!(cands.len(), 2);
+            assert!(cands.contains(&k_a));
+            assert!(cands.contains(&k_b));
+        }
+        CalleeResolution::Resolved(k) => panic!(
+            "unresolved qualifier must not silently pick a leaf-only match; got {k:?}"
+        ),
+        CalleeResolution::NotFound => panic!("candidates exist — should be Ambiguous not NotFound"),
+    }
+}
+
+#[test]
+fn legacy_wrapper_preserves_test_contract() {
+    // The old `resolve_callee_key_with_container` entry point is kept as
+    // a thin wrapper.  The pre-refactor tests
+    // (`same_name_methods_on_different_classes_stay_distinct` and
+    // `free_function_and_method_with_same_name_resolve_separately`)
+    // already cover the happy paths; this test pins the *contract* of
+    // the wrapper itself so we do not drift: a container hint is
+    // treated as a non-authoritative namespace qualifier and falls
+    // through to leaf lookup when it misses.
+    let mut gs = GlobalSummaries::new();
+    let (k_a, s_a) = free_summary("src/a.java", "only", 1, 0x1);
+    gs.insert(k_a.clone(), s_a);
+
+    // container_hint doesn't match any container, but the leaf name has
+    // exactly one candidate — the wrapper should still resolve.
+    let resolved = gs.resolve_callee_key_with_container(
+        "only",
+        Lang::Java,
+        "src/caller.java",
+        Some("NonExistent"),
+        Some(1),
+    );
+    assert_eq!(resolved, CalleeResolution::Resolved(k_a));
+}

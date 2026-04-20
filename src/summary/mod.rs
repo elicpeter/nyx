@@ -282,6 +282,66 @@ pub enum CalleeResolution {
     Ambiguous(Vec<FuncKey>),
 }
 
+/// Structured query describing a call site.
+///
+/// Carries every hint needed to pick the right callee *by qualified identity*
+/// first and only fall back on bare-leaf lookup as a last resort.  The old
+/// entry points (`resolve_callee_key`, `resolve_callee_key_with_container`)
+/// are now thin wrappers that build a `CalleeQuery` with partial information.
+///
+/// Hint categories, ordered from strongest to weakest:
+///
+/// * `receiver_type` — authoritative class/impl/module name (e.g. from
+///   type inference or a `use ...` resolution). When set, the resolver
+///   *requires* the callee's container to equal this name and refuses to
+///   fall back to a leaf-name collision if the qualified lookup misses.
+/// * `namespace_qualifier` — syntactic qualifier parsed from the callee
+///   (e.g. `"env"` in `env::var`, `"http"` in `http.Get`). Treated as a
+///   container hint but not authoritative: a miss falls through.
+/// * `receiver_var` — syntactic receiver variable name (e.g. `"obj"` in
+///   `obj.method()`). Soft hint, used only to tie-break ambiguity.
+/// * `caller_container` — caller's own enclosing container, used to
+///   resolve bare self-calls inside a class/impl body.
+///
+/// `arity` is a hard filter — when `Some`, every candidate whose arity
+/// differs is excluded from consideration.
+#[derive(Debug, Clone)]
+pub struct CalleeQuery<'a> {
+    /// Leaf (unqualified) callee name, e.g. `"process"` for `OrderService::process`.
+    pub name: &'a str,
+    pub caller_lang: Lang,
+    /// Project-relative namespace (file path) of the caller.  Used for
+    /// same-namespace disambiguation when qualified hints miss.
+    pub caller_namespace: &'a str,
+    /// The caller's own container (`FuncKey::container`), for resolving
+    /// bare `self`/intra-class calls without a receiver.
+    pub caller_container: Option<&'a str>,
+    /// Authoritative receiver class/impl name.  Populated from type facts
+    /// (`TypeKind::label_prefix`) or from Rust use-map resolution.
+    pub receiver_type: Option<&'a str>,
+    /// Syntactic namespace qualifier (non-authoritative).  For
+    /// `std::env::var` in Rust the caller passes `"env"`; for `http.Get`
+    /// in Go, `"http"`.  Left `None` for purely bare calls.
+    pub namespace_qualifier: Option<&'a str>,
+    /// Syntactic receiver variable name.  Used only as a tie-breaker — a
+    /// variable name is a weak proxy for a class name.
+    pub receiver_var: Option<&'a str>,
+    /// Positional-argument count at the call site.  Hard filter when set.
+    pub arity: Option<usize>,
+}
+
+impl<'a> CalleeQuery<'a> {
+    /// Whether this query carries any qualified identity hint stronger than
+    /// a bare leaf name.  Used by the resolver to decide whether an
+    /// unresolved qualified match should still fall through to leaf lookup
+    /// (no hints → fall through; authoritative hints → refuse to guess).
+    pub fn has_qualified_hint(&self) -> bool {
+        self.receiver_type.is_some()
+            || self.namespace_qualifier.is_some()
+            || self.caller_container.is_some_and(|s| !s.is_empty())
+    }
+}
+
 // ── Lookup map used by the taint engine ─────────────────────────────────
 
 /// A merged view of all function summaries keyed by qualified [`FuncKey`].
@@ -669,13 +729,10 @@ impl GlobalSummaries {
 
     /// Resolve a bare (already-normalized) callee name to a [`FuncKey`].
     ///
-    /// Resolution order:
-    /// 1. Collect all same-language candidates matching the name.
-    /// 2. If `arity_hint` is `Some`, filter candidates by matching arity.
-    /// 3. If exactly one candidate → [`CalleeResolution::Resolved`].
-    /// 4. If multiple, filter by `caller_namespace`; if exactly one → `Resolved`.
-    /// 5. If still multiple → [`CalleeResolution::Ambiguous`].
-    /// 6. If zero candidates → [`CalleeResolution::NotFound`].
+    /// Thin wrapper around [`resolve_callee`] that constructs a minimal
+    /// [`CalleeQuery`] with no qualified hints.  Kept for call sites that
+    /// only hold a string callee and an arity; prefer [`resolve_callee`]
+    /// whenever receiver / qualifier / container information is available.
     pub fn resolve_callee_key(
         &self,
         callee: &str,
@@ -683,31 +740,27 @@ impl GlobalSummaries {
         caller_namespace: &str,
         arity_hint: Option<usize>,
     ) -> CalleeResolution {
-        self.resolve_callee_key_with_container(
-            callee,
+        self.resolve_callee(&CalleeQuery {
+            name: callee,
             caller_lang,
             caller_namespace,
-            None,
-            arity_hint,
-        )
+            caller_container: None,
+            receiver_type: None,
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: arity_hint,
+        })
     }
 
-    /// Resolve a callee name with an optional container/receiver hint.
+    /// Resolve a callee name with an optional container hint.
     ///
-    /// `container_hint` is the receiver type / enclosing class inferred at the
-    /// call site (e.g. `"OrderService"` for `orderService.process(...)`).
-    /// When supplied, candidates whose [`FuncKey::container`] matches are
-    /// preferred over arbitrary same-name matches.  This is what allows the
-    /// new identity model to disambiguate two `process/1` methods living on
-    /// different classes in the same file.
-    ///
-    /// Resolution order:
-    /// 1. If `container_hint` is `Some` and the qualified lookup returns
-    ///    exactly one (arity-matched, if hint provided) candidate → resolved.
-    /// 2. Otherwise fall back to bare-name lookup (existing logic) with
-    ///    arity + namespace disambiguation.
-    /// 3. If still ambiguous, and `container_hint` is `Some`, filter the
-    ///    ambiguous set by container; if that narrows to one → resolved.
+    /// Legacy entry point — kept so tests and older callers compile
+    /// unchanged.  `container_hint` is interpreted as a syntactic
+    /// container qualifier (not an authoritative receiver type), so a
+    /// miss is allowed to fall through to leaf-name lookup.  New
+    /// callers should route through [`resolve_callee`] and classify
+    /// their hint as `receiver_type` vs `namespace_qualifier` vs
+    /// `receiver_var` so the resolver can apply the correct policy.
     pub fn resolve_callee_key_with_container(
         &self,
         callee: &str,
@@ -716,85 +769,180 @@ impl GlobalSummaries {
         container_hint: Option<&str>,
         arity_hint: Option<usize>,
     ) -> CalleeResolution {
-        // Step 1 — if we have a container hint, try the qualified index first.
-        if let Some(container) = container_hint {
-            let qual = if container.is_empty() {
-                callee.to_string()
+        self.resolve_callee(&CalleeQuery {
+            name: callee,
+            caller_lang,
+            caller_namespace,
+            caller_container: None,
+            receiver_type: None,
+            namespace_qualifier: container_hint,
+            receiver_var: None,
+            arity: arity_hint,
+        })
+    }
+
+    /// Resolve a callee with full structured hints.
+    ///
+    /// **New resolution order** (qualified identity primary, leaf name
+    /// fallback):
+    ///
+    /// 1. **Receiver-type qualified** — if `receiver_type` is set,
+    ///    consult `by_lang_qualified[{receiver_type}::{name}]` with the
+    ///    arity filter.  Exactly-one → resolved; same-namespace
+    ///    tie-breaker if multiple.  *Receiver types are authoritative*:
+    ///    a miss does not fall back to bare leaf lookup (that would be
+    ///    a silent reinterpretation).
+    /// 2. **Namespace-qualifier qualified** — if `namespace_qualifier`
+    ///    is set, try the qualified index with that container.
+    ///    Non-authoritative: a miss falls through.
+    /// 3. **Caller-self-container** — when the caller lives inside a
+    ///    container (method body), try the qualified index against the
+    ///    caller's own container.  Resolves bare `foo()` self-calls
+    ///    inside a class without collapsing into an unrelated same-leaf
+    ///    definition in another file.
+    /// 4. **Same-namespace unique leaf** — intra-file bare-leaf call:
+    ///    if the caller's namespace contains exactly one arity-matched
+    ///    candidate with this leaf, resolve to it.
+    /// 5. **Receiver-variable tie-break** — if the same-namespace
+    ///    lookup misses but the raw call came with a receiver variable,
+    ///    try `{receiver_var}::{name}` as a last qualified attempt.
+    /// 6. **Leaf-name fallback** — arity-filtered same-language lookup.
+    ///    Unique → resolved.  Multiple + we had any qualified hint →
+    ///    Ambiguous (refuse to guess when a qualifier exists but
+    ///    missed).  Multiple + no qualified hint → narrow by namespace,
+    ///    then container.
+    pub fn resolve_callee(&self, q: &CalleeQuery<'_>) -> CalleeResolution {
+        // ── Helpers ─────────────────────────────────────────────────
+        let arity_matches = |k: &FuncKey| match q.arity {
+            Some(a) => k.arity == Some(a),
+            None => true,
+        };
+
+        // Look up `{container}::{name}` and return a single arity-matched
+        // candidate if one exists (using same-namespace to break ties).
+        let try_qualified = |container: &str| -> Option<FuncKey> {
+            if container.is_empty() {
+                return None;
+            }
+            let qual = format!("{container}::{}", q.name);
+            let candidates: Vec<&FuncKey> = self
+                .lookup_qualified(q.caller_lang, &qual)
+                .into_iter()
+                .map(|(k, _)| k)
+                .filter(|k| arity_matches(k))
+                .collect();
+            match candidates.len() {
+                0 => None,
+                1 => Some(candidates[0].clone()),
+                _ => {
+                    let same_ns: Vec<&FuncKey> = candidates
+                        .iter()
+                        .copied()
+                        .filter(|k| k.namespace == q.caller_namespace)
+                        .collect();
+                    if same_ns.len() == 1 {
+                        Some(same_ns[0].clone())
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
+
+        // ── Step 1: receiver_type (authoritative) ───────────────────
+        if let Some(rt) = q.receiver_type {
+            if let Some(key) = try_qualified(rt) {
+                return CalleeResolution::Resolved(key);
+            }
+            // Authoritative miss: before returning, check whether any
+            // candidate exists at all for the leaf name.  If there are
+            // some, report Ambiguous with the leaf candidates (so the
+            // caller knows we saw the name but refused to pick the
+            // wrong container).  If there are none, return NotFound.
+            let bare: Vec<&FuncKey> = self
+                .lookup_same_lang(q.caller_lang, q.name)
+                .into_iter()
+                .map(|(k, _)| k)
+                .filter(|k| arity_matches(k))
+                .collect();
+            return if bare.is_empty() {
+                CalleeResolution::NotFound
             } else {
-                format!("{container}::{callee}")
+                CalleeResolution::Ambiguous(bare.into_iter().cloned().collect())
             };
-            let q_candidates = self.lookup_qualified(caller_lang, &qual);
-            let q_filtered: Vec<&FuncKey> = match arity_hint {
-                Some(a) => q_candidates
-                    .iter()
-                    .filter(|(k, _)| k.arity == Some(a))
-                    .map(|(k, _)| *k)
-                    .collect(),
-                None => q_candidates.iter().map(|(k, _)| *k).collect(),
-            };
-            if q_filtered.len() == 1 {
-                return CalleeResolution::Resolved(q_filtered[0].clone());
+        }
+
+        // ── Step 2: namespace_qualifier (non-authoritative) ─────────
+        if let Some(nq) = q.namespace_qualifier {
+            if let Some(key) = try_qualified(nq) {
+                return CalleeResolution::Resolved(key);
             }
         }
 
-        let candidates = self.lookup_same_lang(caller_lang, callee);
-        if candidates.is_empty() {
+        // ── Step 3: caller self-container ───────────────────────────
+        if let Some(cc) = q.caller_container {
+            if let Some(key) = try_qualified(cc) {
+                return CalleeResolution::Resolved(key);
+            }
+        }
+
+        // ── Step 4: same-namespace unique leaf ──────────────────────
+        let all_candidates: Vec<&FuncKey> = self
+            .lookup_same_lang(q.caller_lang, q.name)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        if all_candidates.is_empty() {
             return CalleeResolution::NotFound;
         }
 
-        // Apply arity filter if hint provided.
-        let filtered: Vec<&FuncKey> = if let Some(arity) = arity_hint {
-            candidates
-                .iter()
-                .filter(|(k, _)| k.arity == Some(arity))
-                .map(|(k, _)| *k)
-                .collect()
-        } else {
-            candidates.iter().map(|(k, _)| *k).collect()
-        };
+        let arity_filtered: Vec<&FuncKey> = all_candidates
+            .iter()
+            .copied()
+            .filter(|k| arity_matches(k))
+            .collect();
+        if arity_filtered.is_empty() {
+            return CalleeResolution::NotFound;
+        }
 
-        match filtered.len() {
-            0 => CalleeResolution::NotFound,
-            1 => CalleeResolution::Resolved(filtered[0].clone()),
-            _ => {
-                // Container hint: narrow by matching container first.
-                if let Some(container) = container_hint {
-                    let same_container: Vec<&FuncKey> = filtered
-                        .iter()
-                        .filter(|k| k.container == container)
-                        .copied()
-                        .collect();
-                    if same_container.len() == 1 {
-                        return CalleeResolution::Resolved(same_container[0].clone());
-                    }
-                }
+        let same_ns: Vec<&FuncKey> = arity_filtered
+            .iter()
+            .copied()
+            .filter(|k| k.namespace == q.caller_namespace)
+            .collect();
+        if same_ns.len() == 1 {
+            return CalleeResolution::Resolved(same_ns[0].clone());
+        }
 
-                // Namespace disambiguation: prefer same-namespace match.
-                let same_ns: Vec<&FuncKey> = filtered
-                    .iter()
-                    .filter(|k| k.namespace == caller_namespace)
-                    .copied()
-                    .collect();
-                match same_ns.len() {
-                    1 => CalleeResolution::Resolved(same_ns[0].clone()),
-                    0 => CalleeResolution::Ambiguous(filtered.into_iter().cloned().collect()),
-                    _ => {
-                        // Same-namespace narrowed to multiple — try container
-                        // again within that subset.
-                        if let Some(container) = container_hint {
-                            let narrowed: Vec<&FuncKey> = same_ns
-                                .iter()
-                                .filter(|k| k.container == container)
-                                .copied()
-                                .collect();
-                            if narrowed.len() == 1 {
-                                return CalleeResolution::Resolved(narrowed[0].clone());
-                            }
-                        }
-                        CalleeResolution::Ambiguous(same_ns.into_iter().cloned().collect())
-                    }
-                }
+        // ── Step 5: receiver_var tie-break (soft) ───────────────────
+        if let Some(rv) = q.receiver_var {
+            if let Some(key) = try_qualified(rv) {
+                return CalleeResolution::Resolved(key);
             }
+        }
+
+        // ── Step 6: leaf fallback ───────────────────────────────────
+        if arity_filtered.len() == 1 {
+            return CalleeResolution::Resolved(arity_filtered[0].clone());
+        }
+
+        // Multiple arity-matched candidates remain.  When a qualified
+        // hint was supplied but missed, refuse to guess — a silent
+        // leaf-name pick would defeat the point of qualified-first
+        // resolution.  (`receiver_type` is handled in Step 1 and never
+        // reaches here; `namespace_qualifier` / `caller_container`
+        // missing their target flow through as a soft miss.)
+        if q.has_qualified_hint() {
+            return CalleeResolution::Ambiguous(
+                arity_filtered.into_iter().cloned().collect(),
+            );
+        }
+
+        // No qualified hints whatsoever — tolerate namespace narrowing.
+        match same_ns.len() {
+            1 => CalleeResolution::Resolved(same_ns[0].clone()),
+            0 => CalleeResolution::Ambiguous(arity_filtered.into_iter().cloned().collect()),
+            _ => CalleeResolution::Ambiguous(same_ns.into_iter().cloned().collect()),
         }
     }
 }

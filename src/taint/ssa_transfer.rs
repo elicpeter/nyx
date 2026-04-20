@@ -19,7 +19,7 @@ use crate::ssa::heap::{HeapSlot, HeapState, PointsToResult, PointsToSet};
 use crate::ssa::ir::*;
 use crate::state::lattice::Lattice;
 use crate::state::symbol::{SymbolId, SymbolInterner};
-use crate::summary::{CalleeResolution, GlobalSummaries};
+use crate::summary::{CalleeQuery, CalleeResolution, GlobalSummaries};
 use crate::symbol::{FuncKey, Lang};
 use crate::taint::domain::{
     PredicateSummary, SmallBitSet, TaintOrigin, VarTaint, predicate_kind_bit,
@@ -1903,12 +1903,19 @@ fn transfer_inst(
             // positional arity.  The CFG's `arg_uses` is the authoritative
             // positional-arg list.
             let arity_hint = info.call.arg_uses.len();
-            let callee_summary = resolve_callee_hinted(
+            // Type-aware resolution: when the SSA receiver value has a
+            // known abstract type (HttpClient, URL, …), feed that into
+            // the resolver as an authoritative `receiver_type`.  This
+            // causes qualified-first resolution to prefer
+            // `{Type}::{name}` over any same-leaf collision in the
+            // global summary table.
+            let callee_summary = resolve_callee_typed(
                 transfer,
                 callee,
                 caller_func,
                 info.call.call_ordinal,
                 Some(arity_hint),
+                *receiver,
             );
 
             // Capture container fields and return type regardless of whether
@@ -4622,6 +4629,135 @@ fn is_string_safe_for_ssrf(sf: &crate::abstract_interp::StringFact) -> bool {
 /// Returns `None` when zero or multiple candidates remain — callers should
 /// then fall through to their own ambiguity policy instead of accidentally
 /// picking an arbitrary definition.
+/// Split a raw callee string into a `(namespace_qualifier, receiver_var)`
+/// pair.
+///
+/// * `"env::var"`    → `(Some("env"), None)`
+/// * `"std::io::File::open"` → `(Some("File"), None)` — leaf's immediate
+///   container is kept so qualified lookup can match
+///   `File::open`.  Deeper module prefixes are discarded here; the call
+///   graph's Rust-specific resolver handles full paths via the use map.
+/// * `"obj.method"` → `(None, Some("obj"))`
+/// * `"a.b.method"` → `(None, Some("b"))` — immediate object hop.
+/// * `"foo"`         → `(None, None)`
+///
+/// `::` is treated as a namespace separator and produces a
+/// `namespace_qualifier`; `.` is treated as a method receiver and
+/// produces a `receiver_var`.  When both separators appear, the
+/// last-used one wins — matching the leaf-extraction rule in
+/// [`callee_leaf_name`].
+fn split_qualifier(raw: &str) -> (Option<&str>, Option<&str>) {
+    if let Some(pos) = raw.rfind("::") {
+        let prefix = &raw[..pos];
+        let last = prefix.rsplit("::").next().unwrap_or(prefix);
+        return (if last.is_empty() { None } else { Some(last) }, None);
+    }
+    if let Some(pos) = raw.rfind('.') {
+        let prefix = &raw[..pos];
+        let last = prefix.rsplit('.').next().unwrap_or(prefix);
+        return (None, if last.is_empty() { None } else { Some(last) });
+    }
+    (None, None)
+}
+
+/// Look up the caller's own container by matching its name in
+/// `local_summaries`.  Used so bare self-calls (`foo()` inside a class
+/// method) prefer same-class candidates over free functions.
+fn caller_container_for(transfer: &SsaTaintTransfer, caller_func: &str) -> Option<String> {
+    if caller_func.is_empty() {
+        return None;
+    }
+    let mut containers: Vec<&str> = transfer
+        .local_summaries
+        .keys()
+        .filter(|k| k.lang == transfer.lang && k.name == caller_func)
+        .map(|k| k.container.as_str())
+        .filter(|c| !c.is_empty())
+        .collect();
+    containers.sort();
+    containers.dedup();
+    if containers.len() == 1 {
+        Some(containers[0].to_string())
+    } else {
+        None
+    }
+}
+
+/// Query-based equivalent of [`resolve_local_func_key`].
+///
+/// Prefers `receiver_type` → `namespace_qualifier` → `caller_container`
+/// in that order before falling back to a uniqueness check on the leaf
+/// name.  Keeps behaviour parity with the top-level resolver so
+/// intra-file lookups apply the same qualified-first policy.
+pub(crate) fn resolve_local_func_key_query(
+    local_summaries: &FuncSummaries,
+    q: &CalleeQuery<'_>,
+) -> Option<FuncKey> {
+    let all: Vec<&FuncKey> = local_summaries
+        .keys()
+        .filter(|k| k.name == q.name && k.lang == q.caller_lang)
+        .collect();
+    if all.is_empty() {
+        return None;
+    }
+
+    let arity_matches = |k: &FuncKey| match q.arity {
+        Some(a) => k.arity == Some(a),
+        None => true,
+    };
+
+    let pick_with_container = |container: &str| -> Option<FuncKey> {
+        if container.is_empty() {
+            return None;
+        }
+        let narrowed: Vec<&FuncKey> = all
+            .iter()
+            .copied()
+            .filter(|k| k.container == container)
+            .filter(|k| arity_matches(k))
+            .collect();
+        if narrowed.len() == 1 {
+            Some(narrowed[0].clone())
+        } else {
+            None
+        }
+    };
+
+    if let Some(rt) = q.receiver_type {
+        if let Some(k) = pick_with_container(rt) {
+            return Some(k);
+        }
+        // Authoritative miss — do not silently pick a different container.
+        return None;
+    }
+
+    if let Some(nq) = q.namespace_qualifier {
+        if let Some(k) = pick_with_container(nq) {
+            return Some(k);
+        }
+    }
+
+    if let Some(cc) = q.caller_container {
+        if let Some(k) = pick_with_container(cc) {
+            return Some(k);
+        }
+    }
+
+    let arity_filtered: Vec<&FuncKey> =
+        all.iter().copied().filter(|k| arity_matches(k)).collect();
+    if arity_filtered.len() == 1 {
+        return Some(arity_filtered[0].clone());
+    }
+
+    if let Some(rv) = q.receiver_var {
+        if let Some(k) = pick_with_container(rv) {
+            return Some(k);
+        }
+    }
+
+    None
+}
+
 pub(crate) fn resolve_local_func_key(
     local_summaries: &FuncSummaries,
     lang: Lang,
@@ -4711,16 +4847,62 @@ fn resolve_callee_hinted(
     call_ordinal: u32,
     arity_hint: Option<usize>,
 ) -> Option<ResolvedSummary> {
+    resolve_callee_full(transfer, callee, caller_func, call_ordinal, arity_hint, None)
+}
+
+/// Like [`resolve_callee_hinted`] but accepts an authoritative
+/// `receiver_type` (class/impl name) derived from the SSA receiver
+/// value's [`TypeKind::label_prefix`].  When supplied, qualified
+/// lookup uses this name first and refuses to fall through to a
+/// leaf-name collision on miss (see
+/// [`GlobalSummaries::resolve_callee`] step 1).
+fn resolve_callee_typed(
+    transfer: &SsaTaintTransfer,
+    callee: &str,
+    caller_func: &str,
+    call_ordinal: u32,
+    arity_hint: Option<usize>,
+    receiver: Option<SsaValue>,
+) -> Option<ResolvedSummary> {
+    let receiver_type = receiver_type_prefix(transfer, receiver);
+    resolve_callee_full(
+        transfer,
+        callee,
+        caller_func,
+        call_ordinal,
+        arity_hint,
+        receiver_type,
+    )
+}
+
+/// Extract a qualified receiver-type name (e.g. `"HttpClient"`) for the
+/// SSA receiver value, when type facts can infer it.  Returns `None`
+/// for built-in `Int`/`String`/unknown types that have no class prefix.
+fn receiver_type_prefix(
+    transfer: &SsaTaintTransfer,
+    receiver: Option<SsaValue>,
+) -> Option<&'static str> {
+    let v = receiver?;
+    let tf = transfer.type_facts?;
+    let kind = tf.get_type(v)?;
+    kind.label_prefix()
+}
+
+fn resolve_callee_full(
+    transfer: &SsaTaintTransfer,
+    callee: &str,
+    caller_func: &str,
+    call_ordinal: u32,
+    arity_hint: Option<usize>,
+    receiver_type: Option<&str>,
+) -> Option<ResolvedSummary> {
     // Use leaf name for map/index lookups (FuncKey.name is always leaf).
     let normalized = callee_leaf_name(callee);
-    // Prefix-segment container hint: `obj.method` → `obj`, `Class::foo` → `Class`.
-    // `None` when the callee is already unqualified.
-    let container_raw = callee_container_hint(callee);
-    let container_hint = if container_raw.is_empty() {
-        None
-    } else {
-        Some(container_raw)
-    };
+    // Split the raw callee into structured qualifier hints.  A `::`
+    // prefix is a namespace qualifier (authoritative-ish); a `.`
+    // prefix is the syntactic receiver variable, which we treat as a
+    // soft hint.
+    let (namespace_qualifier, receiver_var) = split_qualifier(callee);
 
     // -2) Import alias resolution: if the callee matches an aliased import
     // (e.g. `fetchUserCmd` → `getInput` from `./source`), resolve using the
@@ -4812,6 +4994,25 @@ fn resolve_callee_hinted(
         }
     }
 
+    // Caller-container hint: when the caller lives inside a class/impl,
+    // its own container resolves bare self-calls correctly instead of
+    // collapsing into an unrelated same-leaf definition.
+    let caller_container_opt = caller_container_for(transfer, caller_func);
+    let caller_container: Option<&str> = caller_container_opt.as_deref();
+
+    // Build the structured query once and reuse across the same-language
+    // resolution steps (0.5 and 2).
+    let build_query = || CalleeQuery {
+        name: normalized,
+        caller_lang: transfer.lang,
+        caller_namespace: transfer.namespace,
+        caller_container,
+        receiver_type,
+        namespace_qualifier,
+        receiver_var,
+        arity: arity_hint,
+    };
+
     // 0) Precise SSA summaries (intra-file, per-parameter transforms).
     //
     // Resolve the callee string to a local `FuncKey` via the already-
@@ -4819,10 +5020,7 @@ fn resolve_callee_hinted(
     // the same key.  This preserves container/arity/disambig identity so two
     // same-name definitions in the same file never share an SSA summary.
     if let Some(ssa_sums) = transfer.ssa_summaries {
-        if let Some(key) =
-            resolve_local_func_key(transfer.local_summaries, transfer.lang, transfer.namespace,
-                normalized, container_hint)
-        {
+        if let Some(key) = resolve_local_func_key_query(transfer.local_summaries, &build_query()) {
             if let Some(ssa_sum) = ssa_sums.get(&key) {
                 return Some(convert_ssa_to_resolved(ssa_sum));
             }
@@ -4831,13 +5029,7 @@ fn resolve_callee_hinted(
 
     // 0.5) Cross-file SSA summaries (GlobalSummaries.ssa_by_key)
     if let Some(gs) = transfer.global_summaries {
-        match gs.resolve_callee_key_with_container(
-            normalized,
-            transfer.lang,
-            transfer.namespace,
-            container_hint,
-            arity_hint,
-        ) {
+        match gs.resolve_callee(&build_query()) {
             CalleeResolution::Resolved(target_key) => {
                 if let Some(ssa_sum) = gs.get_ssa(&target_key) {
                     return Some(convert_ssa_to_resolved(ssa_sum));
@@ -4847,14 +5039,9 @@ fn resolve_callee_hinted(
         }
     }
 
-    // 1) Local (same-file) — lookup via canonical FuncKey.
-    if let Some(key) = resolve_local_func_key(
-        transfer.local_summaries,
-        transfer.lang,
-        transfer.namespace,
-        normalized,
-        container_hint,
-    ) {
+    // 1) Local (same-file) — lookup via canonical FuncKey using the
+    // same qualified-first policy as the global resolver.
+    if let Some(key) = resolve_local_func_key_query(transfer.local_summaries, &build_query()) {
         if let Some(ls) = transfer.local_summaries.get(&key) {
             return Some(ResolvedSummary {
                 source_caps: ls.source_caps,
@@ -4895,13 +5082,7 @@ fn resolve_callee_hinted(
 
     // 2) Global same-language
     if let Some(gs) = transfer.global_summaries {
-        match gs.resolve_callee_key_with_container(
-            normalized,
-            transfer.lang,
-            transfer.namespace,
-            container_hint,
-            arity_hint,
-        ) {
+        match gs.resolve_callee(&build_query()) {
             CalleeResolution::Resolved(target_key) => {
                 if let Some(fs) = gs.get(&target_key) {
                     return Some(ResolvedSummary {
