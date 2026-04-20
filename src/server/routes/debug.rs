@@ -386,7 +386,7 @@ mod tests {
                     propagates_taint: false,
                     tainted_sink_params: vec![],
                     callees: vec![],
-                ..Default::default()
+                    ..Default::default()
                 }],
             )
             .unwrap();
@@ -584,7 +584,7 @@ mod tests {
                     propagates_taint: false,
                     tainted_sink_params: vec![],
                     callees: vec![],
-                ..Default::default()
+                    ..Default::default()
                 }],
             )
             .unwrap();
@@ -627,7 +627,7 @@ mod tests {
             namespace: "src/lib.rs".into(),
             name: "helper".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
 
         assert!(global.get(&key).is_some());

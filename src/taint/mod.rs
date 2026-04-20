@@ -621,13 +621,8 @@ pub(crate) fn extract_intra_file_ssa_summaries(
             || !summary.param_to_container_store.is_empty()
             || summary.return_abstract.is_some()
         {
-            let key = lookup_canonical_func_key(
-                local_summaries,
-                lang,
-                namespace,
-                func_name,
-                param_count,
-            );
+            let key =
+                lookup_canonical_func_key(local_summaries, lang, namespace, func_name, param_count);
             summaries.insert(key, summary);
         }
     }
@@ -705,13 +700,9 @@ fn lower_all_functions_from_bodies(
         // here keeps both sides of `GlobalSummaries` agreement — otherwise
         // `resolve_callee` resolves to the normalized FuncSummary key and
         // misses the raw-path SSA entry.
-        let mut key = body
-            .meta
-            .func_key
-            .clone()
-            .unwrap_or_else(|| {
-                lookup_canonical_func_key(local_summaries, lang, namespace, &func_name, param_count)
-            });
+        let mut key = body.meta.func_key.clone().unwrap_or_else(|| {
+            lookup_canonical_func_key(local_summaries, lang, namespace, &func_name, param_count)
+        });
         key.namespace = namespace.to_string();
 
         if param_count > 0 {
@@ -800,12 +791,11 @@ pub(crate) fn extract_ssa_artifacts_from_file_cfg(
             // Populate node metadata against the per-body graph whose NodeIndex
             // space the SSA was produced on — otherwise cross-file replay can't
             // find the original CFG nodes.
-            let Some(body_cfg) = file_cfg.bodies.iter().find(|b| {
-                b.meta
-                    .func_key
-                    .as_ref()
-                    .is_some_and(|k| *k == key)
-            }) else {
+            let Some(body_cfg) = file_cfg
+                .bodies
+                .iter()
+                .find(|b| b.meta.func_key.as_ref().is_some_and(|k| *k == key))
+            else {
                 continue;
             };
             if !ssa_transfer::populate_node_meta(&mut body, &body_cfg.graph) {

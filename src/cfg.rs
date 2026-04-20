@@ -1134,8 +1134,8 @@ fn extract_const_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) -
             // "dynamic" and must be reported as `None` so the gate can
             // distinguish literal-safe from dynamic.
             return match value_node.kind() {
-                "true" | "false" | "none" | "integer" | "float" | "string"
-                | "string_literal" | "identifier" => text_of(value_node, code).map(|s| s.to_string()),
+                "true" | "false" | "none" | "integer" | "float" | "string" | "string_literal"
+                | "identifier" => text_of(value_node, code).map(|s| s.to_string()),
                 _ => None,
             }
             .filter(|_| {
@@ -2431,7 +2431,9 @@ fn push_node<'a>(
     // Languages whose grammar doesn't produce `keyword_argument` / `named_argument`
     // children return an empty Vec, so this costs nothing for C/Java/Go/etc.
     let kwargs = if kind == StmtKind::Call || sink_payload_args.is_some() {
-        call_ast.map(|cn| extract_kwargs(cn, code)).unwrap_or_default()
+        call_ast
+            .map(|cn| extract_kwargs(cn, code))
+            .unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -2652,8 +2654,13 @@ fn leading_ident_text(node: Node<'_>, code: &[u8]) -> Option<String> {
     let mut cur = node;
     loop {
         match cur.kind() {
-            "identifier" | "type_identifier" | "property_identifier" | "scoped_identifier"
-            | "name" | "constant" | "simple_identifier" => {
+            "identifier"
+            | "type_identifier"
+            | "property_identifier"
+            | "scoped_identifier"
+            | "name"
+            | "constant"
+            | "simple_identifier" => {
                 return text_of(cur, code);
             }
             _ => {}
@@ -2715,14 +2722,12 @@ fn normalize_decorator_name(raw: &str) -> String {
 /// `hasrole` and `admin` as additional matcher candidates.
 fn decorator_arg_names(decorator_ast: Node<'_>, code: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
-    let args = decorator_ast
-        .child_by_field_name("arguments")
-        .or_else(|| {
-            let mut w = decorator_ast.walk();
-            decorator_ast
-                .children(&mut w)
-                .find(|c| matches!(c.kind(), "argument_list" | "arguments"))
-        });
+    let args = decorator_ast.child_by_field_name("arguments").or_else(|| {
+        let mut w = decorator_ast.walk();
+        decorator_ast
+            .children(&mut w)
+            .find(|c| matches!(c.kind(), "argument_list" | "arguments"))
+    });
     let Some(args) = args else {
         return out;
     };
@@ -2850,9 +2855,7 @@ fn extract_auth_decorators<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) 
             // method_declaration has a `modifiers` field listing annotations.
             let modifiers = func_node.child_by_field_name("modifiers").or_else(|| {
                 let mut w = func_node.walk();
-                func_node
-                    .children(&mut w)
-                    .find(|c| c.kind() == "modifiers")
+                func_node.children(&mut w).find(|c| c.kind() == "modifiers")
             });
             if let Some(modifiers) = modifiers {
                 let mut w = modifiers.walk();
@@ -3039,12 +3042,9 @@ fn collect_ruby_before_action(
             _ => {}
         }
         let mut w = cur.walk();
-        let next = cur.children(&mut w).find(|c| {
-            matches!(
-                c.kind(),
-                "call" | "method_call" | "command" | "identifier"
-            )
-        });
+        let next = cur
+            .children(&mut w)
+            .find(|c| matches!(c.kind(), "call" | "method_call" | "command" | "identifier"));
         match next {
             Some(n) if n.id() != cur.id() => cur = n,
             _ => return,
@@ -3060,17 +3060,15 @@ fn collect_ruby_before_action(
     if !(head_lc == "before_action" || head_lc == "before_filter") {
         return;
     }
-    let args = cur
-        .child_by_field_name("arguments")
-        .or_else(|| {
-            let mut w = cur.walk();
-            cur.children(&mut w).find(|c| {
-                matches!(
-                    c.kind(),
-                    "argument_list" | "arguments" | "command_argument_list"
-                )
-            })
-        });
+    let args = cur.child_by_field_name("arguments").or_else(|| {
+        let mut w = cur.walk();
+        cur.children(&mut w).find(|c| {
+            matches!(
+                c.kind(),
+                "argument_list" | "arguments" | "command_argument_list"
+            )
+        })
+    });
     let Some(args) = args else { return };
 
     let mut positional: Vec<String> = Vec::new();
@@ -3330,10 +3328,9 @@ fn compute_container_and_kind(
             // Rust impl blocks — pick the type name, not the trait name.
             "impl_item" => Some("type"),
             // Go / C++ / PHP namespaces and modules.
-            "namespace_definition"
-            | "namespace_declaration"
-            | "module_declaration"
-            | "module" => Some("name"),
+            "namespace_definition" | "namespace_declaration" | "module_declaration" | "module" => {
+                Some("name")
+            }
             _ => None,
         };
 
@@ -5874,11 +5871,7 @@ pub(crate) fn build_cfg<'a>(
 ///   remains the single segment immediately before the leaf (back-compat
 ///   with the legacy heuristic).  For method calls the qualifier is
 ///   redundant with `receiver` and is left `None`.
-fn build_callee_site(
-    callee: &str,
-    info: &NodeInfo,
-    lang: &str,
-) -> crate::summary::CalleeSite {
+fn build_callee_site(callee: &str, info: &NodeInfo, lang: &str) -> crate::summary::CalleeSite {
     use crate::summary::CalleeSite;
 
     let receiver = info.call.receiver.clone();
@@ -5898,13 +5891,11 @@ fn build_callee_site(
             // resolution can follow `use ...` chains without re-parsing.
             Some(prefix.to_string()).filter(|s| !s.is_empty())
         } else {
-            Some(prefix.rsplit("::").next().unwrap_or(prefix).to_string())
-                .filter(|s| !s.is_empty())
+            Some(prefix.rsplit("::").next().unwrap_or(prefix).to_string()).filter(|s| !s.is_empty())
         }
     } else if let Some(pos) = callee.rfind('.') {
         let prefix = &callee[..pos];
-        Some(prefix.rsplit('.').next().unwrap_or(prefix).to_string())
-            .filter(|s| !s.is_empty())
+        Some(prefix.rsplit('.').next().unwrap_or(prefix).to_string()).filter(|s| !s.is_empty())
     } else {
         None
     };
@@ -7315,11 +7306,7 @@ mod cfg_tests {
             .iter()
             .find(|c| c.name.ends_with("method"))
             .expect("method call should be recorded");
-        assert_eq!(
-            method_site.arity,
-            Some(1),
-            "method has 1 positional arg"
-        );
+        assert_eq!(method_site.arity, Some(1), "method has 1 positional arg");
         assert_eq!(
             method_site.receiver.as_deref(),
             Some("obj"),
@@ -7440,10 +7427,7 @@ def outer(cmd):
             .node_weights()
             .find(|n| {
                 n.kind == StmtKind::Call
-                    && n.call
-                        .callee
-                        .as_deref()
-                        .is_some_and(|c| c.ends_with("run"))
+                    && n.call.callee.as_deref().is_some_and(|c| c.ends_with("run"))
             })
             .expect("subprocess.run call node should exist");
 

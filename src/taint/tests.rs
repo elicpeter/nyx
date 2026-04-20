@@ -450,7 +450,7 @@ fn cross_file_source_resolved_via_global_summaries() {
         namespace: "file_a.rs".into(),
         name: "get_dangerous".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key,
@@ -467,7 +467,7 @@ fn cross_file_source_resolved_via_global_summaries() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -505,7 +505,7 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
         namespace: "file_a.rs".into(),
         name: "my_sanitize".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key,
@@ -522,7 +522,7 @@ fn cross_file_sanitizer_resolved_via_global_summaries() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -585,7 +585,7 @@ fn cross_file_sink_resolved_via_global_summaries() {
         namespace: "file_a.rs".into(),
         name: "dangerous_exec".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key,
@@ -602,7 +602,7 @@ fn cross_file_sink_resolved_via_global_summaries() {
             propagates_taint: false,
             tainted_sink_params: vec![0],
             callees: vec!["Command::new".into()],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -812,7 +812,7 @@ fn multi_file_passthrough_preserves_taint() {
         namespace: "lib.rs".into(),
         name: "identity".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key,
@@ -829,7 +829,7 @@ fn multi_file_passthrough_preserves_taint() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -1033,7 +1033,7 @@ fn local_summary_takes_precedence_over_global() {
         namespace: "other.rs".into(),
         name: "my_func".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key,
@@ -1050,7 +1050,7 @@ fn local_summary_takes_precedence_over_global() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -1139,7 +1139,7 @@ fn source_and_sink_on_same_function() {
         namespace: "lib.rs".into(),
         name: "source_and_sink".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key,
@@ -1156,7 +1156,7 @@ fn source_and_sink_on_same_function() {
             propagates_taint: false,
             tainted_sink_params: vec![0],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -1199,7 +1199,7 @@ fn multiple_cross_file_sources_one_sanitised() {
         namespace: "lib.rs".into(),
         name: "get_secret".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key1,
@@ -1216,7 +1216,7 @@ fn multiple_cross_file_sources_one_sanitised() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
     let key2 = FuncKey {
@@ -1224,7 +1224,7 @@ fn multiple_cross_file_sources_one_sanitised() {
         namespace: "lib.rs".into(),
         name: "get_other_secret".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key2,
@@ -1241,7 +1241,7 @@ fn multiple_cross_file_sources_one_sanitised() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -1572,7 +1572,7 @@ fn cross_lang_python_source_to_js_sink_via_interop() {
             namespace: "lib.py".into(),
             name: "get_input".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         },
     }];
     let findings = analyse_file(
@@ -1634,7 +1634,7 @@ fn cross_lang_go_source_to_python_sink_via_interop() {
             namespace: "lib.go".into(),
             name: "fetch_env".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         },
     }];
     let findings = analyse_file(
@@ -1683,7 +1683,7 @@ fn cross_lang_rust_sanitizer_in_js_via_interop() {
             namespace: "lib.rs".into(),
             name: "clean_shell".into(),
             arity: Some(1),
-        ..Default::default()
+            ..Default::default()
         },
     }];
     let findings = analyse_file(
@@ -1733,7 +1733,7 @@ fn cross_lang_c_sink_called_from_java_via_interop() {
             namespace: "native.c".into(),
             name: "run_cmd".into(),
             arity: Some(1),
-        ..Default::default()
+            ..Default::default()
         },
     }];
     let findings = analyse_file(
@@ -1796,7 +1796,7 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 namespace: "source.py".into(),
                 name: "get_secret".into(),
                 arity: Some(0),
-            ..Default::default()
+                ..Default::default()
             },
         },
         InteropEdge {
@@ -1812,7 +1812,7 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 namespace: "lib.rs".into(),
                 name: "make_safe".into(),
                 arity: Some(1),
-            ..Default::default()
+                ..Default::default()
             },
         },
         InteropEdge {
@@ -1828,7 +1828,7 @@ fn cross_lang_three_languages_merged_summaries_via_interop() {
                 namespace: "native.c".into(),
                 name: "run_dangerous".into(),
                 arity: Some(1),
-            ..Default::default()
+                ..Default::default()
             },
         },
     ];
@@ -1885,7 +1885,7 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 namespace: "source.py".into(),
                 name: "get_secret".into(),
                 arity: Some(0),
-            ..Default::default()
+                ..Default::default()
             },
         },
         InteropEdge {
@@ -1901,7 +1901,7 @@ fn cross_lang_three_languages_unsanitised_via_interop() {
                 namespace: "native.c".into(),
                 name: "run_dangerous".into(),
                 arity: Some(1),
-            ..Default::default()
+                ..Default::default()
             },
         },
     ];
@@ -1945,7 +1945,7 @@ fn cross_lang_name_collision_stays_separate() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
 
     let all_sums: Vec<_> = py_sums
@@ -1980,7 +1980,7 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
         namespace: "helper.rb".into(),
         name: "transform".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key.clone(),
@@ -1997,7 +1997,7 @@ fn cross_lang_ruby_passthrough_in_js_via_interop() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -2051,7 +2051,7 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec!["file_get_contents".into()],
-    ..Default::default()
+        ..Default::default()
     };
 
     let global = merge_summaries(vec![php_summary], None);
@@ -2074,7 +2074,7 @@ fn cross_lang_php_source_to_go_sink_via_interop() {
             namespace: "input.php".into(),
             name: "read_input".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         },
     }];
     let findings = analyse_file(
@@ -2101,7 +2101,7 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
         namespace: "sanitizers.py".into(),
         name: "html_clean".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key.clone(),
@@ -2118,7 +2118,7 @@ fn cross_lang_wrong_sanitizer_still_flags_via_interop() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -2172,7 +2172,7 @@ fn cross_lang_summary_preserves_lang_metadata() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
 
     let js_summary = crate::summary::FuncSummary {
@@ -2188,7 +2188,7 @@ fn cross_lang_summary_preserves_lang_metadata() {
         propagates_taint: false,
         tainted_sink_params: vec![0],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
 
     let global = merge_summaries(vec![py_summary, js_summary], None);
@@ -2249,7 +2249,7 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 namespace: "db.py".into(),
                 name: "dangerous_query".into(),
                 arity: Some(0),
-            ..Default::default()
+                ..Default::default()
             },
         },
         InteropEdge {
@@ -2265,7 +2265,7 @@ fn cross_lang_full_pipeline_python_lib_js_caller_via_interop() {
                 namespace: "db.js".into(),
                 name: "run_query".into(),
                 arity: Some(1),
-            ..Default::default()
+                ..Default::default()
             },
         },
     ];
@@ -2299,7 +2299,7 @@ fn ambiguous_resolution_returns_none() {
             namespace: (*ns).to_string(),
             name: "helper".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
         global.insert(
             key,
@@ -2316,7 +2316,7 @@ fn ambiguous_resolution_returns_none() {
                 propagates_taint: false,
                 tainted_sink_params: vec![],
                 callees: vec![],
-            ..Default::default()
+                ..Default::default()
             },
         );
     }
@@ -2361,7 +2361,7 @@ fn exact_namespace_match_wins() {
         namespace: "test.rs".into(),
         name: "helper".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key_local,
@@ -2378,7 +2378,7 @@ fn exact_namespace_match_wins() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
     // other.rs version: no caps
@@ -2387,7 +2387,7 @@ fn exact_namespace_match_wins() {
         namespace: "other.rs".into(),
         name: "helper".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key_other,
@@ -2404,7 +2404,7 @@ fn exact_namespace_match_wins() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -2447,7 +2447,7 @@ fn interop_edge_wrong_caller_lang_no_match() {
         namespace: "lib.py".into(),
         name: "get_data".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     global.insert(
         key.clone(),
@@ -2464,7 +2464,7 @@ fn interop_edge_wrong_caller_lang_no_match() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -2887,7 +2887,7 @@ fn per_arg_propagation_tainted_param_propagates() {
             namespace: "lib.rs".into(),
             name: "transform".into(),
             arity: Some(2),
-        ..Default::default()
+            ..Default::default()
         },
         FuncSummary {
             name: "transform".into(),
@@ -2902,7 +2902,7 @@ fn per_arg_propagation_tainted_param_propagates() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -2946,7 +2946,7 @@ fn per_arg_propagation_safe_at_propagating_position() {
             namespace: "lib.rs".into(),
             name: "transform".into(),
             arity: Some(2),
-        ..Default::default()
+            ..Default::default()
         },
         FuncSummary {
             name: "transform".into(),
@@ -2961,7 +2961,7 @@ fn per_arg_propagation_safe_at_propagating_position() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -3006,7 +3006,7 @@ fn per_arg_propagation_legacy_backward_compat() {
             namespace: "lib.rs".into(),
             name: "legacy_pass".into(),
             arity: Some(2),
-        ..Default::default()
+            ..Default::default()
         },
         FuncSummary {
             name: "legacy_pass".into(),
@@ -3021,7 +3021,7 @@ fn per_arg_propagation_legacy_backward_compat() {
             propagates_taint: true,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -3065,7 +3065,7 @@ fn per_arg_propagation_both_params_propagate() {
             namespace: "lib.rs".into(),
             name: "concat".into(),
             arity: Some(2),
-        ..Default::default()
+            ..Default::default()
         },
         FuncSummary {
             name: "concat".into(),
@@ -3080,7 +3080,7 @@ fn per_arg_propagation_both_params_propagate() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -3125,7 +3125,7 @@ fn per_arg_propagation_literal_first_arg() {
             namespace: "lib.rs".into(),
             name: "transform".into(),
             arity: Some(2),
-        ..Default::default()
+            ..Default::default()
         },
         FuncSummary {
             name: "transform".into(),
@@ -3140,7 +3140,7 @@ fn per_arg_propagation_literal_first_arg() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -3184,7 +3184,7 @@ fn per_arg_propagation_nested_expr_arg() {
             namespace: "lib.rs".into(),
             name: "transform".into(),
             arity: Some(2),
-        ..Default::default()
+            ..Default::default()
         },
         FuncSummary {
             name: "transform".into(),
@@ -3199,7 +3199,7 @@ fn per_arg_propagation_nested_expr_arg() {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -5217,8 +5217,7 @@ function helper(x) {
     );
 
     // Disambiguator must actually differ (body start bytes).
-    let disambigs: std::collections::HashSet<_> =
-        helper_keys.iter().map(|k| k.disambig).collect();
+    let disambigs: std::collections::HashSet<_> = helper_keys.iter().map(|k| k.disambig).collect();
     assert_eq!(
         disambigs.len(),
         2,

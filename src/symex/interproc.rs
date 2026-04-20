@@ -621,11 +621,7 @@ pub fn execute_callee(
         .callee_bodies
         .iter()
         .find(|(k, _)| k.name == normalized && k.arity == Some(arity_hint))
-        .or_else(|| {
-            ctx.callee_bodies
-                .iter()
-                .find(|(k, _)| k.name == normalized)
-        })
+        .or_else(|| ctx.callee_bodies.iter().find(|(k, _)| k.name == normalized))
         .map(|(_, v)| v);
     let (body, is_cross_file) = match intra_match {
         Some(b) => (b, false),

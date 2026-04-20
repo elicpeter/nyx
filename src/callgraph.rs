@@ -213,8 +213,7 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
             // an impl/trait name, not a module path — so we fall back to the
             // structured resolver.  All other languages skip the use-map
             // branch entirely.
-            let use_rust_path =
-                caller_key.lang == Lang::Rust && site.receiver.is_none();
+            let use_rust_path = caller_key.lang == Lang::Rust && site.receiver.is_none();
             let resolution = if use_rust_path {
                 summaries.resolve_callee_key_rust(
                     leaf,
@@ -242,12 +241,19 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
                 // summaries loaded from SQLite without `qualifier`).
                 let parsed_container = {
                     let raw = callee_container_hint(raw_callee);
-                    if raw.is_empty() { None } else { Some(raw.to_string()) }
+                    if raw.is_empty() {
+                        None
+                    } else {
+                        Some(raw.to_string())
+                    }
                 };
-                let namespace_qualifier = site
-                    .qualifier
-                    .clone()
-                    .or_else(|| if site.receiver.is_none() { parsed_container.clone() } else { None });
+                let namespace_qualifier = site.qualifier.clone().or_else(|| {
+                    if site.receiver.is_none() {
+                        parsed_container.clone()
+                    } else {
+                        None
+                    }
+                });
                 let receiver_var = site.receiver.clone();
                 let caller_container: Option<&str> = if caller_key.container.is_empty() {
                     None
@@ -616,14 +622,14 @@ mod tests {
             namespace: "src/a.rs".into(),
             name: "caller".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
         let helper_a_key = FuncKey {
             lang: Lang::Rust,
             namespace: "src/a.rs".into(),
             name: "helper".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
 
         let caller_node = cg.index[&caller_key];
@@ -659,14 +665,14 @@ mod tests {
             namespace: "handler.py".into(),
             name: "foo".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
         let caller_key = FuncKey {
             lang: Lang::Python,
             namespace: "app.py".into(),
             name: "main".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
 
         let caller_node = cg.index[&caller_key];
@@ -696,14 +702,14 @@ mod tests {
             namespace: "lib.rs".into(),
             name: "helper".into(),
             arity: Some(1),
-        ..Default::default()
+            ..Default::default()
         };
         let key2 = FuncKey {
             lang: Lang::Rust,
             namespace: "lib.rs".into(),
             name: "helper".into(),
             arity: Some(2),
-        ..Default::default()
+            ..Default::default()
         };
         assert!(cg.index.contains_key(&key1));
         assert!(cg.index.contains_key(&key2));
@@ -729,14 +735,14 @@ mod tests {
             namespace: "lib.rs".into(),
             name: "a".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
         let key_b = FuncKey {
             lang: Lang::Rust,
             namespace: "lib.rs".into(),
             name: "b".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
 
         let scc_a = analysis.node_to_scc[&cg.index[&key_a]];
@@ -802,7 +808,7 @@ mod tests {
             namespace: "lib.rs".into(),
             name: name.into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
 
         let scc_of = |name: &str| analysis.node_to_scc[&cg.index[&key(name)]];
@@ -843,7 +849,7 @@ mod tests {
                 namespace: "util.js".into(),
                 name: "js_func".into(),
                 arity: Some(1),
-            ..Default::default()
+                ..Default::default()
             },
         }];
 
@@ -854,14 +860,14 @@ mod tests {
             namespace: "handler.py".into(),
             name: "process".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
         let target_key = FuncKey {
             lang: Lang::JavaScript,
             namespace: "util.js".into(),
             name: "js_func".into(),
             arity: Some(1),
-        ..Default::default()
+            ..Default::default()
         };
 
         let caller_node = cg.index[&caller_key];
@@ -895,7 +901,7 @@ mod tests {
             propagates_taint: false,
             tainted_sink_params: vec![],
             callees: vec![],
-        ..Default::default()
+            ..Default::default()
         };
 
         let root = "/home/user/proj";
@@ -924,7 +930,7 @@ mod tests {
             namespace: "util.rs".into(),
             name: "main".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
         let caller_node = cg.index[&caller_key];
 
@@ -1145,14 +1151,14 @@ mod tests {
             namespace: "src/main.rs".into(),
             name: "caller".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
         let send_http_key = FuncKey {
             lang: Lang::Rust,
             namespace: "src/http.rs".into(),
             name: "send".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
 
         let caller_node = cg.index[&caller_key];
@@ -1184,7 +1190,7 @@ mod tests {
             namespace: "src/main.rs".into(),
             name: "caller".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
         let caller_node = cg.index[&caller_key];
 

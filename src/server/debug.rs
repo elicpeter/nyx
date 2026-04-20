@@ -1239,7 +1239,7 @@ function consume() {
             namespace: "src/helper.js".into(),
             name: "getInput".into(),
             arity: Some(0),
-        ..Default::default()
+            ..Default::default()
         };
         global.insert_ssa(
             key,

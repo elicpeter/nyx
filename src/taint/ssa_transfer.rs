@@ -1546,8 +1546,7 @@ fn inline_analyse_callee(
                                         .callee_bodies
                                         .is_some_and(|cb| cb.contains_key(&target_key))
                                     {
-                                        callback_bindings
-                                            .insert(param_name.clone(), target_key);
+                                        callback_bindings.insert(param_name.clone(), target_key);
                                     }
                                 }
                             }
@@ -1862,16 +1861,9 @@ fn transfer_inst(
             // return taint — otherwise falls through to summary for cases like
             // receiver-only method calls where summary propagation is needed.
             if transfer.inline_cache.is_some() && transfer.context_depth < 1 {
-                if let Some(result) = inline_analyse_callee(
-                    callee,
-                    args,
-                    receiver,
-                    state,
-                    transfer,
-                    cfg,
-                    ssa,
-                    inst,
-                ) {
+                if let Some(result) =
+                    inline_analyse_callee(callee, args, receiver, state, transfer, cfg, ssa, inst)
+                {
                     if let Some(ref ret) = result.return_taint {
                         resolved_callee = true;
                         return_bits |= ret.caps;
@@ -2051,8 +2043,7 @@ fn transfer_inst(
             // Apply explicit sanitizer labels
             if !sanitizer_bits.is_empty() {
                 // Collect uses taint then strip bits
-                let (use_caps, use_origins) =
-                    collect_args_taint(args, receiver, state, &[]);
+                let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
                 return_bits |= use_caps;
                 for orig in &use_origins {
                     if return_origins.len() < MAX_ORIGINS
@@ -2154,8 +2145,7 @@ fn transfer_inst(
                     }
 
                     // No labels and no summary — default propagation (gen/kill)
-                    let (use_caps, use_origins) =
-                        collect_args_taint(args, receiver, state, &[]);
+                    let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
                     if return_bits.is_empty() {
                         return_bits = use_caps;
                         return_origins = use_origins;
@@ -3764,13 +3754,7 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
         .callee
         .as_ref()
         .and_then(|c| {
-            resolve_callee_hinted(
-                transfer,
-                c,
-                caller_func,
-                info.call.call_ordinal,
-                arity_hint,
-            )
+            resolve_callee_hinted(transfer, c, caller_func, info.call.call_ordinal, arity_hint)
         })
         .filter(|r| !r.sink_caps.is_empty())
         .map(|r| SinkInfo {
@@ -4743,8 +4727,7 @@ pub(crate) fn resolve_local_func_key_query(
         }
     }
 
-    let arity_filtered: Vec<&FuncKey> =
-        all.iter().copied().filter(|k| arity_matches(k)).collect();
+    let arity_filtered: Vec<&FuncKey> = all.iter().copied().filter(|k| arity_matches(k)).collect();
     if arity_filtered.len() == 1 {
         return Some(arity_filtered[0].clone());
     }
@@ -4763,10 +4746,7 @@ pub(crate) fn resolve_local_func_key_query(
     // unambiguous target: class methods cannot be invoked with
     // bare-call syntax from outside their own class (self-calls are
     // handled by the `caller_container` branch above).
-    if q.receiver_type.is_none()
-        && q.namespace_qualifier.is_none()
-        && q.receiver_var.is_none()
-    {
+    if q.receiver_type.is_none() && q.namespace_qualifier.is_none() && q.receiver_var.is_none() {
         let empty: Vec<&FuncKey> = arity_filtered
             .iter()
             .copied()
@@ -4869,7 +4849,14 @@ fn resolve_callee_hinted(
     call_ordinal: u32,
     arity_hint: Option<usize>,
 ) -> Option<ResolvedSummary> {
-    resolve_callee_full(transfer, callee, caller_func, call_ordinal, arity_hint, None)
+    resolve_callee_full(
+        transfer,
+        callee,
+        caller_func,
+        call_ordinal,
+        arity_hint,
+        None,
+    )
 }
 
 /// Like [`resolve_callee_hinted`] but accepts an authoritative
@@ -5305,10 +5292,9 @@ fn reconstruct_flow_path(
             if prev.cfg_node == inst.cfg_node {
                 // Still follow the chain, just don't add a duplicate step
                 match &inst.op {
-                    SsaOp::Source
-                    | SsaOp::Param { .. }
-                    | SsaOp::SelfParam
-                    | SsaOp::CatchParam => break,
+                    SsaOp::Source | SsaOp::Param { .. } | SsaOp::SelfParam | SsaOp::CatchParam => {
+                        break;
+                    }
                     SsaOp::Assign(uses) => {
                         current = pick_tainted_operand(uses, origin, ssa);
                         continue;

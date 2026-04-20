@@ -95,14 +95,11 @@ pub fn derive_module_path(file_path: &Path, scan_root: Option<&Path>) -> Option<
         return None;
     }
 
-    let crate_root = find_crate_root(file_path, scan_root)
-        .or_else(|| scan_root.map(|p| p.to_path_buf()))?;
+    let crate_root =
+        find_crate_root(file_path, scan_root).or_else(|| scan_root.map(|p| p.to_path_buf()))?;
 
     let rel = file_path.strip_prefix(&crate_root).ok()?;
-    let mut segments: Vec<&str> = rel
-        .iter()
-        .filter_map(|s| s.to_str())
-        .collect();
+    let mut segments: Vec<&str> = rel.iter().filter_map(|s| s.to_str()).collect();
 
     // Strip a leading `src` directory if present. Files outside `src/` (e.g.
     // tests, examples, build.rs) get a `None` here — we do not have a stable
@@ -180,12 +177,7 @@ pub fn parse_rust_use_map(src: &[u8], tree: &Tree) -> RustUseMap {
 ///
 /// `prefix` carries the parent path segments already consumed (so a nested
 /// `b::c` inside `a::{b::c}` is flattened to `a::b::c`).
-fn collect_use_paths(
-    node: Node<'_>,
-    src: &[u8],
-    prefix: &[String],
-    map: &mut RustUseMap,
-) {
+fn collect_use_paths(node: Node<'_>, src: &[u8], prefix: &[String], map: &mut RustUseMap) {
     match node.kind() {
         // `crate::auth::token::validate` — terminal scoped path, leaf is the alias.
         "scoped_identifier" => {
@@ -221,20 +213,18 @@ fn collect_use_paths(
                 let segs = scoped_segments_or_ident(p, src);
                 new_prefix.extend(segs);
             }
-            let list_node = node
-                .child_by_field_name("list")
-                .or_else(|| {
-                    let mut found = None;
-                    for i in 0..node.named_child_count() as u32 {
-                        if let Some(n) = node.named_child(i)
-                            && n.kind() == "use_list"
-                        {
-                            found = Some(n);
-                            break;
-                        }
+            let list_node = node.child_by_field_name("list").or_else(|| {
+                let mut found = None;
+                for i in 0..node.named_child_count() as u32 {
+                    if let Some(n) = node.named_child(i)
+                        && n.kind() == "use_list"
+                    {
+                        found = Some(n);
+                        break;
                     }
-                    found
-                });
+                }
+                found
+            });
             if let Some(list) = list_node {
                 let mut cursor = list.walk();
                 for c in list.named_children(&mut cursor) {
@@ -457,10 +447,7 @@ mod tests {
         std::fs::write(dir.join("Cargo.toml"), "").ok();
         std::fs::write(dir.join("src/foo/bar.rs"), "").ok();
         let p = dir.join("src/foo/bar.rs");
-        assert_eq!(
-            derive_module_path(&p, None),
-            Some("foo::bar".to_string())
-        );
+        assert_eq!(derive_module_path(&p, None), Some("foo::bar".to_string()));
     }
 
     #[test]
@@ -472,10 +459,7 @@ mod tests {
         let _ = std::fs::remove_file(dir.join("Cargo.toml"));
         std::fs::write(dir.join("src/foo.rs"), "").ok();
         let p = dir.join("src/foo.rs");
-        assert_eq!(
-            derive_module_path(&p, Some(&dir)),
-            Some("foo".to_string())
-        );
+        assert_eq!(derive_module_path(&p, Some(&dir)), Some("foo".to_string()));
     }
 
     #[test]

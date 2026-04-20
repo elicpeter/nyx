@@ -35,7 +35,7 @@ fn merge_unions_conservatively() {
         namespace: "test.rs".into(),
         name: "foo".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     let foo = merged.get(&key).unwrap();
 
@@ -64,7 +64,7 @@ fn same_lang_different_namespace_no_merge() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
     let b = FuncSummary {
         name: "helper".into(),
@@ -79,7 +79,7 @@ fn same_lang_different_namespace_no_merge() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
 
     let global = merge_summaries(vec![a, b], None);
@@ -90,14 +90,14 @@ fn same_lang_different_namespace_no_merge() {
         namespace: "file_a.rs".into(),
         name: "helper".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     let key_b = FuncKey {
         lang: Lang::Rust,
         namespace: "file_b.rs".into(),
         name: "helper".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     assert!(global.get(&key_a).is_some());
     assert!(global.get(&key_b).is_some());
@@ -121,7 +121,7 @@ fn same_lang_same_namespace_merges() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
     let b = FuncSummary {
         name: "helper".into(),
@@ -136,7 +136,7 @@ fn same_lang_same_namespace_merges() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
 
     let global = merge_summaries(vec![a, b], None);
@@ -145,7 +145,7 @@ fn same_lang_same_namespace_merges() {
         namespace: "lib.rs".into(),
         name: "helper".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     let merged = global.get(&key).unwrap();
     assert_eq!(merged.source_caps, 0x01);
@@ -169,7 +169,7 @@ fn cross_lang_name_collision_stays_separate() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
     let c = FuncSummary {
         name: "process_data".into(),
@@ -184,7 +184,7 @@ fn cross_lang_name_collision_stays_separate() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
 
     let global = merge_summaries(vec![py, c], None);
@@ -194,14 +194,14 @@ fn cross_lang_name_collision_stays_separate() {
         namespace: "handler.py".into(),
         name: "process_data".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     let c_key = FuncKey {
         lang: Lang::C,
         namespace: "handler.c".into(),
         name: "process_data".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
 
     assert!(global.get(&py_key).is_some());
@@ -226,7 +226,7 @@ fn lookup_same_lang_returns_all_matches() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
     let b = FuncSummary {
         name: "helper".into(),
@@ -241,7 +241,7 @@ fn lookup_same_lang_returns_all_matches() {
         propagates_taint: false,
         tainted_sink_params: vec![],
         callees: vec![],
-    ..Default::default()
+        ..Default::default()
     };
 
     let global = merge_summaries(vec![a, b], None);
@@ -268,7 +268,7 @@ fn u16_caps_round_trip_serde() {
         propagates_taint: false,
         tainted_sink_params: vec![0],
         callees: vec!["query".into()],
-    ..Default::default()
+        ..Default::default()
     };
 
     let json = serde_json::to_string(&summary).unwrap();
@@ -323,7 +323,7 @@ fn merge_propagating_params_union() {
         namespace: "test.rs".into(),
         name: "foo".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     let foo = merged.get(&key).unwrap();
     assert_eq!(foo.propagating_params, vec![0, 1]);
@@ -388,7 +388,7 @@ fn snapshot_caps_detects_change() {
         namespace: "test.rs".into(),
         name: "bar".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     let updated = FuncSummary {
         sink_caps: 0x08,
@@ -425,7 +425,7 @@ fn ssa_summary_serde_round_trip_identity() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -451,7 +451,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -474,7 +474,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -501,7 +501,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -516,7 +516,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         namespace: "app.py".into(),
         name: "process".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
 
     let v1 = SsaFuncSummary {
@@ -533,7 +533,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     gs.insert_ssa(key.clone(), v1.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v1));
@@ -553,7 +553,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     gs.insert_ssa(key.clone(), v2.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v2));
@@ -569,14 +569,14 @@ fn global_summaries_merge_with_ssa_entries() {
         namespace: "a.py".into(),
         name: "foo".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     let key_b = FuncKey {
         lang: Lang::Python,
         namespace: "b.py".into(),
         name: "bar".into(),
         arity: Some(2),
-    ..Default::default()
+        ..Default::default()
     };
 
     let sum_a = SsaFuncSummary {
@@ -593,7 +593,7 @@ fn global_summaries_merge_with_ssa_entries() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     let sum_b = SsaFuncSummary {
         param_to_return: vec![],
@@ -609,7 +609,7 @@ fn global_summaries_merge_with_ssa_entries() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
 
     gs1.insert_ssa(key_a.clone(), sum_a.clone());
@@ -631,7 +631,7 @@ fn global_summaries_is_empty_considers_ssa() {
         namespace: "lib.rs".into(),
         name: "f".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     gs.insert_ssa(
         key,
@@ -649,7 +649,7 @@ fn global_summaries_is_empty_considers_ssa() {
             receiver_to_return: None,
 
             receiver_to_sink: Cap::empty(),
-        ..Default::default()
+            ..Default::default()
         },
     );
 
@@ -672,7 +672,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -710,7 +710,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -757,7 +757,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
         receiver_to_return: None,
 
         receiver_to_sink: Cap::empty(),
-    ..Default::default()
+        ..Default::default()
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -1075,7 +1075,7 @@ fn global_summaries_insert_body_exact_key_replacement() {
         namespace: "helper.py".into(),
         name: "transform".into(),
         arity: Some(2),
-    ..Default::default()
+        ..Default::default()
     };
 
     let body1 = make_callee_body(3, 2);
@@ -1097,7 +1097,7 @@ fn global_summaries_get_body_not_found() {
         namespace: "missing.py".into(),
         name: "nope".into(),
         arity: Some(0),
-    ..Default::default()
+        ..Default::default()
     };
     assert!(gs.get_body(&key).is_none());
 }
@@ -1112,14 +1112,14 @@ fn global_summaries_merge_includes_bodies() {
         namespace: "a.py".into(),
         name: "func_a".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     let key2 = FuncKey {
         lang: crate::symbol::Lang::Python,
         namespace: "b.py".into(),
         name: "func_b".into(),
         arity: Some(2),
-    ..Default::default()
+        ..Default::default()
     };
 
     // Need to also insert regular summaries so the by_lang_name index is populated
@@ -1146,7 +1146,7 @@ fn global_summaries_resolve_callee_body_exact_match() {
         namespace: "util.py".into(),
         name: "helper".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
 
     gs.insert(key.clone(), make("helper", 0, 0, 0));
@@ -1177,14 +1177,14 @@ fn global_summaries_resolve_callee_body_ambiguous_returns_none() {
         namespace: "a.py".into(),
         name: "helper".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     let key2 = FuncKey {
         lang: crate::symbol::Lang::Python,
         namespace: "b.py".into(),
         name: "helper".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
 
     gs.insert(key1.clone(), make("helper", 0, 0, 0));
@@ -1209,14 +1209,14 @@ fn global_summaries_resolve_callee_body_namespace_disambiguates() {
         namespace: "a.py".into(),
         name: "helper".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     let key2 = FuncKey {
         lang: crate::symbol::Lang::Python,
         namespace: "b.py".into(),
         name: "helper".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
 
     gs.insert(key1.clone(), make("helper", 0, 0, 0));
@@ -1240,7 +1240,7 @@ fn global_summaries_resolve_body_requires_body_present() {
         namespace: "util.py".into(),
         name: "helper".into(),
         arity: Some(1),
-    ..Default::default()
+        ..Default::default()
     };
     gs.insert(key.clone(), make("helper", 0, 0, 0));
     gs.insert_ssa(
@@ -1259,7 +1259,7 @@ fn global_summaries_resolve_body_requires_body_present() {
             receiver_to_return: None,
 
             receiver_to_sink: Cap::empty(),
-        ..Default::default()
+            ..Default::default()
         },
     );
     // Don't insert body
@@ -1379,13 +1379,8 @@ fn free_function_and_method_with_same_name_resolve_separately() {
     gs.insert(kf.clone(), sf);
     gs.insert(km.clone(), sm);
 
-    let free = gs.resolve_callee_key_with_container(
-        "process",
-        Lang::Java,
-        "src/app.java",
-        None,
-        Some(1),
-    );
+    let free =
+        gs.resolve_callee_key_with_container("process", Lang::Java, "src/app.java", None, Some(1));
     let method = gs.resolve_callee_key_with_container(
         "process",
         Lang::Java,
@@ -1669,7 +1664,11 @@ fn rust_summary_with_mod(
         tainted_sink_params: vec![],
         callees,
         module_path: module_path.map(str::to_string),
-        rust_use_map: if aliases.is_empty() { None } else { Some(aliases) },
+        rust_use_map: if aliases.is_empty() {
+            None
+        } else {
+            Some(aliases)
+        },
         rust_wildcards: if wildcards.is_empty() {
             None
         } else {
@@ -1784,13 +1783,8 @@ fn rust_use_map_qualified_call_via_module_alias() {
     };
     // The site's structured qualifier is the full `crate::auth::token`; the
     // resolver's alias map matches the first segment.
-    let resolution = gs.resolve_callee_key_rust(
-        "validate",
-        Some("token"),
-        Some(1),
-        "src/main.rs",
-        Some(&um),
-    );
+    let resolution =
+        gs.resolve_callee_key_rust("validate", Some("token"), Some(1), "src/main.rs", Some(&um));
     match resolution {
         CalleeResolution::Resolved(k) => {
             assert_eq!(k.namespace, "src/auth/token.rs");
@@ -1829,13 +1823,8 @@ fn rust_wildcard_import_resolves_uniquely() {
         aliases: BTreeMap::new(),
         wildcards: vec!["crate::auth::token".to_string()],
     };
-    let resolution = gs.resolve_callee_key_rust(
-        "validate",
-        None,
-        Some(1),
-        "src/main.rs",
-        Some(&um),
-    );
+    let resolution =
+        gs.resolve_callee_key_rust("validate", None, Some(1), "src/main.rs", Some(&um));
     match resolution {
         CalleeResolution::Resolved(k) => {
             assert_eq!(k.namespace, "src/auth/token.rs");
@@ -1848,15 +1837,7 @@ fn rust_wildcard_import_resolves_uniquely() {
 fn rust_use_map_fallback_when_absent() {
     // No use_map entry — falls through to generic same-language resolution,
     // which for an unqualified caller in the same namespace still works.
-    let helper = rust_summary_with_mod(
-        "helper",
-        "/proj/src/lib.rs",
-        0,
-        Some(""),
-        &[],
-        &[],
-        vec![],
-    );
+    let helper = rust_summary_with_mod("helper", "/proj/src/lib.rs", 0, Some(""), &[], &[], vec![]);
     let caller = rust_summary_with_mod(
         "caller",
         "/proj/src/lib.rs",
@@ -1872,13 +1853,7 @@ fn rust_use_map_fallback_when_absent() {
     );
 
     let gs = merge_summaries(vec![helper, caller], Some("/proj"));
-    let resolution = gs.resolve_callee_key_rust(
-        "helper",
-        None,
-        Some(0),
-        "src/lib.rs",
-        None,
-    );
+    let resolution = gs.resolve_callee_key_rust("helper", None, Some(0), "src/lib.rs", None);
     assert!(matches!(resolution, CalleeResolution::Resolved(_)));
 }
 
@@ -1918,13 +1893,7 @@ fn rust_use_map_ambiguous_stays_ambiguous_without_hint() {
         }],
     );
     let gs = merge_summaries(vec![token, session, caller], Some("/proj"));
-    let resolution = gs.resolve_callee_key_rust(
-        "validate",
-        None,
-        Some(1),
-        "src/main.rs",
-        None,
-    );
+    let resolution = gs.resolve_callee_key_rust("validate", None, Some(1), "src/main.rs", None);
     assert!(matches!(resolution, CalleeResolution::Ambiguous(_)));
 }
 
@@ -2361,8 +2330,7 @@ fn query_receiver_var_is_soft_tiebreak_not_primary() {
     // after same-namespace unique-leaf resolution fails.
     let mut gs = GlobalSummaries::new();
     let (k_same_ns, s_same_ns) = free_summary("src/app.js", "method", 1, 0xAA);
-    let (k_other_class, s_other_class) =
-        method_summary("src/other.js", "obj", "method", 1, 0xBB);
+    let (k_other_class, s_other_class) = method_summary("src/other.js", "obj", "method", 1, 0xBB);
     gs.insert(k_same_ns.clone(), s_same_ns);
     gs.insert(k_other_class.clone(), s_other_class);
 
@@ -2423,9 +2391,9 @@ fn query_qualifier_miss_refuses_to_guess_leaf() {
             assert!(cands.contains(&k_a));
             assert!(cands.contains(&k_b));
         }
-        CalleeResolution::Resolved(k) => panic!(
-            "unresolved qualifier must not silently pick a leaf-only match; got {k:?}"
-        ),
+        CalleeResolution::Resolved(k) => {
+            panic!("unresolved qualifier must not silently pick a leaf-only match; got {k:?}")
+        }
         CalleeResolution::NotFound => panic!("candidates exist — should be Ambiguous not NotFound"),
     }
 }
@@ -2578,8 +2546,7 @@ fn same_file_free_function_and_method_bare_call_prefers_free_function() {
     // tie-break on.
     let mut gs = GlobalSummaries::new();
     let (k_free, s_free) = free_summary("src/app.java", "process", 1, 0x0F);
-    let (k_method, s_method) =
-        method_summary("src/app.java", "Worker", "process", 1, 0xF0);
+    let (k_method, s_method) = method_summary("src/app.java", "Worker", "process", 1, 0xF0);
     gs.insert(k_free.clone(), s_free);
     gs.insert(k_method.clone(), s_method);
 
@@ -2618,8 +2585,7 @@ fn same_file_method_calling_sibling_free_function_resolves_to_free() {
     // caller_container hint (`Runner`) misses both candidates.
     let mut gs = GlobalSummaries::new();
     let (k_free, s_free) = free_summary("src/app.java", "process", 1, 0x0F);
-    let (k_method, s_method) =
-        method_summary("src/app.java", "Worker", "process", 1, 0xF0);
+    let (k_method, s_method) = method_summary("src/app.java", "Worker", "process", 1, 0xF0);
     // Runner::kick exists only so caller_container("Runner") is a real
     // container name in the global summaries.  It is NOT a candidate.
     let (k_kick, s_kick) = method_summary("src/app.java", "Runner", "kick", 0, 0x00);
@@ -2665,8 +2631,7 @@ fn same_file_method_calling_own_container_sibling_prefers_self_class() {
     // security behaviour.
     let mut gs = GlobalSummaries::new();
     let (k_free, s_free) = free_summary("src/app.java", "process", 1, 0x0F);
-    let (k_method, s_method) =
-        method_summary("src/app.java", "Worker", "process", 1, 0xF0);
+    let (k_method, s_method) = method_summary("src/app.java", "Worker", "process", 1, 0xF0);
     gs.insert(k_free.clone(), s_free);
     gs.insert(k_method.clone(), s_method);
 
@@ -2697,8 +2662,7 @@ fn same_file_nested_container_same_method_disambiguates_by_container() {
     // them and mis-resolve.
     let mut gs = GlobalSummaries::new();
     let (k_outer, s_outer) = method_summary("src/nested.java", "Outer", "foo", 1, 0x01);
-    let (k_inner, s_inner) =
-        method_summary("src/nested.java", "Outer::Inner", "foo", 1, 0x02);
+    let (k_inner, s_inner) = method_summary("src/nested.java", "Outer::Inner", "foo", 1, 0x02);
     gs.insert(k_outer.clone(), s_outer);
     gs.insert(k_inner.clone(), s_inner);
 
@@ -2757,8 +2721,13 @@ fn same_file_same_name_different_security_behaviour_no_cap_leak() {
     s_free.sanitizer_caps = Cap::all().bits();
     let (k_html, mut s_html) = method_summary("src/val.py", "HtmlGuard", "validate", 1, 0x00);
     s_html.sanitizer_caps = Cap::HTML_ESCAPE.bits();
-    let (k_shell, s_shell) =
-        method_summary("src/val.py", "ShellRunner", "validate", 1, Cap::SHELL_ESCAPE.bits());
+    let (k_shell, s_shell) = method_summary(
+        "src/val.py",
+        "ShellRunner",
+        "validate",
+        1,
+        Cap::SHELL_ESCAPE.bits(),
+    );
     gs.insert(k_free.clone(), s_free);
     gs.insert(k_html.clone(), s_html);
     gs.insert(k_shell.clone(), s_shell);
@@ -2778,10 +2747,7 @@ fn same_file_same_name_different_security_behaviour_no_cap_leak() {
     assert_eq!(gs.get(&k_shell).unwrap().sanitizer_caps, 0x00);
 
     // Each `receiver_type` hint must land on its OWN container.
-    for (hint, expected) in [
-        ("HtmlGuard", &k_html),
-        ("ShellRunner", &k_shell),
-    ] {
+    for (hint, expected) in [("HtmlGuard", &k_html), ("ShellRunner", &k_shell)] {
         let r = gs.resolve_callee(&CalleeQuery {
             name: "validate",
             caller_lang: Lang::Java,

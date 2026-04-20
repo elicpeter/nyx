@@ -1242,13 +1242,8 @@ mod tests {
 
     #[test]
     fn gated_sink_dynamic_conservative() {
-        let result = classify_gated_sink(
-            "javascript",
-            "setAttribute",
-            |_| None,
-            no_kw,
-            no_kw_present,
-        );
+        let result =
+            classify_gated_sink("javascript", "setAttribute", |_| None, no_kw, no_kw_present);
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
@@ -1357,8 +1352,7 @@ mod tests {
 
     #[test]
     fn gated_sink_python_popen_no_shell_conservative() {
-        let result =
-            classify_gated_sink("python", "Popen", |_| None, |_| None, no_kw_present);
+        let result = classify_gated_sink("python", "Popen", |_| None, |_| None, no_kw_present);
         assert_eq!(
             result,
             Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))

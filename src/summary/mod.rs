@@ -444,7 +444,10 @@ impl GlobalSummaries {
         }
 
         if let Some(mp) = rust_module {
-            let mk = self.by_rust_module.entry((mp, key.name.clone())).or_default();
+            let mk = self
+                .by_rust_module
+                .entry((mp, key.name.clone()))
+                .or_default();
             if !mk.contains(&key) {
                 mk.push(key);
             }
@@ -522,11 +525,7 @@ impl GlobalSummaries {
 
     /// Container-qualified lookup.  `qualified` should be
     /// `"Container::name"` (use [`FuncKey::qualified_name`]) or `"name"`.
-    pub fn lookup_qualified(
-        &self,
-        lang: Lang,
-        qualified: &str,
-    ) -> Vec<(&FuncKey, &FuncSummary)> {
+    pub fn lookup_qualified(&self, lang: Lang, qualified: &str) -> Vec<(&FuncKey, &FuncSummary)> {
         self.by_lang_qualified
             .get(&(lang, qualified.to_string()))
             .map(|keys| {
@@ -964,9 +963,7 @@ impl GlobalSummaries {
         // reaches here; `namespace_qualifier` / `caller_container`
         // missing their target flow through as a soft miss.)
         if q.has_qualified_hint() {
-            return CalleeResolution::Ambiguous(
-                arity_filtered.into_iter().cloned().collect(),
-            );
+            return CalleeResolution::Ambiguous(arity_filtered.into_iter().cloned().collect());
         }
 
         // No qualified hints whatsoever — tolerate namespace narrowing.
