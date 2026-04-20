@@ -7143,3 +7143,198 @@ mod worklist_tests {
         assert!(in_wl.is_empty());
     }
 }
+
+#[cfg(test)]
+mod primary_sink_location_tests {
+    //! Regression guard for the primary sink-location attribution contract
+    //! introduced in phases 1-4: a [`SinkSite`] carried on an
+    //! [`SsaFuncSummary`] must propagate unchanged through summary
+    //! resolution → [`SsaTaintEvent::primary_sink_site`] →
+    //! [`crate::taint::Finding::primary_location`].
+    //!
+    //! The test is deliberately low-level — it wires up synthetic SSA and
+    //! drives the three emission stages directly — so any future refactor
+    //! that drops the site on the floor between stages fails here rather
+    //! than only at the corpus/benchmark layer.
+    use super::*;
+    use crate::cfg::{AstMeta, CallMeta, Cfg, NodeInfo, StmtKind, TaintMeta};
+    use crate::labels::{Cap, SourceKind};
+    use crate::summary::SinkSite;
+    use crate::summary::ssa_summary::SsaFuncSummary;
+    use crate::taint::domain::TaintOrigin;
+    use petgraph::graph::NodeIndex;
+    use petgraph::prelude::*;
+    use smallvec::smallvec;
+    use std::collections::HashMap;
+
+    /// Build a caller CFG that models `sink(source())`: two nodes, where
+    /// the sink node carries `callee = "dangerous_exec"` so
+    /// [`reconstruct_flow_path`] can name the sink.
+    fn caller_cfg() -> (Cfg, NodeIndex, NodeIndex) {
+        let mut cfg = Graph::new();
+        let source = cfg.add_node(NodeInfo {
+            kind: StmtKind::Seq,
+            ast: AstMeta {
+                span: (0, 5),
+                ..Default::default()
+            },
+            taint: TaintMeta::default(),
+            call: CallMeta::default(),
+            ..Default::default()
+        });
+        let sink = cfg.add_node(NodeInfo {
+            kind: StmtKind::Call,
+            ast: AstMeta {
+                span: (10, 30),
+                ..Default::default()
+            },
+            taint: TaintMeta::default(),
+            call: CallMeta {
+                callee: Some("dangerous_exec".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        (cfg, source, sink)
+    }
+
+    /// Build an SSA body for `v0 = source(); v1 = dangerous_exec(v0); ret`.
+    fn caller_body(source_node: NodeIndex, sink_node: NodeIndex) -> SsaBody {
+        let mut cfg_node_map = HashMap::new();
+        cfg_node_map.insert(source_node, SsaValue(0));
+        cfg_node_map.insert(sink_node, SsaValue(1));
+        SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![
+                    SsaInst {
+                        value: SsaValue(0),
+                        op: SsaOp::Source,
+                        cfg_node: source_node,
+                        var_name: Some("x".into()),
+                        span: (0, 5),
+                    },
+                    SsaInst {
+                        value: SsaValue(1),
+                        op: SsaOp::Call {
+                            callee: "dangerous_exec".into(),
+                            args: vec![smallvec![SsaValue(0)]],
+                            receiver: None,
+                        },
+                        cfg_node: sink_node,
+                        var_name: None,
+                        span: (10, 30),
+                    },
+                ],
+                terminator: Terminator::Return(None),
+                preds: smallvec![],
+                succs: smallvec![],
+            }],
+            entry: BlockId(0),
+            value_defs: vec![
+                ValueDef {
+                    var_name: Some("x".into()),
+                    cfg_node: source_node,
+                    block: BlockId(0),
+                },
+                ValueDef {
+                    var_name: None,
+                    cfg_node: sink_node,
+                    block: BlockId(0),
+                },
+            ],
+            cfg_node_map,
+            exception_edges: vec![],
+        }
+    }
+
+    /// Locks in the end-to-end contract that a SinkSite on an
+    /// SsaFuncSummary surfaces verbatim as `Finding.primary_location`.
+    ///
+    /// If this fails, something on the summary→event→finding path
+    /// (`pick_primary_sink_sites`, `emit_ssa_taint_events`, or
+    /// `ssa_events_to_findings`) has silently stopped forwarding
+    /// coordinates.  Fixing that path — not this test — is the right
+    /// response.
+    #[test]
+    fn ssa_summary_sinksite_surfaces_as_finding_primary_location() {
+        let (cfg, source_node, sink_node) = caller_cfg();
+        let ssa = caller_body(source_node, sink_node);
+
+        // Synthetic summary: parameter 0 reaches a SHELL_ESCAPE sink inside
+        // the callee at "other.rs":42:10.
+        let site = SinkSite {
+            file_rel: "other.rs".into(),
+            line: 42,
+            col: 10,
+            snippet: "Command::new(cmd).status()".into(),
+            cap: Cap::SHELL_ESCAPE,
+        };
+        let summary = SsaFuncSummary {
+            param_to_sink: vec![(0usize, smallvec![site.clone()])],
+            ..Default::default()
+        };
+
+        // Drive the three emission stages with the summary's own
+        // `param_to_sink` — that is what summary resolution feeds in the
+        // real pipeline.
+        let tainted: Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)> = vec![(
+            SsaValue(0),
+            Cap::SHELL_ESCAPE,
+            smallvec![TaintOrigin {
+                node: source_node,
+                source_kind: SourceKind::EnvironmentConfig,
+                source_span: None,
+            }],
+        )];
+        let call_inst = &ssa.blocks[0].body[1];
+        let primary_sites = pick_primary_sink_sites(
+            call_inst,
+            &tainted,
+            Cap::SHELL_ESCAPE,
+            &summary.param_to_sink,
+        );
+        assert_eq!(
+            primary_sites.len(),
+            1,
+            "summary site must survive pick filter (line != 0, cap ∩ sink_caps ≠ ∅)",
+        );
+
+        let mut events = Vec::new();
+        emit_ssa_taint_events(
+            &mut events,
+            sink_node,
+            tainted.clone(),
+            Cap::SHELL_ESCAPE,
+            /* all_validated */ false,
+            /* guard_kind   */ None,
+            /* uses_summary */ true,
+            primary_sites,
+        );
+        assert_eq!(events.len(), 1, "single site → single event");
+        let event_site = events[0]
+            .primary_sink_site
+            .as_ref()
+            .expect("event must carry the primary SinkSite");
+        assert_eq!(
+            (
+                event_site.file_rel.as_str(),
+                event_site.line,
+                event_site.col,
+            ),
+            ("other.rs", 42, 10),
+        );
+
+        let findings = ssa_events_to_findings(&events, &ssa, &cfg);
+        assert_eq!(findings.len(), 1);
+        let loc = findings[0]
+            .primary_location
+            .as_ref()
+            .expect("Finding.primary_location must be populated from SinkSite");
+        assert_eq!(loc.file_rel, "other.rs");
+        assert_eq!(loc.line, 42);
+        assert_eq!(loc.col, 10);
+        assert_eq!(loc.snippet, "Command::new(cmd).status()");
+    }
+}
