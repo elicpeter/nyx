@@ -5940,16 +5940,20 @@ pub fn ssa_events_to_findings(
                     file_rel: s.file_rel.clone(),
                     line: s.line,
                     col: s.col,
+                    snippet: s.snippet.clone(),
                 })
             }
         });
 
-        // Data-integrity invariant: a populated primary_location must carry
-        // resolved coordinates and name a file.  Upstream filters already
-        // enforce this; the assertion pins the contract for the field.
+        // Data-integrity invariant: a populated primary_location must at least
+        // carry resolved line coordinates.  `file_rel` may legitimately be
+        // empty — when the scan root is the caller file itself (single-file
+        // scans), every namespace normalizes to `""` and the callee's site
+        // inherits that empty path; consumers resolve it against the file
+        // under analysis.  Line==0 is the only filter-worthy invariant.
         debug_assert!(
-            primary_location.as_ref().is_none_or(|l| l.line != 0 && !l.file_rel.is_empty()),
-            "primary_location must carry resolved coordinates and a non-empty file path",
+            primary_location.as_ref().is_none_or(|l| l.line != 0),
+            "primary_location must carry a resolved line coordinate",
         );
 
         // Dedup key includes primary location so multi-site events that

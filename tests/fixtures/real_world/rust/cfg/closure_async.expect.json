@@ -37,10 +37,10 @@
       "must_match": true,
       "line_range": [
         10,
-        10
+        11
       ],
       "evidence_contains": [],
-      "notes": "TP: env::var(\"CMD\") at line 5 flows through closure parameter into Command::new at line 11 \u2014 command injection via higher-order function"
+      "notes": "TP: env::var(\"CMD\") at line 5 flows through closure parameter into Command::new at line 11 \u2014 command injection via higher-order function; primary location now points at line 11 (callee-internal sink)"
     }
   ]
 }

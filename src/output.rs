@@ -143,6 +143,45 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                 }]
             });
 
+            // Emit SARIF `codeFlows` when the finding carries structured flow
+            // steps.  Each step becomes a `threadFlows[0].locations[]` entry,
+            // the SARIF-idiomatic encoding for data-flow paths; the primary
+            // `locations[0]` above already names the true sink.
+            if let Some(ev) = d.evidence.as_ref()
+                && !ev.flow_steps.is_empty()
+            {
+                let thread_locations: Vec<Value> = ev
+                    .flow_steps
+                    .iter()
+                    .map(|step| {
+                        let step_uri = Path::new(&step.file)
+                            .strip_prefix(scan_root)
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|_| step.file.clone());
+                        let mut loc = json!({
+                            "location": {
+                                "physicalLocation": {
+                                    "artifactLocation": { "uri": step_uri },
+                                    "region": {
+                                        "startLine": step.line,
+                                        "startColumn": step.col
+                                    }
+                                },
+                                "message": { "text": step.kind.to_string() }
+                            }
+                        });
+                        if let Some(ref snippet) = step.snippet {
+                            loc["location"]["physicalLocation"]["region"]["snippet"] =
+                                json!({ "text": snippet });
+                        }
+                        loc
+                    })
+                    .collect();
+                result["codeFlows"] = json!([{
+                    "threadFlows": [{ "locations": thread_locations }]
+                }]);
+            }
+
             // Build properties object
             let mut props = serde_json::Map::new();
             props.insert("category".into(), json!(d.category.to_string()));

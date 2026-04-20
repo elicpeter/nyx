@@ -62,6 +62,26 @@ fn extract_line_snippet(src: &[u8], byte_offset: usize) -> Option<String> {
     }
 }
 
+/// Resolve a `file_rel` (relative to `scan_root` per
+/// [`normalize_namespace`] convention) back to the absolute path the
+/// diagnostic pipeline expects.
+///
+/// * Empty `file_rel` — single-file scans normalize every namespace to
+///   `""`; treat that as "the file under analysis" and return
+///   `fallback.to_string_lossy()`.
+/// * `scan_root` absent — we have no workspace root to resolve against;
+///   return `file_rel` verbatim (it may already be absolute).
+/// * Otherwise — join `scan_root` with `file_rel`.
+fn resolve_file_rel(file_rel: &str, scan_root: Option<&Path>, fallback: &Path) -> String {
+    if file_rel.is_empty() {
+        return fallback.to_string_lossy().into_owned();
+    }
+    match scan_root {
+        Some(root) => root.join(file_rel).to_string_lossy().into_owned(),
+        None => file_rel.to_string(),
+    }
+}
+
 /// Build a [`Diag`] from a taint [`Finding`], the CFG that produced it,
 /// the parsed tree (for byte→line/col conversion) and the file path.
 fn build_taint_diag(
@@ -70,9 +90,10 @@ fn build_taint_diag(
     tree: &tree_sitter::Tree,
     path: &Path,
     src: &[u8],
+    scan_root: Option<&Path>,
 ) -> Diag {
-    let sink_byte = cfg_graph[finding.sink].ast.span.0;
-    let sink_point = byte_offset_to_point(tree, sink_byte);
+    let call_site_byte = cfg_graph[finding.sink].ast.span.0;
+    let call_site_point = byte_offset_to_point(tree, call_site_byte);
     // For cross-body origins, prefer the preserved source_span over
     // indexing into the (possibly different) body's graph.
     let source_byte = finding
@@ -86,7 +107,7 @@ fn build_taint_diag(
         .as_deref()
         .map(sanitize_desc)
         .unwrap_or_else(|| "(unknown)".into());
-    let sink_callee = cfg_graph[finding.sink]
+    let call_site_callee = cfg_graph[finding.sink]
         .call
         .callee
         .as_deref()
@@ -94,8 +115,50 @@ fn build_taint_diag(
         .unwrap_or_else(|| "(unknown)".into());
     let kind_label = source_kind_label(finding.source_kind);
 
+    let file_path_owned = path.to_string_lossy().into_owned();
+
+    // Primary-location attribution: when the sink was resolved via a
+    // callee summary that carried a [`SinkSite`], `finding.primary_location`
+    // names the dangerous instruction inside the callee body.  Use those
+    // coordinates as the diag's primary (file, line, col); otherwise fall
+    // back to the caller's call-site position.
+    let (primary_path, primary_line, primary_col, primary_snippet_hint) =
+        if let Some(loc) = finding.primary_location.as_ref() {
+            let abs = resolve_file_rel(&loc.file_rel, scan_root, path);
+            if abs != file_path_owned {
+                tracing::debug!(
+                    caller_file = %file_path_owned,
+                    primary_file = %abs,
+                    primary_line = loc.line,
+                    "taint finding attributed to a cross-file primary sink location",
+                );
+            }
+            let snippet = if loc.snippet.is_empty() {
+                None
+            } else {
+                Some(loc.snippet.clone())
+            };
+            (abs, loc.line as usize, loc.col as usize, snippet)
+        } else {
+            (
+                file_path_owned.clone(),
+                call_site_point.row + 1,
+                call_site_point.column + 1,
+                None,
+            )
+        };
+
     let short_source = crate::fmt::shorten_callee(&source_callee);
-    let short_sink = crate::fmt::shorten_callee(&sink_callee);
+    let short_call_site = crate::fmt::shorten_callee(&call_site_callee);
+    let sink_display = primary_snippet_hint
+        .as_deref()
+        .map(crate::fmt::shorten_callee)
+        .unwrap_or_else(|| short_call_site.clone());
+    let sink_label_display = if finding.primary_location.is_some() {
+        format!("{call_site_callee} \u{2192} {sink_display}")
+    } else {
+        call_site_callee.clone()
+    };
 
     let mut labels = vec![
         (
@@ -106,13 +169,12 @@ fn build_taint_diag(
                 source_point.column + 1
             ),
         ),
-        ("Sink".into(), sink_callee.to_string()),
+        ("Sink".into(), sink_label_display),
     ];
     if let Some(guard) = finding.guard_kind {
         labels.push(("Path guard".into(), format!("{guard:?}")));
     }
 
-    let file_path_owned = path.to_string_lossy().into_owned();
     let mut evidence_notes = Vec::new();
     if finding.path_validated {
         evidence_notes.push("path_validated".into());
@@ -124,8 +186,12 @@ fn build_taint_diag(
         evidence_notes.push("uses_summary".into());
     }
 
-    // Convert raw flow steps to display FlowSteps
-    let flow_steps: Vec<FlowStep> = finding
+    // Convert raw flow steps to display FlowSteps.  When the finding has a
+    // primary_location distinct from the call site, the last raw step is
+    // really the Call — reclassify it and append a synthetic Sink step
+    // pointing at the callee-internal dangerous instruction so analysts
+    // see both the call site and the final sink in the trace.
+    let mut flow_steps: Vec<FlowStep> = finding
         .flow_steps
         .iter()
         .enumerate()
@@ -149,10 +215,41 @@ fn build_taint_diag(
         })
         .collect();
 
+    if let Some(loc) = finding.primary_location.as_ref() {
+        if let Some(last) = flow_steps.last_mut()
+            && matches!(last.kind, crate::evidence::FlowStepKind::Sink)
+        {
+            last.kind = crate::evidence::FlowStepKind::Call;
+        }
+        let is_cross_file = primary_path != file_path_owned;
+        let synthetic_snippet = if loc.snippet.is_empty() {
+            None
+        } else {
+            Some(loc.snippet.clone())
+        };
+        let next_step = (flow_steps.len() + 1) as u32;
+        flow_steps.push(FlowStep {
+            step: next_step,
+            kind: crate::evidence::FlowStepKind::Sink,
+            file: primary_path.clone(),
+            line: loc.line,
+            col: loc.col,
+            snippet: synthetic_snippet,
+            variable: None,
+            callee: None,
+            function: None,
+            is_cross_file,
+        });
+    }
+
+    let sink_evidence_snippet = primary_snippet_hint
+        .clone()
+        .or_else(|| Some(short_call_site.clone()));
+
     let mut diag = Diag {
-        path: file_path_owned.clone(),
-        line: sink_point.row + 1,
-        col: sink_point.column + 1,
+        path: primary_path.clone(),
+        line: primary_line,
+        col: primary_col,
         severity: severity_for_source_kind(finding.source_kind),
         id: format!(
             "taint-unsanitised-flow (source {}:{})",
@@ -163,7 +260,7 @@ fn build_taint_diag(
         path_validated: finding.path_validated,
         guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
         message: Some(format!(
-            "unsanitised {kind_label} flows from {short_source} \u{2192} {short_sink}"
+            "unsanitised {kind_label} flows from {short_source} \u{2192} {sink_display}"
         )),
         labels,
         confidence: None,
@@ -176,18 +273,18 @@ fn build_taint_diag(
                 snippet: Some(short_source.clone()),
             }),
             sink: Some(SpanEvidence {
-                path: file_path_owned.clone(),
-                line: (sink_point.row + 1) as u32,
-                col: (sink_point.column + 1) as u32,
+                path: primary_path.clone(),
+                line: primary_line as u32,
+                col: primary_col as u32,
                 kind: "sink".into(),
-                snippet: Some(short_sink.clone()),
+                snippet: sink_evidence_snippet,
             }),
             guards: finding
                 .guard_kind
                 .map(|g| {
                     vec![SpanEvidence {
-                        path: file_path_owned,
-                        line: (sink_point.row + 1) as u32,
+                        path: primary_path.clone(),
+                        line: primary_line as u32,
                         col: 0,
                         kind: "guard".into(),
                         snippet: Some(format!("{g:?}")),
@@ -726,6 +823,7 @@ impl<'a> ParsedFile<'a> {
                 &self.source.tree,
                 self.source.path,
                 self.source.bytes,
+                scan_root,
             ));
         }
 

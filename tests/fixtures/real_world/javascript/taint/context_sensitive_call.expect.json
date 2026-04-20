@@ -14,11 +14,11 @@
       "severity": null,
       "must_match": true,
       "line_range": [
-        12,
+        7,
         14
       ],
       "evidence_contains": [],
-      "notes": "req.query.cmd flows through run() to child_process.exec — command injection"
+      "notes": "req.query.cmd flows through run() to child_process.exec — command injection; primary location points at line 8 (callee-internal sink), call site at line 13"
     }
   ]
 }

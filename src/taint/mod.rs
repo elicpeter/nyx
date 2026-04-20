@@ -39,6 +39,11 @@ pub struct SinkLocation {
     pub line: u32,
     /// 1-based column of the sink instruction inside the callee body.
     pub col: u32,
+    /// Trimmed source line at the sink, copied from the upstream
+    /// [`crate::summary::SinkSite`].  Empty when the extractor had no
+    /// tree/bytes context.  Used by formatters so the primary-location
+    /// display does not need to re-read the callee file.
+    pub snippet: String,
 }
 
 /// A detected taint finding with both source and sink locations.
@@ -88,9 +93,12 @@ pub struct Finding {
     /// # Invariant
     ///
     /// `primary_location.is_some()` ⇒ the inner [`SinkLocation`] has
-    /// `line != 0` AND a non-empty `file_rel`.  Enforced at
-    /// `ssa_events_to_findings` by a `debug_assert!` — upstream filters
-    /// drop cap-only sites before they reach this field.
+    /// `line != 0`.  `file_rel` may be empty for single-file scans where
+    /// the scan root is the file itself (every namespace normalizes to
+    /// `""`); consumers resolve empty `file_rel` against the file under
+    /// analysis.  Enforced at `ssa_events_to_findings` by a
+    /// `debug_assert!` — upstream filters drop cap-only sites before
+    /// they reach this field.
     ///
     /// Deliberately independent of `uses_summary`: that flag tracks whether
     /// the **taint chain** used a callee summary, not whether the **sink**
