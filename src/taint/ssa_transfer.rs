@@ -5905,8 +5905,9 @@ pub fn ssa_events_to_findings(
 ) -> Vec<crate::taint::Finding> {
     use std::collections::HashSet;
 
+    type FindingDedupKey = (usize, usize, Option<(String, u32, u32)>);
     let mut findings = Vec::new();
-    let mut seen: HashSet<(usize, usize, Option<(String, u32, u32)>)> = HashSet::new();
+    let mut seen: HashSet<FindingDedupKey> = HashSet::new();
 
     for event in events {
         // Suppress findings where all tainted variables were validated
