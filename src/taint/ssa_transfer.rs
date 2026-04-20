@@ -4755,6 +4755,28 @@ pub(crate) fn resolve_local_func_key_query(
         }
     }
 
+    // Bare-call free-function preference — mirrors
+    // `GlobalSummaries::resolve_callee` step 5.5.  When the call is
+    // syntactically bare (no receiver, no namespace qualifier, no
+    // authoritative receiver type) and exactly one arity-matched local
+    // candidate is a free function (empty container), it is the
+    // unambiguous target: class methods cannot be invoked with
+    // bare-call syntax from outside their own class (self-calls are
+    // handled by the `caller_container` branch above).
+    if q.receiver_type.is_none()
+        && q.namespace_qualifier.is_none()
+        && q.receiver_var.is_none()
+    {
+        let empty: Vec<&FuncKey> = arity_filtered
+            .iter()
+            .copied()
+            .filter(|k| k.container.is_empty())
+            .collect();
+        if empty.len() == 1 {
+            return Some(empty[0].clone());
+        }
+    }
+
     None
 }
 

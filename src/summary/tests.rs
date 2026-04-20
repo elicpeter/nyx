@@ -1395,14 +1395,12 @@ fn free_function_and_method_with_same_name_resolve_separately() {
     );
     assert_eq!(method, CalleeResolution::Resolved(km));
 
-    // Without container hint and two same-name candidates: ambiguous.
-    match free {
-        CalleeResolution::Ambiguous(cands) => {
-            assert_eq!(cands.len(), 2, "both keys should be reported as candidates");
-            assert!(cands.contains(&kf));
-        }
-        other => panic!("expected Ambiguous, got {other:?}"),
-    }
+    // Without any qualifier, receiver, or receiver_type, a bare
+    // `process()` call is syntactically a free-function invocation — a
+    // method cannot be invoked that way from outside its class.  The
+    // resolver's bare-call preference (step 5.5) picks the sole
+    // empty-container candidate deterministically.
+    assert_eq!(free, CalleeResolution::Resolved(kf));
 }
 
 #[test]
@@ -2456,4 +2454,348 @@ fn legacy_wrapper_preserves_test_contract() {
         Some(1),
     );
     assert_eq!(resolved, CalleeResolution::Resolved(k_a));
+}
+
+// ── Adversarial: same-name identity collisions in the SAME file ─────────
+//
+// These tests target the most error-prone identity cases: two or more
+// definitions that share `(lang, namespace, name, arity)` but differ in
+// `container`.  The resolver must either resolve to the exact container
+// target or refuse to guess — silently falling back to a same-leaf
+// collision in a different container is a correctness bug, and mis-
+// ordering the resolution steps can cause either false positives (wrong
+// summary picked) or false negatives (missed flow because Ambiguous
+// took a confident hint off the table).
+
+#[test]
+fn same_file_two_classes_same_method_typed_receiver_picks_exact() {
+    // Two classes in the SAME file, both defining `run/1` with
+    // incompatible security behaviour: `Safe::run` is a sanitizer-ish
+    // passthrough (no sink bits) while `Unsafe::run` is a shell sink.
+    // When the caller has a typed receiver (Phase 10 inference), the
+    // resolver must pick the exact class — the wrong pick would either
+    // miss the Unsafe sink or wrongly flag the Safe path.
+    let mut gs = GlobalSummaries::new();
+    let (k_safe, s_safe) = method_summary("src/app.java", "Safe", "run", 1, 0x00);
+    let (k_unsafe, s_unsafe) =
+        method_summary("src/app.java", "Unsafe", "run", 1, Cap::SHELL_ESCAPE.bits());
+    gs.insert(k_safe.clone(), s_safe);
+    gs.insert(k_unsafe.clone(), s_unsafe);
+
+    let unsafe_call = gs.resolve_callee(&CalleeQuery {
+        name: "run",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.java",
+        caller_container: None,
+        receiver_type: Some("Unsafe"),
+        namespace_qualifier: None,
+        receiver_var: Some("u"),
+        arity: Some(1),
+    });
+    assert_eq!(
+        unsafe_call,
+        CalleeResolution::Resolved(k_unsafe.clone()),
+        "typed receiver `Unsafe` MUST land on Unsafe::run, not Safe::run"
+    );
+
+    let safe_call = gs.resolve_callee(&CalleeQuery {
+        name: "run",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.java",
+        caller_container: None,
+        receiver_type: Some("Safe"),
+        namespace_qualifier: None,
+        receiver_var: Some("s"),
+        arity: Some(1),
+    });
+    assert_eq!(
+        safe_call,
+        CalleeResolution::Resolved(k_safe.clone()),
+        "typed receiver `Safe` MUST land on Safe::run, not Unsafe::run"
+    );
+
+    // Sink-cap sanity: if the resolver ever silently swapped them the
+    // cap mismatch would show up here.
+    assert_eq!(gs.get(&k_safe).unwrap().sink_caps, 0x00);
+    assert_eq!(
+        gs.get(&k_unsafe).unwrap().sink_caps,
+        Cap::SHELL_ESCAPE.bits()
+    );
+}
+
+#[test]
+fn same_file_two_classes_same_method_untyped_receiver_is_ambiguous_not_wrong() {
+    // Same setup as above, but the caller only has a variable-name
+    // receiver (no type facts).  `receiver_var` is a SOFT hint — and in
+    // the common case `s`/`u` don't match any container.  The resolver
+    // MUST refuse to pick one arbitrarily; returning `Safe::run` when
+    // the call was `u.run(...)` would be a silent false negative of the
+    // worst kind (wrong summary pickup).
+    let mut gs = GlobalSummaries::new();
+    let (k_safe, s_safe) = method_summary("src/app.java", "Safe", "run", 1, 0x00);
+    let (k_unsafe, s_unsafe) =
+        method_summary("src/app.java", "Unsafe", "run", 1, Cap::SHELL_ESCAPE.bits());
+    gs.insert(k_safe.clone(), s_safe);
+    gs.insert(k_unsafe.clone(), s_unsafe);
+
+    let resolved = gs.resolve_callee(&CalleeQuery {
+        name: "run",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.java",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: Some("u"),
+        arity: Some(1),
+    });
+    match resolved {
+        CalleeResolution::Ambiguous(cands) => {
+            assert!(cands.contains(&k_safe));
+            assert!(cands.contains(&k_unsafe));
+        }
+        CalleeResolution::Resolved(k) => panic!(
+            "same-file same-name two-class collision with only a soft `receiver_var` MUST NOT \
+             pick a specific summary — got {k:?}"
+        ),
+        CalleeResolution::NotFound => {
+            panic!("candidates exist in the same file — must be Ambiguous, not NotFound")
+        }
+    }
+}
+
+#[test]
+fn same_file_free_function_and_method_bare_call_prefers_free_function() {
+    // Classic "I wrote a top-level helper AND a method with the same
+    // name in the same file" trap.  A bare `process()` call — no
+    // receiver, no qualifier, caller outside any container — is
+    // syntactically a FREE function call; the method cannot be invoked
+    // this way.  The resolver MUST resolve to the free function, not
+    // return Ambiguous.
+    //
+    // NOTE: this test was FAILING under the pre-fix resolver, which
+    // returned Ambiguous because step 4's same-namespace narrowing
+    // still saw two candidates and step 6 had no qualified hint to
+    // tie-break on.
+    let mut gs = GlobalSummaries::new();
+    let (k_free, s_free) = free_summary("src/app.java", "process", 1, 0x0F);
+    let (k_method, s_method) =
+        method_summary("src/app.java", "Worker", "process", 1, 0xF0);
+    gs.insert(k_free.clone(), s_free);
+    gs.insert(k_method.clone(), s_method);
+
+    // Caller is a top-level free function (caller_container = None).
+    let bare = gs.resolve_callee(&CalleeQuery {
+        name: "process",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.java",
+        caller_container: None,
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(
+        bare,
+        CalleeResolution::Resolved(k_free.clone()),
+        "bare `process()` from a top-level caller must resolve to the FREE function \
+         in the same file, not get lost in Ambiguous"
+    );
+
+    // Cap sanity: if we accidentally resolved to `Worker::process` the
+    // sink caps would leak and downstream taint would flag the wrong
+    // flow.  Pin the exact resolution, not just Resolved-vs-Ambiguous.
+    if let CalleeResolution::Resolved(k) = bare {
+        assert_eq!(gs.get(&k).unwrap().sink_caps, 0x0F);
+    }
+}
+
+#[test]
+fn same_file_method_calling_sibling_free_function_resolves_to_free() {
+    // Variant of the previous test with the caller LIVING INSIDE a
+    // class whose own container does NOT define `process`.  Bare
+    // `process()` inside `Runner::kick()` must still resolve to the
+    // file-local free function — not get lost in Ambiguous because the
+    // caller_container hint (`Runner`) misses both candidates.
+    let mut gs = GlobalSummaries::new();
+    let (k_free, s_free) = free_summary("src/app.java", "process", 1, 0x0F);
+    let (k_method, s_method) =
+        method_summary("src/app.java", "Worker", "process", 1, 0xF0);
+    // Runner::kick exists only so caller_container("Runner") is a real
+    // container name in the global summaries.  It is NOT a candidate.
+    let (k_kick, s_kick) = method_summary("src/app.java", "Runner", "kick", 0, 0x00);
+    gs.insert(k_free.clone(), s_free);
+    gs.insert(k_method.clone(), s_method);
+    gs.insert(k_kick, s_kick);
+
+    let resolved = gs.resolve_callee(&CalleeQuery {
+        name: "process",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.java",
+        caller_container: Some("Runner"),
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    match resolved {
+        CalleeResolution::Resolved(k) => {
+            assert_eq!(
+                k, k_free,
+                "bare `process()` inside Runner::kick must land on the free function; \
+                 picking Worker::process would be wrong-summary pickup"
+            );
+        }
+        // Ambiguous is also wrong: syntactically this CANNOT be
+        // Worker::process (no receiver, no this in the caller's
+        // container), so the resolver has enough information to pick
+        // the free function.
+        other => panic!(
+            "bare `process()` from Runner::kick should resolve to the free function; got {other:?}"
+        ),
+    }
+}
+
+#[test]
+fn same_file_method_calling_own_container_sibling_prefers_self_class() {
+    // Inverse of the previous: caller is INSIDE `Worker::other()` and
+    // calls bare `process()`.  Both a free `process` AND `Worker::process`
+    // exist in the file.  The caller's own container resolution (step 3)
+    // must prefer `Worker::process` — otherwise intra-class self calls
+    // would get misresolved to a free function with possibly different
+    // security behaviour.
+    let mut gs = GlobalSummaries::new();
+    let (k_free, s_free) = free_summary("src/app.java", "process", 1, 0x0F);
+    let (k_method, s_method) =
+        method_summary("src/app.java", "Worker", "process", 1, 0xF0);
+    gs.insert(k_free.clone(), s_free);
+    gs.insert(k_method.clone(), s_method);
+
+    let resolved = gs.resolve_callee(&CalleeQuery {
+        name: "process",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/app.java",
+        caller_container: Some("Worker"),
+        receiver_type: None,
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(
+        resolved,
+        CalleeResolution::Resolved(k_method),
+        "self-call from Worker::other() must resolve to Worker::process, not the free function"
+    );
+}
+
+#[test]
+fn same_file_nested_container_same_method_disambiguates_by_container() {
+    // Two nested definitions: `Outer::foo/1` and `Outer::Inner::foo/1`
+    // both live in the same file.  The fully qualified container names
+    // must be distinct keys and the resolver must pick each one exactly
+    // when the container hint is given.  A bug that stripped nested
+    // container suffixes or used only the outermost name would collapse
+    // them and mis-resolve.
+    let mut gs = GlobalSummaries::new();
+    let (k_outer, s_outer) = method_summary("src/nested.java", "Outer", "foo", 1, 0x01);
+    let (k_inner, s_inner) =
+        method_summary("src/nested.java", "Outer::Inner", "foo", 1, 0x02);
+    gs.insert(k_outer.clone(), s_outer);
+    gs.insert(k_inner.clone(), s_inner);
+
+    // Exact qualified hint "Outer::Inner" must land on the inner one.
+    let inner = gs.resolve_callee(&CalleeQuery {
+        name: "foo",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/nested.java",
+        caller_container: None,
+        receiver_type: Some("Outer::Inner"),
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(
+        inner,
+        CalleeResolution::Resolved(k_inner.clone()),
+        "`Outer::Inner` receiver_type must pick the NESTED foo — picking `Outer::foo` would be \
+         wrong-summary pickup driven by prefix collapse"
+    );
+
+    // Exact qualified hint "Outer" must land on the outer one, not the
+    // nested one (nested container starts with "Outer::" but is not
+    // equal to "Outer").
+    let outer = gs.resolve_callee(&CalleeQuery {
+        name: "foo",
+        caller_lang: Lang::Java,
+        caller_namespace: "src/nested.java",
+        caller_container: None,
+        receiver_type: Some("Outer"),
+        namespace_qualifier: None,
+        receiver_var: None,
+        arity: Some(1),
+    });
+    assert_eq!(
+        outer,
+        CalleeResolution::Resolved(k_outer),
+        "`Outer` receiver_type must pick only Outer::foo — not Outer::Inner::foo via prefix match"
+    );
+
+    // Exact cap pinning — guards against merge_summaries accidentally
+    // unioning caps across the two nested keys.
+    assert_eq!(gs.get(&k_inner).unwrap().sink_caps, 0x02);
+}
+
+#[test]
+fn same_file_same_name_different_security_behaviour_no_cap_leak() {
+    // Three `validate/1` entries in the same file: a sanitizer
+    // passthrough (free function), an HTML-escape sanitizer in one
+    // class, and a shell-exec sink in another class.  These must end
+    // up as three distinct keys with their caps preserved exactly —
+    // no merge of sink caps into the sanitizer entry, no cross-leak
+    // via `by_lang_name` fallback.
+    let mut gs = GlobalSummaries::new();
+    let (k_free, mut s_free) = free_summary("src/val.py", "validate", 1, 0x00);
+    s_free.sanitizer_caps = Cap::all().bits();
+    let (k_html, mut s_html) = method_summary("src/val.py", "HtmlGuard", "validate", 1, 0x00);
+    s_html.sanitizer_caps = Cap::HTML_ESCAPE.bits();
+    let (k_shell, s_shell) =
+        method_summary("src/val.py", "ShellRunner", "validate", 1, Cap::SHELL_ESCAPE.bits());
+    gs.insert(k_free.clone(), s_free);
+    gs.insert(k_html.clone(), s_html);
+    gs.insert(k_shell.clone(), s_shell);
+
+    // Each key retrieved independently must yield exactly its own caps.
+    assert_eq!(gs.get(&k_free).unwrap().sink_caps, 0x00);
+    assert_eq!(gs.get(&k_free).unwrap().sanitizer_caps, Cap::all().bits());
+    assert_eq!(gs.get(&k_html).unwrap().sink_caps, 0x00);
+    assert_eq!(
+        gs.get(&k_html).unwrap().sanitizer_caps,
+        Cap::HTML_ESCAPE.bits()
+    );
+    assert_eq!(
+        gs.get(&k_shell).unwrap().sink_caps,
+        Cap::SHELL_ESCAPE.bits()
+    );
+    assert_eq!(gs.get(&k_shell).unwrap().sanitizer_caps, 0x00);
+
+    // Each `receiver_type` hint must land on its OWN container.
+    for (hint, expected) in [
+        ("HtmlGuard", &k_html),
+        ("ShellRunner", &k_shell),
+    ] {
+        let r = gs.resolve_callee(&CalleeQuery {
+            name: "validate",
+            caller_lang: Lang::Java,
+            caller_namespace: "src/val.py",
+            caller_container: None,
+            receiver_type: Some(hint),
+            namespace_qualifier: None,
+            receiver_var: None,
+            arity: Some(1),
+        });
+        assert_eq!(
+            r,
+            CalleeResolution::Resolved(expected.clone()),
+            "receiver_type `{hint}` must pick its own container's validate"
+        );
+    }
 }

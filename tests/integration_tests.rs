@@ -380,6 +380,21 @@ fn cross_file_near_miss_field_isolation() {
     validate_expectations(&diags, &dir);
 }
 
+/// Same-file identity collision — ADVERSARIAL.
+/// `runTask` is defined as a free function (shell-exec sink) AND as a
+/// method on multiple classes in the same file with conflicting
+/// security behaviours.  A bare `runTask(tainted)` top-level call MUST
+/// resolve to the free function (its summary carries a SHELL_ESCAPE
+/// sink) — the pre-fix resolver returned Ambiguous for this call and
+/// silently dropped the finding.  Regression guard for the bare-call
+/// free-function preference (resolve_callee step 5.5).
+#[test]
+fn same_name_collisions_js() {
+    let dir = fixture_path("same_name_collisions_js");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── New sink coverage fixtures ────────────────────────────────────────────
 
 /// JS: execAsync wraps child_process.exec; user input flows through the

@@ -806,6 +806,13 @@ impl GlobalSummaries {
     /// 5. **Receiver-variable tie-break** — if the same-namespace
     ///    lookup misses but the raw call came with a receiver variable,
     ///    try `{receiver_var}::{name}` as a last qualified attempt.
+    /// 5.5. **Bare-call free-function preference** — for a truly bare
+    ///    call (no receiver type, no namespace qualifier, no receiver
+    ///    variable), if exactly one same-namespace arity-matched
+    ///    candidate has an empty container, resolve to it.  A class
+    ///    method cannot be invoked with bare-call syntax from outside
+    ///    its class, so this disambiguation is safe even when same-name
+    ///    methods exist elsewhere in the file.
     /// 6. **Leaf-name fallback** — arity-filtered same-language lookup.
     ///    Unique → resolved.  Multiple + we had any qualified hint →
     ///    Ambiguous (refuse to guess when a qualifier exists but
@@ -918,6 +925,30 @@ impl GlobalSummaries {
         if let Some(rv) = q.receiver_var {
             if let Some(key) = try_qualified(rv) {
                 return CalleeResolution::Resolved(key);
+            }
+        }
+
+        // ── Step 5.5: bare-call free-function preference ────────────
+        // A call with no receiver, no namespace qualifier, and no
+        // authoritative receiver type is syntactically a free-function
+        // invocation: a class method cannot be invoked that way from
+        // outside its own class (intra-class self-calls were already
+        // resolved by step 3).  When the same-namespace candidate set
+        // contains exactly one empty-container entry, it is the
+        // unambiguous target — returning Ambiguous here would be a
+        // silent false negative whenever a top-level helper happens to
+        // share a name with some method elsewhere in the file.
+        let syntactic_bare = q.receiver_type.is_none()
+            && q.namespace_qualifier.is_none()
+            && q.receiver_var.is_none();
+        if syntactic_bare {
+            let empty_container_same_ns: Vec<&FuncKey> = same_ns
+                .iter()
+                .copied()
+                .filter(|k| k.container.is_empty())
+                .collect();
+            if empty_container_same_ns.len() == 1 {
+                return CalleeResolution::Resolved(empty_container_same_ns[0].clone());
             }
         }
 
