@@ -338,6 +338,7 @@ mod tests {
             flow_steps: vec![],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -370,6 +371,7 @@ mod tests {
             flow_steps: vec![],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -399,6 +401,7 @@ mod tests {
             flow_steps: vec![],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
         let ssa = SsaBody {
             blocks: vec![],

@@ -811,6 +811,7 @@ fn taint_and_unguarded_sink_deduped() {
         flow_steps: vec![],
         symbolic: None,
         source_span: None,
+        primary_location: None,
     }];
 
     let findings = parse_and_run_all_with_taint(

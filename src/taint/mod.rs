@@ -24,6 +24,23 @@ pub struct FlowStepRaw {
     pub op_kind: crate::evidence::FlowStepKind,
 }
 
+/// Resolved source-location of the primary (callee-internal) sink instruction.
+///
+/// Populated on [`Finding`] when the sink was resolved via a callee summary
+/// that recorded a [`crate::summary::SinkSite`].  Phase 2 of primary
+/// sink-location attribution: data-only; downstream formatters (SARIF, JSON,
+/// diag) still report the caller's call-site until phase 3 opts in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SinkLocation {
+    /// Callee file path relative to the workspace root.  Matches the
+    /// `FuncKey::namespace` convention used in [`crate::summary::SinkSite`].
+    pub file_rel: String,
+    /// 1-based line of the sink instruction inside the callee body.
+    pub line: u32,
+    /// 1-based column of the sink instruction inside the callee body.
+    pub col: u32,
+}
+
 /// A detected taint finding with both source and sink locations.
 #[derive(Debug, Clone)]
 pub struct Finding {
@@ -59,6 +76,28 @@ pub struct Finding {
     /// Original source byte span, preserved when origin was remapped across
     /// body boundaries.  `None` for intra-body findings (use `cfg[source].ast.span`).
     pub source_span: Option<usize>,
+    /// Source-location of the callee-internal dangerous instruction when the
+    /// sink was resolved via a function summary carrying a
+    /// [`crate::summary::SinkSite`] with concrete coordinates (phase 2 of
+    /// primary sink-location attribution).  `None` for:
+    /// * intra-procedural / label-based sinks — the caller's `cfg[sink]`
+    ///   span already names the dangerous instruction;
+    /// * summary-resolved sinks whose `SinkSite` was cap-only (no tree or
+    ///   bytes context at extraction time).
+    ///
+    /// # Invariant
+    ///
+    /// `primary_location.is_some()` ⇒ the inner [`SinkLocation`] has
+    /// `line != 0` AND a non-empty `file_rel`.  Enforced at
+    /// `ssa_events_to_findings` by a `debug_assert!` — upstream filters
+    /// drop cap-only sites before they reach this field.
+    ///
+    /// Deliberately independent of `uses_summary`: that flag tracks whether
+    /// the **taint chain** used a callee summary, not whether the **sink**
+    /// was summary-resolved.  A local source can reach a cross-file sink,
+    /// yielding `uses_summary == false` alongside a populated
+    /// `primary_location`.
+    pub primary_location: Option<SinkLocation>,
 }
 
 /// Pre-compute module aliases from an unoptimized SSA body for JS/TS.

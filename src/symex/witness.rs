@@ -574,6 +574,7 @@ mod tests {
             flow_steps: vec![],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
         assert_eq!(sink_cap(&finding, &cfg), Cap::SQL_QUERY);
     }
@@ -603,6 +604,7 @@ mod tests {
             flow_steps: vec![],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
         let cap = sink_cap(&finding, &cfg);
         assert!(cap.contains(Cap::SQL_QUERY));
@@ -789,6 +791,7 @@ mod tests {
             ],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -825,6 +828,7 @@ mod tests {
             flow_steps: vec![],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         assert!(extract_witness(&state, &finding, &ssa, &cfg).is_none());
@@ -882,6 +886,7 @@ mod tests {
             }],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -936,6 +941,7 @@ mod tests {
             }],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);

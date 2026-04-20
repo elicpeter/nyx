@@ -1102,6 +1102,7 @@ mod tests {
             ],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         }
     }
 
@@ -1478,6 +1479,7 @@ mod tests {
             ],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let ctx = super::SymexContext {
@@ -1615,6 +1617,7 @@ mod tests {
             ],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let ctx = super::SymexContext {
@@ -1882,6 +1885,7 @@ mod tests {
             ],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let cfg_graph = crate::cfg::Cfg::new();

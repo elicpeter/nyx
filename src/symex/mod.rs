@@ -410,6 +410,7 @@ mod tests {
             ],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let blocks = extract_path_blocks(&finding, &ssa);
@@ -475,6 +476,7 @@ mod tests {
             ],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let ctx = SymexContext {
@@ -528,6 +530,7 @@ mod tests {
             ],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let ssa = SsaBody {
@@ -580,6 +583,7 @@ mod tests {
             }],
             symbolic: None,
             source_span: None,
+            primary_location: None,
         };
 
         let ssa = SsaBody {

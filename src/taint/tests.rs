@@ -619,6 +619,149 @@ fn cross_file_sink_resolved_via_global_summaries() {
     assert_eq!(findings.len(), 1, "cross-file sink should be detected");
 }
 
+#[test]
+fn cross_file_sink_finding_carries_primary_location() {
+    // Phase 2 of primary sink-location attribution: when a callee summary
+    // carries a [`SinkSite`] with resolved coordinates, the emitted Finding
+    // must expose those coordinates via `primary_location`.  This guards
+    // the event→finding plumbing independent of any CFG/label changes.
+    use crate::summary::{FuncSummary, SinkSite};
+    use smallvec::smallvec;
+
+    let src = br#"
+        use std::env;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            dangerous_exec(x);
+        }"#;
+
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
+
+    let mut global = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "file_a.rs".into(),
+        name: "dangerous_exec".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+    // Summary: param 0 (`cmd`) flows to a shell-exec sink at file_a.rs:42:5.
+    let sink_site = SinkSite {
+        file_rel: "file_a.rs".into(),
+        line: 42,
+        col: 5,
+        snippet: "Command::new(\"sh\").arg(cmd).status().unwrap();".into(),
+        cap: Cap::SHELL_ESCAPE,
+    };
+    global.insert(
+        key,
+        FuncSummary {
+            name: "dangerous_exec".into(),
+            file_path: "file_a.rs".into(),
+            lang: "rust".into(),
+            param_count: 1,
+            param_names: vec!["cmd".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: Cap::SHELL_ESCAPE.bits(),
+            propagating_params: vec![],
+            propagates_taint: false,
+            tainted_sink_params: vec![0],
+            param_to_sink: vec![(0, smallvec![sink_site.clone()])],
+            callees: vec!["Command::new".into()],
+            ..Default::default()
+        },
+    );
+
+    let findings = analyse_file(
+        &file_cfg,
+        local_summaries,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(
+        findings.len(),
+        1,
+        "cross-file sink should still be detected",
+    );
+    let finding = &findings[0];
+    // Note: `uses_summary == false` here because the source (env::var) is
+    // local — only the *sink* was summary-resolved.  That's the case the
+    // `primary_location` / `uses_summary` independence comment on
+    // [`super::Finding::primary_location`] documents.
+    let loc = finding
+        .primary_location
+        .as_ref()
+        .expect("summary-resolved sink with SinkSite must carry primary_location");
+    assert_eq!(loc.file_rel, "file_a.rs");
+    assert_eq!(loc.line, 42);
+    assert_eq!(loc.col, 5);
+}
+
+#[test]
+fn cross_file_sink_cap_only_site_leaves_primary_location_none() {
+    // Cap-only SinkSites (line == 0) must not surface as Finding.primary_location,
+    // otherwise the formatter would claim a (0, 0) position as authoritative.
+    use crate::summary::FuncSummary;
+
+    let src = br#"
+        use std::env;
+        fn main() {
+            let x = env::var("INPUT").unwrap();
+            dangerous_exec(x);
+        }"#;
+
+    let file_cfg = parse_rust(src);
+    let local_summaries = &file_cfg.summaries;
+
+    let mut global = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "file_a.rs".into(),
+        name: "dangerous_exec".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+    global.insert(
+        key,
+        FuncSummary {
+            name: "dangerous_exec".into(),
+            file_path: "file_a.rs".into(),
+            lang: "rust".into(),
+            param_count: 1,
+            param_names: vec!["cmd".into()],
+            source_caps: 0,
+            sanitizer_caps: 0,
+            sink_caps: Cap::SHELL_ESCAPE.bits(),
+            propagating_params: vec![],
+            propagates_taint: false,
+            tainted_sink_params: vec![0],
+            // No param_to_sink: falls back to cap-only summary (no SinkSite).
+            callees: vec!["Command::new".into()],
+            ..Default::default()
+        },
+    );
+
+    let findings = analyse_file(
+        &file_cfg,
+        local_summaries,
+        Some(&global),
+        Lang::Rust,
+        "test.rs",
+        &[],
+        None,
+    );
+    assert_eq!(findings.len(), 1, "cross-file sink should be detected");
+    assert!(
+        findings[0].primary_location.is_none(),
+        "cap-only summary must not produce a primary_location",
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Multi-file integration tests (real parsing, full pass-1 → pass-2 pipeline)
 // ─────────────────────────────────────────────────────────────────────────────

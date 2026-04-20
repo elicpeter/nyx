@@ -19,7 +19,7 @@ use crate::ssa::heap::{HeapSlot, HeapState, PointsToResult, PointsToSet};
 use crate::ssa::ir::*;
 use crate::state::lattice::Lattice;
 use crate::state::symbol::{SymbolId, SymbolInterner};
-use crate::summary::{CalleeQuery, CalleeResolution, GlobalSummaries};
+use crate::summary::{CalleeQuery, CalleeResolution, GlobalSummaries, SinkSite};
 use crate::symbol::{FuncKey, Lang};
 use crate::taint::domain::{
     PredicateSummary, SmallBitSet, TaintOrigin, VarTaint, predicate_kind_bit,
@@ -379,6 +379,23 @@ pub struct SsaTaintEvent {
     /// Whether any callee in this event's taint path was resolved via a
     /// function summary (SSA, local, or global) rather than direct label.
     pub uses_summary: bool,
+    /// Primary (callee-internal) sink location for cross-file attribution.
+    ///
+    /// Populated when this event was emitted via summary resolution and the
+    /// callee summary carried a [`SinkSite`] whose `cap` intersects
+    /// `sink_caps`.  When multiple [`SinkSite`]s for the same `(param_idx,
+    /// cap mask)` match, the emission site produces one event per
+    /// [`SinkSite`] so each downstream [`crate::taint::Finding`] carries a
+    /// single primary attribution — the multi-primary case collapses to
+    /// multiple single-primary events.
+    ///
+    /// `None` for:
+    /// * intra-procedural sinks (`uses_summary == false`), where the
+    ///   caller's sink span already names the dangerous instruction;
+    /// * summary-resolved sinks whose callee summary carried only cap-only
+    ///   [`SinkSite`]s (no source coordinates — e.g. pass-2 transient
+    ///   summaries or local `LocalFuncSummary`-only callees).
+    pub primary_sink_site: Option<SinkSite>,
 }
 
 // ── Context-Sensitive Inline Analysis ──────────────────────────────────
@@ -3078,18 +3095,33 @@ fn collect_block_events(
                                         source_kind,
                                         source_span: None,
                                     };
-                                    events.push(SsaTaintEvent {
-                                        sink_node: inst.cfg_node,
-                                        tainted_values: vec![(
-                                            inst.value,
-                                            src_caps & matching_sink_caps,
-                                            SmallVec::from_elem(origin, 1),
-                                        )],
-                                        sink_caps: matching_sink_caps,
-                                        all_validated: false,
-                                        guard_kind: None,
-                                        uses_summary: true,
-                                    });
+                                    // Phase 2: pick callback-path sink sites.
+                                    // The callback callee's `param_to_sink_sites`
+                                    // drives attribution when available; cap-only
+                                    // fallback yields `primary_sink_site = None`.
+                                    let cb_tainted: Vec<(
+                                        SsaValue,
+                                        Cap,
+                                        SmallVec<[TaintOrigin; 2]>,
+                                    )> = vec![(
+                                        inst.value,
+                                        src_caps & matching_sink_caps,
+                                        SmallVec::from_elem(origin, 1),
+                                    )];
+                                    let cb_sites = pick_primary_sink_sites_from_resolved(
+                                        matching_sink_caps,
+                                        &cb_resolved.param_to_sink_sites,
+                                    );
+                                    emit_ssa_taint_events(
+                                        events,
+                                        inst.cfg_node,
+                                        cb_tainted,
+                                        matching_sink_caps,
+                                        false,
+                                        None,
+                                        true,
+                                        cb_sites,
+                                    );
                                 }
                             }
                         }
@@ -3283,15 +3315,194 @@ fn collect_block_events(
             let any_uses_summary = tainted
                 .iter()
                 .any(|(val, _, _)| state.get(*val).is_some_and(|t| t.uses_summary));
-            events.push(SsaTaintEvent {
-                sink_node: inst.cfg_node,
-                tainted_values: tainted,
+
+            // Phase 2: pick primary sink sites (if any) from the resolved
+            // callee summary.  Multi-site cases emit one event per matching
+            // [`SinkSite`] so each downstream Finding carries one attribution.
+            let primary_sites = pick_primary_sink_sites(
+                inst,
+                &tainted,
+                sink_caps,
+                &sink_info.param_to_sink_sites,
+            );
+            emit_ssa_taint_events(
+                events,
+                inst.cfg_node,
+                tainted,
                 sink_caps,
                 all_validated,
                 guard_kind,
-                uses_summary: any_uses_summary,
-            });
+                any_uses_summary,
+                primary_sites,
+            );
         }
+    }
+}
+
+// ── Primary sink-site attribution (Phase 2) ─────────────────────────────
+
+/// Pick primary [`SinkSite`]s for a summary-based sink event in the main
+/// sink-detection path.
+///
+/// Filters `param_to_sink_sites` to entries whose:
+/// 1. `param_idx` appears in the call's positional `args` and contains one
+///    of the `tainted` SSA values (proves this site's parameter actually
+///    carried the tainted flow), AND
+/// 2. [`SinkSite`] carries resolved coordinates (`line != 0` — cap-only
+///    sites are ignored), AND
+/// 3. [`SinkSite::cap`] intersects `sink_caps` (the propagated cap mask).
+///
+/// Returns the deduped list of matching sites (`dedup_key` identity).
+/// Empty ⇒ no primary attribution — caller emits a single event with
+/// `primary_sink_site = None`.
+fn pick_primary_sink_sites(
+    inst: &SsaInst,
+    tainted: &[(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)],
+    sink_caps: Cap,
+    param_to_sink_sites: &[(usize, SmallVec<[SinkSite; 1]>)],
+) -> Vec<SinkSite> {
+    if param_to_sink_sites.is_empty() || tainted.is_empty() {
+        return Vec::new();
+    }
+    let SsaOp::Call { ref args, .. } = inst.op else {
+        return Vec::new();
+    };
+    let mut out: Vec<SinkSite> = Vec::new();
+    let mut seen: HashSet<(String, u32, u32, u16)> = HashSet::new();
+    for (param_idx, sites) in param_to_sink_sites {
+        let Some(arg_vals) = args.get(*param_idx) else {
+            continue;
+        };
+        let carries_tainted = arg_vals
+            .iter()
+            .any(|v| tainted.iter().any(|(tv, _, _)| tv == v));
+        if !carries_tainted {
+            continue;
+        }
+        for site in sites {
+            if site.line == 0 {
+                continue;
+            }
+            if (site.cap & sink_caps).is_empty() {
+                continue;
+            }
+            let key = (
+                site.file_rel.clone(),
+                site.line,
+                site.col,
+                site.cap.bits(),
+            );
+            if seen.insert(key) {
+                out.push(site.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Pick primary [`SinkSite`]s for the callback-pattern path, where the
+/// tainted-arg positional mapping is not directly available (the callback
+/// callee is resolved separately from the outer call's `args`).  Matches
+/// solely on cap intersection and coordinate resolution.
+fn pick_primary_sink_sites_from_resolved(
+    sink_caps: Cap,
+    param_to_sink_sites: &[(usize, SmallVec<[SinkSite; 1]>)],
+) -> Vec<SinkSite> {
+    if param_to_sink_sites.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<SinkSite> = Vec::new();
+    let mut seen: HashSet<(String, u32, u32, u16)> = HashSet::new();
+    for (_, sites) in param_to_sink_sites {
+        for site in sites {
+            if site.line == 0 {
+                continue;
+            }
+            if (site.cap & sink_caps).is_empty() {
+                continue;
+            }
+            let key = (
+                site.file_rel.clone(),
+                site.line,
+                site.col,
+                site.cap.bits(),
+            );
+            if seen.insert(key) {
+                out.push(site.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Emit one or more [`SsaTaintEvent`]s for a sink hit.
+///
+/// Multi-primary collapse: when `primary_sites` contains more than one
+/// entry, one event is emitted per site so downstream findings each carry
+/// a single attribution.  When `primary_sites` is empty, a single event
+/// is emitted with `primary_sink_site = None` (intra-procedural sinks,
+/// cap-only callee summaries, or label-based sinks).
+///
+/// # Invariants enforced by debug_assert!
+///
+/// Every [`SinkSite`] in `primary_sites` must have been filtered at the
+/// pick-site to satisfy:
+/// * `site.line != 0` — cap-only sites carry no primary attribution and
+///   must not reach the event stream.
+/// * `(site.cap & sink_caps).is_empty() == false` — the site's cap
+///   intersects the propagated cap mask (it's the dangerous-bit
+///   justification for the finding).
+///
+/// Note: `uses_summary` intentionally does not gate `primary_sites` here.
+/// The taint-chain `uses_summary` flag tracks whether a callee summary
+/// propagated taint along the source→sink chain, whereas a primary
+/// [`SinkSite`] only requires that the *sink* itself was resolved via a
+/// callee summary — an intra-file source can still reach a cross-file
+/// sink, producing `uses_summary == false` alongside a populated primary.
+fn emit_ssa_taint_events(
+    events: &mut Vec<SsaTaintEvent>,
+    sink_node: NodeIndex,
+    tainted_values: Vec<(SsaValue, Cap, SmallVec<[TaintOrigin; 2]>)>,
+    sink_caps: Cap,
+    all_validated: bool,
+    guard_kind: Option<PredicateKind>,
+    uses_summary: bool,
+    primary_sites: Vec<SinkSite>,
+) {
+    // Data-integrity invariant: every surviving primary site carries
+    // resolved coordinates and a cap that intersects `sink_caps`.  This is
+    // the contract the pick functions enforce; the assertion defends
+    // against a future caller that builds `primary_sites` by hand.
+    debug_assert!(
+        primary_sites
+            .iter()
+            .all(|s| s.line != 0 && !(s.cap & sink_caps).is_empty()),
+        "primary_sites must all carry resolved coordinates and cap ∩ sink_caps ≠ ∅",
+    );
+
+    if primary_sites.is_empty() {
+        events.push(SsaTaintEvent {
+            sink_node,
+            tainted_values,
+            sink_caps,
+            all_validated,
+            guard_kind,
+            uses_summary,
+            primary_sink_site: None,
+        });
+        return;
+    }
+
+    for site in primary_sites {
+        events.push(SsaTaintEvent {
+            sink_node,
+            tainted_values: tainted_values.clone(),
+            sink_caps,
+            all_validated,
+            guard_kind,
+            uses_summary,
+            primary_sink_site: Some(site),
+        });
     }
 }
 
@@ -3777,6 +3988,12 @@ struct SinkInfo {
     /// Each entry is (param_index, per_param_sink_caps).
     /// Empty = check all arguments (label-based sinks, or no per-param info).
     param_to_sink: Vec<(usize, Cap)>,
+    /// Per-parameter [`SinkSite`] records carried from the callee summary,
+    /// mirroring `param_to_sink` by parameter index.  Empty for label-based
+    /// sinks and for cap-only summaries that do not retain source
+    /// coordinates.  Phase 2 uses this to attribute findings to the
+    /// dangerous callee-internal instruction.
+    param_to_sink_sites: Vec<(usize, SmallVec<[SinkSite; 1]>)>,
 }
 
 fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
@@ -3791,6 +4008,7 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
         return SinkInfo {
             caps: label_sink_caps,
             param_to_sink: vec![],
+            param_to_sink_sites: vec![],
         };
     }
 
@@ -3814,10 +4032,12 @@ fn resolve_sink_info(info: &NodeInfo, transfer: &SsaTaintTransfer) -> SinkInfo {
         .map(|r| SinkInfo {
             caps: r.sink_caps,
             param_to_sink: r.param_to_sink,
+            param_to_sink_sites: r.param_to_sink_sites,
         })
         .unwrap_or(SinkInfo {
             caps: Cap::empty(),
             param_to_sink: vec![],
+            param_to_sink_sites: vec![],
         })
 }
 
@@ -5065,6 +5285,13 @@ struct ResolvedSummary {
     /// arguments at these positions flow to internal sinks — enables positional
     /// and capability-aware filtering instead of aggregate-only detection.
     param_to_sink: Vec<(usize, Cap)>,
+    /// Per-parameter [`SinkSite`] records mirroring `param_to_sink` by index.
+    /// Populated when the underlying summary carried source-coordinate
+    /// context (SSA and global `FuncSummary` paths).  Empty for label,
+    /// local-summary, and interop paths where no [`SinkSite`] was
+    /// retained; in that case `param_to_sink` alone still drives sink
+    /// detection.
+    param_to_sink_sites: Vec<(usize, SmallVec<[SinkSite; 1]>)>,
     propagates_taint: bool,
     propagating_params: Vec<usize>,
     /// Parameter indices whose container identity flows to return value.
@@ -5212,6 +5439,7 @@ fn resolve_callee_full(
                         .iter()
                         .map(|&i| (i, ls.sink_caps))
                         .collect(),
+                    param_to_sink_sites: vec![],
                     propagates_taint: !ls.propagating_params.is_empty(),
                     propagating_params: ls.propagating_params.clone(),
                     param_container_to_return: vec![],
@@ -5247,6 +5475,7 @@ fn resolve_callee_full(
                     sanitizer_caps,
                     sink_caps,
                     param_to_sink: vec![],
+                    param_to_sink_sites: vec![],
                     propagates_taint: false,
                     propagating_params: vec![],
                     param_container_to_return: vec![],
@@ -5321,6 +5550,7 @@ fn resolve_callee_full(
                     .iter()
                     .map(|&i| (i, ls.sink_caps))
                     .collect(),
+                param_to_sink_sites: vec![],
                 propagates_taint: !ls.propagating_params.is_empty(),
                 propagating_params: ls.propagating_params.clone(),
                 param_container_to_return: vec![],
@@ -5363,6 +5593,10 @@ fn resolve_callee_full(
                             .iter()
                             .map(|&i| (i, fs.sink_caps()))
                             .collect(),
+                        // Phase 1/2: carry [`SinkSite`]s from the global
+                        // FuncSummary so cross-file findings can attribute
+                        // to the callee-internal dangerous instruction.
+                        param_to_sink_sites: fs.param_to_sink.clone(),
                         propagates_taint: fs.propagates_any(),
                         propagating_params: fs.propagating_params.clone(),
                         param_container_to_return: vec![],
@@ -5400,6 +5634,7 @@ fn resolve_callee_full(
                     .iter()
                     .map(|&i| (i, fs.sink_caps()))
                     .collect(),
+                param_to_sink_sites: fs.param_to_sink.clone(),
                 propagates_taint: fs.propagates_any(),
                 propagating_params: fs.propagating_params.clone(),
                 param_container_to_return: vec![],
@@ -5441,12 +5676,19 @@ fn convert_ssa_to_resolved(
     // Compute effective sink caps: union across all params
     let sink_caps = ssa_sum.total_param_sink_caps();
     let param_to_sink = ssa_sum.param_to_sink_caps();
+    // Carry the full SinkSite lists through so the taint engine can
+    // attribute cross-file findings to the callee-internal sink.  Sites
+    // with coordinates of `(0, 0)` (cap-only, no tree/bytes context at
+    // extraction time) remain in the list but contribute no primary
+    // location — the emission site filters by `SinkSite::line != 0`.
+    let param_to_sink_sites = ssa_sum.param_to_sink.clone();
 
     ResolvedSummary {
         source_caps: ssa_sum.source_caps,
         sanitizer_caps,
         sink_caps,
         param_to_sink,
+        param_to_sink_sites,
         propagates_taint: !propagating_params.is_empty(),
         propagating_params,
         param_container_to_return: ssa_sum.param_container_to_return.clone(),
@@ -5655,6 +5897,21 @@ fn pick_tainted_operand_call(
 }
 
 /// Convert SSA taint events to the standard Finding struct.
+///
+/// # Invariants enforced by debug_assert!
+///
+/// The `primary_location` field carries Phase 2's primary sink-location
+/// attribution.  One invariant must hold across every emitted Finding:
+///
+/// * A populated `primary_location` implies the attribution came from a
+///   [`SinkSite`] with resolved coordinates (`line != 0` AND `file_rel`
+///   non-empty).  Cap-only sites are filtered to `None` here; they never
+///   reach downstream formatters claiming a `(0, 0)` origin.
+///
+/// Note: this invariant is intentionally independent of `uses_summary`.
+/// The taint-chain flag tracks summary-propagated *taint*, not summary-
+/// resolved *sinks* — a local source can reach a cross-file sink, so
+/// `primary_location.is_some()` does not imply `uses_summary == true`.
 pub fn ssa_events_to_findings(
     events: &[SsaTaintEvent],
     ssa: &SsaBody,
@@ -5663,7 +5920,7 @@ pub fn ssa_events_to_findings(
     use std::collections::HashSet;
 
     let mut findings = Vec::new();
-    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    let mut seen: HashSet<(usize, usize, Option<(String, u32, u32)>)> = HashSet::new();
 
     for event in events {
         // Suppress findings where all tainted variables were validated
@@ -5671,10 +5928,44 @@ pub fn ssa_events_to_findings(
         if event.all_validated {
             continue;
         }
+
+        let primary_location = event.primary_sink_site.as_ref().and_then(|s| {
+            // Only promote to a Finding.primary_location when the site has
+            // resolved coordinates (cap-only sites at (0, 0) carry no
+            // attribution and would just add noise).
+            if s.line == 0 {
+                None
+            } else {
+                Some(crate::taint::SinkLocation {
+                    file_rel: s.file_rel.clone(),
+                    line: s.line,
+                    col: s.col,
+                })
+            }
+        });
+
+        // Data-integrity invariant: a populated primary_location must carry
+        // resolved coordinates and name a file.  Upstream filters already
+        // enforce this; the assertion pins the contract for the field.
+        debug_assert!(
+            primary_location.as_ref().is_none_or(|l| l.line != 0 && !l.file_rel.is_empty()),
+            "primary_location must carry resolved coordinates and a non-empty file path",
+        );
+
+        // Dedup key includes primary location so multi-site events that
+        // share a single (source, sink) pair still produce distinct findings
+        // — one per resolved callee-internal site.
+        let loc_key = primary_location
+            .as_ref()
+            .map(|l| (l.file_rel.clone(), l.line, l.col));
         for (val, caps, origins) in &event.tainted_values {
             let cap_specificity = (*caps & event.sink_caps).bits().count_ones() as u8;
             for origin in origins {
-                if seen.insert((origin.node.index(), event.sink_node.index())) {
+                if seen.insert((
+                    origin.node.index(),
+                    event.sink_node.index(),
+                    loc_key.clone(),
+                )) {
                     let hop_count = block_distance(ssa, origin.node, event.sink_node);
                     let flow_steps = reconstruct_flow_path(*val, origin, event.sink_node, ssa, cfg);
                     findings.push(crate::taint::Finding {
@@ -5691,6 +5982,7 @@ pub fn ssa_events_to_findings(
                         flow_steps,
                         symbolic: None,
                         source_span: origin.source_span.map(|(start, _)| start),
+                        primary_location: primary_location.clone(),
                     });
                 }
             }
