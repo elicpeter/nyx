@@ -119,6 +119,15 @@ pub fn build_index_with_observer(
     metrics: Option<&Arc<ScanMetrics>>,
     logs: Option<&Arc<ScanLogCollector>>,
 ) -> NyxResult<()> {
+    // Pass 1 of the indexed scan reads persisted summaries produced here, so
+    // framework context must be populated at index-build time — otherwise
+    // framework-conditional label rules never contribute to the summaries
+    // and indexed scans diverge from non-indexed ones.  Matches the
+    // auto-fill in scan_filesystem_with_observer /
+    // scan_with_index_parallel_observer.
+    let owned_cfg = crate::commands::scan::ensure_framework_ctx(project_path, config);
+    let config = owned_cfg.as_ref().unwrap_or(config);
+
     tracing::debug!("Building index for: {}", project_name);
     let pool = Indexer::init(db_path)?;
     {

@@ -244,7 +244,9 @@ impl fmt::Display for CutoffReason {
 pub struct InterprocCtx<'a> {
     /// Pre-lowered intra-file function bodies, keyed by canonical `FuncKey`.
     pub callee_bodies: &'a HashMap<crate::symbol::FuncKey, CalleeSsaBody>,
-    /// Shared CFG (all intra-file functions share one Cfg graph).
+    /// The top-level caller's body CFG. Callees have their own per-body graphs
+    /// (see `CalleeSsaBody::body_graph`) — `execute_callee` must swap this for
+    /// the callee's own graph before indexing by `SsaInst::cfg_node`.
     pub cfg: &'a Cfg,
     /// Source language.
     pub lang: Lang,
@@ -821,10 +823,15 @@ pub fn execute_callee(
             } else {
                 None
             };
+            // `inst.cfg_node` indices are body-local — refer to `body.body_graph`,
+            // not `ctx.cfg` (the caller's graph). Fall back to `ctx.cfg` only for
+            // cross-file bodies, where `node_meta` is populated and the graph is
+            // never indexed directly.
+            let body_cfg = body.body_graph.as_ref().unwrap_or(ctx.cfg);
             transfer::transfer_block_with_predecessor(
                 &mut path.sym_state,
                 block,
-                ctx.cfg,
+                body_cfg,
                 &body.ssa,
                 path.predecessor,
                 summary_ctx,
@@ -853,7 +860,7 @@ pub fn execute_callee(
             // Detect callee-internal sinks
             detect_internal_sinks(
                 block,
-                ctx.cfg,
+                body_cfg,
                 &path.sym_state,
                 &frame_chain,
                 &mut internal_findings,

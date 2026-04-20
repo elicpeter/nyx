@@ -523,7 +523,14 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                         // Fallback for constructors whose grammar lacks field names
                         // (e.g. PHP `object_creation_expression` has positional children).
                         .or_else(|| find_constructor_type_child(c))
-                        .and_then(|f| text_of(f, code)),
+                        .and_then(|f| {
+                            let unwrapped = unwrap_parens(f);
+                            if lookup(lang, unwrapped.kind()) == Kind::Function {
+                                Some(format!("<anon@{}>", unwrapped.start_byte()))
+                            } else {
+                                text_of(f, code)
+                            }
+                        }),
                     Kind::CallMethod => {
                         let func = c
                             .child_by_field_name("method")
@@ -785,6 +792,149 @@ fn collect_nested_functions_rec<'a>(
     for c in n.children(&mut cursor) {
         collect_nested_functions_rec(c, lang, out, inside_function);
     }
+}
+
+/// Derive a binding name for an anonymous function literal from its syntactic
+/// context. Returns `None` when no unambiguous binding exists (e.g. function
+/// passed directly as a call argument, nested in a destructuring pattern, or
+/// stored into a subscript expression).
+///
+/// Supported shapes (across JS/TS, Python, Ruby, Go, PHP, Rust):
+///  * `var|let|const h = <fn>`         → `"h"`
+///  * `h := <fn>`                      → `"h"` (Go short-var)
+///  * `h = <fn>`                       → `"h"` (reassignment)
+///  * `obj.prop = <fn>` / `obj::prop`  → `"prop"` (bind via rightmost member)
+///
+/// Parenthesised wrappers (`var h = (function(){})`) are transparently
+/// skipped. The disambig start-byte on the generated FuncKey prevents
+/// shadowed same-name bindings from colliding.
+fn derive_anon_fn_name_from_context<'a>(
+    func_node: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+) -> Option<String> {
+    // Walk up past parenthesized wrappers so `var h = (fn)` works.
+    let mut cur = func_node.parent()?;
+    while cur.kind() == "parenthesized_expression" {
+        cur = cur.parent()?;
+    }
+    let parent = cur;
+
+    let lhs_ident_text = |lhs: Node<'a>| -> Option<String> {
+        let lhs = unwrap_parens(lhs);
+        match lhs.kind() {
+            "identifier" | "variable_name" | "simple_identifier" => text_of(lhs, code),
+            // `obj.prop = <fn>` → "prop" (JS/TS/Python/PHP/Ruby/Go)
+            "member_expression"
+            | "attribute"
+            | "field_expression"
+            | "selector_expression"
+            | "scoped_identifier" => lhs
+                .child_by_field_name("property")
+                .or_else(|| lhs.child_by_field_name("field"))
+                .or_else(|| lhs.child_by_field_name("name"))
+                .and_then(|n| text_of(n, code)),
+            _ => None,
+        }
+    };
+
+    match parent.kind() {
+        // JS/TS: `var h = fn`, Java/Rust: `let h = fn`, C++: `auto h = fn`,
+        // PHP: `$h = fn` also lands here when the parent is `variable_declarator`.
+        "variable_declarator" | "init_declarator" | "let_declaration" => parent
+            .child_by_field_name("name")
+            .or_else(|| parent.child_by_field_name("pattern"))
+            .and_then(|n| match n.kind() {
+                "identifier" | "variable_name" | "simple_identifier" => text_of(n, code),
+                _ => None, // destructuring / tuple patterns are ambiguous
+            }),
+
+        // JS/TS: `h = fn`, `obj.prop = fn`
+        // Ruby `assignment` / C `assignment_expression`
+        "assignment_expression" | "assignment" => {
+            parent.child_by_field_name("left").and_then(lhs_ident_text)
+        }
+
+        // Go: `h := fn` (short_var_declaration). The left child is an
+        // expression_list with one identifier.
+        "short_var_declaration" => {
+            let left = parent.child_by_field_name("left")?;
+            let mut cur = left.walk();
+            left.children(&mut cur).find_map(|c| {
+                (c.kind() == "identifier")
+                    .then(|| text_of(c, code))
+                    .flatten()
+            })
+        }
+
+        // Go: `var h = fn` → var_spec with names field.
+        "var_spec" | "const_spec" => {
+            let names = parent.child_by_field_name("name")?;
+            let mut cur = names.walk();
+            names.children(&mut cur).find_map(|c| {
+                (c.kind() == "identifier")
+                    .then(|| text_of(c, code))
+                    .flatten()
+            })
+        }
+
+        // Python: `h = lambda: ...` parents as `assignment`, handled above.
+        // Python `default_parameter` assigning `def foo(x=lambda: 0)` — ambiguous, skip.
+        _ => {
+            // Some grammars wrap the RHS in an `expression`, `expression_list`,
+            // or similar node between the binding site and the function literal.
+            // Do one more hop to catch these without blowing past meaningful
+            // scopes (e.g. enclosing function body / block).
+            let grand = parent.parent()?;
+            match grand.kind() {
+                "variable_declarator" | "init_declarator" => grand
+                    .child_by_field_name("name")
+                    .and_then(|n| match n.kind() {
+                        "identifier" | "variable_name" | "simple_identifier" => text_of(n, code),
+                        _ => None,
+                    }),
+                "assignment_expression" | "assignment" => {
+                    grand.child_by_field_name("left").and_then(lhs_ident_text)
+                }
+                // Go: `run := func(){...}` → func_literal's parent is
+                // `expression_list`, grandparent is `short_var_declaration`.
+                "short_var_declaration" => {
+                    let left = grand.child_by_field_name("left")?;
+                    let mut cur = left.walk();
+                    left.children(&mut cur).find_map(|c| {
+                        (c.kind() == "identifier")
+                            .then(|| text_of(c, code))
+                            .flatten()
+                    })
+                }
+                // Go: `var run = func(){...}` wraps through var_spec via
+                // expression_list in older grammar versions.
+                "var_spec" | "const_spec" => {
+                    let names = grand.child_by_field_name("name")?;
+                    let mut cur = names.walk();
+                    names.children(&mut cur).find_map(|c| {
+                        (c.kind() == "identifier")
+                            .then(|| text_of(c, code))
+                            .flatten()
+                    })
+                }
+                _ => None,
+            }
+        }
+    }
+    .and_then(|name| {
+        // Guard against degenerate names that would collide with label rules
+        // or produce unstable summary keys. Lang-specific leaf only.
+        if name.is_empty()
+            || name.contains(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        {
+            None
+        } else {
+            // Silence unused-binding warning if lang matching never fires.
+            let _ = lang;
+            Some(name)
+        }
+    })
 }
 
 fn has_call_descendant(n: Node, lang: &str) -> bool {
@@ -1613,7 +1763,14 @@ fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> 
             .or_else(|| n.child_by_field_name("name"))
             .or_else(|| n.child_by_field_name("type"))
             .or_else(|| find_constructor_type_child(n))
-            .and_then(|f| text_of(f, code)),
+            .and_then(|f| {
+                let unwrapped = unwrap_parens(f);
+                if lookup(lang, unwrapped.kind()) == Kind::Function {
+                    Some(format!("<anon@{}>", unwrapped.start_byte()))
+                } else {
+                    text_of(f, code)
+                }
+            }),
         Kind::CallMethod => {
             let func = n
                 .child_by_field_name("method")
@@ -2173,7 +2330,20 @@ fn push_node<'a>(
             // Fallback for constructors whose grammar lacks field names
             // (e.g. PHP `object_creation_expression` has positional children).
             .or_else(|| find_constructor_type_child(ast))
-            .and_then(|n| text_of(n, code))
+            .and_then(|n| {
+                // IIFE: `(function(x){...})(arg)` — the called expression is a
+                // function literal with no identifier. Bind the call to the
+                // anonymous body's synthetic name so resolve_callee can find
+                // the extracted BodyCfg/summary. Without this, text_of() would
+                // return the function's full source slice, which matches no
+                // summary key.
+                let unwrapped = unwrap_parens(n);
+                if lookup(lang, unwrapped.kind()) == Kind::Function {
+                    Some(format!("<anon@{}>", unwrapped.start_byte()))
+                } else {
+                    text_of(n, code)
+                }
+            })
             .unwrap_or_default(),
 
         // method / UFCS call  `recv.method()`  or  `Type::func()`
@@ -4969,6 +5139,20 @@ fn build_sub<'a>(
                     .unwrap_or_else(|| format!("<anon@{}>", ast.start_byte()))
             };
 
+            // When the grammar-level name is anonymous, try to derive a binding
+            // name from the surrounding declaration or assignment. This lets
+            // `var h = function(x){...}` / `this.run = () => {...}` participate
+            // in callback resolution — callers referencing `h` or `run` can
+            // find the body via `resolve_local_func_key` and intra-file calls
+            // like `h()` can resolve to the anonymous body's summary. Without
+            // this, the body is keyed `<anon@byte>` with no path from the
+            // variable identifier to the body.
+            let fn_name = if fn_name.starts_with("<anon@") {
+                derive_anon_fn_name_from_context(ast, lang, code).unwrap_or(fn_name)
+            } else {
+                fn_name
+            };
+
             let is_anon = fn_name.starts_with("<anon@");
             let param_names = extract_param_names(ast, lang, code);
             let param_count = param_names.len();
@@ -7502,5 +7686,132 @@ def outer(cmd):
         let ord0 = a_sites[0].ordinal;
         let ord1 = a_sites[1].ordinal;
         assert_ne!(ord0, ord1, "ordinals must differ across sites");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    //  Anonymous function body naming via syntactic context
+    //  (derive_anon_fn_name_from_context coverage)
+    // ─────────────────────────────────────────────────────────────────────
+
+    fn js_body_names(src: &[u8]) -> Vec<String> {
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        file_cfg
+            .bodies
+            .iter()
+            .filter_map(|b| b.meta.func_key.as_ref().map(|k| k.name.clone()))
+            .collect()
+    }
+
+    fn js_body_kinds(src: &[u8]) -> Vec<BodyKind> {
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        file_cfg.bodies.iter().map(|b| b.meta.kind).collect()
+    }
+
+    #[test]
+    fn anon_fn_named_from_var_declarator_js() {
+        let src = b"var handler = function(x) { child_process.exec(x); };";
+        let names = js_body_names(src);
+        assert!(
+            names.iter().any(|n| n == "handler"),
+            "expected body named `handler` from var declarator, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn anon_arrow_named_from_const_declarator_js() {
+        let src = b"const run = (x) => { eval(x); };";
+        let names = js_body_names(src);
+        assert!(
+            names.iter().any(|n| n == "run"),
+            "expected body named `run` from const arrow declarator, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn anon_fn_named_from_member_assignment_js() {
+        let src = b"this.run = function(x) { eval(x); };";
+        let names = js_body_names(src);
+        assert!(
+            names.iter().any(|n| n == "run"),
+            "expected body named `run` from member assignment, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn anon_fn_passed_as_arg_stays_anonymous_js() {
+        // Function literal passed directly as argument has no stable
+        // syntactic binding → must remain <anon@byte>.
+        let src = b"apply(function(x) { eval(x); });";
+        let names = js_body_names(src);
+        let kinds = js_body_kinds(src);
+        assert!(
+            kinds.contains(&BodyKind::AnonymousFunction),
+            "expected at least one AnonymousFunction body, got: {:?}",
+            kinds
+        );
+        assert!(
+            names.iter().any(|n| n.starts_with("<anon@")),
+            "expected <anon@BYTE> name on FuncKey for call-argument fn literal, got: {:?}",
+            names
+        );
+        assert!(
+            !names.iter().any(|n| n == "apply"),
+            "must not leak callee name onto its argument function, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn named_fn_declaration_unchanged_js() {
+        let src = b"function real_name(x) { eval(x); }";
+        let names = js_body_names(src);
+        assert!(
+            names.iter().any(|n| n == "real_name"),
+            "named declaration must retain its name, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn anon_fn_named_from_short_var_decl_go() {
+        let src = b"package main\nfunc main() { run := func(x string) { exec(x) }; run(\"hi\") }";
+        let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "go", ts_lang);
+        let names: Vec<String> = file_cfg
+            .bodies
+            .iter()
+            .filter_map(|b| b.meta.func_key.as_ref().map(|k| k.name.clone()))
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "run"),
+            "expected func literal body keyed as `run` via Go short-var decl, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn iife_callee_resolves_to_anon_body_js() {
+        // `(function(arg){eval(arg);})(q)` — the CallFn arm must produce
+        // `<anon@BYTE>` for the callee text so that taint can match the
+        // inline body's FuncKey.
+        let src = b"(function(arg){ eval(arg); })(q);";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        let top = &file_cfg.bodies[0];
+        let callee_names: Vec<String> = top
+            .graph
+            .node_indices()
+            .filter_map(|i| top.graph[i].call.callee.clone())
+            .collect();
+        assert!(
+            callee_names.iter().any(|c| c.starts_with("<anon@")),
+            "IIFE call site should record `<anon@BYTE>` callee, got: {:?}",
+            callee_names
+        );
     }
 }

@@ -1,0 +1,14 @@
+{
+  "description": "Python nested def captures outer var, then inner() invoked in same scope reaches os.system sink",
+  "tags": ["taint", "closure", "nested-def", "cmdi", "flask"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [9, 12],
+      "evidence_contains": [],
+      "notes": "request.args.get captured by inner() then flows to os.system(q) inside nested def"
+    }
+  ]
+}

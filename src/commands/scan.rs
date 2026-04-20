@@ -145,6 +145,30 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Detect frameworks at `root` if `cfg.framework_ctx` is `None`, returning a
+/// clone of `cfg` with the detection populated.
+///
+/// Returns `None` when the caller already populated `framework_ctx` (no work
+/// needed).  Callers store the `Option<Config>` on the stack and rebind `cfg`
+/// through `as_ref().unwrap_or(cfg)`, matching the pattern in
+/// `scan_filesystem_with_observer`.
+///
+/// Framework detection drives framework-conditional label rules (e.g. actix /
+/// axum / rocket handler-arg sources, Rails route helpers) and auth-analysis
+/// extractors.  If any scan entry point forgets to populate it, the indexed
+/// and non-indexed paths silently diverge — missing framework-specific
+/// findings in whichever path skipped detection.  This helper exists so the
+/// auto-fill stays consistent across `scan_filesystem_with_observer`,
+/// `scan_with_index_parallel_observer`, and `build_index_with_observer`.
+pub(crate) fn ensure_framework_ctx(root: &Path, cfg: &Config) -> Option<Config> {
+    if cfg.framework_ctx.is_some() {
+        return None;
+    }
+    let mut c = cfg.clone();
+    c.framework_ctx = Some(crate::utils::detect_frameworks(root));
+    Some(c)
+}
+
 /// Entry point called by the CLI.
 #[allow(clippy::too_many_arguments)]
 pub fn handle(
@@ -577,17 +601,8 @@ pub(crate) fn scan_filesystem_with_observer(
 ) -> NyxResult<Vec<Diag>> {
     // Ensure framework context is available (handle sets it, but direct
     // callers like scan_no_index may not).
-    let owned_cfg;
-    let cfg = if cfg.framework_ctx.is_some() {
-        cfg
-    } else {
-        owned_cfg = {
-            let mut c = cfg.clone();
-            c.framework_ctx = Some(crate::utils::detect_frameworks(root));
-            c
-        };
-        &owned_cfg
-    };
+    let owned_cfg = ensure_framework_ctx(root, cfg);
+    let cfg = owned_cfg.as_ref().unwrap_or(cfg);
 
     if let Some(p) = progress {
         p.set_stage(ScanStage::Discovering);
@@ -980,6 +995,13 @@ pub fn scan_with_index_parallel_observer(
     metrics: Option<&Arc<ScanMetrics>>,
     logs: Option<&Arc<ScanLogCollector>>,
 ) -> NyxResult<Vec<Diag>> {
+    // Match scan_filesystem_with_observer: auto-fill framework detection when
+    // the caller didn't supply one.  Without this, directly-invoked indexed
+    // scans drop framework-specific findings and break indexed/non-indexed
+    // parity.
+    let owned_cfg = ensure_framework_ctx(scan_root, cfg);
+    let cfg = owned_cfg.as_ref().unwrap_or(cfg);
+
     if let Some(p) = progress {
         p.set_stage(ScanStage::Discovering);
     }
@@ -1582,10 +1604,14 @@ pub fn scan_with_index_parallel_observer(
 
     let mut diags = topo_diags;
 
-    // Apply mode filter for taint-only mode.
-    if cfg.scanner.mode == crate::utils::config::AnalysisMode::Taint {
-        diags.retain(|d| d.id.starts_with("taint") || d.id.starts_with("cfg-"));
-    }
+    // NOTE: Taint-mode output is *not* filtered here.  `run_rules_on_bytes`
+    // already gates AST queries and auth analyses behind `mode == Full`, so
+    // Taint-mode raw output is exactly the set of diagnostics the analysis
+    // pipeline intends to produce (taint + cfg-* + state-* from state
+    // analysis + auth.* when configured).  A previous revision clipped this
+    // to `taint*`/`cfg-*` only, silently dropping state-model findings and
+    // breaking parity with `scan_filesystem` — fixed.  Mode-scoped
+    // filtering, if ever needed, belongs in the analysis layer, not here.
 
     let post_process_start = std::time::Instant::now();
     post_process_diags(&mut diags, cfg);
