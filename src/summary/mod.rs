@@ -4,7 +4,7 @@ use crate::labels::Cap;
 use crate::summary::ssa_summary::SsaFuncSummary;
 use crate::symbol::{FuncKey, FuncKind, Lang, normalize_namespace};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 // ── Callee site metadata ────────────────────────────────────────────────
 
@@ -196,6 +196,34 @@ pub struct FuncSummary {
     /// deserialising legacy JSON.
     #[serde(default)]
     pub kind: FuncKind,
+
+    // ── Rust-specific module-resolution metadata ────────────────────────
+    /// Crate-relative module path for this function's defining file
+    /// (e.g. `"auth::token"` for `src/auth/token.rs`). Only populated
+    /// when `lang == "rust"`. Used by the call graph to resolve
+    /// `use`-imported callees to their fully-qualified module.
+    ///
+    /// `None` for non-Rust files and for Rust files outside a recognised
+    /// `src/` tree (tests, examples, build scripts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_path: Option<String>,
+
+    /// Per-file `use`-alias map for the defining Rust source.
+    ///
+    /// Maps the local identifier introduced by a `use` declaration to its
+    /// fully qualified path (`"validate"` → `"crate::auth::token::validate"`).
+    /// Carried on every summary for the file even though it is per-file
+    /// information; the duplication keeps the persistence schema simple
+    /// and lets resolution operate purely off the caller's summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_use_map: Option<BTreeMap<String, String>>,
+
+    /// Fully qualified prefixes of any wildcard `use ...::*` imports in
+    /// the defining Rust source. Stored separately because they expand
+    /// the candidate space at resolution time rather than naming a single
+    /// alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_wildcards: Option<Vec<String>>,
 }
 
 // ── Cap conversion helpers ──────────────────────────────────────────────
@@ -275,6 +303,14 @@ pub struct GlobalSummaries {
     /// `name` for free functions).  Used to resolve calls when the call-site
     /// can supply a receiver / container hint (e.g. `OrderService::process`).
     by_lang_qualified: HashMap<(Lang, String), Vec<FuncKey>>,
+    /// Rust-only secondary index keyed on `(module_path, name)`.
+    ///
+    /// Populated whenever a Rust [`FuncSummary`] is inserted with a
+    /// `module_path` set. Used by use-map driven resolution to look up
+    /// candidates by their crate-relative module rather than their
+    /// filesystem path. Same name / module / arity overloads land on the
+    /// same vector — arity narrowing happens at resolution time.
+    by_rust_module: HashMap<(String, String), Vec<FuncKey>>,
     /// Precise SSA-derived per-parameter summaries, keyed by `FuncKey`.
     /// These take precedence over `FuncSummary` during callee resolution.
     ssa_by_key: HashMap<FuncKey, SsaFuncSummary>,
@@ -300,6 +336,11 @@ impl GlobalSummaries {
         let lang = key.lang;
         let name = key.name.clone();
         let qualified = key.qualified_name();
+        let rust_module = if lang == Lang::Rust {
+            summary.module_path.clone()
+        } else {
+            None
+        };
 
         self.by_key
             .entry(key.clone())
@@ -339,7 +380,14 @@ impl GlobalSummaries {
 
         let q_keys = self.by_lang_qualified.entry((lang, qualified)).or_default();
         if !q_keys.contains(&key) {
-            q_keys.push(key);
+            q_keys.push(key.clone());
+        }
+
+        if let Some(mp) = rust_module {
+            let mk = self.by_rust_module.entry((mp, key.name.clone())).or_default();
+            if !mk.contains(&key) {
+                mk.push(key);
+            }
         }
     }
 
@@ -391,6 +439,27 @@ impl GlobalSummaries {
             .unwrap_or_default()
     }
 
+    /// Rust-only lookup by `(module_path, name)`.
+    ///
+    /// Returns every candidate that was inserted with a matching module
+    /// path. Arity filtering is applied by the caller so that the index
+    /// stays ambiguity-aware (two overloads legitimately share a module
+    /// path + name and only differ in arity).
+    pub fn lookup_rust_module(
+        &self,
+        module_path: &str,
+        name: &str,
+    ) -> Vec<(&FuncKey, &FuncSummary)> {
+        self.by_rust_module
+            .get(&(module_path.to_string(), name.to_string()))
+            .map(|keys| {
+                keys.iter()
+                    .filter_map(|k| self.by_key.get(k).map(|v| (k, v)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Container-qualified lookup.  `qualified` should be
     /// `"Container::name"` (use [`FuncKey::qualified_name`]) or `"name"`.
     pub fn lookup_qualified(
@@ -410,6 +479,9 @@ impl GlobalSummaries {
 
     /// Merge another `GlobalSummaries` into this one (for parallel fold/reduce).
     pub fn merge(&mut self, other: GlobalSummaries) {
+        // `insert` rebuilds every secondary index (by_lang_name, by_lang_qualified,
+        // by_rust_module) from the summary itself, so we do not need to copy
+        // `other.by_rust_module` explicitly — draining `other.by_key` is enough.
         for (key, summary) in other.by_key {
             self.insert(key, summary);
         }
@@ -499,6 +571,100 @@ impl GlobalSummaries {
     /// cross-file sanitizer is resolved) are not invisible to convergence.
     pub fn snapshot_ssa(&self) -> &HashMap<FuncKey, SsaFuncSummary> {
         &self.ssa_by_key
+    }
+
+    /// Rust-only resolution that consults the caller's `use` map before
+    /// falling back to generic resolution.
+    ///
+    /// The caller passes the callee's leaf name plus the (optional)
+    /// structured qualifier that `CalleeSite.qualifier` carries for Rust
+    /// call sites (e.g. `"crate::auth::token"` for `crate::auth::token::validate()`).
+    /// The `use` map and wildcard list come from the caller's own
+    /// [`FuncSummary`].
+    ///
+    /// Resolution order:
+    ///
+    /// 1. If the caller has a `use_map` and (qualifier, name) resolves to a
+    ///    fully qualified path, strip the leading `crate::` and look up
+    ///    `(module_path, name)` in the Rust module index.  If arity filtering
+    ///    leaves exactly one candidate → resolved.
+    /// 2. Otherwise, for each wildcard prefix in scope, try
+    ///    `(wildcard_prefix, name)` in the module index.  If across all
+    ///    wildcards exactly one arity-filtered candidate appears → resolved.
+    /// 3. Otherwise fall through to [`resolve_callee_key_with_container`]
+    ///    with no `container_hint` — meaning only the existing namespace /
+    ///    arity disambiguation applies.
+    ///
+    /// A `None` use_map (non-Rust file or no `use` declarations) makes this
+    /// equivalent to the generic path.
+    pub fn resolve_callee_key_rust(
+        &self,
+        callee: &str,
+        qualifier: Option<&str>,
+        arity_hint: Option<usize>,
+        caller_namespace: &str,
+        use_map: Option<&crate::rust_resolve::RustUseMap>,
+    ) -> CalleeResolution {
+        use crate::rust_resolve::{resolve_with_use_map, split_module_and_name};
+
+        // 1) Try direct use-map resolution.
+        if let Some(um) = use_map
+            && let Some(full) = resolve_with_use_map(um, qualifier, callee)
+        {
+            let (module_path, name) = split_module_and_name(&full);
+            if !module_path.is_empty() {
+                let candidates = self.lookup_rust_module(&module_path, &name);
+                let filtered: Vec<&FuncKey> = match arity_hint {
+                    Some(a) => candidates
+                        .iter()
+                        .filter(|(k, _)| k.arity == Some(a))
+                        .map(|(k, _)| *k)
+                        .collect(),
+                    None => candidates.iter().map(|(k, _)| *k).collect(),
+                };
+                if filtered.len() == 1 {
+                    return CalleeResolution::Resolved(filtered[0].clone());
+                }
+            }
+        }
+
+        // 2) Try wildcards.  Each wildcard expands `use prefix::*;` into an
+        //    implicit `(prefix, name)` candidate set; we union across all
+        //    wildcards and only resolve when exactly one matches under the
+        //    arity filter.
+        if let Some(um) = use_map
+            && !um.wildcards.is_empty()
+        {
+            let mut collected: Vec<FuncKey> = Vec::new();
+            for w in &um.wildcards {
+                let prefix = w.strip_prefix("crate::").unwrap_or(w);
+                if prefix.is_empty() {
+                    continue;
+                }
+                for (k, _) in self.lookup_rust_module(prefix, callee) {
+                    if let Some(a) = arity_hint
+                        && k.arity != Some(a)
+                    {
+                        continue;
+                    }
+                    if !collected.contains(k) {
+                        collected.push(k.clone());
+                    }
+                }
+            }
+            if collected.len() == 1 {
+                return CalleeResolution::Resolved(collected.remove(0));
+            }
+        }
+
+        // 3) Fall back to generic same-language resolution.
+        self.resolve_callee_key_with_container(
+            callee,
+            Lang::Rust,
+            caller_namespace,
+            None,
+            arity_hint,
+        )
     }
 
     /// Resolve a bare (already-normalized) callee name to a [`FuncKey`].

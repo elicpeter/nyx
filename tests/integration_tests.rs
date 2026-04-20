@@ -29,6 +29,18 @@ fn rust_framework_rules() {
 }
 
 #[test]
+fn rust_module_path_resolution() {
+    // Two modules define `pub fn validate(&str) -> String` with the same arity.
+    // `main.rs` has `use crate::auth::token::validate;` and calls `validate(&cmd)`.
+    // A correct use-map driven resolver must target `auth::token::validate`
+    // (pass-through sanitizer) and NOT `auth::session::validate` (shell sink);
+    // the expectations forbid any taint finding on main.rs.
+    let dir = fixture_path("rust_module_path_resolution");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
 fn express_app() {
     let dir = fixture_path("express_app");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);

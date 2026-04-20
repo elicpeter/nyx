@@ -1640,3 +1640,355 @@ fn mixed_callee_form_deserializes() {
     assert_eq!(s.callees[1].arity, Some(3));
     assert_eq!(s.callees[1].receiver.as_deref(), Some("obj"));
 }
+
+// ── Rust module-path resolution (Phase: qualified Rust paths) ────────────
+
+/// Helper: build a Rust summary populated with module-path + use-map fields.
+fn rust_summary_with_mod(
+    name: &str,
+    file_path: &str,
+    param_count: usize,
+    module_path: Option<&str>,
+    use_map: &[(&str, &str)],
+    wildcards: &[&str],
+    callees: Vec<CalleeSite>,
+) -> FuncSummary {
+    let aliases: BTreeMap<String, String> = use_map
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect();
+    FuncSummary {
+        name: name.into(),
+        file_path: file_path.into(),
+        lang: "rust".into(),
+        param_count,
+        param_names: vec![],
+        source_caps: 0,
+        sanitizer_caps: 0,
+        sink_caps: 0,
+        propagating_params: vec![],
+        propagates_taint: false,
+        tainted_sink_params: vec![],
+        callees,
+        module_path: module_path.map(str::to_string),
+        rust_use_map: if aliases.is_empty() { None } else { Some(aliases) },
+        rust_wildcards: if wildcards.is_empty() {
+            None
+        } else {
+            Some(wildcards.iter().map(|s| (*s).to_string()).collect())
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn rust_use_map_disambiguates_same_name_across_modules() {
+    // Two `validate` functions in different modules.
+    let token = rust_summary_with_mod(
+        "validate",
+        "/proj/src/auth/token.rs",
+        1,
+        Some("auth::token"),
+        &[],
+        &[],
+        vec![],
+    );
+    let session = rust_summary_with_mod(
+        "validate",
+        "/proj/src/auth/session.rs",
+        1,
+        Some("auth::session"),
+        &[],
+        &[],
+        vec![],
+    );
+    // Caller imports crate::auth::token::validate and calls `validate(x)`.
+    let caller = rust_summary_with_mod(
+        "handler",
+        "/proj/src/main.rs",
+        0,
+        Some(""),
+        &[("validate", "crate::auth::token::validate")],
+        &[],
+        vec![CalleeSite {
+            name: "validate".into(),
+            arity: Some(1),
+            ..Default::default()
+        }],
+    );
+
+    let gs = merge_summaries(vec![token, session, caller], Some("/proj"));
+    // Pull the token key back out and verify exact-one resolution.
+    let caller_key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "src/main.rs".into(),
+        name: "handler".into(),
+        arity: Some(0),
+        ..Default::default()
+    };
+    let caller_sum = gs.get(&caller_key).expect("caller summary");
+    let use_map = crate::rust_resolve::RustUseMap {
+        aliases: caller_sum.rust_use_map.clone().unwrap_or_default(),
+        wildcards: caller_sum.rust_wildcards.clone().unwrap_or_default(),
+    };
+    let resolution = gs.resolve_callee_key_rust(
+        "validate",
+        None,
+        Some(1),
+        &caller_key.namespace,
+        Some(&use_map),
+    );
+    match resolution {
+        CalleeResolution::Resolved(k) => {
+            assert_eq!(k.namespace, "src/auth/token.rs");
+            assert_eq!(k.name, "validate");
+        }
+        other => panic!(
+            "expected token::validate to resolve uniquely, got {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn rust_use_map_qualified_call_via_module_alias() {
+    // `use crate::auth::token;  token::validate(x);`
+    let token = rust_summary_with_mod(
+        "validate",
+        "/proj/src/auth/token.rs",
+        1,
+        Some("auth::token"),
+        &[],
+        &[],
+        vec![],
+    );
+    let caller = rust_summary_with_mod(
+        "handler",
+        "/proj/src/main.rs",
+        0,
+        Some(""),
+        &[("token", "crate::auth::token")],
+        &[],
+        vec![CalleeSite {
+            name: "token::validate".into(),
+            arity: Some(1),
+            qualifier: Some("crate::auth::token".into()),
+            ..Default::default()
+        }],
+    );
+
+    let gs = merge_summaries(vec![token, caller], Some("/proj"));
+    let um = crate::rust_resolve::RustUseMap {
+        aliases: [("token".to_string(), "crate::auth::token".to_string())]
+            .into_iter()
+            .collect(),
+        wildcards: Vec::new(),
+    };
+    // The site's structured qualifier is the full `crate::auth::token`; the
+    // resolver's alias map matches the first segment.
+    let resolution = gs.resolve_callee_key_rust(
+        "validate",
+        Some("token"),
+        Some(1),
+        "src/main.rs",
+        Some(&um),
+    );
+    match resolution {
+        CalleeResolution::Resolved(k) => {
+            assert_eq!(k.namespace, "src/auth/token.rs");
+        }
+        other => panic!("expected unique resolution, got {:?}", other),
+    }
+}
+
+#[test]
+fn rust_wildcard_import_resolves_uniquely() {
+    let token = rust_summary_with_mod(
+        "validate",
+        "/proj/src/auth/token.rs",
+        1,
+        Some("auth::token"),
+        &[],
+        &[],
+        vec![],
+    );
+    let caller = rust_summary_with_mod(
+        "handler",
+        "/proj/src/main.rs",
+        0,
+        Some(""),
+        &[],
+        &["crate::auth::token"],
+        vec![CalleeSite {
+            name: "validate".into(),
+            arity: Some(1),
+            ..Default::default()
+        }],
+    );
+
+    let gs = merge_summaries(vec![token, caller], Some("/proj"));
+    let um = crate::rust_resolve::RustUseMap {
+        aliases: BTreeMap::new(),
+        wildcards: vec!["crate::auth::token".to_string()],
+    };
+    let resolution = gs.resolve_callee_key_rust(
+        "validate",
+        None,
+        Some(1),
+        "src/main.rs",
+        Some(&um),
+    );
+    match resolution {
+        CalleeResolution::Resolved(k) => {
+            assert_eq!(k.namespace, "src/auth/token.rs");
+        }
+        other => panic!("wildcard should resolve uniquely, got {:?}", other),
+    }
+}
+
+#[test]
+fn rust_use_map_fallback_when_absent() {
+    // No use_map entry — falls through to generic same-language resolution,
+    // which for an unqualified caller in the same namespace still works.
+    let helper = rust_summary_with_mod(
+        "helper",
+        "/proj/src/lib.rs",
+        0,
+        Some(""),
+        &[],
+        &[],
+        vec![],
+    );
+    let caller = rust_summary_with_mod(
+        "caller",
+        "/proj/src/lib.rs",
+        0,
+        Some(""),
+        &[],
+        &[],
+        vec![CalleeSite {
+            name: "helper".into(),
+            arity: Some(0),
+            ..Default::default()
+        }],
+    );
+
+    let gs = merge_summaries(vec![helper, caller], Some("/proj"));
+    let resolution = gs.resolve_callee_key_rust(
+        "helper",
+        None,
+        Some(0),
+        "src/lib.rs",
+        None,
+    );
+    assert!(matches!(resolution, CalleeResolution::Resolved(_)));
+}
+
+#[test]
+fn rust_use_map_ambiguous_stays_ambiguous_without_hint() {
+    // Two modules define `validate`; no use-map on the caller — resolution
+    // should remain Ambiguous rather than silently picking one.
+    let token = rust_summary_with_mod(
+        "validate",
+        "/proj/src/auth/token.rs",
+        1,
+        Some("auth::token"),
+        &[],
+        &[],
+        vec![],
+    );
+    let session = rust_summary_with_mod(
+        "validate",
+        "/proj/src/auth/session.rs",
+        1,
+        Some("auth::session"),
+        &[],
+        &[],
+        vec![],
+    );
+    let caller = rust_summary_with_mod(
+        "handler",
+        "/proj/src/main.rs",
+        0,
+        Some(""),
+        &[],
+        &[],
+        vec![CalleeSite {
+            name: "validate".into(),
+            arity: Some(1),
+            ..Default::default()
+        }],
+    );
+    let gs = merge_summaries(vec![token, session, caller], Some("/proj"));
+    let resolution = gs.resolve_callee_key_rust(
+        "validate",
+        None,
+        Some(1),
+        "src/main.rs",
+        None,
+    );
+    assert!(matches!(resolution, CalleeResolution::Ambiguous(_)));
+}
+
+// ── Serde round-trip / backward compatibility ────────────────────────────
+
+#[test]
+fn pre_rust_fields_json_deserializes_with_defaults() {
+    // A summary JSON written before the Rust `module_path`/`rust_use_map`/
+    // `rust_wildcards` fields existed must still deserialise cleanly with
+    // all three defaulting to `None`.
+    let legacy_json = r#"{
+        "name": "old",
+        "file_path": "src/lib.rs",
+        "lang": "rust",
+        "param_count": 1,
+        "param_names": ["x"],
+        "source_caps": 0,
+        "sanitizer_caps": 0,
+        "sink_caps": 0,
+        "propagating_params": [0],
+        "tainted_sink_params": [],
+        "callees": []
+    }"#;
+    let s: FuncSummary = serde_json::from_str(legacy_json).unwrap();
+    assert_eq!(s.name, "old");
+    assert!(s.module_path.is_none());
+    assert!(s.rust_use_map.is_none());
+    assert!(s.rust_wildcards.is_none());
+}
+
+#[test]
+fn rust_fields_roundtrip_through_json() {
+    let mut aliases = BTreeMap::new();
+    aliases.insert(
+        "validate".to_string(),
+        "crate::auth::token::validate".to_string(),
+    );
+    let s = FuncSummary {
+        name: "handler".into(),
+        file_path: "src/main.rs".into(),
+        lang: "rust".into(),
+        param_count: 0,
+        param_names: vec![],
+        source_caps: 0,
+        sanitizer_caps: 0,
+        sink_caps: 0,
+        propagating_params: vec![],
+        propagates_taint: false,
+        tainted_sink_params: vec![],
+        callees: vec![],
+        module_path: Some(String::new()),
+        rust_use_map: Some(aliases.clone()),
+        rust_wildcards: Some(vec!["crate::auth::session".to_string()]),
+        ..Default::default()
+    };
+
+    let json = serde_json::to_string(&s).unwrap();
+    let back: FuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.module_path.as_deref(), Some(""));
+    assert_eq!(back.rust_use_map.unwrap(), aliases);
+    assert_eq!(
+        back.rust_wildcards.unwrap(),
+        vec!["crate::auth::session".to_string()]
+    );
+}

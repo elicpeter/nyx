@@ -545,11 +545,46 @@ impl<'a> ParsedFile<'a> {
     }
 
     fn export_summaries(&self) -> Vec<FuncSummary> {
-        export_summaries(
+        self.export_summaries_with_root(None)
+    }
+
+    fn export_summaries_with_root(&self, scan_root: Option<&Path>) -> Vec<FuncSummary> {
+        let mut out = export_summaries(
             self.local_summaries(),
             &self.source.file_path_str,
             self.source.lang_slug,
-        )
+        );
+
+        // Rust-specific enrichment: derive the crate-relative module path for
+        // this file and parse every top-level `use` declaration into an alias
+        // map. The information lets the call graph resolve same-name functions
+        // across modules and is cheap enough to compute once per file and
+        // duplicate across the file's summaries. Non-Rust files skip all of
+        // this and keep the new fields at `None`.
+        if self.source.lang_slug == "rust" && !out.is_empty() {
+            let module_path = crate::rust_resolve::derive_module_path(self.source.path, scan_root);
+            let use_map =
+                crate::rust_resolve::parse_rust_use_map(self.source.bytes, &self.source.tree);
+
+            let aliases = if use_map.aliases.is_empty() {
+                None
+            } else {
+                Some(use_map.aliases)
+            };
+            let wildcards = if use_map.wildcards.is_empty() {
+                None
+            } else {
+                Some(use_map.wildcards)
+            };
+
+            for s in &mut out {
+                s.module_path = module_path.clone();
+                s.rust_use_map = aliases.clone();
+                s.rust_wildcards = wildcards.clone();
+            }
+        }
+
+        out
     }
 
     /// Extract SSA function summaries for all functions in this file.
@@ -826,6 +861,22 @@ pub fn extract_summaries_from_bytes(
     Ok(parsed.export_summaries())
 }
 
+/// Like [`extract_summaries_from_bytes`] but forwards `scan_root` so Rust
+/// summaries carry their crate-relative module path.
+pub fn extract_summaries_from_bytes_with_root(
+    bytes: &[u8],
+    path: &Path,
+    cfg: &Config,
+    scan_root: Option<&Path>,
+) -> NyxResult<Vec<FuncSummary>> {
+    let _span = tracing::debug_span!("extract_summaries", file = %path.display()).entered();
+    let Some(source) = ParsedSource::try_new(bytes, path)? else {
+        return Ok(vec![]);
+    };
+    let parsed = ParsedFile::from_source(source, cfg);
+    Ok(parsed.export_summaries_with_root(scan_root))
+}
+
 /// Convenience wrapper that reads the file then delegates to
 /// [`extract_summaries_from_bytes`].
 #[allow(dead_code)] // used by benchmarks and lib consumers
@@ -872,7 +923,7 @@ pub fn extract_all_summaries_from_bytes(
         return Ok((vec![], vec![], vec![]));
     };
     let parsed = ParsedFile::from_source(source, cfg);
-    let func_summaries = parsed.export_summaries();
+    let func_summaries = parsed.export_summaries_with_root(scan_root);
     let (ssa_summaries, ssa_bodies) = parsed.extract_ssa_artifacts(None, scan_root);
     Ok((func_summaries, ssa_summaries, ssa_bodies))
 }
@@ -1273,7 +1324,7 @@ pub fn analyse_file_fused(
 
     let parsed = ParsedFile::from_source(source, cfg);
     let cfg_nodes = parsed.cfg_graph().node_count();
-    let summaries = parsed.export_summaries();
+    let summaries = parsed.export_summaries_with_root(scan_root);
 
     let mut out = Vec::new();
 

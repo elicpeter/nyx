@@ -5077,7 +5077,7 @@ fn build_sub<'a>(
             for idx in fn_graph.node_indices() {
                 let info = &fn_graph[idx];
                 if let Some(callee) = &info.call.callee {
-                    let site = build_callee_site(callee, info);
+                    let site = build_callee_site(callee, info, lang);
                     // Dedup by (name, arity, receiver, qualifier, ordinal).  A
                     // single function may legitimately contain multiple distinct
                     // calls to the same callee (e.g. different ordinals or
@@ -5866,12 +5866,18 @@ pub(crate) fn build_cfg<'a>(
 ///   represented in `arg_uses`, so `arity == arg_uses.len()` for calls.
 /// * `receiver` — forwarded verbatim from `CallMeta.receiver` (already
 ///   normalized to the root identifier).
-/// * `qualifier` — derived from the raw callee when it contains `::` or
-///   `.`.  For method calls the qualifier is redundant with `receiver`
-///   and is left `None`.
+/// * `qualifier` — the segment(s) before the leaf identifier of the callee.
+///   For **Rust** specifically, this is the *full* `::`-joined prefix (e.g.
+///   `"crate::auth::token"` for `crate::auth::token::validate`) so that
+///   cross-file `use`-map resolution in `callgraph.rs` has everything it
+///   needs to walk an import chain.  For every other language the qualifier
+///   remains the single segment immediately before the leaf (back-compat
+///   with the legacy heuristic).  For method calls the qualifier is
+///   redundant with `receiver` and is left `None`.
 fn build_callee_site(
     callee: &str,
     info: &NodeInfo,
+    lang: &str,
 ) -> crate::summary::CalleeSite {
     use crate::summary::CalleeSite;
 
@@ -5887,8 +5893,14 @@ fn build_callee_site(
         None
     } else if let Some(pos) = callee.rfind("::") {
         let prefix = &callee[..pos];
-        Some(prefix.rsplit("::").next().unwrap_or(prefix).to_string())
-            .filter(|s| !s.is_empty())
+        if lang == "rust" {
+            // Rust: preserve the full module path prefix so use-map
+            // resolution can follow `use ...` chains without re-parsing.
+            Some(prefix.to_string()).filter(|s| !s.is_empty())
+        } else {
+            Some(prefix.rsplit("::").next().unwrap_or(prefix).to_string())
+                .filter(|s| !s.is_empty())
+        }
     } else if let Some(pos) = callee.rfind('.') {
         let prefix = &callee[..pos];
         Some(prefix.rsplit('.').next().unwrap_or(prefix).to_string())
@@ -5931,6 +5943,13 @@ pub(crate) fn export_summaries(
             container: local.container.clone(),
             disambig: local.disambig,
             kind: local.kind,
+            // Rust use-map metadata is attached later in
+            // `ParsedFile::export_summaries_with_root`, which has access to
+            // the file's tree and scan root. Leaving these `None` here keeps
+            // `export_summaries` a pure graph→summary transform.
+            module_path: None,
+            rust_use_map: None,
+            rust_wildcards: None,
         })
         .collect()
 }

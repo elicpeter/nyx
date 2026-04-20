@@ -1,6 +1,7 @@
 use crate::interop::InteropEdge;
+use crate::rust_resolve::RustUseMap;
 use crate::summary::{CalleeResolution, GlobalSummaries};
-use crate::symbol::FuncKey;
+use crate::symbol::{FuncKey, Lang};
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
 use std::collections::{BTreeMap, HashMap};
@@ -182,39 +183,73 @@ pub fn build_call_graph(summaries: &GlobalSummaries, interop_edges: &[InteropEdg
     for (caller_key, summary) in summaries.iter() {
         let caller_node = index[caller_key];
 
+        // Rebuild the caller's `use` map once per function rather than per
+        // call site.  Non-Rust callers always get `None`.
+        let rust_use_map: Option<RustUseMap> = if caller_key.lang == Lang::Rust {
+            match (&summary.rust_use_map, &summary.rust_wildcards) {
+                (None, None) => None,
+                (a, w) => Some(RustUseMap {
+                    aliases: a.clone().unwrap_or_default(),
+                    wildcards: w.clone().unwrap_or_default(),
+                }),
+            }
+        } else {
+            None
+        };
+
         for site in &summary.callees {
             let raw_callee = site.name.as_str();
             // Use leaf name for the initial lookup (FuncKey.name is always leaf).
             let leaf = callee_leaf_name(raw_callee);
             // Two-segment form for diagnostics / fallback disambiguation.
             let qualified = normalize_callee_name(raw_callee);
-            // Container hint: prefer the structured receiver/qualifier captured
-            // at CFG time; fall back to the legacy prefix heuristic for
-            // backward-compatible summaries persisted without the richer form.
-            let container_owned: Option<String> = site
-                .receiver
-                .clone()
-                .or_else(|| site.qualifier.clone())
-                .or_else(|| {
-                    let raw = callee_container_hint(raw_callee);
-                    if raw.is_empty() {
-                        None
-                    } else {
-                        Some(raw.to_string())
-                    }
-                });
-            let container_hint = container_owned.as_deref();
             // Structured arity carried per call site — used to disambiguate
             // same-name/different-arity overloads during resolution.
             let arity_hint: Option<usize> = site.arity;
 
-            match summaries.resolve_callee_key_with_container(
-                leaf,
-                caller_key.lang,
-                &caller_key.namespace,
-                container_hint,
-                arity_hint,
-            ) {
+            // Rust callers with a module-qualified call (no receiver) go
+            // through the `use`-map aware resolver first.  When the call has
+            // a structured receiver it is a method call — the qualifier is
+            // an impl/trait name, not a module path — so we fall back to the
+            // generic container-hint resolver.  All other languages skip
+            // the use-map branch entirely.
+            let use_rust_path =
+                caller_key.lang == Lang::Rust && site.receiver.is_none();
+            let resolution = if use_rust_path {
+                summaries.resolve_callee_key_rust(
+                    leaf,
+                    site.qualifier.as_deref(),
+                    arity_hint,
+                    &caller_key.namespace,
+                    rust_use_map.as_ref(),
+                )
+            } else {
+                // Non-Rust, or Rust method call with a receiver.  Preserve
+                // the legacy container-hint path verbatim so receiver-driven
+                // disambiguation still works for `obj.method()` style calls
+                // (including Rust method calls on impl blocks).
+                let container_owned: Option<String> = site
+                    .receiver
+                    .clone()
+                    .or_else(|| site.qualifier.clone())
+                    .or_else(|| {
+                        let raw = callee_container_hint(raw_callee);
+                        if raw.is_empty() {
+                            None
+                        } else {
+                            Some(raw.to_string())
+                        }
+                    });
+                summaries.resolve_callee_key_with_container(
+                    leaf,
+                    caller_key.lang,
+                    &caller_key.namespace,
+                    container_owned.as_deref(),
+                    arity_hint,
+                )
+            };
+
+            match resolution {
                 CalleeResolution::Resolved(target_key) => {
                     if let Some(&target_node) = index.get(&target_key) {
                         graph.add_edge(

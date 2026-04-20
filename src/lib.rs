@@ -57,6 +57,7 @@ pub mod labels;
 pub mod output;
 pub mod patterns;
 pub mod rank;
+pub mod rust_resolve;
 #[cfg(feature = "serve")]
 pub mod server;
 pub mod ssa;
