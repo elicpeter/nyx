@@ -67,6 +67,12 @@ struct Case {
     expected_sink_lines: Option<Vec<[usize; 2]>>,
     #[allow(dead_code)]
     expected_source_lines: Option<Vec<[usize; 2]>>,
+    /// Optional: line ranges where the *call site* leading to the sink
+    /// appears. When present, at least one `flow_step` in the finding's
+    /// trace must fall within ±2 of one of these ranges. When absent,
+    /// the check is skipped (forward-compatible with existing fixtures).
+    #[serde(default)]
+    expected_call_site_lines: Option<Vec<[usize; 2]>>,
     #[allow(dead_code)]
     tags: Vec<String>,
     #[serde(default)]
@@ -352,13 +358,36 @@ fn score_location_level(
         if !is_expected {
             continue;
         }
-        for sink_range in expected_sinks {
-            let lo = sink_range[0].saturating_sub(2);
-            let hi = sink_range[1] + 2;
-            if d.line >= lo && d.line <= hi {
-                return Some(Outcome::TP);
+        let primary_ok = expected_sinks.iter().any(|r| {
+            let lo = r[0].saturating_sub(2);
+            let hi = r[1] + 2;
+            d.line >= lo && d.line <= hi
+        });
+        if !primary_ok {
+            continue;
+        }
+        // Optional: require at least one flow_step to fall within the
+        // caller's call-site range. Only active when the fixture opts in.
+        if let Some(call_ranges) = case.expected_call_site_lines.as_ref()
+            && !call_ranges.is_empty()
+        {
+            let steps = d
+                .evidence
+                .as_ref()
+                .map(|e| e.flow_steps.as_slice())
+                .unwrap_or(&[]);
+            let call_ok = steps.iter().any(|s| {
+                call_ranges.iter().any(|r| {
+                    let lo = r[0].saturating_sub(2);
+                    let hi = r[1] + 2;
+                    (s.line as usize) >= lo && (s.line as usize) <= hi
+                })
+            });
+            if !call_ok {
+                continue;
             }
         }
+        return Some(Outcome::TP);
     }
 
     // Rule matched but location didn't.

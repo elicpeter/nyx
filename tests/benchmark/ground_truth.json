@@ -4458,6 +4458,32 @@
       "notes": "Cross-file wrong-cap sanitizer: HTML sanitizer does not strip SHELL_ESCAPE caps \u2192 os.system still vulnerable"
     },
     {
+      "case_id": "py-cmdi-cross-004",
+      "file": "python/cmdi/cross_indirect_sink/",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "py.cmdi.os_system"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[5, 5]],
+      "expected_source_lines": [[6, 6]],
+      "expected_call_site_lines": [[7, 7]],
+      "tags": ["cross-file", "helper-function", "sink-in-helper"],
+      "disabled": false,
+      "notes": "Cross-file sink-in-helper: app.py line 6 reads env source, line 7 calls run_cmd() (cross-file call), helper.py line 5 is the real os.system sink. Phase 3 attribution must report helper.py:5 as the primary location (not app.py:7) and include app.py:7 in flow_steps as a Call step."
+    },
+    {
       "case_id": "js-xss-cross-001",
       "file": "javascript/xss/cross_propagation/",
       "language": "javascript",
@@ -5977,6 +6003,12 @@
           10
         ]
       ],
+      "expected_call_site_lines": [
+        [
+          10,
+          10
+        ]
+      ],
       "tags": [
         "indirect",
         "helper-function"
@@ -6590,6 +6622,32 @@
       "notes": "Static HashMap where one inserted value carries shell metacharacters — finite-set suppression must NOT clear this sink"
     },
     {
+      "case_id": "rs-cmdi-009",
+      "file": "rust/cmdi/cmdi_indirect_multisink.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[5, 6]],
+      "expected_source_lines": [[10, 11]],
+      "expected_call_site_lines": [[12, 12]],
+      "tags": ["indirect", "helper-function", "multisink"],
+      "disabled": false,
+      "notes": "Helper run_both takes two tainted params and invokes two Command sinks on consecutive lines (5, 6). Phase 3 attribution must land each finding's primary line inside the helper, not at the call site (line 12). NOTE: the summary currently stores one SinkSite per callee so both findings may collapse onto the same helper line today — the ±2 sink range and the call-site assertion guard against regression to caller-attribution regardless."
+    },
+    {
       "case_id": "rs-cmdi-cross-001",
       "file": "rust/cmdi/cross_propagation/",
       "language": "rust",
@@ -6608,11 +6666,12 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
+      "expected_sink_lines": [[9, 9]],
       "expected_source_lines": [[7, 7]],
+      "expected_call_site_lines": [[8, 8]],
       "tags": ["cross-file", "propagation"],
       "disabled": false,
-      "notes": "Cross-file taint: main.rs → transform::wrap (format!) → Command"
+      "notes": "Cross-file taint: main.rs line 7 env::var → transform::wrap at line 8 → Command::new at line 9. Sink is the top-level Command::new; transform::wrap is a cross-file propagator, not a sink."
     },
     {
       "case_id": "rs-path-005",
