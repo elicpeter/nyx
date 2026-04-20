@@ -266,10 +266,7 @@ pub fn peel_identity_suffix(callee: &str) -> String {
     if let Some(p) = cur.find('(') {
         cur.truncate(p);
     }
-    loop {
-        let Some(dot_idx) = cur.rfind('.') else {
-            break;
-        };
+    while let Some(dot_idx) = cur.rfind('.') {
         let tail = &cur[dot_idx + 1..];
         if !is_identity_method(tail) {
             break;
