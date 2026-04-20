@@ -30,6 +30,7 @@ fn parse_and_analyse<A: CfgAnalysis>(
         taint_findings: &[],
         analysis_rules: None,
         taint_active: true,
+        body_const_facts: None,
     };
     analysis.run(&ctx)
 }
@@ -55,6 +56,7 @@ fn parse_and_run_all(src: &[u8], lang_str: &str, ts_lang: Language) -> Vec<CfgFi
         taint_findings: &[],
         analysis_rules: None,
         taint_active: true,
+        body_const_facts: None,
     };
     run_all(&ctx)
 }
@@ -85,6 +87,7 @@ fn parse_and_run_all_with_taint(
         taint_findings,
         analysis_rules: None,
         taint_active: true,
+        body_const_facts: None,
     };
     run_all(&ctx)
 }
@@ -169,6 +172,101 @@ fn unreachable_detects_orphaned_nodes() {
         reachable.len(),
         cfg.node_count(),
         "All nodes should be reachable in linear code — no unreachable findings expected"
+    );
+}
+
+/// Like `parse_and_analyse` but also plumbs per-body SSA + const-prop facts
+/// into the analysis context.  Used by tests that exercise the SSA-backed
+/// branch of `is_all_args_constant`.
+fn parse_and_analyse_with_ssa<A: CfgAnalysis>(
+    analysis: &A,
+    src: &[u8],
+    lang_str: &str,
+    ts_lang: Language,
+) -> Vec<CfgFinding> {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src, None).unwrap();
+    let file_cfg = build_cfg(&tree, src, lang_str, "test.rs", None);
+    let body = file_cfg.first_body();
+    let lang = Lang::from_slug(lang_str).unwrap();
+    let facts = build_body_const_facts(body, lang);
+    let ctx = AnalysisContext {
+        cfg: &body.graph,
+        entry: body.entry,
+        lang,
+        file_path: "test.rs",
+        source_bytes: src,
+        func_summaries: &file_cfg.summaries,
+        global_summaries: None,
+        taint_findings: &[],
+        analysis_rules: None,
+        taint_active: true,
+        body_const_facts: facts.as_ref(),
+    };
+    analysis.run(&ctx)
+}
+
+#[test]
+fn ssa_const_prop_suppresses_sink_on_unused_source() {
+    // rs-safe-003 regression: a tainted source binds a variable that is
+    // never used; the sink's arg is a constant reassigned through a local
+    // `let`.  SSA const-prop resolves `cmd` to a string literal, so the
+    // structural finding must be suppressed.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        fn main() {
+            let _input = env::var("USER_CMD").unwrap();
+            let cmd = "echo safe";
+            Command::new("sh").arg("-c").arg(cmd).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        guard_findings.is_empty(),
+        "SSA const-prop should suppress sink with only constant args, got {guard_findings:?}"
+    );
+}
+
+#[test]
+fn ssa_const_prop_preserves_sink_on_dynamic_source_arg() {
+    // Positive case: even with SSA facts available, a sink whose argument
+    // flows from a source must still raise the structural finding.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        fn main() {
+            let shell = "sh";
+            let flag = "-c";
+            let user_cmd = env::var("USER_CMD").unwrap();
+            Command::new(shell).arg(flag).arg(&user_cmd).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard_findings.is_empty(),
+        "Structural finding must still fire when a sink arg is source-derived"
     );
 }
 
@@ -1026,6 +1124,7 @@ fn config_sanitizer_suppresses_unguarded_sink() {
         taint_findings: &[],
         analysis_rules: Some(&rules),
         taint_active: true,
+        body_const_facts: None,
     };
     let findings = run_all(&ctx);
 
@@ -1501,6 +1600,7 @@ fn cfg_only_no_taint_produces_low_severity() {
         taint_findings: &[],
         analysis_rules: None,
         taint_active: false, // cfg-only mode
+        body_const_facts: None,
     };
     let findings = guards::UnguardedSink.run(&ctx);
 

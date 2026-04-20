@@ -2,13 +2,18 @@
 
 use super::dominators::{self, dominates};
 use super::rules;
-use super::{AnalysisContext, CfgAnalysis, CfgFinding, Confidence, is_entry_point_func};
+use super::{
+    AnalysisContext, BodyConstFacts, CfgAnalysis, CfgFinding, Confidence, is_entry_point_func,
+};
 use crate::callgraph::callee_leaf_name;
 use crate::cfg::StmtKind;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule};
 use crate::patterns::Severity;
+use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::{SsaOp, SsaValue};
 use crate::taint::path_state::{PredicateKind, classify_condition};
 use petgraph::graph::NodeIndex;
+use std::collections::HashSet;
 
 pub struct UnguardedSink;
 
@@ -16,7 +21,11 @@ pub struct UnguardedSink;
 /// variable flows).  Extends the inline callee-part check by tracing one hop
 /// through the CFG: if a used variable is defined by a node that itself has
 /// empty `uses` and no Source label, the definition is treated as a constant
-/// binding (e.g. `let cmd = "git"; Command::new(cmd)`).
+/// binding (e.g. `let cmd = "git"; Command::new(cmd)`).  When SSA
+/// [`BodyConstFacts`] are available, falls back to walking the sink's
+/// `SsaOp::Call` operands and consulting `OptimizeResult.const_values` for
+/// any operand the syntactic trace can't classify (e.g. a chained method-call
+/// receiver recorded as a compound identifier rather than a named binding).
 fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
     // Fast path: syntactic literal detection from CFG construction.
     // Strictly weaker than the one-hop trace below — serves as an
@@ -77,7 +86,140 @@ fn is_all_args_constant(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
             }
         }
         false
-    })
+    }) || ssa_all_sink_operands_constant(ctx, sink, callee_desc, &callee_parts, &outer_parts)
+}
+
+/// SSA-backed fallback for `is_all_args_constant`.  Looks up the sink CFG
+/// node in `cfg_node_map`, expects an `SsaOp::Call`, and checks that every
+/// operand (positional args and receiver) either names a callee fragment or
+/// resolves to a concrete `ConstLattice` literal.
+fn ssa_all_sink_operands_constant(
+    ctx: &AnalysisContext,
+    sink: NodeIndex,
+    callee_desc: &str,
+    callee_parts: &[&str],
+    outer_parts: &[&str],
+) -> bool {
+    let Some(facts) = ctx.body_const_facts else {
+        return false;
+    };
+    let Some(&sink_val) = facts.ssa.cfg_node_map.get(&sink) else {
+        return false;
+    };
+    let Some(inst) = find_inst(&facts.ssa, sink_val) else {
+        return false;
+    };
+    let SsaOp::Call { args, receiver, .. } = &inst.op else {
+        return false;
+    };
+
+    let operand_const = |v: SsaValue| -> bool {
+        ssa_operand_constant(v, facts, callee_desc, callee_parts, outer_parts)
+    };
+    let args_ok = args
+        .iter()
+        .all(|group| group.iter().all(|v| operand_const(*v)));
+    let receiver_ok = receiver.is_none_or(operand_const);
+    args_ok && receiver_ok
+}
+
+/// Return true if this SSA operand is a compile-time-known literal, a callee
+/// fragment pseudo-use (not a real runtime value), or transitively composed
+/// of such operands.  Returns false for sources, parameters with non-callee
+/// names, `Varying` const-prop facts, and any unresolved definition.
+fn ssa_operand_constant(
+    root: SsaValue,
+    facts: &BodyConstFacts,
+    callee_desc: &str,
+    callee_parts: &[&str],
+    outer_parts: &[&str],
+) -> bool {
+    let mut visited: HashSet<SsaValue> = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(v) = stack.pop() {
+        if !visited.insert(v) {
+            continue;
+        }
+        match facts.const_values.get(&v) {
+            Some(ConstLattice::Str(_))
+            | Some(ConstLattice::Int(_))
+            | Some(ConstLattice::Bool(_))
+            | Some(ConstLattice::Null) => continue,
+            Some(ConstLattice::Varying) => {
+                // Fall through: a Varying lattice entry may still correspond
+                // to a callee-fragment pseudo-name that the SSA models as a
+                // Param.  The per-op check below filters those out.
+            }
+            _ => {}
+        }
+        let Some(inst) = find_inst(&facts.ssa, v) else {
+            return false;
+        };
+        match &inst.op {
+            SsaOp::Const(_) => {}
+            SsaOp::Assign(vals) => stack.extend(vals.iter().copied()),
+            SsaOp::Phi(ops) => stack.extend(ops.iter().map(|(_, v)| *v)),
+            SsaOp::Call { args, receiver, .. } => {
+                for group in args {
+                    stack.extend(group.iter().copied());
+                }
+                if let Some(r) = receiver {
+                    stack.push(*r);
+                }
+            }
+            SsaOp::Param { .. } | SsaOp::SelfParam | SsaOp::CatchParam | SsaOp::Source => {
+                // Only acceptable when the param's `var_name` is a callee
+                // fragment — i.e. an identifier that only appears because
+                // the CFG recorded name components of the dotted/chained
+                // callee as uses.  Real parameters and sources are dynamic.
+                let name = inst.var_name.as_deref().unwrap_or("");
+                if matches!(inst.op, SsaOp::Source) {
+                    return false;
+                }
+                if !is_callee_fragment(name, callee_desc, callee_parts, outer_parts) {
+                    return false;
+                }
+            }
+            SsaOp::Nop => {}
+        }
+    }
+    true
+}
+
+fn is_callee_fragment(
+    name: &str,
+    callee_desc: &str,
+    callee_parts: &[&str],
+    outer_parts: &[&str],
+) -> bool {
+    if name.is_empty() {
+        return true;
+    }
+    if callee_parts.contains(&name) || outer_parts.contains(&name) || name == callee_desc {
+        return true;
+    }
+    // Chained-receiver prefix: the name is a strict prefix of `callee_desc`
+    // terminating at a `.` or `::` boundary (e.g. name =
+    // `Command::new("sh").arg("-c").arg(cmd)` for callee_desc ending in
+    // `.status().unwrap`).  These are the outer callee's receiver chain,
+    // not user-supplied arguments.
+    if callee_desc.len() > name.len() && callee_desc.starts_with(name) {
+        let rest = &callee_desc[name.len()..];
+        if rest.starts_with('.') || rest.starts_with("::") {
+            return true;
+        }
+    }
+    false
+}
+
+fn find_inst(ssa: &crate::ssa::SsaBody, v: SsaValue) -> Option<&crate::ssa::SsaInst> {
+    let def = ssa.value_defs.get(v.0 as usize)?;
+    let block = ssa.blocks.get(def.block.0 as usize)?;
+    block
+        .phis
+        .iter()
+        .chain(block.body.iter())
+        .find(|inst| inst.value == v)
 }
 
 /// Check if a callee matches any of the runtime label rules that are sanitizers.

@@ -12,11 +12,40 @@ pub mod unreachable;
 use crate::cfg::{FuncSummaries, NodeInfo, StmtKind};
 use crate::labels::{DataLabel, LangAnalysisRules};
 use crate::patterns::Severity;
+use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::{SsaBody, SsaValue};
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
 use crate::taint;
 use petgraph::graph::NodeIndex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+/// Per-body SSA facts used by structural analyses for finer-grained
+/// constancy checks.  Produced once per body in `run_cfg_analyses` and
+/// passed via `AnalysisContext::body_const_facts`.
+pub struct BodyConstFacts {
+    pub ssa: SsaBody,
+    pub const_values: HashMap<SsaValue, ConstLattice>,
+}
+
+/// Lower a body to SSA and run constant propagation.  Returns `None` when
+/// lowering fails (empty CFG, invalid entry) — callers treat absence as
+/// "no SSA facts available" and fall back to the syntactic path.
+pub fn build_body_const_facts(body: &crate::cfg::BodyCfg, lang: Lang) -> Option<BodyConstFacts> {
+    let mut ssa = crate::ssa::lower_to_ssa_with_params(
+        &body.graph,
+        body.entry,
+        body.meta.name.as_deref(),
+        body.meta.parent_body_id.is_none(),
+        &body.meta.params,
+    )
+    .ok()?;
+    let opt = crate::ssa::optimize_ssa(&mut ssa, &body.graph, Some(lang));
+    Some(BodyConstFacts {
+        ssa,
+        const_values: opt.const_values,
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Confidence {
@@ -55,6 +84,11 @@ pub struct AnalysisContext<'a> {
     /// existed and taint engine ran).  When false, structural findings without
     /// taint confirmation should be treated with lower confidence.
     pub taint_active: bool,
+    /// Optional per-body SSA + constant-propagation facts.  When present,
+    /// structural analyses can use SSA const-prop to prove that all argument
+    /// flows into a sink resolve to literal constants, suppressing false
+    /// positives that the one-hop CFG trace alone cannot.
+    pub body_const_facts: Option<&'a BodyConstFacts>,
 }
 
 pub trait CfgAnalysis {

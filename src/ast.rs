@@ -731,6 +731,7 @@ impl<'a> ParsedFile<'a> {
                 .filter(|f| f.body_id == body.meta.id)
                 .cloned()
                 .collect();
+            let body_const_facts = cfg_analysis::build_body_const_facts(body, caller_lang);
             let cfg_ctx = cfg_analysis::AnalysisContext {
                 cfg: &body.graph,
                 entry: body.entry,
@@ -742,6 +743,7 @@ impl<'a> ParsedFile<'a> {
                 taint_findings: &body_taint,
                 analysis_rules: self.rules_ref(),
                 taint_active,
+                body_const_facts: body_const_facts.as_ref(),
             };
             for cf in cfg_analysis::run_all(&cfg_ctx) {
                 let point = byte_offset_to_point(&self.source.tree, cf.span.0);
