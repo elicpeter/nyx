@@ -506,7 +506,7 @@ mod tests {
             m.aliases.get("ok").map(String::as_str),
             Some("crate::auth::token::validate")
         );
-        assert!(m.aliases.get("validate").is_none(), "alias only");
+        assert!(!m.aliases.contains_key("validate"), "alias only");
     }
 
     #[test]
@@ -548,7 +548,7 @@ mod tests {
         let tree = parse(std::str::from_utf8(src).unwrap());
         let m = parse_rust_use_map(src, &tree);
         assert!(
-            m.aliases.get("helper").is_none(),
+            !m.aliases.contains_key("helper"),
             "inner uses should not leak into the top-level map"
         );
     }
