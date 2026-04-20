@@ -42,18 +42,17 @@ fn collect_top_level_from_node(
                 rules,
             ));
         }
-        "decorated_definition" => {
+        "decorated_definition"
             if decorated_definition_child(node)
-                .is_some_and(|definition| definition.kind() == "function_definition")
-            {
-                model.units.push(build_function_unit(
-                    node,
-                    AnalysisUnitKind::Function,
-                    function_name(node, bytes),
-                    bytes,
-                    rules,
-                ));
-            }
+                .is_some_and(|definition| definition.kind() == "function_definition") =>
+        {
+            model.units.push(build_function_unit(
+                node,
+                AnalysisUnitKind::Function,
+                function_name(node, bytes),
+                bytes,
+                rules,
+            ));
         }
         "lexical_declaration" | "variable_declaration" => {
             for idx in 0..node.named_child_count() {

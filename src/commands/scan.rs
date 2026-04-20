@@ -22,6 +22,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 fn make_progress_bar(len: u64, msg: &str, show: bool) -> ProgressBar {
@@ -357,14 +358,58 @@ fn log_unresolved_callees(call_graph: &CallGraph) {
     }
 }
 
-/// Maximum iterations for SCC fixed-point convergence.
-const MAX_SCC_FIXPOINT_ITERS: usize = 3;
+/// Safety cap on SCC fixed-point iterations.
+///
+/// The convergence predicate is *snapshot equality* — we break as soon as
+/// an iteration leaves both `snapshot_caps()` and `snapshot_ssa()`
+/// unchanged.  The cap only triggers if something prevents monotone
+/// progress (e.g. a non-monotone SSA summary refinement or an SCC larger
+/// than the cap length in the worst Jacobi propagation order).
+///
+/// Why 64 and not 3?
+/// -----------------
+/// Pass 2 runs Jacobi iteration: every file in the batch is analysed in
+/// parallel against the *pre-iteration* `global_summaries`, and updates
+/// are only visible to callers on the next iteration.  In a cross-file
+/// SCC with `k` functions arranged in a chain, fresh taint introduced at
+/// one end of the chain needs up to `k` iterations to reach the other
+/// end.  A hard cap of 3 was silently truncating propagation for any
+/// SCC of 4+ cross-file functions — findings vanished with no warning.
+///
+/// `FuncSummary` is a finite-height lattice (≤ 48 bits of caps + a
+/// bounded vector of parameter indices) and `insert()` is strictly
+/// monotone (OR on caps, union on param vectors).  `SsaFuncSummary` is
+/// inserted with last-writer-wins semantics but its extraction is
+/// input-monotone in practice (richer `global_summaries` produce
+/// at-least-as-precise summaries).  Therefore the real fixed-point is
+/// always reached in `O(|SCC| × 16)` iterations.  64 covers every
+/// realistic cross-file SCC we have seen while still bounding worst-case
+/// cost for pathological cases.
+///
+/// If the cap *is* hit we emit a `warn!` so the operator knows the
+/// result is potentially imprecise rather than silently truncated.
+const SCC_FIXPOINT_SAFETY_CAP: usize = 64;
+
+/// Observability hook: records the maximum number of SCC fixed-point
+/// iterations used by the most recent [`run_topo_batches`] invocation.
+///
+/// Reset to 0 at the start of each invocation.  Used by convergence
+/// regression tests to prove that adversarial SCCs exercise more
+/// iterations than the old bound of 3.  Cheap to read in production
+/// (a single relaxed atomic load) so it is always on.
+static LAST_SCC_MAX_ITERATIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// Returns the max SCC fixed-point iteration count observed during the
+/// most recent two-pass scan.  Intended for tests and diagnostics.
+pub fn last_scc_max_iterations() -> usize {
+    LAST_SCC_MAX_ITERATIONS.load(Ordering::Relaxed)
+}
 
 /// Run pass 2 analysis on a sequence of topo-ordered file batches.
 ///
 /// For batches with mutual recursion, iterates until summaries converge
-/// (max [`MAX_SCC_FIXPOINT_ITERS`]).  Updates `global_summaries` between
-/// batches so later callers see refined callee context.
+/// (bounded by [`SCC_FIXPOINT_SAFETY_CAP`]).  Updates `global_summaries`
+/// between batches so later callers see refined callee context.
 #[allow(clippy::too_many_arguments)]
 fn run_topo_batches(
     batches: &[FileBatch<'_>],
@@ -380,11 +425,19 @@ fn run_topo_batches(
     let root_str_ref = root_str.as_deref();
     let mut result: Vec<Diag> = Vec::new();
 
+    // Reset the observability counter for this invocation so tests and
+    // diagnostics always see fresh data.
+    LAST_SCC_MAX_ITERATIONS.store(0, Ordering::Relaxed);
+
     for (batch_idx, batch) in batches.iter().enumerate() {
         if batch.has_mutual_recursion {
-            // SCC fixed-point: iterate until summaries converge.
+            // SCC fixed-point: iterate until summaries converge (snapshot
+            // equality) or we hit the safety cap.
             let mut iteration_diags = Vec::new();
-            for iter in 0..MAX_SCC_FIXPOINT_ITERS {
+            let mut converged = false;
+            let mut iters_used: usize = 0;
+            for iter in 0..SCC_FIXPOINT_SAFETY_CAP {
+                iters_used = iter + 1;
                 let snap_before = global_summaries.snapshot_caps();
 
                 // Intermediate iteration diags may be incomplete due to
@@ -466,7 +519,7 @@ fn run_topo_batches(
 
                 let snap_after = global_summaries.snapshot_caps();
                 let ssa_converged = ssa_snap_before == *global_summaries.snapshot_ssa();
-                let converged = snap_before == snap_after && ssa_converged;
+                let iter_converged = snap_before == snap_after && ssa_converged;
                 tracing::debug!(
                     batch = batch_idx,
                     files = batch.files.len(),
@@ -474,11 +527,36 @@ fn run_topo_batches(
                     iteration = iter,
                     ssa_summaries_updated = ssa_count,
                     ssa_converged,
-                    converged,
+                    converged = iter_converged,
                     "SCC batch iteration"
                 );
-                if converged {
+                if iter_converged {
+                    converged = true;
                     break;
+                }
+            }
+            LAST_SCC_MAX_ITERATIONS.fetch_max(iters_used, Ordering::Relaxed);
+            if !converged {
+                tracing::warn!(
+                    batch = batch_idx,
+                    files = batch.files.len(),
+                    iterations = iters_used,
+                    cap = SCC_FIXPOINT_SAFETY_CAP,
+                    "SCC batch did not converge within safety cap — results \
+                     may be imprecise. This usually indicates a very large \
+                     mutually-recursive region or a non-monotone summary \
+                     refinement; please file a bug with a reproducer."
+                );
+                if let Some(l) = logs {
+                    l.warn(
+                        format!(
+                            "SCC batch {batch_idx} ({} files) did not converge \
+                             within {SCC_FIXPOINT_SAFETY_CAP} iterations",
+                            batch.files.len()
+                        ),
+                        None,
+                        None,
+                    );
                 }
             }
             // Count progress for these files once.

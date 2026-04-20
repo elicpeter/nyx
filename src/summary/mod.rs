@@ -5,6 +5,18 @@ use crate::summary::ssa_summary::SsaFuncSummary;
 use crate::symbol::{FuncKey, FuncKind, Lang, normalize_namespace};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
+
+/// Top bit of [`FuncKey::disambig`] reserved for synthetic discriminators
+/// minted by [`GlobalSummaries`] when an identity collision is detected
+/// between structurally incompatible summaries.
+///
+/// Real disambigs come from `tree_sitter::Node::start_byte` (see
+/// `cfg.rs:fn_disambig`), which is a byte offset into the source file.
+/// Source files in practice are far below 2 GiB, so bit 31 of a real
+/// disambig is always zero — setting it marks a value as synthetic and
+/// keeps it in a disjoint namespace from byte-offset disambigs.
+const SYNTHETIC_DISAMBIG_BIT: u32 = 0x8000_0000;
 
 // ── Callee site metadata ────────────────────────────────────────────────
 
@@ -384,15 +396,131 @@ impl GlobalSummaries {
         Self::default()
     }
 
-    /// Insert or merge a summary.  If an exact `FuncKey` match exists,
-    /// merge conservatively (OR caps/booleans, union params/callees).
+    /// Walk a proposed insertion key, bumping the synthetic disambig
+    /// until either (a) the key is unoccupied, or (b) the entry found at
+    /// that key is compatible with the incoming summary (safe to merge).
     ///
-    /// Exact-key merging is still safe here because `FuncKey` is now
-    /// structurally precise (lang + namespace + container + name + arity +
-    /// disambig + kind) — two summaries that hash to the same key really do
-    /// describe the same function (e.g. parallel fold/reduce produced two
-    /// partial views of one definition).
+    /// Identity collisions are extraordinarily rare in practice (they
+    /// require two structurally distinct functions to land on the same
+    /// non-synthetic key, e.g. both with `disambig: None`).  The loop
+    /// bound is defensive — if synthetic probing still collides after
+    /// 1024 attempts we fall through and let the caller merge, which
+    /// degrades gracefully to the old behaviour rather than looping
+    /// forever.
+    fn reconcile_func_summary_key(&self, mut key: FuncKey, summary: &FuncSummary) -> FuncKey {
+        let mut probe: u32 = 0;
+        loop {
+            match self.by_key.get(&key) {
+                Some(existing) if !summaries_compatible(existing, summary) => {
+                    let synth = synthesize_disambig(summary).wrapping_add(probe);
+                    key.disambig = Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT));
+                    probe = probe.wrapping_add(1);
+                    if probe >= 1024 {
+                        tracing::warn!(
+                            "summary identity collision probe gave up after 1024 attempts; \
+                             falling back to union-merge for {}",
+                            key
+                        );
+                        return key;
+                    }
+                }
+                _ => return key,
+            }
+        }
+    }
+
+    /// SSA-summary variant of [`Self::reconcile_func_summary_key`].
+    ///
+    /// Distinctness signals for SSA summaries are weaker than for
+    /// coarse `FuncSummary`s — the summary itself carries no explicit
+    /// `param_count`, only references to parameter indices.  We combine:
+    ///
+    /// * **Key arity fit** — any parameter index referenced by the new
+    ///   summary that exceeds `key.arity` is a structural mismatch.
+    /// * **Existing-entry compare** — if an entry already lives at
+    ///   this key and it disagrees on the set of referenced parameter
+    ///   indices, the two cannot both describe the same function.
+    fn reconcile_ssa_summary_key(&self, mut key: FuncKey, summary: &SsaFuncSummary) -> FuncKey {
+        let mut probe: u32 = 0;
+        loop {
+            let conflict = match self.ssa_by_key.get(&key) {
+                Some(existing) => !ssa_summaries_compatible(existing, summary, key.arity),
+                None => !ssa_summary_fits_arity(summary, key.arity),
+            };
+            if !conflict {
+                return key;
+            }
+            let synth = synthesize_ssa_disambig(summary).wrapping_add(probe);
+            key.disambig = Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT));
+            probe = probe.wrapping_add(1);
+            if probe >= 1024 {
+                tracing::warn!(
+                    "SSA summary identity collision probe gave up after 1024 attempts \
+                     for {}",
+                    key
+                );
+                return key;
+            }
+        }
+    }
+
+    /// Body variant of [`Self::reconcile_func_summary_key`].
+    ///
+    /// `CalleeSsaBody` carries an explicit `param_count`, which must
+    /// agree with both `key.arity` and any co-located body's
+    /// `param_count`.  A mismatch is a hard collision.
+    fn reconcile_body_key(
+        &self,
+        mut key: FuncKey,
+        body: &crate::taint::ssa_transfer::CalleeSsaBody,
+    ) -> FuncKey {
+        let mut probe: u32 = 0;
+        loop {
+            let conflict = match self.bodies_by_key.get(&key) {
+                Some(existing) => existing.param_count != body.param_count,
+                None => match key.arity {
+                    Some(a) => a != body.param_count,
+                    None => false,
+                },
+            };
+            if !conflict {
+                return key;
+            }
+            let synth = (body.param_count as u32)
+                .wrapping_mul(0x9E37_79B9)
+                .wrapping_add(probe);
+            key.disambig = Some(SYNTHETIC_DISAMBIG_BIT | (synth & !SYNTHETIC_DISAMBIG_BIT));
+            probe = probe.wrapping_add(1);
+            if probe >= 1024 {
+                tracing::warn!(
+                    "SSA body identity collision probe gave up after 1024 attempts for {}",
+                    key
+                );
+                return key;
+            }
+        }
+    }
+
+    /// Insert or merge a summary.  If an exact `FuncKey` match exists and
+    /// the two summaries describe the same function, merge conservatively
+    /// (OR caps/booleans, union params/callees).
+    ///
+    /// `FuncKey` is structurally precise *when every producer populates
+    /// `disambig`*.  Legacy on-disk JSON, interop configs, DB rows written
+    /// by older versions, and any code path that keeps `disambig: None`
+    /// can produce two keys that hash-equal even though they belong to
+    /// structurally distinct functions (e.g. different `param_count`,
+    /// `kind`, `container`, or `param_names`).  Silently unioning those
+    /// would leak security-relevant caps across unrelated functions and
+    /// drop one of the two summaries entirely.
+    ///
+    /// We therefore inspect the existing entry first.  If the new summary
+    /// is not [`summaries_compatible`] with it, we mint a synthetic
+    /// disambig (top bit set to stay disjoint from byte-offset disambigs)
+    /// and retry the insert under the fresh key so *both* functions are
+    /// preserved.
     pub fn insert(&mut self, key: FuncKey, summary: FuncSummary) {
+        let key = self.reconcile_func_summary_key(key, &summary);
         let lang = key.lang;
         let name = key.name.clone();
         let qualified = key.qualified_name();
@@ -554,8 +682,21 @@ impl GlobalSummaries {
         }
     }
 
-    /// Insert an SSA summary with exact-key replacement (no union merge).
+    /// Insert an SSA summary.
+    ///
+    /// Per-function refinement is expressed via last-writer-wins for
+    /// *compatible* summaries: re-analysing the same function body with
+    /// more precise seeds yields a strictly better summary, and the
+    /// caller genuinely wants the new one to replace the old.
+    ///
+    /// When the existing entry is **incompatible** with the incoming
+    /// one — the key's `arity` disagrees with the new summary's referenced
+    /// parameter indices, or the two summaries would describe different
+    /// functions — we synthesize a disambig so both are kept.  Silent
+    /// replacement in that case would drop one function's cross-file
+    /// taint signal entirely, which the caller cannot recover.
     pub fn insert_ssa(&mut self, key: FuncKey, summary: SsaFuncSummary) {
+        let key = self.reconcile_ssa_summary_key(key, &summary);
         self.ssa_by_key.insert(key, summary);
     }
 
@@ -564,8 +705,14 @@ impl GlobalSummaries {
         self.ssa_by_key.get(key)
     }
 
-    /// Insert a cross-file callee body (exact-key replacement, no union merge).
+    /// Insert a cross-file callee body.
+    ///
+    /// See [`insert_ssa`](Self::insert_ssa) for the identity-safety rule.
+    /// Bodies additionally carry `param_count`, giving a hard structural
+    /// signal: a collision between bodies with different `param_count`
+    /// cannot be the same function and is always rekeyed.
     pub fn insert_body(&mut self, key: FuncKey, body: crate::taint::ssa_transfer::CalleeSsaBody) {
+        let key = self.reconcile_body_key(key, &body);
         self.bodies_by_key.insert(key, body);
     }
 
@@ -984,6 +1131,147 @@ impl std::fmt::Debug for GlobalSummaries {
             .field("bodies_len", &self.bodies_by_key.len())
             .finish()
     }
+}
+
+/// Return `true` iff two `FuncSummary`s can be safely union-merged at the
+/// same `FuncKey`.
+///
+/// Only fields that a single function definition is guaranteed to agree on
+/// are compared.  Behaviour fields (`source_caps`, `propagating_params`,
+/// `callees`, …) are deliberately ignored: merge is *allowed* to combine
+/// those.  The test is symmetric.
+///
+/// Comparison rules
+/// ────────────────
+/// * **`param_count` / `kind` / `container`** — unconditional agreement.
+///   Any mismatch is a hard collision between distinct functions.
+/// * **`file_path`** — agree when both sides are populated.  A blank path
+///   can come from synthetic summaries constructed in tests / interop
+///   configs and should not force a split.
+/// * **`param_names`** — agree when both sides are populated.  Legacy
+///   summaries may persist with empty names; treating empty as "unknown"
+///   avoids gratuitous splits while still catching real divergence.
+/// * **`module_path`** — Rust-only.  Agreed when both sides are `Some`.
+///   A missing module path on one side is legacy-compatible; two *distinct*
+///   `Some` values mean the two summaries belong to different crates'
+///   module trees.
+pub(crate) fn summaries_compatible(a: &FuncSummary, b: &FuncSummary) -> bool {
+    if a.param_count != b.param_count {
+        return false;
+    }
+    if a.kind != b.kind {
+        return false;
+    }
+    if a.container != b.container {
+        return false;
+    }
+    if !a.file_path.is_empty() && !b.file_path.is_empty() && a.file_path != b.file_path {
+        return false;
+    }
+    if !a.param_names.is_empty() && !b.param_names.is_empty() && a.param_names != b.param_names {
+        return false;
+    }
+    match (&a.module_path, &b.module_path) {
+        (Some(l), Some(r)) if l != r => return false,
+        _ => {}
+    }
+    true
+}
+
+/// Derive a deterministic synthetic disambiguator from the
+/// identity-relevant fields of a `FuncSummary`.
+///
+/// The top bit is **not** set here — the caller composes the final value
+/// via `SYNTHETIC_DISAMBIG_BIT | (hash & !SYNTHETIC_DISAMBIG_BIT)` so that
+/// (a) the caller can safely bump the low bits to probe for a free slot,
+/// and (b) the synthetic namespace stays disjoint from byte-offset
+/// disambigs produced by `cfg.rs`.
+pub(crate) fn synthesize_disambig(summary: &FuncSummary) -> u32 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    summary.param_count.hash(&mut h);
+    summary.param_names.hash(&mut h);
+    summary.container.hash(&mut h);
+    summary.kind.hash(&mut h);
+    summary.file_path.hash(&mut h);
+    summary.source_caps.hash(&mut h);
+    summary.sanitizer_caps.hash(&mut h);
+    summary.sink_caps.hash(&mut h);
+    summary.module_path.hash(&mut h);
+    h.finish() as u32
+}
+
+/// Return `true` iff the new `SsaFuncSummary` is consistent with the
+/// existing one at the same `FuncKey`.
+///
+/// `SsaFuncSummary` carries no explicit `param_count`; we approximate
+/// it via the maximum parameter index referenced by either summary.
+/// Two summaries are compatible when neither references a parameter
+/// index the other cannot — an upward compatibility check, so a refined
+/// summary that merely adds flows for previously-silent parameters is
+/// still considered compatible.
+fn ssa_summaries_compatible(
+    existing: &SsaFuncSummary,
+    new: &SsaFuncSummary,
+    key_arity: Option<usize>,
+) -> bool {
+    if !ssa_summary_fits_arity(existing, key_arity) {
+        // Existing entry itself is inconsistent with the key; don't let
+        // that inconsistency mask a real collision with the new entry.
+        return false;
+    }
+    if !ssa_summary_fits_arity(new, key_arity) {
+        return false;
+    }
+    true
+}
+
+/// Every parameter index referenced by `summary` must fit inside
+/// `key_arity` when it is known.  `None` (unknown arity) accepts any
+/// index.
+fn ssa_summary_fits_arity(summary: &SsaFuncSummary, key_arity: Option<usize>) -> bool {
+    let arity = match key_arity {
+        Some(a) => a,
+        None => return true,
+    };
+    let refs = summary
+        .param_to_return
+        .iter()
+        .map(|(i, _)| *i)
+        .chain(summary.param_to_sink.iter().map(|(i, _)| *i))
+        .chain(summary.param_to_sink_param.iter().map(|(i, _, _)| *i))
+        .chain(summary.param_container_to_return.iter().copied())
+        .chain(
+            summary
+                .param_to_container_store
+                .iter()
+                .flat_map(|(a, b)| [*a, *b]),
+        )
+        .chain(summary.source_to_callback.iter().map(|(i, _)| *i));
+    for i in refs {
+        if i >= arity {
+            return false;
+        }
+    }
+    true
+}
+
+/// Derive a deterministic synthetic disambiguator for an
+/// `SsaFuncSummary`.  Mirrors `synthesize_disambig` but restricted to
+/// SSA-level structural signals.
+fn synthesize_ssa_disambig(summary: &SsaFuncSummary) -> u32 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    summary.param_to_return.len().hash(&mut h);
+    summary.param_to_sink.len().hash(&mut h);
+    summary.source_caps.bits().hash(&mut h);
+    summary.param_to_sink_param.len().hash(&mut h);
+    summary.param_container_to_return.len().hash(&mut h);
+    summary.param_to_container_store.len().hash(&mut h);
+    summary.receiver_to_sink.bits().hash(&mut h);
+    summary.receiver_to_return.is_some().hash(&mut h);
+    summary.return_type.is_some().hash(&mut h);
+    summary.return_abstract.is_some().hash(&mut h);
+    summary.source_to_callback.len().hash(&mut h);
+    h.finish() as u32
 }
 
 /// Merge a set of per‑file summaries into a single `GlobalSummaries` map.

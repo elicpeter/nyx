@@ -338,7 +338,7 @@ fn compute_noisy_rules(
         })
         .collect();
 
-    noisy.sort_by(|a, b| b.finding_count.cmp(&a.finding_count));
+    noisy.sort_by_key(|b| std::cmp::Reverse(b.finding_count));
     noisy
 }
 

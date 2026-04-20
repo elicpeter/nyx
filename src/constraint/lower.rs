@@ -500,14 +500,9 @@ fn try_lower_comparison(
     let rhs_op = resolve_operand(rhs, var_lookup, const_lookup);
 
     // Need at least one Value operand
-    match (&lhs_op, &rhs_op) {
-        (Operand::Unknown, _) | (_, Operand::Unknown) => {
-            // If both unknown, nothing useful
-            if matches!(&lhs_op, Operand::Unknown) && matches!(&rhs_op, Operand::Unknown) {
-                return None;
-            }
-        }
-        _ => {}
+    // If both unknown, nothing useful
+    if matches!(&lhs_op, Operand::Unknown) && matches!(&rhs_op, Operand::Unknown) {
+        return None;
     }
 
     Some(ConditionExpr::Comparison {

@@ -277,10 +277,8 @@ fn find_top_level_function_node<'tree>(
 ) -> Option<Node<'tree>> {
     for child in named_children(root) {
         match child.kind() {
-            "function_definition" => {
-                if function_name(child, bytes).as_deref() == Some(name) {
-                    return Some(child);
-                }
+            "function_definition" if function_name(child, bytes).as_deref() == Some(name) => {
+                return Some(child);
             }
             "decorated_definition" => {
                 if let Some(definition) = decorated_definition_child(child)
@@ -303,10 +301,8 @@ fn find_top_level_class_node<'tree>(
 ) -> Option<Node<'tree>> {
     for child in named_children(root) {
         match child.kind() {
-            "class_definition" => {
-                if class_name(child, bytes).as_deref() == Some(name) {
-                    return Some(child);
-                }
+            "class_definition" if class_name(child, bytes).as_deref() == Some(name) => {
+                return Some(child);
             }
             "decorated_definition" => {
                 if let Some(definition) = decorated_definition_child(child)

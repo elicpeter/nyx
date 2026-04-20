@@ -2752,3 +2752,335 @@ fn same_file_same_name_different_security_behaviour_no_cap_leak() {
         );
     }
 }
+
+// ── Tightened-merge regression tests ────────────────────────────────────
+// These guard the identity-collision split added to `insert`, `insert_ssa`,
+// and `insert_body`.  Each scenario encodes an "underspecified identity"
+// (typically `disambig: None` from legacy/interop/DB-loaded summaries) where
+// the old code silently collapsed structurally distinct functions.
+
+/// Build a minimal `FuncSummary` with `disambig: None` — mirrors the shape
+/// produced by legacy JSON rows / interop configs that don't know byte
+/// offsets.  `file_path` is left blank so namespace normalisation doesn't
+/// separate the two otherwise-identical keys.
+fn legacy_summary(
+    file_path: &str,
+    name: &str,
+    param_count: usize,
+    param_names: Vec<String>,
+    kind: FuncKind,
+    container: &str,
+    sink: u16,
+) -> FuncSummary {
+    FuncSummary {
+        name: name.into(),
+        file_path: file_path.into(),
+        lang: "java".into(),
+        param_count,
+        param_names,
+        sink_caps: sink,
+        container: container.into(),
+        disambig: None,
+        kind,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn insert_mismatched_module_path_does_not_silently_merge() {
+    // Two Rust summaries with the same leaf key but different
+    // `module_path` (e.g. produced by loading a stale DB alongside a
+    // freshly-scanned file, or by two different scan_root anchors).
+    // `module_path` is not part of `FuncKey` but identifies the defining
+    // crate module; two distinct modules with the same file path relative
+    // to different scan roots must stay separate.
+    let mut gs = GlobalSummaries::new();
+    let a = FuncSummary {
+        name: "validate".into(),
+        file_path: "src/lib.rs".into(),
+        lang: "rust".into(),
+        param_count: 1,
+        param_names: vec!["x".into()],
+        sink_caps: Cap::SHELL_ESCAPE.bits(),
+        disambig: None,
+        module_path: Some("auth::token".into()),
+        ..Default::default()
+    };
+    let b = FuncSummary {
+        name: "validate".into(),
+        file_path: "src/lib.rs".into(),
+        lang: "rust".into(),
+        param_count: 1,
+        param_names: vec!["x".into()],
+        sink_caps: Cap::SQL_QUERY.bits(),
+        disambig: None,
+        module_path: Some("billing::invoice".into()),
+        ..Default::default()
+    };
+    let k = a.func_key(None);
+    assert_eq!(
+        k,
+        b.func_key(None),
+        "pre-fix: both summaries would land on the same key"
+    );
+
+    gs.insert(k.clone(), a);
+    gs.insert(k.clone(), b);
+
+    let hits = gs.lookup_same_lang(Lang::Rust, "validate");
+    assert_eq!(
+        hits.len(),
+        2,
+        "different module_path summaries must stay distinct — got {hits:?}"
+    );
+    let auth = hits
+        .iter()
+        .find(|(_, s)| s.module_path.as_deref() == Some("auth::token"))
+        .expect("auth::token summary preserved");
+    let billing = hits
+        .iter()
+        .find(|(_, s)| s.module_path.as_deref() == Some("billing::invoice"))
+        .expect("billing::invoice summary preserved");
+    // Cross-contamination guard: the two crates must not have their
+    // caps unioned — that's the observable failure mode of a silent
+    // merge.
+    assert_eq!(auth.1.sink_caps, Cap::SHELL_ESCAPE.bits());
+    assert_eq!(billing.1.sink_caps, Cap::SQL_QUERY.bits());
+    assert_eq!(auth.1.sink_caps & Cap::SQL_QUERY.bits(), 0);
+    assert_eq!(billing.1.sink_caps & Cap::SHELL_ESCAPE.bits(), 0);
+}
+
+#[test]
+fn insert_mismatched_kind_does_not_silently_merge() {
+    // A free function and a method with the same name, arity, namespace,
+    // and container ("" vs "") can't actually occur — but kind alone
+    // mismatching does happen in interop configs where a getter is
+    // described as a function.  Make sure the two end up distinct.
+    let mut gs = GlobalSummaries::new();
+    let f = legacy_summary(
+        "src/a.java",
+        "size",
+        0,
+        vec![],
+        FuncKind::Function,
+        "Widget",
+        0,
+    );
+    let g = legacy_summary(
+        "src/a.java",
+        "size",
+        0,
+        vec![],
+        FuncKind::Getter,
+        "Widget",
+        Cap::SHELL_ESCAPE.bits(),
+    );
+    gs.insert(f.func_key(None), f);
+    gs.insert(g.func_key(None), g);
+
+    // Two distinct keys in the same-lang index.
+    let hits = gs.lookup_same_lang(Lang::Java, "size");
+    assert_eq!(hits.len(), 2);
+    // The getter's sink caps must not have been unioned into the
+    // function — that would be a security-relevant leak.
+    let func_hit = hits
+        .iter()
+        .find(|(k, _)| k.kind == FuncKind::Function)
+        .expect("function summary kept separate");
+    assert_eq!(
+        func_hit.1.sink_caps, 0,
+        "function's sink caps must not absorb the getter's SHELL_ESCAPE"
+    );
+}
+
+#[test]
+fn insert_mismatched_param_names_does_not_silently_merge() {
+    // Two overloads in Java/C++ with the same arity but different
+    // parameter types/names — a classic case where arity-only identity
+    // collapses distinct functions.  Neither summary ships a disambig
+    // because it was loaded from legacy JSON.
+    let mut gs = GlobalSummaries::new();
+    let a = legacy_summary(
+        "src/app.java",
+        "handle",
+        1,
+        vec!["msg".into()],
+        FuncKind::Function,
+        "",
+        0,
+    );
+    let b = legacy_summary(
+        "src/app.java",
+        "handle",
+        1,
+        vec!["event".into()],
+        FuncKind::Function,
+        "",
+        Cap::SHELL_ESCAPE.bits(),
+    );
+    gs.insert(a.func_key(None), a);
+    gs.insert(b.func_key(None), b);
+
+    let hits = gs.lookup_same_lang(Lang::Java, "handle");
+    assert_eq!(
+        hits.len(),
+        2,
+        "same name + arity + kind but different param_names → distinct functions"
+    );
+    // Exactly one carries the sink cap.
+    let sinky: Vec<_> = hits
+        .iter()
+        .filter(|(_, s)| s.sink_caps == Cap::SHELL_ESCAPE.bits())
+        .collect();
+    assert_eq!(sinky.len(), 1);
+}
+
+#[test]
+fn insert_synthetic_disambig_bit_set_only_for_collisions() {
+    // A single legacy-style insert with `disambig: None` must NOT gain a
+    // synthetic disambig — we only rekey to resolve collisions, never
+    // speculatively.  This prevents downstream lookups keyed with
+    // `disambig: None` from spuriously missing legitimately-single
+    // summaries.
+    let mut gs = GlobalSummaries::new();
+    let sole = legacy_summary(
+        "src/only.java",
+        "alone",
+        0,
+        vec![],
+        FuncKind::Function,
+        "",
+        Cap::SHELL_ESCAPE.bits(),
+    );
+    let key = sole.func_key(None);
+    gs.insert(key.clone(), sole);
+    assert_eq!(key.disambig, None);
+    assert!(gs.get(&key).is_some(), "unique legacy insert keeps its key");
+}
+
+#[test]
+fn insert_compatible_refinement_still_unions() {
+    // Two summaries describing the same function (structurally identical
+    // head, differing only on behaviour fields) must still union — the
+    // tightened check doesn't regress the classic parallel-fold merge.
+    let mut gs = GlobalSummaries::new();
+    let a = FuncSummary {
+        name: "f".into(),
+        file_path: "src/x.rs".into(),
+        lang: "rust".into(),
+        param_count: 1,
+        param_names: vec!["x".into()],
+        source_caps: Cap::ENV_VAR.bits(),
+        container: "".into(),
+        disambig: None,
+        kind: FuncKind::Function,
+        ..Default::default()
+    };
+    let b = FuncSummary {
+        name: "f".into(),
+        file_path: "src/x.rs".into(),
+        lang: "rust".into(),
+        param_count: 1,
+        param_names: vec!["x".into()],
+        sink_caps: Cap::SHELL_ESCAPE.bits(),
+        container: "".into(),
+        disambig: None,
+        kind: FuncKind::Function,
+        ..Default::default()
+    };
+    let k = a.func_key(None);
+    gs.insert(k.clone(), a);
+    gs.insert(k.clone(), b);
+
+    let merged = gs.get(&k).expect("compatible summaries still merge");
+    assert_eq!(merged.source_caps, Cap::ENV_VAR.bits());
+    assert_eq!(merged.sink_caps, Cap::SHELL_ESCAPE.bits());
+    // Single entry — no accidental split for the compatible case.
+    let hits = gs.lookup_same_lang(Lang::Rust, "f");
+    assert_eq!(hits.len(), 1);
+}
+
+#[test]
+fn insert_body_param_count_mismatch_rekeys() {
+    // Two CalleeSsaBody instances arrive at the same FuncKey (both
+    // `disambig: None`) but claim different `param_count`.  Silently
+    // replacing would lose the first body and mis-route future cross-
+    // file symex resolutions to the second.
+    let mut gs = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Python,
+        namespace: "mod.py".into(),
+        name: "run".into(),
+        arity: Some(2),
+        ..Default::default()
+    };
+    gs.insert_body(key.clone(), make_callee_body(2, 2));
+    // Incoming body with a different param_count — must not overwrite.
+    gs.insert_body(key.clone(), make_callee_body(5, 4));
+
+    // Invariant 1: the original body stays at the original key (not
+    // silently replaced by the param_count=4 body).
+    let head = gs.get_body(&key).expect("original 2-param body kept");
+    assert_eq!(head.param_count, 2);
+
+    // Invariant 2: the conflicting body is preserved under a synthetic
+    // disambig, not dropped.  Reconstruct the expected synth disambig
+    // using the same formula as `reconcile_body_key`.
+    let mut found_conflicting = false;
+    let base = (4u32).wrapping_mul(0x9E37_79B9);
+    for probe in 0u32..1024 {
+        let synth = base.wrapping_add(probe);
+        let synth_key = FuncKey {
+            disambig: Some(0x8000_0000 | (synth & 0x7FFF_FFFF)),
+            ..key.clone()
+        };
+        if let Some(body) = gs.get_body(&synth_key)
+            && body.param_count == 4
+        {
+            found_conflicting = true;
+            break;
+        }
+    }
+    assert!(
+        found_conflicting,
+        "the 4-param body must be preserved under a synthetic disambig key"
+    );
+}
+
+#[test]
+fn insert_ssa_arity_overflow_rekeys() {
+    // Key claims arity 1, but the incoming SSA summary references
+    // param index 3 — structurally impossible for the same function.
+    // The fix must split so the key arity invariant is preserved.
+    let mut gs = GlobalSummaries::new();
+    let key = FuncKey {
+        lang: Lang::Python,
+        namespace: "mod.py".into(),
+        name: "f".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+
+    let legit = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        ..Default::default()
+    };
+    gs.insert_ssa(key.clone(), legit.clone());
+    assert_eq!(
+        gs.get_ssa(&key).unwrap().param_to_return,
+        vec![(0, TaintTransform::Identity)]
+    );
+
+    // Bad-arity incoming summary — must not overwrite the legitimate one.
+    let overflowing = SsaFuncSummary {
+        param_to_return: vec![(3, TaintTransform::Identity)],
+        param_to_sink: vec![(2, Cap::SQL_QUERY)],
+        ..Default::default()
+    };
+    gs.insert_ssa(key.clone(), overflowing);
+
+    // Original summary still exactly intact at the original key.
+    let kept = gs.get_ssa(&key).expect("legit summary not overwritten");
+    assert_eq!(kept.param_to_return, vec![(0, TaintTransform::Identity)]);
+    assert!(kept.param_to_sink.is_empty());
+}

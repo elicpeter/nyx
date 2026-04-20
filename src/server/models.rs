@@ -645,7 +645,7 @@ pub fn top_directories_from_findings(findings: &[Diag], limit: usize) -> Vec<Ove
         *dir_counts.entry(dir.to_string()).or_insert(0) += 1;
     }
     let mut sorted: Vec<_> = dir_counts.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
     sorted.truncate(limit);
     sorted
         .into_iter()

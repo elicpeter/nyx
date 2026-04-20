@@ -140,7 +140,7 @@ async fn list_findings(
 
     // Sort.
     match query.sort_by.as_deref() {
-        Some("severity") => views.sort_by(|a, b| a.severity.cmp(&b.severity)),
+        Some("severity") => views.sort_by_key(|a| a.severity),
         Some("path") | Some("file") => views.sort_by(|a, b| a.path.cmp(&b.path)),
         Some("rule_id") => views.sort_by(|a, b| a.rule_id.cmp(&b.rule_id)),
         Some("score") => views.sort_by(|a, b| {
@@ -154,7 +154,7 @@ async fn list_findings(
             let cb = b.confidence.map(|c| c as u8).unwrap_or(0);
             ca.cmp(&cb)
         }),
-        Some("line") => views.sort_by(|a, b| a.line.cmp(&b.line)),
+        Some("line") => views.sort_by_key(|a| a.line),
         Some("language") => views.sort_by(|a, b| {
             a.language
                 .as_deref()
@@ -162,9 +162,7 @@ async fn list_findings(
                 .cmp(b.language.as_deref().unwrap_or(""))
         }),
         Some("status") => views.sort_by(|a, b| a.status.cmp(&b.status)),
-        Some("category") => {
-            views.sort_by(|a, b| a.category.to_string().cmp(&b.category.to_string()))
-        }
+        Some("category") => views.sort_by_key(|a| a.category.to_string()),
         _ => {} // default order (by index)
     }
     if query.sort_dir.as_deref() == Some("desc") {

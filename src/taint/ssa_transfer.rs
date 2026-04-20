@@ -232,11 +232,7 @@ impl Lattice for SsaTaintState {
         // Phase 17: abstract_state
         match (&self.abstract_state, &other.abstract_state) {
             (None, Some(_)) => return false,
-            (Some(a), Some(b)) => {
-                if !a.leq(b) {
-                    return false;
-                }
-            }
+            (Some(a), Some(b)) if !a.leq(b) => return false,
             _ => {}
         }
         true
@@ -2718,23 +2714,21 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
             }
         }
 
-        SsaOp::Call { callee, .. } => {
-            // Known integer-producing calls get a bounded interval so downstream
-            // arithmetic transfer produces useful facts (e.g. parseInt(x) * 10).
-            if is_int_producing_callee(callee) {
-                abs.set(
-                    inst.value,
-                    AbstractValue {
-                        interval: IntervalFact {
-                            lo: Some(i32::MIN as i64),
-                            hi: Some(i32::MAX as i64),
-                        },
-                        string: StringFact::top(),
-                        bits: BitFact::top(),
+        // Known integer-producing calls get a bounded interval so downstream
+        // arithmetic transfer produces useful facts (e.g. parseInt(x) * 10).
+        // Unknown calls: implicit Top (don't store).
+        SsaOp::Call { callee, .. } if is_int_producing_callee(callee) => {
+            abs.set(
+                inst.value,
+                AbstractValue {
+                    interval: IntervalFact {
+                        lo: Some(i32::MIN as i64),
+                        hi: Some(i32::MAX as i64),
                     },
-                );
-            }
-            // Unknown calls: implicit Top (don't store)
+                    string: StringFact::top(),
+                    bits: BitFact::top(),
+                },
+            );
         }
 
         SsaOp::Source | SsaOp::CatchParam | SsaOp::Param { .. } => {

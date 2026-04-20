@@ -1415,31 +1415,25 @@ fn has_sql_placeholders(s: &str) -> bool {
     let mut i = 0;
     while i < len {
         match bytes[i] {
-            b'$' => {
+            b'$' if i + 1 < len && bytes[i + 1].is_ascii_digit() && bytes[i + 1] != b'0' => {
                 // $N where N is 1..9 (at minimum)
-                if i + 1 < len && bytes[i + 1].is_ascii_digit() && bytes[i + 1] != b'0' {
-                    return true;
-                }
+                return true;
             }
             b'?' => return true,
-            b'%' => {
-                if i + 1 < len && bytes[i + 1] == b's' {
-                    return true;
-                }
+            b'%' if i + 1 < len && bytes[i + 1] == b's' => {
+                return true;
             }
-            b':' => {
+            b':' if i > 0
+                && (bytes[i - 1] == b' '
+                    || bytes[i - 1] == b'='
+                    || bytes[i - 1] == b'('
+                    || bytes[i - 1] == b',')
+                && i + 1 < len
+                && bytes[i + 1].is_ascii_alphabetic() =>
+            {
                 // :identifier — must be preceded by whitespace/= to avoid
                 // false positives on object literals or ternary operators.
-                if i > 0
-                    && (bytes[i - 1] == b' '
-                        || bytes[i - 1] == b'='
-                        || bytes[i - 1] == b'('
-                        || bytes[i - 1] == b',')
-                    && i + 1 < len
-                    && bytes[i + 1].is_ascii_alphabetic()
-                {
-                    return true;
-                }
+                return true;
             }
             _ => {}
         }
