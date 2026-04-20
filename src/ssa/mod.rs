@@ -9,6 +9,7 @@ pub mod heap;
 pub mod ir;
 pub mod lower;
 pub mod pointsto;
+pub mod static_map;
 pub mod type_facts;
 
 #[allow(unused_imports)]

@@ -100,6 +100,32 @@ impl TypeFactResult {
     }
 }
 
+/// Check whether the given sink-operand SSA values are all int-typed for the
+/// sink's capability set.  Returns `false` when `sink_caps` carries no
+/// type-suppressible bits, when `values` is empty, or when any value is not
+/// known to be `TypeKind::Int`.  Shared by the SSA taint engine and the
+/// structural `cfg-unguarded-sink` analysis so both agree on when a sink's
+/// arguments are provably non-injectable.
+pub fn is_type_safe_for_sink(
+    values: &[SsaValue],
+    sink_caps: crate::labels::Cap,
+    type_facts: &TypeFactResult,
+) -> bool {
+    use crate::labels::Cap;
+    // Int-typed values cannot carry injection payloads for these caps:
+    //   SQL_QUERY   — digits can't form meta SQL tokens
+    //   FILE_IO     — digits can't form path traversal sequences
+    //   SHELL_ESCAPE — digits can't form shell metacharacters
+    let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO | Cap::SHELL_ESCAPE;
+    if !sink_caps.intersects(type_suppressible) {
+        return false;
+    }
+    if values.is_empty() {
+        return false;
+    }
+    values.iter().all(|v| type_facts.is_int(*v))
+}
+
 /// Infer a type from a constructor, factory, or allocator call.
 ///
 /// Maps known constructor/factory/allocator patterns to security-relevant

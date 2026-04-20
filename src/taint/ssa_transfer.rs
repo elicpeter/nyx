@@ -537,6 +537,13 @@ pub struct SsaTaintTransfer<'a> {
     /// Used to resolve dynamic dispatch (e.g., `lib.request()` where
     /// `lib = require("http")`) for sink label matching.
     pub module_aliases: Option<&'a HashMap<SsaValue, smallvec::SmallVec<[String; 2]>>>,
+    /// Static-map analysis result: SSA values whose concrete string value is
+    /// provably bounded to a finite set of literals (e.g. the result of
+    /// `map.get(x).unwrap_or("fallback")` over an all-literal-insert map).
+    /// When present, seeded into [`AbstractState`] at entry so downstream sink
+    /// suppression can clear command-injection findings whose payload is
+    /// provably metacharacter-free.
+    pub static_map: Option<&'a crate::ssa::static_map::StaticMapResult>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -631,6 +638,15 @@ fn run_ssa_taint_internal(
                     }
                 }
             }
+            // Static-map seeding is intentionally NOT fused into the
+            // AbstractState here.  A blanket `StringFact::finite_set` would
+            // compose with `StringFact::exact` facts emitted by
+            // `transfer_abstract` for every string literal — and downstream
+            // suppression logic can't distinguish "single-literal exact"
+            // from "multi-literal bounded lookup".  Instead the sink check
+            // consults `transfer.static_map` directly via the dedicated
+            // `is_static_map_shell_safe` predicate, which only fires when
+            // the value was proved bounded by the HashMap idiom detector.
         }
     }
 
@@ -1595,6 +1611,7 @@ fn inline_analyse_callee(
         dynamic_pts: None, // no inter-procedural container propagation at k>1
         import_bindings: transfer.import_bindings,
         module_aliases: None, // callee body has its own const_values; module aliases not propagated
+        static_map: None, // static-map seeding is caller-body local, not propagated to inlined callees
     };
 
     // Use the callee's own body graph for inline analysis (per-body CFGs
@@ -3206,6 +3223,7 @@ fn collect_block_events(
                 sink_caps,
                 abs,
                 transfer.type_facts,
+                transfer.static_map,
                 &state,
                 ssa,
                 cfg,
@@ -3222,6 +3240,7 @@ fn collect_block_events(
                     sink_caps,
                     abs,
                     transfer.type_facts,
+                    transfer.static_map,
                     &state,
                     ssa,
                     cfg,
@@ -4441,29 +4460,16 @@ fn suppress_known_safe_callees(sink_caps: Cap, callee: &str, lang: Lang) -> Cap 
 ///
 /// Suppresses findings when all argument values are known to be integer-typed,
 /// since integer values cannot carry SQL injection or path traversal payloads.
+/// Delegates to the shared [`crate::ssa::type_facts::is_type_safe_for_sink`]
+/// helper so the structural `cfg-unguarded-sink` analysis agrees on the
+/// suppression rule.
 fn is_type_safe_for_sink(
     inst: &SsaInst,
     sink_caps: Cap,
     type_facts: &crate::ssa::type_facts::TypeFactResult,
 ) -> bool {
-    // Int-typed values cannot carry injection payloads for these caps:
-    //   SQL_QUERY   — digits can't form meta SQL tokens
-    //   FILE_IO     — digits can't form path traversal sequences
-    //   SHELL_ESCAPE — digits can't form shell metacharacters
-    // Rationale for SHELL_ESCAPE: once a value is parsed to a numeric type
-    // (Rust `parse::<u32>()`, JS `parseInt`, etc.) its string representation is
-    // bounded to `[0-9-+.eE]`, none of which are shell metacharacters.
-    let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO | Cap::SHELL_ESCAPE;
-    if !sink_caps.intersects(type_suppressible) {
-        return false;
-    }
-
     let used = inst_use_values(inst);
-    if used.is_empty() {
-        return false;
-    }
-
-    used.iter().all(|v| type_facts.is_int(*v))
+    crate::ssa::type_facts::is_type_safe_for_sink(&used, sink_caps, type_facts)
 }
 
 // ── Phase 16: Centralized Type-Sink Compatibility Helpers ────────────────
@@ -4545,6 +4551,7 @@ fn is_abstract_safe_for_sink(
     sink_caps: Cap,
     abs: &AbstractState,
     type_facts: Option<&crate::ssa::type_facts::TypeFactResult>,
+    static_map: Option<&crate::ssa::static_map::StaticMapResult>,
     state: &SsaTaintState,
     ssa: &SsaBody,
     cfg: &Cfg,
@@ -4572,6 +4579,19 @@ fn is_abstract_safe_for_sink(
         {
             return true;
         }
+    }
+
+    // SHELL_ESCAPE — static-map finite-domain safety.  When every tainted
+    // payload value is proved by the static-HashMap-lookup analysis to come
+    // from a bounded set of metacharacter-free literals, the call cannot
+    // carry shell injection regardless of how the attacker influenced the
+    // lookup key.  Only fires when the value appears in `static_map.finite_
+    // string_values`, not for arbitrary single-literal exact facts — those
+    // already have their own constant-argument suppression path and we
+    // must not over-apply shell-safety to unrelated const-prop bare-string
+    // artefacts (e.g. Python `commands = []`).
+    if sink_caps.intersects(Cap::SHELL_ESCAPE) && is_static_map_shell_safe(&used, static_map) {
+        return true;
     }
 
     // Dual gate: SQL_QUERY / FILE_IO / SHELL_ESCAPE with proven Int type AND
@@ -4604,6 +4624,7 @@ fn is_call_abstract_safe(
     sink_caps: Cap,
     abs: &AbstractState,
     type_facts: Option<&crate::ssa::type_facts::TypeFactResult>,
+    static_map: Option<&crate::ssa::static_map::StaticMapResult>,
     state: &SsaTaintState,
     ssa: &SsaBody,
     cfg: &Cfg,
@@ -4628,6 +4649,19 @@ fn is_call_abstract_safe(
             {
                 return true;
             }
+        }
+    }
+
+    // SHELL_ESCAPE — static-map finite-domain safety on every non-empty arg
+    // group.  Mirrors the non-Call path so suppression fires regardless of
+    // which branch the sink detector took.
+    if sink_caps.intersects(Cap::SHELL_ESCAPE) && !args.is_empty() {
+        let all_values: Vec<SsaValue> = args
+            .iter()
+            .flat_map(|g| g.iter().copied())
+            .collect();
+        if !all_values.is_empty() && is_static_map_shell_safe(&all_values, static_map) {
+            return true;
         }
     }
 
@@ -4775,6 +4809,29 @@ fn is_stringify_callee(callee: &str) -> bool {
         suffix,
         "to_string" | "to_owned" | "format" | "String" | "str"
     )
+}
+
+/// Return `true` when every value in `values` was proved by the static-map
+/// analysis to be drawn from a finite set of metacharacter-free literals.
+/// Returns `false` when `static_map` is `None`, when any value is missing,
+/// or when any value's bounded set contains a shell metacharacter — the
+/// predicate is conservative, so a missing entry never suppresses.
+fn is_static_map_shell_safe(
+    values: &[SsaValue],
+    static_map: Option<&crate::ssa::static_map::StaticMapResult>,
+) -> bool {
+    let Some(sm) = static_map else {
+        return false;
+    };
+    if values.is_empty() {
+        return false;
+    }
+    values.iter().all(|v| match sm.finite_string_values.get(v) {
+        Some(set) if !set.is_empty() => set
+            .iter()
+            .all(|s| crate::abstract_interp::string_domain::is_shell_safe_literal(s)),
+        _ => false,
+    })
 }
 
 /// SSRF safety: prefix includes scheme + full host + path separator.
@@ -5773,6 +5830,7 @@ pub fn extract_ssa_func_summary(
             dynamic_pts: None,
             import_bindings: None,
             module_aliases,
+            static_map: None,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);
@@ -5969,6 +6027,7 @@ pub fn extract_ssa_func_summary(
             dynamic_pts: None,
             import_bindings: None,
             module_aliases: None,
+            static_map: None,
         };
         detect_source_to_callback_from_states(
             ssa,

@@ -268,6 +268,17 @@ fn analyse_body_with_seed(
                 }
             }
             let dynamic_pts = std::cell::RefCell::new(std::collections::HashMap::new());
+            // Static-map abstract analysis: recognises provably-bounded
+            // lookup idioms (e.g. `map.get(x).unwrap_or("safe")`) so the SSA
+            // taint engine can clear command-injection findings whose payload
+            // is a finite set of literal strings.
+            let static_map =
+                crate::ssa::static_map::analyze(&ssa_body, cfg, Some(lang), &opt.const_values);
+            let static_map_opt = if static_map.is_empty() {
+                None
+            } else {
+                Some(static_map)
+            };
             let transfer = ssa_transfer::SsaTaintTransfer {
                 lang,
                 namespace,
@@ -293,6 +304,7 @@ fn analyse_body_with_seed(
                 } else {
                     Some(&opt.module_aliases)
                 },
+                static_map: static_map_opt.as_ref(),
             };
             let (events, block_states) =
                 ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);

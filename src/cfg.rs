@@ -108,6 +108,13 @@ pub struct CallMeta {
     /// Empty for languages without named arguments and for calls that use
     /// only positional arguments.
     pub kwargs: Vec<(String, Vec<String>)>,
+    /// String-literal value at each positional argument of this call, parallel
+    /// to `arg_uses` — `Some(s)` when the argument is a syntactic string
+    /// literal, `None` otherwise.  Empty for non-call nodes or when positional
+    /// boundaries can't be determined.  Consumed by the static-map abstract
+    /// analysis (and future literal-aware passes) so they don't need the
+    /// source bytes.
+    pub arg_string_literals: Vec<Option<String>>,
 }
 
 /// Taint-classification and variable-flow metadata.
@@ -2018,6 +2025,76 @@ fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> 
     }
 }
 
+/// For each argument of `call_node`, return `Some(s)` when the argument is a
+/// syntactic string literal (unquoted contents) and `None` otherwise.  The
+/// returned vector is parallel to [`extract_arg_uses`] / [`extract_arg_callees`].
+///
+/// Bails on splats so that a variadic call (`f(*args)`, `f(...xs)`) produces
+/// an empty vector — positional indices past the splat are meaningless and
+/// downstream passes already treat an empty vector as "no info".
+fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<Option<String>> {
+    let Some(args_node) = call_node.child_by_field_name("arguments") else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        let kind = child.kind();
+        // Splat → positional indexing breaks; bail.
+        if kind == "spread_element"
+            || kind == "dictionary_splat"
+            || kind == "list_splat"
+            || kind == "splat_argument"
+            || kind == "hash_splat_argument"
+        {
+            return Vec::new();
+        }
+        // Named / keyword arguments are tracked separately in `kwargs` and
+        // don't participate in positional indexing — skip them here so this
+        // vector stays aligned with `arg_uses`.
+        if kind == "keyword_argument" || kind == "named_argument" {
+            continue;
+        }
+        let literal = match kind {
+            "string"
+            | "string_literal"
+            | "interpreted_string_literal"
+            | "raw_string_literal" => {
+                let raw = text_of(child, code);
+                raw.and_then(|s| strip_literal_quotes(&s, child, code))
+            }
+            _ => None,
+        };
+        result.push(literal);
+    }
+    result
+}
+
+/// Strip surrounding quotes from a syntactic string literal, resolving the
+/// `string_content` child for Rust-style two-level string nodes.  Returns the
+/// raw inner text (no escape-sequence processing) — sufficient for whitelist
+/// matching against shell-metachar sets.
+fn strip_literal_quotes(raw: &str, node: Node, code: &[u8]) -> Option<String> {
+    // Rust/tree-sitter-rust: `string_literal` wraps a `string_content` child.
+    // Prefer the content text so the caller doesn't have to deal with quote
+    // pairing for raw strings (`r"..."`, `r#"..."#`, etc.).
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "string_content" {
+            return text_of(child, code).map(|s| s.to_string());
+        }
+    }
+    if raw.len() >= 2 {
+        let bytes = raw.as_bytes();
+        let first = bytes[0];
+        let last = bytes[raw.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return Some(raw[1..raw.len() - 1].to_string());
+        }
+    }
+    None
+}
+
 /// For each argument of `call_node`, find the callee name if that argument
 /// is itself a call expression (e.g. `sanitize(x)` in `os.system(sanitize(x))`).
 /// Returns a `Vec<Option<String>>` parallel to `extract_arg_uses` output.
@@ -2995,6 +3072,14 @@ fn push_node<'a>(
         Vec::new()
     };
 
+    // String-literal values at each positional argument, parallel to
+    // `arg_uses`.  Populated whenever there is a call AST so downstream
+    // passes (static-map, symex, sink suppression) can consume literals
+    // without re-accessing source bytes.
+    let arg_string_literals = call_ast
+        .map(|cn| extract_arg_string_literals(cn, code))
+        .unwrap_or_default();
+
     // Extract keyword / named arguments for Call and gated-sink nodes.
     // Languages whose grammar doesn't produce `keyword_argument` / `named_argument`
     // children return an empty Vec, so this costs nothing for C/Java/Go/etc.
@@ -3192,6 +3277,7 @@ fn push_node<'a>(
             receiver,
             sink_payload_args,
             kwargs,
+            arg_string_literals,
         },
         taint: TaintMeta {
             labels,
@@ -7606,6 +7692,7 @@ mod cfg_tests {
                 receiver: Some("obj".into()),
                 sink_payload_args: Some(vec![1, 2]),
                 kwargs: vec![("shell".into(), vec!["True".into()])],
+                arg_string_literals: vec![Some("lit".into())],
             },
             taint: TaintMeta {
                 labels: {

@@ -10,6 +10,7 @@ use crate::cfg::StmtKind;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule};
 use crate::patterns::Severity;
 use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::type_facts::TypeFactResult;
 use crate::ssa::{SsaOp, SsaValue};
 use crate::taint::path_state::{PredicateKind, classify_condition};
 use petgraph::graph::NodeIndex;
@@ -220,6 +221,194 @@ fn find_inst(ssa: &crate::ssa::SsaBody, v: SsaValue) -> Option<&crate::ssa::SsaI
         .iter()
         .chain(block.body.iter())
         .find(|inst| inst.value == v)
+}
+
+/// Check whether every operand SSA value of the sink's Call instruction is
+/// proven by type-fact analysis to be non-injectable for `sink_caps`.
+///
+/// Used to suppress `cfg-unguarded-sink` when all arguments are typed safe
+/// (e.g. Rust `port: u16` flowing into `Command::new(…).arg(port.to_string())`).
+/// Returns `false` when any required fact is missing so the structural finding
+/// is preserved whenever typing is ambiguous.
+fn sink_args_typed_safe(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) -> bool {
+    let Some(facts) = ctx.body_const_facts else {
+        return false;
+    };
+    let Some(type_facts) = ctx.type_facts else {
+        return false;
+    };
+    let Some(&sink_val) = facts.ssa.cfg_node_map.get(&sink) else {
+        return false;
+    };
+    let Some(inst) = find_inst(&facts.ssa, sink_val) else {
+        return false;
+    };
+    let SsaOp::Call { args, receiver, .. } = &inst.op else {
+        return false;
+    };
+
+    // Chained Rust/JS calls record the whole dotted path as a single Call node.
+    // Its SSA operands include pseudo-uses for every identifier segment of the
+    // callee (e.g. `Command`, `new`, `arg`, `status`, `unwrap`) plus string
+    // literal arguments to intermediate calls.  Filter those out so the
+    // is-Int check runs only against real argument values.
+    let sink_info = &ctx.cfg[sink];
+    let callee_desc = sink_info.call.callee.as_deref().unwrap_or("");
+    let callee_parts: Vec<&str> = callee_desc
+        .split(['.', ':'])
+        .map(|p| p.split('(').next().unwrap_or(p))
+        .collect();
+    let outer_parts: Vec<&str> = sink_info
+        .call
+        .outer_callee
+        .as_deref()
+        .map(|oc| {
+            oc.split(['.', ':'])
+                .map(|p| p.split('(').next().unwrap_or(p))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let is_real_arg = |v: SsaValue| -> bool {
+        let Some(def) = find_inst(&facts.ssa, v) else {
+            return true;
+        };
+        // Callee-fragment pseudo-uses appear as `Param { .. }` with a
+        // var_name that is a segment of the callee text.  SelfParam and
+        // CatchParam cover `self`/exception bindings that cannot be the
+        // implicit callee chain.
+        match &def.op {
+            SsaOp::Param { .. } => {
+                let name = def.var_name.as_deref().unwrap_or("");
+                !is_callee_fragment(name, callee_desc, &callee_parts, &outer_parts)
+            }
+            // Constant string literals used as inline args (e.g. `"listener"`,
+            // `"-c"`) are not user-controlled — treat as non-real for the
+            // "all int-typed" test so they don't block suppression.
+            SsaOp::Const(_) => false,
+            _ => true,
+        }
+    };
+
+    let mut values: Vec<SsaValue> = Vec::new();
+    if let Some(r) = receiver {
+        if is_real_arg(*r) {
+            values.push(*r);
+        }
+    }
+    for group in args {
+        for v in group.iter() {
+            if is_real_arg(*v) {
+                values.push(*v);
+            }
+        }
+    }
+    type_facts_suppress(&values, sink_caps, type_facts)
+}
+
+/// Thin wrapper around [`crate::ssa::type_facts::is_type_safe_for_sink`] kept
+/// local so the unit tests here can exercise the exact predicate used at the
+/// `cfg-unguarded-sink` emission site.
+fn type_facts_suppress(
+    values: &[SsaValue],
+    sink_caps: Cap,
+    type_facts: &TypeFactResult,
+) -> bool {
+    crate::ssa::type_facts::is_type_safe_for_sink(values, sink_caps, type_facts)
+}
+
+/// Suppress a `cfg-unguarded-sink` finding when every real argument SSA
+/// value resolves to a finite set of metacharacter-free literals, as proved
+/// by the static-map analysis.  Runs in lock-step with the SSA taint
+/// suppression so both findings paths agree on when a provably-bounded
+/// lookup idiom (e.g. `map.get(x).unwrap_or("safe")` over literal inserts)
+/// should clear a command-injection sink.
+///
+/// Only fires for `Cap::SHELL_ESCAPE` — SQL / path suppression from this
+/// domain would require stronger reasoning (literal keys can still carry
+/// SQL tokens if the inserts themselves contain them).
+fn sink_args_static_map_safe(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) -> bool {
+    if !sink_caps.intersects(Cap::SHELL_ESCAPE) {
+        return false;
+    }
+    let Some(facts) = ctx.body_const_facts else {
+        return false;
+    };
+    let Some(&sink_val) = facts.ssa.cfg_node_map.get(&sink) else {
+        return false;
+    };
+    let Some(inst) = find_inst(&facts.ssa, sink_val) else {
+        return false;
+    };
+    let SsaOp::Call { args, receiver, .. } = &inst.op else {
+        return false;
+    };
+
+    let sm = crate::ssa::static_map::analyze(
+        &facts.ssa,
+        ctx.cfg,
+        Some(ctx.lang),
+        &facts.const_values,
+    );
+    if sm.is_empty() {
+        return false;
+    }
+
+    // Skip callee-fragment pseudo-uses the same way `sink_args_typed_safe`
+    // does so only real runtime arg values participate in the check.
+    let sink_info = &ctx.cfg[sink];
+    let callee_desc = sink_info.call.callee.as_deref().unwrap_or("");
+    let callee_parts: Vec<&str> = callee_desc
+        .split(['.', ':'])
+        .map(|p| p.split('(').next().unwrap_or(p))
+        .collect();
+    let outer_parts: Vec<&str> = sink_info
+        .call
+        .outer_callee
+        .as_deref()
+        .map(|oc| {
+            oc.split(['.', ':'])
+                .map(|p| p.split('(').next().unwrap_or(p))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let is_real_arg = |v: SsaValue| -> bool {
+        let Some(def) = find_inst(&facts.ssa, v) else {
+            return true;
+        };
+        match &def.op {
+            SsaOp::Param { .. } => {
+                let name = def.var_name.as_deref().unwrap_or("");
+                !is_callee_fragment(name, callee_desc, &callee_parts, &outer_parts)
+            }
+            SsaOp::Const(_) => false,
+            _ => true,
+        }
+    };
+
+    let mut values: Vec<SsaValue> = Vec::new();
+    if let Some(r) = receiver {
+        if is_real_arg(*r) {
+            values.push(*r);
+        }
+    }
+    for group in args {
+        for v in group.iter() {
+            if is_real_arg(*v) {
+                values.push(*v);
+            }
+        }
+    }
+    if values.is_empty() {
+        return false;
+    }
+    values.iter().all(|v| match sm.finite_string_values.get(v) {
+        Some(set) if !set.is_empty() => set
+            .iter()
+            .all(|s| crate::abstract_interp::string_domain::is_shell_safe_literal(s)),
+        _ => false,
+    })
 }
 
 /// Check if a callee matches any of the runtime label rules that are sanitizers.
@@ -542,6 +731,24 @@ impl CfgAnalysis for UnguardedSink {
             // If sink args are all constants (including one-hop constant bindings)
             // and taint didn't confirm, this is a false positive — skip it.
             if is_all_args_constant(ctx, *sink) && !has_taint {
+                continue;
+            }
+
+            // Type-aware suppression: when all SSA operand values of the sink
+            // are proven to carry non-injectable types (e.g. integers parsed
+            // from a raw source), the arguments cannot form a payload for
+            // SHELL/SQL/FILE sinks.  Skip the structural finding — the taint
+            // engine already covers the source→sink flow via Phase 10 type
+            // suppression.  Unknown-typed or mixed operands fall through.
+            if !has_taint && sink_args_typed_safe(ctx, *sink, sink_caps) {
+                continue;
+            }
+
+            // Static-map suppression: the SSA value flowing into the sink is
+            // proved by the static-HashMap-lookup idiom detector to be a
+            // finite set of literals free of shell metacharacters.  Mirrors
+            // the SSA-taint finite-domain suppression so both paths agree.
+            if !has_taint && sink_args_static_map_safe(ctx, *sink, sink_caps) {
                 continue;
             }
 

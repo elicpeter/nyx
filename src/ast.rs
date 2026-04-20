@@ -744,6 +744,7 @@ impl<'a> ParsedFile<'a> {
                 analysis_rules: self.rules_ref(),
                 taint_active,
                 body_const_facts: body_const_facts.as_ref(),
+                type_facts: body_const_facts.as_ref().map(|f| &f.type_facts),
             };
             for cf in cfg_analysis::run_all(&cfg_ctx) {
                 let point = byte_offset_to_point(&self.source.tree, cf.span.0);

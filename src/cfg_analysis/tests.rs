@@ -31,6 +31,7 @@ fn parse_and_analyse<A: CfgAnalysis>(
         analysis_rules: None,
         taint_active: true,
         body_const_facts: None,
+        type_facts: None,
     };
     analysis.run(&ctx)
 }
@@ -57,6 +58,7 @@ fn parse_and_run_all(src: &[u8], lang_str: &str, ts_lang: Language) -> Vec<CfgFi
         analysis_rules: None,
         taint_active: true,
         body_const_facts: None,
+        type_facts: None,
     };
     run_all(&ctx)
 }
@@ -88,6 +90,7 @@ fn parse_and_run_all_with_taint(
         analysis_rules: None,
         taint_active: true,
         body_const_facts: None,
+        type_facts: None,
     };
     run_all(&ctx)
 }
@@ -203,6 +206,7 @@ fn parse_and_analyse_with_ssa<A: CfgAnalysis>(
         analysis_rules: None,
         taint_active: true,
         body_const_facts: facts.as_ref(),
+        type_facts: facts.as_ref().map(|f| &f.type_facts),
     };
     analysis.run(&ctx)
 }
@@ -1125,6 +1129,7 @@ fn config_sanitizer_suppresses_unguarded_sink() {
         analysis_rules: Some(&rules),
         taint_active: true,
         body_const_facts: None,
+        type_facts: None,
     };
     let findings = run_all(&ctx);
 
@@ -1601,6 +1606,7 @@ fn cfg_only_no_taint_produces_low_severity() {
         analysis_rules: None,
         taint_active: false, // cfg-only mode
         body_const_facts: None,
+        type_facts: None,
     };
     let findings = guards::UnguardedSink.run(&ctx);
 
@@ -1987,5 +1993,71 @@ function run() {
     assert!(
         !sink_findings.is_empty(),
         "PHP system() with interpolated string should produce a HIGH finding"
+    );
+}
+
+// ── Type-fact sink suppression (rs-safe-011 regression) ────────────────
+
+#[test]
+fn type_facts_suppress_int_typed_shell_arg() {
+    // rs-safe-011 fixture: a u16-typed port (parsed from env) flows into
+    // Command::new("listener").arg(port.to_string()).  The taint engine
+    // already suppresses the flow via Phase 10 typing; the structural
+    // cfg-unguarded-sink must also honour the type fact and stay silent.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        fn main() {
+            let raw = env::var("PORT").unwrap();
+            let port: u16 = raw.parse().expect("invalid port");
+            Command::new("listener").arg(port.to_string()).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        guard_findings.is_empty(),
+        "Int-typed sink argument should suppress cfg-unguarded-sink, got: {:?}",
+        guard_findings
+    );
+}
+
+#[test]
+fn type_facts_preserve_untyped_string_shell_arg() {
+    // Companion negative test: env::var() flows directly into a Command arg
+    // with no int typing.  The sink argument is a String of unknown content,
+    // so the structural finding must still fire.  Guards against the
+    // suppression helper over-reaching into cases without an Int fact.
+    let src = br#"
+        use std::env;
+        use std::process::Command;
+        fn main() {
+            let cmd = env::var("USER_CMD").unwrap();
+            Command::new("sh").arg("-c").arg(cmd).status().unwrap();
+        }"#;
+
+    let findings = parse_and_analyse_with_ssa(
+        &guards::UnguardedSink,
+        src,
+        "rust",
+        Language::from(tree_sitter_rust::LANGUAGE),
+    );
+
+    let guard_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.rule_id == "cfg-unguarded-sink")
+        .collect();
+    assert!(
+        !guard_findings.is_empty(),
+        "Untyped String shell argument must still produce cfg-unguarded-sink"
     );
 }

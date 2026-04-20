@@ -13,6 +13,7 @@ use crate::cfg::{FuncSummaries, NodeInfo, StmtKind};
 use crate::labels::{DataLabel, LangAnalysisRules};
 use crate::patterns::Severity;
 use crate::ssa::const_prop::ConstLattice;
+use crate::ssa::type_facts::TypeFactResult;
 use crate::ssa::{SsaBody, SsaValue};
 use crate::summary::GlobalSummaries;
 use crate::symbol::Lang;
@@ -26,6 +27,7 @@ use std::collections::{HashMap, HashSet};
 pub struct BodyConstFacts {
     pub ssa: SsaBody,
     pub const_values: HashMap<SsaValue, ConstLattice>,
+    pub type_facts: TypeFactResult,
 }
 
 /// Lower a body to SSA and run constant propagation.  Returns `None` when
@@ -44,6 +46,7 @@ pub fn build_body_const_facts(body: &crate::cfg::BodyCfg, lang: Lang) -> Option<
     Some(BodyConstFacts {
         ssa,
         const_values: opt.const_values,
+        type_facts: opt.type_facts,
     })
 }
 
@@ -89,6 +92,12 @@ pub struct AnalysisContext<'a> {
     /// flows into a sink resolve to literal constants, suppressing false
     /// positives that the one-hop CFG trace alone cannot.
     pub body_const_facts: Option<&'a BodyConstFacts>,
+    /// Optional per-body type-fact result produced by `optimize_ssa`.
+    /// Structural analyses use it to suppress findings when a sink's argument
+    /// SSA values are proven to carry non-injectable types (e.g. integers
+    /// parsed from a raw source can't form SHELL/SQL/path payloads).  Sourced
+    /// from `body_const_facts` when present — keep both pointers coherent.
+    pub type_facts: Option<&'a TypeFactResult>,
 }
 
 pub trait CfgAnalysis {

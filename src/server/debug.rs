@@ -976,6 +976,7 @@ pub fn analyse_function_taint(
         } else {
             Some(&opt.module_aliases)
         },
+        static_map: None,
     };
 
     crate::taint::ssa_transfer::run_ssa_taint_full_with_exits(ssa, cfg, &transfer)

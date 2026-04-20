@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-20T21:29:19Z",
+  "timestamp": "2026-04-20T22:29:27Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:f61d0a58422b8a22bd1c18609847908762af5009fdc993211f4fc5affc3dfa7c",
-  "corpus_size": 262,
-  "cases_run": 261,
+  "ground_truth_hash": "sha256:0e2edf9ed012b2a5c7d7fbc7a0534b4122afee5eccb09ac97073551cdf15de1b",
+  "corpus_size": 265,
+  "cases_run": 264,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -3372,6 +3372,27 @@
       "non_security_finding_count": 2
     },
     {
+      "case_id": "rs-cmdi-008",
+      "file": "rust/cmdi/cmdi_static_map_dangerous.rs",
+      "language": "rust",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 6:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 6:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
       "case_id": "rs-cmdi-cross-001",
       "file": "rust/cmdi/cross_propagation/",
       "language": "rust",
@@ -3662,6 +3683,24 @@
     },
     {
       "case_id": "rs-safe-009",
+      "file": "rust/safe/safe_shell_metachar.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-safe-009",
       "file": "rust/safe/safe_match_guard.rs",
       "language": "rust",
       "vuln_class": "safe",
@@ -3684,19 +3723,16 @@
       "language": "rust",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "taint-unsanitised-flow (source 6:5)"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "rs.quality.unwrap",
-        "rs.quality.unwrap",
-        "taint-unsanitised-flow (source 6:5)"
+        "rs.quality.unwrap"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 0,
       "non_security_finding_count": 2
     },
     {
@@ -3705,20 +3741,17 @@
       "language": "rust",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "cfg-unguarded-sink"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "rs.quality.unwrap",
         "rs.quality.expect",
-        "cfg-unguarded-sink",
         "rs.quality.unwrap"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 0,
       "non_security_finding_count": 3
     },
     {
@@ -3742,6 +3775,28 @@
     {
       "case_id": "rs-sqli-001",
       "file": "rust/sqli/sqli_rusqlite_format.rs",
+      "language": "rust",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 3
+    },
+    {
+      "case_id": "rs-sqli-002",
+      "file": "rust/sqli/sqli_metachar_gate_wrong_sink.rs",
       "language": "rust",
       "vuln_class": "sqli",
       "is_vulnerable": true,
@@ -4876,22 +4931,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 155,
-    "fp": 12,
+    "tp": 157,
+    "fp": 10,
     "fn_": 0,
-    "tn": 94,
-    "precision": 0.9281437125748503,
+    "tn": 97,
+    "precision": 0.9401197604790419,
     "recall": 1.0,
-    "f1": 0.9627329192546584
+    "f1": 0.9691358024691358
   },
   "aggregate_rule_level": {
-    "tp": 154,
-    "fp": 12,
+    "tp": 156,
+    "fp": 10,
     "fn_": 1,
-    "tn": 94,
-    "precision": 0.927710843373494,
-    "recall": 0.9935483870967742,
-    "f1": 0.9595015576323986
+    "tn": 97,
+    "precision": 0.9397590361445783,
+    "recall": 0.9936305732484076,
+    "f1": 0.9659442724458205
   },
   "by_language": {
     "c": {
@@ -4967,13 +5022,13 @@
       "f1": 0.9600000000000001
     },
     "rust": {
-      "tp": 19,
-      "fp": 2,
+      "tp": 21,
+      "fp": 0,
       "fn_": 0,
-      "tn": 10,
-      "precision": 0.9047619047619048,
+      "tn": 13,
+      "precision": 1.0,
       "recall": 1.0,
-      "f1": 0.9500000000000001
+      "f1": 1.0
     },
     "typescript": {
       "tp": 25,
@@ -4996,7 +5051,7 @@
       "f1": 1.0
     },
     "cmdi": {
-      "tp": 42,
+      "tp": 43,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -5069,9 +5124,9 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 12,
+      "fp": 10,
       "fn_": 0,
-      "tn": 94,
+      "tn": 97,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -5086,13 +5141,13 @@
       "f1": 1.0
     },
     "sqli": {
-      "tp": 21,
+      "tp": 22,
       "fp": 0,
       "fn_": 1,
       "tn": 0,
       "precision": 1.0,
-      "recall": 0.9545454545454546,
-      "f1": 0.9767441860465117
+      "recall": 0.9565217391304348,
+      "f1": 0.9777777777777777
     },
     "ssrf": {
       "tp": 20,
@@ -5115,31 +5170,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 105,
-      "fp": 49,
+      "tp": 107,
+      "fp": 48,
       "fn_": 50,
-      "tn": 57,
-      "precision": 0.6818181818181818,
-      "recall": 0.6774193548387096,
-      "f1": 0.6796116504854368
+      "tn": 59,
+      "precision": 0.6903225806451613,
+      "recall": 0.6815286624203821,
+      "f1": 0.6858974358974359
     },
     ">=Low": {
-      "tp": 105,
-      "fp": 52,
+      "tp": 107,
+      "fp": 50,
       "fn_": 50,
-      "tn": 54,
-      "precision": 0.6687898089171974,
-      "recall": 0.6774193548387096,
-      "f1": 0.673076923076923
+      "tn": 57,
+      "precision": 0.6815286624203821,
+      "recall": 0.6815286624203821,
+      "f1": 0.6815286624203821
     },
     ">=Medium": {
-      "tp": 105,
-      "fp": 52,
+      "tp": 107,
+      "fp": 50,
       "fn_": 50,
-      "tn": 54,
-      "precision": 0.6687898089171974,
-      "recall": 0.6774193548387096,
-      "f1": 0.673076923076923
+      "tn": 57,
+      "precision": 0.6815286624203821,
+      "recall": 0.6815286624203821,
+      "f1": 0.6815286624203821
     }
   }
 }

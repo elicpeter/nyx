@@ -6565,6 +6565,31 @@
       "notes": "Tainted &str concatenated via + into sh -c argument"
     },
     {
+      "case_id": "rs-cmdi-008",
+      "file": "rust/cmdi/cmdi_static_map_dangerous.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[14, 14]],
+      "expected_source_lines": [[6, 6]],
+      "tags": ["hashmap", "static-lookup", "dangerous-literal"],
+      "disabled": false,
+      "notes": "Static HashMap where one inserted value carries shell metacharacters — finite-set suppression must NOT clear this sink"
+    },
+    {
       "case_id": "rs-cmdi-cross-001",
       "file": "rust/cmdi/cross_propagation/",
       "language": "rust",
