@@ -1903,7 +1903,10 @@ fn ssa_summaries_round_trip() {
             crate::symbol::FuncKind::Function,
             SsaFuncSummary {
                 param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
-                param_to_sink: vec![(0, Cap::SQL_QUERY)],
+                param_to_sink: vec![(
+                    0,
+                    smallvec::smallvec![crate::summary::SinkSite::cap_only(Cap::SQL_QUERY)],
+                )],
                 source_caps: Cap::ENV_VAR,
                 param_to_sink_param: vec![],
                 param_container_to_return: vec![],
@@ -1947,7 +1950,7 @@ fn ssa_summaries_round_trip() {
         sum2.param_to_return,
         vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))]
     );
-    assert_eq!(sum2.param_to_sink, vec![(0, Cap::SQL_QUERY)]);
+    assert_eq!(sum2.param_to_sink_caps(), vec![(0, Cap::SQL_QUERY)]);
     assert_eq!(sum2.source_caps, Cap::ENV_VAR);
 }
 

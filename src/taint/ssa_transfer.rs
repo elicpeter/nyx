@@ -5439,16 +5439,14 @@ fn convert_ssa_to_resolved(
     }
 
     // Compute effective sink caps: union across all params
-    let mut sink_caps = Cap::empty();
-    for (_, caps) in &ssa_sum.param_to_sink {
-        sink_caps |= *caps;
-    }
+    let sink_caps = ssa_sum.total_param_sink_caps();
+    let param_to_sink = ssa_sum.param_to_sink_caps();
 
     ResolvedSummary {
         source_caps: ssa_sum.source_caps,
         sanitizer_caps,
         sink_caps,
-        param_to_sink: ssa_sum.param_to_sink.clone(),
+        param_to_sink,
         propagates_taint: !propagating_params.is_empty(),
         propagating_params,
         param_container_to_return: ssa_sum.param_container_to_return.clone(),
@@ -5752,6 +5750,7 @@ const MAX_PROBE_PARAMS: usize = 8;
 /// that parameter with `Cap::all()` via `global_seed` and observing what caps
 /// survive to return positions and which sinks fire.  A final probe with no params
 /// tainted detects intrinsic source caps.
+#[allow(clippy::too_many_arguments)]
 pub fn extract_ssa_func_summary(
     ssa: &SsaBody,
     cfg: &Cfg,
@@ -5762,8 +5761,10 @@ pub fn extract_ssa_func_summary(
     interner: &crate::state::symbol::SymbolInterner,
     param_count: usize,
     module_aliases: Option<&HashMap<SsaValue, smallvec::SmallVec<[String; 2]>>>,
+    locator: Option<&crate::summary::SinkSiteLocator<'_>>,
 ) -> crate::summary::ssa_summary::SsaFuncSummary {
     use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
+    use crate::summary::SinkSite;
 
     let effective_params = param_count.min(MAX_PROBE_PARAMS);
 
@@ -5946,7 +5947,7 @@ pub fn extract_ssa_func_summary(
 
     // Probe each param
     let mut param_to_return = Vec::new();
-    let mut param_to_sink = Vec::new();
+    let mut param_to_sink: Vec<(usize, SmallVec<[SinkSite; 1]>)> = Vec::new();
     let mut param_to_sink_param = Vec::new();
 
     for &(idx, ref var_name, _ssa_val) in &param_info {
@@ -5980,16 +5981,26 @@ pub fn extract_ssa_func_summary(
             param_to_return.push((idx, transform));
         }
 
-        // Collect sink caps from events + per-arg-position detail
-        let mut sink_caps = Cap::empty();
+        // Collect sink caps + primary-location sites from events + per-arg-position detail
+        let mut param_sites: SmallVec<[SinkSite; 1]> = SmallVec::new();
         for event in &events {
-            sink_caps |= event.sink_caps;
             for pos in extract_sink_arg_positions(event, ssa) {
                 param_to_sink_param.push((idx, pos, event.sink_caps));
             }
+            if event.sink_caps.is_empty() {
+                continue;
+            }
+            let site = match locator {
+                Some(loc) => loc.site_for_span(cfg[event.sink_node].ast.span, event.sink_caps),
+                None => SinkSite::cap_only(event.sink_caps),
+            };
+            let key = site.dedup_key();
+            if !param_sites.iter().any(|s| s.dedup_key() == key) {
+                param_sites.push(site);
+            }
         }
-        if !sink_caps.is_empty() {
-            param_to_sink.push((idx, sink_caps));
+        if !param_sites.is_empty() {
+            param_to_sink.push((idx, param_sites));
         }
     }
 

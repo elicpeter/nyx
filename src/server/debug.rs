@@ -802,11 +802,11 @@ impl FuncSummaryView {
                 })
                 .collect(),
             param_to_sink: ss
-                .param_to_sink
-                .iter()
+                .param_to_sink_caps()
+                .into_iter()
                 .map(|(idx, caps)| ParamSinkView {
-                    param_index: *idx,
-                    sink_caps: cap_names(*caps),
+                    param_index: idx,
+                    sink_caps: cap_names(caps),
                 })
                 .collect(),
             source_caps: cap_names(ss.source_caps),

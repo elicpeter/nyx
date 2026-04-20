@@ -4,8 +4,170 @@ use crate::labels::Cap;
 use crate::summary::ssa_summary::SsaFuncSummary;
 use crate::symbol::{FuncKey, FuncKind, Lang, normalize_namespace};
 use serde::{Deserialize, Deserializer, Serialize};
+use smallvec::SmallVec;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
+
+// ── Sink site (primary sink-location attribution) ───────────────────────
+
+/// A single dangerous-instruction site recorded inside a function's body.
+///
+/// `SinkSite` pairs a [`Cap`] (the bits this particular site consumes) with
+/// the file-relative source location of the instruction that consumes them.
+/// Carrying this alongside a summary's `param_to_sink` map lets cross-file
+/// findings attribute the finding line to the actual dangerous call inside
+/// the callee, rather than to the caller's call-site (which is all a
+/// bare `(param_idx, Cap)` pair could support).
+///
+/// Phase 1 of the primary sink-location attribution work stores this data
+/// in the summary; phase 2 will consume it in `build_taint_diag()` to
+/// overwrite the caller-site `Finding.line` when the sink was resolved via
+/// summary.
+///
+/// Fields
+/// ──────
+/// * `file_rel` — the callee file's path relative to the workspace root
+///   being scanned.  Matches the `FuncKey::namespace` convention so the
+///   site's origin is addressable without additional workspace context.
+/// * `line` / `col` — 1-based source coordinates of the sink instruction.
+///   `0` indicates the extractor could not resolve coordinates (e.g. a
+///   pass-2 transient summary without tree access).
+/// * `snippet` — the trimmed source line, capped at 120 characters, empty
+///   when coordinates could not be resolved.
+/// * `cap` — the [`Cap`] bits this specific site consumes.  A parameter's
+///   total sink caps is the union across every site associated with it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SinkSite {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub file_rel: String,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub line: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub col: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub snippet: String,
+    pub cap: Cap,
+}
+
+impl SinkSite {
+    /// Dedup key comparing the full identity of a site.  Two sites with the
+    /// same `(file_rel, line, col, cap)` describe the same consumption of
+    /// the same bits at the same source location and should collapse when
+    /// summaries are merged.
+    pub(crate) fn dedup_key(&self) -> (&str, u32, u32, u16) {
+        (self.file_rel.as_str(), self.line, self.col, self.cap.bits())
+    }
+
+    /// Build a site that only carries a [`Cap`] — no resolved source
+    /// coordinates.  Used by extraction paths that have no tree/bytes
+    /// context (e.g. pass-2 transient summaries), so downstream consumers
+    /// unioning caps across sites still see the correct bits even when
+    /// primary-location attribution is not available.
+    pub fn cap_only(cap: Cap) -> Self {
+        Self {
+            file_rel: String::new(),
+            line: 0,
+            col: 0,
+            snippet: String::new(),
+            cap,
+        }
+    }
+}
+
+/// Tree/bytes context for resolving a CFG span to a [`SinkSite`].
+///
+/// Summary extraction runs deep inside the taint engine, far from the
+/// `ParsedFile` that owns the tree; `SinkSiteLocator` is the narrow
+/// reference bundle the extractor needs to populate `SinkSite.line`,
+/// `col`, and `snippet`.  The struct is intentionally plain references
+/// so construction is free and threading it as `Option<&Locator>` is
+/// cheap.
+pub struct SinkSiteLocator<'a> {
+    pub tree: &'a tree_sitter::Tree,
+    pub bytes: &'a [u8],
+    pub file_rel: &'a str,
+}
+
+impl<'a> SinkSiteLocator<'a> {
+    /// Resolve a `(start_byte, end_byte)` span to a [`SinkSite`] with the
+    /// given `cap`.  Coordinates fall back to `(0, 0)` and the snippet to
+    /// empty when the byte offset is out of range (should not happen for
+    /// spans that came from the same tree).
+    pub fn site_for_span(&self, span: (usize, usize), cap: Cap) -> SinkSite {
+        let byte = span.0;
+        let point = self
+            .tree
+            .root_node()
+            .descendant_for_byte_range(byte, byte)
+            .map(|n| n.start_position())
+            .unwrap_or(tree_sitter::Point { row: 0, column: 0 });
+        let snippet = line_snippet(self.bytes, byte).unwrap_or_default();
+        SinkSite {
+            file_rel: self.file_rel.to_string(),
+            line: (point.row + 1) as u32,
+            col: (point.column + 1) as u32,
+            snippet,
+            cap,
+        }
+    }
+}
+
+/// Extract the source line containing `byte_offset`, trimmed and capped at
+/// 120 chars.  Returns `None` when the offset is out of range or the line
+/// is entirely blank after trimming.
+pub(crate) fn line_snippet(src: &[u8], byte_offset: usize) -> Option<String> {
+    if byte_offset >= src.len() {
+        return None;
+    }
+    let line_start = src[..byte_offset]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |p| p + 1);
+    let line_end = src[byte_offset..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map_or(src.len(), |p| byte_offset + p);
+    let line = std::str::from_utf8(&src[line_start..line_end]).ok()?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() > 120 {
+        Some(format!("{}...", &trimmed[..120]))
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Union two `SmallVec<[SinkSite; 1]>` lists with `(file_rel, line, col,
+/// cap)` dedup.  Preserves insertion order of `existing` then appends any
+/// new sites from `incoming` not already present.
+pub(crate) fn union_sink_sites(
+    existing: &mut SmallVec<[SinkSite; 1]>,
+    incoming: &[SinkSite],
+) {
+    for site in incoming {
+        let key = site.dedup_key();
+        if !existing.iter().any(|s| s.dedup_key() == key) {
+            existing.push(site.clone());
+        }
+    }
+}
+
+/// Union two `Vec<(usize, SmallVec<[SinkSite; 1]>)>` lists keyed by
+/// parameter index.  Each parameter keeps its own deduped site list.
+pub(crate) fn union_param_sink_sites(
+    existing: &mut Vec<(usize, SmallVec<[SinkSite; 1]>)>,
+    incoming: &[(usize, SmallVec<[SinkSite; 1]>)],
+) {
+    for (idx, sites) in incoming {
+        if let Some((_, ex)) = existing.iter_mut().find(|(i, _)| *i == *idx) {
+            union_sink_sites(ex, sites);
+        } else {
+            existing.push((*idx, sites.clone()));
+        }
+    }
+}
 
 /// Top bit of [`FuncKey::disambig`] reserved for synthetic discriminators
 /// minted by [`GlobalSummaries`] when an identity collision is detected
@@ -181,6 +343,13 @@ pub struct FuncSummary {
 
     /// Indices of parameters that flow to internal sinks (0‑based).
     pub tainted_sink_params: Vec<usize>,
+
+    /// Per-parameter [`SinkSite`] records — mirrors
+    /// [`SsaFuncSummary::param_to_sink`] so the coarse legacy summary also
+    /// carries primary sink-location attribution through the two-pass
+    /// architecture.  Empty when the extractor lacked tree access.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_to_sink: Vec<(usize, SmallVec<[SinkSite; 1]>)>,
 
     /// Per-call-site metadata for every function/method/macro invoked
     /// inside this body (`CalleeSite`).  Carries arity, receiver,
@@ -547,6 +716,7 @@ impl GlobalSummaries {
                         existing.tainted_sink_params.push(idx);
                     }
                 }
+                union_param_sink_sites(&mut existing.param_to_sink, &summary.param_to_sink);
                 for c in &summary.callees {
                     if !existing.callees.iter().any(|e| {
                         e.name == c.name

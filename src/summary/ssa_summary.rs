@@ -1,7 +1,9 @@
 use crate::abstract_interp::AbstractValue;
 use crate::labels::Cap;
 use crate::ssa::type_facts::TypeKind;
+use crate::summary::SinkSite;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 /// Per-parameter taint transform describing how taint flows through a function.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,8 +27,17 @@ pub enum TaintTransform {
 pub struct SsaFuncSummary {
     /// Per-parameter flows to return value: (param_index, transform).
     pub param_to_return: Vec<(usize, TaintTransform)>,
-    /// Per-parameter flows to internal sinks: (param_index, sink_caps).
-    pub param_to_sink: Vec<(usize, Cap)>,
+    /// Per-parameter flows to internal sinks: each entry binds a parameter
+    /// index to one or more [`SinkSite`]s inside this function's body.
+    ///
+    /// Phase 1 of primary sink-location attribution: carrying the callee's
+    /// sink source-location through the summary lets cross-file findings
+    /// attribute the finding to the actual dangerous instruction rather
+    /// than to the call site.  Each `SinkSite` records the bits (`cap`) it
+    /// contributes, so consumers deriving a coarse `Cap` union across all
+    /// sites for a given parameter remain behavior-compatible.
+    #[serde(default)]
+    pub param_to_sink: Vec<(usize, SmallVec<[SinkSite; 1]>)>,
     /// Source caps introduced regardless of parameters (e.g., function reads env).
     pub source_caps: Cap,
     /// Per-parameter flows to specific internal sink argument positions:
@@ -66,4 +77,33 @@ pub struct SsaFuncSummary {
     /// Empty when the receiver is not used as a sink payload inside the body.
     #[serde(default)]
     pub receiver_to_sink: Cap,
+}
+
+impl SsaFuncSummary {
+    /// Per-parameter union of [`Cap`] bits across every [`SinkSite`] recorded
+    /// for that parameter.
+    ///
+    /// Returns one `(param_index, caps)` pair per distinct parameter, with
+    /// `caps` being the bitwise OR of every site's own `cap`.  This is the
+    /// backward-compatible view that pre-`SinkSite` consumers (resolver,
+    /// taint engine) still rely on.
+    pub fn param_to_sink_caps(&self) -> Vec<(usize, Cap)> {
+        self.param_to_sink
+            .iter()
+            .map(|(idx, sites)| {
+                let caps = sites
+                    .iter()
+                    .fold(Cap::empty(), |acc, s| acc | s.cap);
+                (*idx, caps)
+            })
+            .collect()
+    }
+
+    /// Total [`Cap`] bits reached across every parameter's recorded sink sites.
+    pub fn total_param_sink_caps(&self) -> Cap {
+        self.param_to_sink
+            .iter()
+            .flat_map(|(_, sites)| sites.iter())
+            .fold(Cap::empty(), |acc, s| acc | s.cap)
+    }
 }

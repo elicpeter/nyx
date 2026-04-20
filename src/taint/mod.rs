@@ -95,12 +95,15 @@ pub fn analyse_file(
     let _span = tracing::debug_span!("taint_analyse_file").entered();
 
     // 1. Lower all function bodies: produce SSA summaries + cached bodies.
+    //    No locator: pass-2 intra-file summaries are transient (not persisted)
+    //    and behavior depends on SinkSite.cap only, which is always populated.
     let (ssa_summaries, callee_bodies) = lower_all_functions_from_bodies(
         file_cfg,
         caller_lang,
         caller_namespace,
         local_summaries,
         global_summaries,
+        None,
     );
     let ssa_sums_ref = if ssa_summaries.is_empty() {
         None
@@ -640,6 +643,7 @@ pub(crate) fn extract_intra_file_ssa_summaries(
             interner,
             param_count,
             mod_aliases_ref,
+            None,
         );
 
         // Only store if the summary has observable effects
@@ -680,6 +684,7 @@ fn lower_all_functions_from_bodies(
     namespace: &str,
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
+    locator: Option<&crate::summary::SinkSiteLocator<'_>>,
 ) -> (
     std::collections::HashMap<FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
     std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>,
@@ -751,6 +756,7 @@ fn lower_all_functions_from_bodies(
                 &interner,
                 param_count,
                 mod_aliases_ref,
+                locator,
             );
 
             // Always insert the summary, even when all fields are empty/default.
@@ -802,6 +808,7 @@ pub(crate) fn extract_ssa_artifacts_from_file_cfg(
     namespace: &str,
     local_summaries: &FuncSummaries,
     global_summaries: Option<&GlobalSummaries>,
+    locator: Option<&crate::summary::SinkSiteLocator<'_>>,
 ) -> (SsaArtifactSummaries, EligibleCalleeBodies) {
     let (summaries, bodies) = lower_all_functions_from_bodies(
         file_cfg,
@@ -809,6 +816,7 @@ pub(crate) fn extract_ssa_artifacts_from_file_cfg(
         namespace,
         local_summaries,
         global_summaries,
+        locator,
     );
 
     let mut eligible_bodies = Vec::new();

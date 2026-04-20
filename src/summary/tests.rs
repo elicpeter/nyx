@@ -1,4 +1,13 @@
 use super::*;
+use smallvec::smallvec;
+
+/// Test helper: build a [`SmallVec`] of one cap-only [`SinkSite`] for a
+/// parameter, matching the pre-`SinkSite` shape `(idx, Cap)`.  Source
+/// coordinates stay default (`line=0, col=0`) since tests do not
+/// exercise the primary-location attribution path at this layer.
+fn cap_sites(cap: Cap) -> SmallVec<[SinkSite; 1]> {
+    smallvec![SinkSite::cap_only(cap)]
+}
 
 fn make(name: &str, src: u16, san: u16, sink: u16) -> FuncSummary {
     FuncSummary {
@@ -438,7 +447,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
             0,
             TaintTransform::StripBits(Cap::HTML_ESCAPE | Cap::URL_ENCODE),
         )],
-        param_to_sink: vec![(1, Cap::SQL_QUERY)],
+        param_to_sink: vec![(1, cap_sites(Cap::SQL_QUERY))],
         source_caps: Cap::empty(),
         param_to_sink_param: vec![],
         param_container_to_return: vec![],
@@ -486,7 +495,10 @@ fn ssa_summary_serde_round_trip_all_variants() {
             (1, TaintTransform::StripBits(Cap::SHELL_ESCAPE)),
             (2, TaintTransform::AddBits(Cap::SSRF)),
         ],
-        param_to_sink: vec![(0, Cap::SQL_QUERY), (1, Cap::CODE_EXEC | Cap::CRYPTO)],
+        param_to_sink: vec![
+            (0, cap_sites(Cap::SQL_QUERY)),
+            (1, cap_sites(Cap::CODE_EXEC | Cap::CRYPTO)),
+        ],
         source_caps: Cap::all(),
         param_to_sink_param: vec![],
         param_container_to_return: vec![],
@@ -536,7 +548,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
     // Replace with a different summary — exact replacement, not union
     let v2 = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::StripBits(Cap::HTML_ESCAPE))],
-        param_to_sink: vec![(0, Cap::SQL_QUERY)],
+        param_to_sink: vec![(0, cap_sites(Cap::SQL_QUERY))],
         source_caps: Cap::ENV_VAR,
         param_to_sink_param: vec![],
         param_container_to_return: vec![],
@@ -590,7 +602,7 @@ fn global_summaries_merge_with_ssa_entries() {
     };
     let sum_b = SsaFuncSummary {
         param_to_return: vec![],
-        param_to_sink: vec![(0, Cap::CODE_EXEC)],
+        param_to_sink: vec![(0, cap_sites(Cap::CODE_EXEC))],
         source_caps: Cap::ENV_VAR,
         param_to_sink_param: vec![],
         param_container_to_return: vec![],
@@ -651,7 +663,7 @@ fn global_summaries_is_empty_considers_ssa() {
 fn ssa_summary_serde_round_trip_param_to_sink_param() {
     let summary = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::Identity)],
-        param_to_sink: vec![(0, Cap::SQL_QUERY)],
+        param_to_sink: vec![(0, cap_sites(Cap::SQL_QUERY))],
         source_caps: Cap::empty(),
         param_to_sink_param: vec![(0, 0, Cap::SQL_QUERY), (1, 0, Cap::CODE_EXEC)],
         param_container_to_return: vec![],
@@ -3074,7 +3086,7 @@ fn insert_ssa_arity_overflow_rekeys() {
     // Bad-arity incoming summary — must not overwrite the legitimate one.
     let overflowing = SsaFuncSummary {
         param_to_return: vec![(3, TaintTransform::Identity)],
-        param_to_sink: vec![(2, Cap::SQL_QUERY)],
+        param_to_sink: vec![(2, cap_sites(Cap::SQL_QUERY))],
         ..Default::default()
     };
     gs.insert_ssa(key.clone(), overflowing);
@@ -3083,4 +3095,170 @@ fn insert_ssa_arity_overflow_rekeys() {
     let kept = gs.get_ssa(&key).expect("legit summary not overwritten");
     assert_eq!(kept.param_to_return, vec![(0, TaintTransform::Identity)]);
     assert!(kept.param_to_sink.is_empty());
+}
+
+// ── Phase 1: primary sink-location attribution — SinkSite round-trips ───
+
+#[test]
+fn sink_site_serde_round_trip_solo() {
+    let site = SinkSite {
+        file_rel: "src/auth/token.rs".into(),
+        line: 42,
+        col: 9,
+        snippet: "Command::new(\"sh\").arg(cmd).status()".into(),
+        cap: Cap::CODE_EXEC | Cap::SHELL_ESCAPE,
+    };
+    let json = serde_json::to_string(&site).unwrap();
+    let back: SinkSite = serde_json::from_str(&json).unwrap();
+    assert_eq!(site, back);
+}
+
+#[test]
+fn sink_site_serde_round_trip_cap_only_defaults() {
+    // Extraction paths without tree access produce cap-only sites.  The
+    // `skip_serializing_if` default attributes let the JSON drop empty
+    // fields, and deserialisation must recover the same value.
+    let site = SinkSite::cap_only(Cap::SQL_QUERY);
+    let json = serde_json::to_string(&site).unwrap();
+    // Zero/empty fields are dropped by `skip_serializing_if`.
+    assert!(!json.contains("\"line\""));
+    assert!(!json.contains("\"col\""));
+    assert!(!json.contains("\"file_rel\""));
+    assert!(!json.contains("\"snippet\""));
+    let back: SinkSite = serde_json::from_str(&json).unwrap();
+    assert_eq!(site, back);
+}
+
+#[test]
+fn ssa_summary_serde_round_trip_with_sink_sites() {
+    use smallvec::smallvec;
+    let site_a = SinkSite {
+        file_rel: "db.py".into(),
+        line: 10,
+        col: 4,
+        snippet: "cursor.execute(sql)".into(),
+        cap: Cap::SQL_QUERY,
+    };
+    let site_b = SinkSite {
+        file_rel: "exec.py".into(),
+        line: 33,
+        col: 12,
+        snippet: "subprocess.call(cmd, shell=True)".into(),
+        cap: Cap::CODE_EXEC | Cap::SHELL_ESCAPE,
+    };
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        param_to_sink: vec![
+            (0, smallvec![site_a.clone(), site_b.clone()]),
+            (1, smallvec![site_b.clone()]),
+        ],
+        source_caps: Cap::empty(),
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+
+    // Cap-derivation helpers still produce the expected unions.
+    let caps = back.param_to_sink_caps();
+    assert_eq!(caps.len(), 2);
+    assert!(caps.iter().any(|&(i, c)| i == 0 && c == (site_a.cap | site_b.cap)));
+    assert!(caps.iter().any(|&(i, c)| i == 1 && c == site_b.cap));
+    assert_eq!(back.total_param_sink_caps(), site_a.cap | site_b.cap);
+}
+
+#[test]
+fn ssa_summary_deserialize_legacy_param_to_sink_missing_defaults_empty() {
+    // Summaries written before phase 1 omitted the new field entirely.  The
+    // `#[serde(default)]` attribute must carry the missing field through as
+    // an empty vec rather than erroring out.
+    let json = r#"{
+        "param_to_return": [],
+        "source_caps": 0
+    }"#;
+    let back: SsaFuncSummary = serde_json::from_str(json).unwrap();
+    assert!(back.param_to_sink.is_empty());
+    assert_eq!(back.total_param_sink_caps(), Cap::empty());
+}
+
+#[test]
+fn func_summary_deserialize_legacy_param_to_sink_missing_defaults_empty() {
+    let json = r#"{
+        "name": "legacy",
+        "file_path": "app.py",
+        "lang": "python",
+        "param_count": 1,
+        "param_names": ["data"],
+        "source_caps": 0,
+        "sanitizer_caps": 0,
+        "sink_caps": 0,
+        "tainted_sink_params": []
+    }"#;
+    let back: FuncSummary = serde_json::from_str(json).unwrap();
+    assert!(back.param_to_sink.is_empty());
+}
+
+#[test]
+fn merge_unions_sink_sites_with_dedup() {
+    use smallvec::smallvec;
+    let key = FuncKey {
+        lang: Lang::Python,
+        namespace: "svc.py".into(),
+        name: "run".into(),
+        arity: Some(1),
+        ..Default::default()
+    };
+
+    let site_a = SinkSite {
+        file_rel: "svc.py".into(),
+        line: 10,
+        col: 1,
+        snippet: "execute(sql)".into(),
+        cap: Cap::SQL_QUERY,
+    };
+    let site_b = SinkSite {
+        file_rel: "svc.py".into(),
+        line: 20,
+        col: 4,
+        snippet: "os.system(cmd)".into(),
+        cap: Cap::CODE_EXEC,
+    };
+
+    let mut left = FuncSummary {
+        name: "run".into(),
+        file_path: "svc.py".into(),
+        lang: "python".into(),
+        param_count: 1,
+        param_names: vec!["x".into()],
+        param_to_sink: vec![(0, smallvec![site_a.clone()])],
+        ..Default::default()
+    };
+    let right = FuncSummary {
+        name: "run".into(),
+        file_path: "svc.py".into(),
+        lang: "python".into(),
+        param_count: 1,
+        param_names: vec!["x".into()],
+        // Mix a duplicate of site_a (same file/line/col/cap) with a new site.
+        param_to_sink: vec![(0, smallvec![site_a.clone(), site_b.clone()])],
+        ..Default::default()
+    };
+
+    let mut gs = GlobalSummaries::new();
+    gs.insert(key.clone(), left.clone());
+    gs.insert(key.clone(), right);
+
+    let merged = gs.get(&key).unwrap();
+    assert_eq!(merged.param_to_sink.len(), 1);
+    let (_, sites) = &merged.param_to_sink[0];
+    // Exactly two distinct sites survive; the duplicate was deduped.
+    assert_eq!(sites.len(), 2);
+    assert!(sites.iter().any(|s| s.dedup_key() == site_a.dedup_key()));
+    assert!(sites.iter().any(|s| s.dedup_key() == site_b.dedup_key()));
+
+    // Idempotent: re-inserting the original left introduces no new sites.
+    left.param_to_sink = vec![(0, smallvec![site_a.clone()])];
+    gs.insert(key.clone(), left);
+    let merged = gs.get(&key).unwrap();
+    assert_eq!(merged.param_to_sink[0].1.len(), 2);
 }

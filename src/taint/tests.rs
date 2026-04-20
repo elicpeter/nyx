@@ -4010,6 +4010,7 @@ fn ssa_summary_identity_propagation() {
                 &interner,
                 param_count,
                 None,
+                None,
             );
             assert!(
                 !summary.param_to_return.is_empty(),
@@ -4071,6 +4072,7 @@ fn ssa_summary_sanitizer_strips_bits() {
                 &interner,
                 param_count,
                 None,
+                None,
             );
             // Sanitizer should strip some bits
             for (_, transform) in &summary.param_to_return {
@@ -4125,6 +4127,7 @@ fn ssa_summary_source_adds_bits() {
                 &interner,
                 param_count,
                 None,
+                None,
             );
             assert!(
                 !summary.source_caps.is_empty(),
@@ -4178,6 +4181,7 @@ fn ssa_summary_param_to_sink() {
                 "test.rs",
                 &interner,
                 param_count,
+                None,
                 None,
             );
             assert!(
@@ -5137,6 +5141,7 @@ class Worker {
         "test.js",
         &file_cfg.summaries,
         None,
+        None,
     );
 
     // Collect containers of every key named "process".
@@ -5207,6 +5212,7 @@ function helper(x) {
         Lang::JavaScript,
         "test.js",
         &file_cfg.summaries,
+        None,
         None,
     );
 

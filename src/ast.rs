@@ -652,12 +652,18 @@ impl<'a> ParsedFile<'a> {
         // Use the FileCfg path (same one `analyse_file` uses at taint time) so
         // the SSA summaries stored cross-file match exactly what pass 2 will
         // resolve against — no NodeIndex-space or entry-detection drift.
+        let locator = crate::summary::SinkSiteLocator {
+            tree: &self.source.tree,
+            bytes: self.source.bytes,
+            file_rel: &namespace,
+        };
         let (summaries, bodies) = crate::taint::extract_ssa_artifacts_from_file_cfg(
             &self.file_cfg,
             caller_lang,
             &namespace,
             self.local_summaries(),
             global_summaries,
+            Some(&locator),
         );
 
         (summaries.into_iter().collect(), bodies)

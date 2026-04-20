@@ -6640,6 +6640,12 @@ pub(crate) fn export_summaries(
             propagating_params: local.propagating_params.clone(),
             propagates_taint: false,
             tainted_sink_params: local.tainted_sink_params.clone(),
+            // Phase 1 of primary sink-location attribution: legacy
+            // `export_summaries` runs without tree/bytes access, so
+            // cannot resolve sink node spans to line/col/snippet.
+            // `ParsedFile::export_summaries_with_root` is responsible
+            // for populating this field when it has tree access.
+            param_to_sink: Vec::new(),
             callees: local.callees.clone(),
             container: local.container.clone(),
             disambig: local.disambig,
