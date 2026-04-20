@@ -252,6 +252,21 @@ fn analyse_body_with_seed(
     match ssa_result {
         Ok(mut ssa_body) => {
             let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg, Some(lang));
+            if std::env::var("NYX_RTQ_DBG").is_ok() {
+                eprintln!(
+                    "=== SSA BODY ({}) ===",
+                    body.meta.name.as_deref().unwrap_or("<anon>")
+                );
+                eprintln!("{}", ssa_body);
+                eprintln!("=== TYPE FACTS ===");
+                for block in &ssa_body.blocks {
+                    for inst in block.phis.iter().chain(block.body.iter()) {
+                        if let Some(t) = opt.type_facts.get_type(inst.value) {
+                            eprintln!("  v{} = {:?}", inst.value.0, t);
+                        }
+                    }
+                }
+            }
             let dynamic_pts = std::cell::RefCell::new(std::collections::HashMap::new());
             let transfer = ssa_transfer::SsaTaintTransfer {
                 lang,

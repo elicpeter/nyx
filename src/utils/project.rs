@@ -77,6 +77,44 @@ fn read_bounded(path: &Path) -> Option<String> {
     Some(out)
 }
 
+/// Scan file source bytes for import statements referencing known web
+/// frameworks. Used to augment the project-level [`FrameworkContext`] with
+/// per-file signals, so that single-file scans (no package.json nearby) still
+/// trigger framework-conditional rules.
+///
+/// Intentionally a coarse byte-level substring check against the module
+/// specifier in quoted form (e.g. `'fastify'`) — JavaScript / TypeScript only,
+/// where framework-conditional rules target `framework_rules(ctx)` in
+/// `labels/javascript.rs` and `labels/typescript.rs`. Returns an empty list for
+/// other languages.
+pub fn detect_in_file_frameworks(bytes: &[u8], lang_slug: &str) -> Vec<DetectedFramework> {
+    if !matches!(lang_slug, "javascript" | "typescript" | "js" | "ts") {
+        return Vec::new();
+    }
+    // Only look at a bounded prefix — imports are at the top of the file.
+    let head_len = bytes.len().min(8 * 1024);
+    let head = match std::str::from_utf8(&bytes[..head_len]) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let mut fws = Vec::new();
+    let matches_module = |name: &str| {
+        // Quoted single or double, as appears in `from 'fastify'` /
+        // `require("fastify")` / `import('fastify')`.
+        head.contains(&format!("'{name}'")) || head.contains(&format!("\"{name}\""))
+    };
+    if matches_module("fastify") {
+        fws.push(DetectedFramework::Fastify);
+    }
+    if matches_module("express") {
+        fws.push(DetectedFramework::Express);
+    }
+    if matches_module("koa") || matches_module("@koa/router") || matches_module("koa-router") {
+        fws.push(DetectedFramework::Koa);
+    }
+    fws
+}
+
 /// Detect frameworks from manifest files in the project root.
 pub fn detect_frameworks(root: &Path) -> FrameworkContext {
     let mut fws = Vec::new();

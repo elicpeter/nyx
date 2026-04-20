@@ -520,6 +520,16 @@ pub fn build_lang_rules(
     }
 }
 
+/// Public re-export used by [`crate::ast::ParsedFile::from_source`] to
+/// augment per-file rule sets when imports reveal frameworks that the
+/// manifest-level detector missed.
+pub fn framework_rules_for_lang_pub(
+    lang_slug: &str,
+    ctx: &crate::utils::project::FrameworkContext,
+) -> Vec<RuntimeLabelRule> {
+    framework_rules_for_lang(lang_slug, ctx)
+}
+
 /// Return framework-conditional label rules for a given language.
 fn framework_rules_for_lang(
     lang_slug: &str,
@@ -862,6 +872,12 @@ pub fn classify_gated_sink(
         }
     }
     None
+}
+
+/// Public wrapper for [`normalize_chained_call`] so callers outside the module
+/// can share the same normalization used by the label classifier.
+pub fn normalize_chained_call_for_classify(text: &str) -> String {
+    normalize_chained_call(text)
 }
 
 /// Normalize a chained method call: strip `()` between `.` segments.

@@ -2,7 +2,7 @@
 
 ## Corpus philosophy
 
-The benchmark corpus is a curated set of ~95 minimal synthetic files (8-20 lines each) across 5 languages: JavaScript, Python, Java, Go, and PHP. Each file contains exactly one vulnerability (positive case) or demonstrates a specific safe pattern (negative case).
+The benchmark corpus is a curated set of ~262 minimal synthetic files (8-20 lines each) across 10 languages: JavaScript, TypeScript, Python, Java, Go, PHP, Ruby, Rust, C, and C++. Each file contains exactly one vulnerability (positive case) or demonstrates a specific safe pattern (negative case).
 
 Design principles:
 - **One vuln per file**: isolates the detection signal from noise.
@@ -48,11 +48,11 @@ Caveats:
 ## How to run
 
 ```bash
-# Full benchmark (all 95 cases)
+# Full benchmark (all 246 cases)
 cargo test benchmark_evaluation -- --ignored --nocapture
 
-# Filter by language
-NYX_BENCH_LANG=python cargo test benchmark_evaluation -- --ignored --nocapture
+# Filter by language (python, typescript, javascript, java, go, php, ruby, rust, c, cpp)
+NYX_BENCH_LANG=typescript cargo test benchmark_evaluation -- --ignored --nocapture
 
 # Filter by vulnerability class
 NYX_BENCH_CLASS=sqli cargo test benchmark_evaluation -- --ignored --nocapture

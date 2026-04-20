@@ -237,7 +237,21 @@ fn lang_for_path(path: &Path) -> Option<(Language, &'static str)> {
             Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT),
             "typescript",
         )),
+        // TSX grammar is a superset of TypeScript plus JSX element/attribute
+        // nodes — all TypeScript KINDS / RULES / PARAM_CONFIG entries apply,
+        // and JSX-specific sinks (e.g. `dangerouslySetInnerHTML`) layer on top
+        // via the same `typescript` slug.
+        Some("tsx") => Some((
+            Language::from(tree_sitter_typescript::LANGUAGE_TSX),
+            "typescript",
+        )),
         Some("js") => Some((
+            Language::from(tree_sitter_javascript::LANGUAGE),
+            "javascript",
+        )),
+        // JSX uses the same JavaScript grammar (tree-sitter-javascript handles
+        // JSX natively) — slug "javascript" so all JS rules apply.
+        Some("jsx") => Some((
             Language::from(tree_sitter_javascript::LANGUAGE),
             "javascript",
         )),
@@ -497,7 +511,31 @@ struct ParsedFile<'a> {
 impl<'a> ParsedFile<'a> {
     /// Build CFG + lang rules from a parsed source.
     fn from_source(source: ParsedSource<'a>, cfg: &Config) -> Self {
-        let lang_rules = build_lang_rules(cfg, source.lang_slug);
+        let mut lang_rules = build_lang_rules(cfg, source.lang_slug);
+        // Single-file scans rarely have a nearby package.json, so the
+        // project-level `FrameworkContext` misses frameworks the file
+        // obviously imports. Augment the per-file rule set with any
+        // framework-conditional rules keyed off in-file import specifiers
+        // (e.g. `import fastify from 'fastify'`). Idempotent — skips
+        // frameworks already active from the manifest pass.
+        let in_file_fws =
+            crate::utils::project::detect_in_file_frameworks(source.bytes, source.lang_slug);
+        let missing: Vec<_> = in_file_fws
+            .into_iter()
+            .filter(|fw| !lang_rules.frameworks.contains(fw))
+            .collect();
+        if !missing.is_empty() {
+            let aug_ctx = crate::utils::project::FrameworkContext {
+                frameworks: missing.clone(),
+            };
+            lang_rules
+                .extra_labels
+                .extend(crate::labels::framework_rules_for_lang_pub(
+                    source.lang_slug,
+                    &aug_ctx,
+                ));
+            lang_rules.frameworks.extend(missing);
+        }
         let has_lang_rules = !lang_rules.extra_labels.is_empty()
             || !lang_rules.terminators.is_empty()
             || !lang_rules.event_handlers.is_empty();

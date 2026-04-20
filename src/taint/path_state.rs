@@ -113,6 +113,13 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         || lower.contains("ctype_")
         || lower.contains(".is_a?(")
         || lower.contains(".kind_of?(")
+        // Rust character-class validation: `.chars().all(|c| c.is_ascii_*())`
+        // and similar per-character validations.  Presence of `is_ascii_`
+        // inside an `.all(…)` / `.iter().all(…)` call is a strong validation
+        // signal equivalent to a TypeCheck.
+        || (lower.contains(".all(") && lower.contains("is_ascii_"))
+        || (lower.contains(".all(") && lower.contains("is_alphanumeric"))
+        || (lower.contains(".all(") && lower.contains("is_numeric("))
     {
         return PredicateKind::TypeCheck;
     }

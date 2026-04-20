@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 214
+    "corpus_size": 259
   },
   "cases": [
     {
@@ -6443,6 +6443,315 @@
       "notes": "Input validated with allowlist check before Command"
     },
     {
+      "case_id": "rs-cmdi-005",
+      "file": "rust/cmdi/cmdi_format_macro.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[7, 7]],
+      "expected_source_lines": [[5, 5]],
+      "tags": ["format-macro", "env-var"],
+      "disabled": false,
+      "notes": "Tainted input interpolated via format!() into sh -c"
+    },
+    {
+      "case_id": "rs-cmdi-006",
+      "file": "rust/cmdi/cmdi_match_source.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[9, 9]],
+      "expected_source_lines": [[6, 6]],
+      "tags": ["match-expression", "env-var"],
+      "disabled": false,
+      "notes": "env::var bound via match expression then used as Command program name"
+    },
+    {
+      "case_id": "rs-cmdi-007",
+      "file": "rust/cmdi/cmdi_string_concat.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[7, 7]],
+      "expected_source_lines": [[5, 5]],
+      "tags": ["string-concat", "binary-op"],
+      "disabled": false,
+      "notes": "Tainted &str concatenated via + into sh -c argument"
+    },
+    {
+      "case_id": "rs-cmdi-cross-001",
+      "file": "rust/cmdi/cross_propagation/",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.cmdi.command"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[8, 8]],
+      "expected_source_lines": [[7, 7]],
+      "tags": ["cross-file", "propagation"],
+      "disabled": false,
+      "notes": "Cross-file taint: main.rs → transform::wrap (format!) → Command"
+    },
+    {
+      "case_id": "rs-path-005",
+      "file": "rust/path_traversal/path_remove.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.file_io.remove_file"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[6, 6]],
+      "expected_source_lines": [[5, 5]],
+      "tags": ["filesystem", "remove", "known-gap"],
+      "disabled": false,
+      "notes": "fs::remove_file not in Rust sink rules — known FN coverage"
+    },
+    {
+      "case_id": "rs-ssrf-003",
+      "file": "rust/ssrf/ssrf_client_builder.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.ssrf.reqwest"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[6, 6]],
+      "expected_source_lines": [[4, 4]],
+      "tags": ["builder-chain", "known-gap"],
+      "disabled": false,
+      "notes": "reqwest::Client::new().get(url).send() — builder chain not matched by reqwest::get/Client.execute sinks"
+    },
+    {
+      "case_id": "rs-sqli-001",
+      "file": "rust/sqli/sqli_rusqlite_format.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.sqli.rusqlite"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[8, 8]],
+      "expected_source_lines": [[5, 5]],
+      "tags": ["rusqlite", "format-macro", "known-gap"],
+      "disabled": false,
+      "notes": "rusqlite::Connection.execute not in Rust sink rules — SQLi class has no Rust coverage"
+    },
+    {
+      "case_id": "rs-deser-001",
+      "file": "rust/deser/deser_serde_yaml.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "deser",
+      "cwe": "CWE-502",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.deser.serde_yaml"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[9, 9]],
+      "expected_source_lines": [[8, 8]],
+      "tags": ["serde", "yaml", "known-gap"],
+      "disabled": false,
+      "notes": "serde_yaml::from_str not in Rust sink rules — deserialization class has no Rust coverage"
+    },
+    {
+      "case_id": "rs-xss-001",
+      "file": "rust/xss/axum_html/",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "rust.xss.axum_html"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[4, 4]],
+      "expected_source_lines": [[3, 3]],
+      "tags": ["framework", "axum", "html"],
+      "disabled": false,
+      "notes": "Axum Path<String> → Html(format!(...)) — requires framework rules (Cargo.toml present)"
+    },
+    {
+      "case_id": "rs-safe-009",
+      "file": "rust/safe/safe_match_guard.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": ["match-guard", "validated"],
+      "disabled": false,
+      "notes": "Match guard restricts input to ASCII alphanumeric before Command"
+    },
+    {
+      "case_id": "rs-safe-010",
+      "file": "rust/safe/safe_static_map_lookup.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": ["hashmap", "static-lookup"],
+      "disabled": false,
+      "notes": "Tainted key indexes static HashMap — value is hardcoded, not tainted"
+    },
+    {
+      "case_id": "rs-safe-011",
+      "file": "rust/safe/safe_parsed_port.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": ["type-parse", "u16"],
+      "disabled": false,
+      "notes": "Input parsed to u16 before use as Command arg — type-narrowed"
+    },
+    {
+      "case_id": "rs-safe-cross-001",
+      "file": "rust/cmdi/cross_sanitizer/",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": ["cross-file", "sanitizer"],
+      "disabled": false,
+      "notes": "Cross-file: sanitize_shell in sanitizer.rs clears SHELL_ESCAPE cap before Command"
+    },
+    {
       "case_id": "js-interproc-safe-001",
       "file": "javascript/interprocedural/interproc_sanitizer_wrap.js",
       "language": "javascript",
@@ -6890,6 +7199,899 @@
       ],
       "disabled": false,
       "notes": "Command execution gated by allowlist check with early return"
+    },
+    {
+      "case_id": "ts-xss-001",
+      "file": "typescript/xss/xss_typed_innerhtml.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [6, 6]
+      ],
+      "expected_source_lines": [
+        [5, 5]
+      ],
+      "tags": ["innerHTML", "typed-express", "reflected"],
+      "disabled": false,
+      "notes": "Baseline TS XSS: typed Express handler flows req.query into innerHTML"
+    },
+    {
+      "case_id": "ts-xss-002",
+      "file": "typescript/xss/xss_as_any_cast.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "ts.quality.as_any"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [7, 7]
+      ],
+      "expected_source_lines": [
+        [5, 5]
+      ],
+      "tags": ["as-any", "type-assertion", "innerHTML"],
+      "disabled": false,
+      "notes": "TS-specific: taint must flow through `as any` and chained assertions (as_expression→Kind::Seq)"
+    },
+    {
+      "case_id": "ts-xss-003",
+      "file": "typescript/xss/xss_generic_identity.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [11, 11]
+      ],
+      "expected_source_lines": [
+        [9, 9]
+      ],
+      "tags": ["generics", "interprocedural", "innerHTML"],
+      "disabled": false,
+      "notes": "Tests Phase 11 inline context-sensitivity through generic identity<T> function"
+    },
+    {
+      "case_id": "ts-xss-004",
+      "file": "typescript/xss/xss_optional_chain_source.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [7, 7]
+      ],
+      "expected_source_lines": [
+        [5, 5]
+      ],
+      "tags": ["optional-chain", "adversarial-source", "innerHTML"],
+      "disabled": false,
+      "notes": "Adversarial: optional-chained source `req?.query?.name`. Tests whether the source matcher survives optional_chain_expression nodes. Expected FN until optional chaining is lowered to member access in labeling"
+    },
+    {
+      "case_id": "ts-xss-005",
+      "file": "typescript/xss/xss_dangerously_set_inner_html.tsx",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [9, 10]
+      ],
+      "expected_source_lines": [
+        [7, 7]
+      ],
+      "tags": ["tsx", "jsx", "dangerouslySetInnerHTML"],
+      "disabled": false,
+      "notes": "TSX fixture: user bio flows into `dangerouslySetInnerHTML` and is sent via res.send. Exercises TSX grammar wiring (LANGUAGE_TSX) and confirms taint propagation through JSX expressions"
+    },
+    {
+      "case_id": "ts-sqli-001",
+      "file": "typescript/sqli/sqli_template_literal.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [10, 10]
+      ],
+      "expected_source_lines": [
+        [9, 9]
+      ],
+      "tags": ["sqli", "pg", "template-literal"],
+      "disabled": false,
+      "notes": "Template-literal SQL via pg Pool.query; exact SQL_QUERY sink match"
+    },
+    {
+      "case_id": "ts-sqli-002",
+      "file": "typescript/sqli/sqli_prisma_raw.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [10, 10]
+      ],
+      "expected_source_lines": [
+        [9, 9]
+      ],
+      "tags": ["sqli", "prisma", "queryRawUnsafe"],
+      "disabled": false,
+      "notes": "Prisma $queryRawUnsafe — TS-specific ORM sink"
+    },
+    {
+      "case_id": "ts-cmdi-001",
+      "file": "typescript/cmdi/cmdi_exec_template.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [9, 9]
+      ],
+      "expected_source_lines": [
+        [8, 8]
+      ],
+      "tags": ["cmdi", "child_process", "template-literal"],
+      "disabled": false,
+      "notes": "Destructured exec with template literal command from req.body"
+    },
+    {
+      "case_id": "ts-cmdi-002",
+      "file": "typescript/cmdi/cmdi_async_wrapper.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [11, 11]
+      ],
+      "expected_source_lines": [
+        [10, 10]
+      ],
+      "tags": ["cmdi", "async", "promisify", "execAsync"],
+      "disabled": false,
+      "notes": "promisify-wrapped exec (execAsync) — TS rules enumerate execAsync as a command sink"
+    },
+    {
+      "case_id": "ts-ssrf-001",
+      "file": "typescript/ssrf/ssrf_axios_user_url.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [8, 8]
+      ],
+      "expected_source_lines": [
+        [7, 7]
+      ],
+      "tags": ["ssrf", "axios"],
+      "disabled": false,
+      "notes": "axios.get with req.query.url — baseline TS SSRF"
+    },
+    {
+      "case_id": "ts-ssrf-002",
+      "file": "typescript/ssrf/ssrf_fastify_fetch.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [9, 9]
+      ],
+      "expected_source_lines": [
+        [8, 8]
+      ],
+      "tags": ["ssrf", "fastify", "framework-rules", "adversarial-framework"],
+      "disabled": false,
+      "notes": "Fastify framework route — exercises framework_rules(ctx) source detection for request.query. Expected FN when framework context is not detected from a single file (no package.json)"
+    },
+    {
+      "case_id": "ts-ssrf-003",
+      "file": "typescript/ssrf/ssrf_encoded_host.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [9, 9]
+      ],
+      "expected_source_lines": [
+        [7, 7]
+      ],
+      "tags": ["ssrf", "axios", "url-encode", "adversarial-fn-guard"],
+      "disabled": false,
+      "notes": "Regression guard for prefix-locked SSRF suppression: encodeURIComponent is applied to the HOST (not path), so the template prefix 'https://' does not lock the destination. Must still fire as SSRF — proves the StringFact host check does not over-suppress when the attacker controls the authority component"
+    },
+    {
+      "case_id": "ts-code_injection-001",
+      "file": "typescript/code_injection/code_exec_eval.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "code_injection",
+      "cwe": "CWE-94",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "ts.code_exec.eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [6, 6]
+      ],
+      "expected_source_lines": [
+        [5, 5]
+      ],
+      "tags": ["eval", "code-injection"],
+      "disabled": false,
+      "notes": "Classic eval + user input; AST pattern ts.code_exec.eval applies"
+    },
+    {
+      "case_id": "ts-code_injection-002",
+      "file": "typescript/code_injection/code_exec_new_function.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "code_injection",
+      "cwe": "CWE-94",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "ts.code_exec.new_function"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [6, 6]
+      ],
+      "expected_source_lines": [
+        [5, 5]
+      ],
+      "tags": ["new-function", "code-injection"],
+      "disabled": false,
+      "notes": "new Function(body) — AST pattern ts.code_exec.new_function"
+    },
+    {
+      "case_id": "ts-open_redirect-001",
+      "file": "typescript/open_redirect/location_href.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-601",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "ts.xss.location_assign"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [6, 6]
+      ],
+      "expected_source_lines": [
+        [5, 5]
+      ],
+      "tags": ["open-redirect", "location-href"],
+      "disabled": false,
+      "notes": "Open redirect via location.href = userUrl"
+    },
+    {
+      "case_id": "ts-path_traversal-001",
+      "file": "typescript/path_traversal/path_traversal_sendfile.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [6, 6]
+      ],
+      "expected_source_lines": [
+        [5, 5]
+      ],
+      "tags": ["path-traversal", "sendFile"],
+      "disabled": false,
+      "notes": "res.sendFile with unsanitized req.query.path"
+    },
+    {
+      "case_id": "ts-crypto-001",
+      "file": "typescript/crypto/weak_hash_md5.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "crypto",
+      "cwe": "CWE-327",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "ts.crypto.weak_hash_import"
+      ],
+      "allowed_alternative_rule_ids": [
+        "ts.crypto.weak_hash"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [4, 4]
+      ],
+      "expected_source_lines": null,
+      "tags": ["crypto", "weak-hash", "md5"],
+      "disabled": false,
+      "notes": "md5() imported from the md5 package — AST pattern ts.crypto.weak_hash_import"
+    },
+    {
+      "case_id": "ts-secrets-001",
+      "file": "typescript/secrets/fallback_secret.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "secrets",
+      "cwe": "CWE-798",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "ts.secrets.fallback_secret"
+      ],
+      "allowed_alternative_rule_ids": [
+        "ts.secrets.hardcoded_secret"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [5, 5]
+      ],
+      "expected_source_lines": null,
+      "tags": ["secrets", "fallback-env"],
+      "disabled": false,
+      "notes": "process.env.KEY || 'hardcoded' — AST pattern ts.secrets.fallback_secret"
+    },
+    {
+      "case_id": "ts-insecure_config-001",
+      "file": "typescript/insecure_config/reject_unauthorized.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "insecure_config",
+      "cwe": "CWE-295",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "ts.config.reject_unauthorized"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [4, 4]
+      ],
+      "expected_source_lines": null,
+      "tags": ["tls", "reject-unauthorized"],
+      "disabled": false,
+      "notes": "TLS verification disabled — AST pattern"
+    },
+    {
+      "case_id": "ts-insecure_config-002",
+      "file": "typescript/insecure_config/cookie_httponly.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "insecure_config",
+      "cwe": "CWE-1004",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "ts.config.insecure_session_httponly"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [9, 9]
+      ],
+      "expected_source_lines": null,
+      "tags": ["cookies", "httpOnly"],
+      "disabled": false,
+      "notes": "session cookie httpOnly: false — AST pattern"
+    },
+    {
+      "case_id": "ts-prototype-001",
+      "file": "typescript/prototype/proto_assignment.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "prototype",
+      "cwe": "CWE-1321",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "ts.prototype.proto_assignment"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [4, 4]
+      ],
+      "expected_source_lines": null,
+      "tags": ["prototype-pollution"],
+      "disabled": false,
+      "notes": "__proto__ write — AST pattern"
+    },
+    {
+      "case_id": "ts-interproc-001",
+      "file": "typescript/interprocedural/interproc_class_method.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [17, 17]
+      ],
+      "expected_source_lines": [
+        [15, 15]
+      ],
+      "tags": ["cmdi", "class-method", "interprocedural"],
+      "disabled": false,
+      "notes": "Class method builder: Runner.build concatenates tainted target, caller passes result to exec. Stresses intra-file class-method call resolution"
+    },
+    {
+      "case_id": "ts-type_system-001",
+      "file": "typescript/type_system/discriminated_union_narrow.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [13, 13]
+      ],
+      "expected_source_lines": [
+        [12, 12]
+      ],
+      "tags": ["discriminated-union", "narrowing", "cmdi"],
+      "disabled": false,
+      "notes": "TS discriminated-union narrowing (kind === 'ping') does not sanitize — a.target is still user-controlled. Guards against the FP of treating `kind` guards as security sanitizers"
+    },
+    {
+      "case_id": "ts-type_system-002",
+      "file": "typescript/type_system/interface_dispatch.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [10, 10],
+        [20, 20]
+      ],
+      "expected_source_lines": [
+        [19, 19]
+      ],
+      "tags": ["interface", "dispatch", "adversarial-interprocedural", "cmdi"],
+      "disabled": false,
+      "notes": "Interface-typed receiver `impl: Runner` → resolve to ShellRunner.run → exec. Tests intra-file method resolution through interface types; expected FN if only normalized callee-name matching is used"
+    },
+    {
+      "case_id": "ts-type_system-003",
+      "file": "typescript/type_system/decorator_passthrough.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "language_specific",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [15, 15],
+        [23, 23]
+      ],
+      "expected_source_lines": [
+        [23, 23]
+      ],
+      "tags": ["decorator", "adversarial-decorator", "cmdi"],
+      "disabled": false,
+      "notes": "Method decorator wraps Service.run; the undecorated body still contains exec(cmd). Tests whether decorator syntax interferes with class-method extraction. Expected FN if decorator parsing derails summary extraction"
+    },
+    {
+      "case_id": "ts-safe-001",
+      "file": "typescript/safe/safe_dompurify.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["sanitizer", "dompurify"],
+      "disabled": false,
+      "notes": "DOMPurify.sanitize inline before innerHTML"
+    },
+    {
+      "case_id": "ts-safe-002",
+      "file": "typescript/safe/safe_number_coerce.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["type-coercion", "Number"],
+      "disabled": false,
+      "notes": "Number() coercion sanitizes SQL integer interpolation; Number is in TS sanitizer rules with Cap::all()"
+    },
+    {
+      "case_id": "ts-safe-003",
+      "file": "typescript/safe/safe_encode_uri.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["url-encode", "ssrf", "adversarial-fp"],
+      "disabled": false,
+      "notes": "Semantically safe: user term is URL-encoded into a fixed-host URL; no SSRF possible. Known Nyx weak spot — encodeURIComponent is Cap::URL_ENCODE while axios sink is Cap::SSRF, so cap mismatch may yield FP. Documents the cap-overlap limitation"
+    },
+    {
+      "case_id": "ts-safe-004",
+      "file": "typescript/safe/safe_hardcoded_url.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["no-source", "hardcoded"],
+      "disabled": false,
+      "notes": "Hardcoded URL, no user input; should be a clean TN"
+    },
+    {
+      "case_id": "ts-safe-005",
+      "file": "typescript/safe/safe_validator_escape.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["sanitizer", "validator"],
+      "disabled": false,
+      "notes": "validator.escape sanitizes XSS payload before innerHTML"
+    },
+    {
+      "case_id": "ts-safe-006",
+      "file": "typescript/safe/safe_typeof_guard.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "ts.code_exec.eval"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["type-check", "typeof", "eval"],
+      "disabled": false,
+      "notes": "typeof === 'number' guards eval; only numbers reach sink. Forbidden ts.code_exec.eval here because the taint flow is gated — pattern-only detection would be an FP"
+    },
+    {
+      "case_id": "ts-safe-007",
+      "file": "typescript/safe/safe_interproc_sanitizer.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["sanitizer", "interprocedural", "dompurify", "adversarial-fp"],
+      "disabled": false,
+      "notes": "DOMPurify wrapped in cleanHtml() helper. Known JS weak spot (js-interproc-safe-001 is an FP); documents whether TS handling matches"
+    },
+    {
+      "case_id": "ts-safe-008",
+      "file": "typescript/safe/safe_constant_query.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["constant", "no-source"],
+      "disabled": false,
+      "notes": "Compile-time constant SQL; no user input; should TN"
+    },
+    {
+      "case_id": "ts-safe-009",
+      "file": "typescript/safe/safe_parameterized.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["parameterized", "sqli", "adversarial-fp"],
+      "disabled": false,
+      "notes": "Parameterized pg query: SQL string is constant, id flows as $1 placeholder value. Semantically safe but taint still reaches pool.query call; known Nyx limitation — positional args aren't distinguished for SQL_QUERY sink"
+    },
+    {
+      "case_id": "ts-safe-010",
+      "file": "typescript/safe/safe_jsx_text.tsx",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["tsx", "jsx", "auto-escape"],
+      "disabled": false,
+      "notes": "TSX fixture: user bio rendered as JSX text child. React auto-escapes JSX text so this is semantically safe. Guards against over-flagging JSX expressions now that TSX grammar is wired"
     }
   ]
 }

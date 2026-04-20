@@ -2006,6 +2006,7 @@ fn transfer_inst(
                             state.path_env.as_ref(),
                             transfer.lang,
                             transfer.extra_labels,
+                            Some(ssa),
                         );
                         for lbl in &tq_labels {
                             match lbl {
@@ -2587,6 +2588,25 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
             // Bool/Null/other: leave as Top
         }
 
+        // Template-literal / string-prefix override: when the RHS is
+        // `\`scheme://host/…${x}\`` or `"scheme://host/" + x`, seed the
+        // result's StringFact prefix regardless of interpolation arity. Taint
+        // still flows through the normal taint lattice; the prefix is only
+        // consumed by `is_string_safe_for_ssrf` to suppress SSRF sinks on
+        // fixed-host URLs. Placed before the arithmetic/copy arms so it wins
+        // over the default Top StringFact.
+        SsaOp::Assign(_) if info.string_prefix.is_some() => {
+            let prefix = info.string_prefix.as_deref().unwrap();
+            abs.set(
+                inst.value,
+                AbstractValue {
+                    interval: IntervalFact::top(),
+                    string: StringFact::from_prefix(prefix),
+                    bits: BitFact::top(),
+                },
+            );
+        }
+
         SsaOp::Assign(uses) if uses.len() == 1 => {
             // Phase 26: single-use Assign with bin_op + literal operand.
             // When a binary expression like `x & 0x07` has one identifier use
@@ -2943,6 +2963,7 @@ fn collect_block_events(
                         state.path_env.as_ref(),
                         transfer.lang,
                         transfer.extra_labels,
+                        Some(ssa),
                     );
                     for lbl in &tq_labels {
                         if let DataLabel::Sink(bits) = lbl {
@@ -4241,16 +4262,36 @@ fn resolve_type_qualified_labels(
     path_env: Option<&constraint::PathEnv>,
     lang: Lang,
     extra_labels: Option<&[crate::labels::RuntimeLabelRule]>,
+    ssa: Option<&SsaBody>,
 ) -> SmallVec<[DataLabel; 2]> {
+    // Candidate method names: the last segment after `.`, plus segments peeled
+    // back through trailing identity-preserving methods (`unwrap`, `expect`,
+    // `await`, etc.).  For chain text like `conn.execute(&sql, []).unwrap` the
+    // direct last segment is `unwrap`; the real sink verb is `execute`.
+    // `normalize_chained_call_for_classify` strips paren groups; the walk
+    // peels back through identity methods.
+    let method_candidates = method_candidates_from_chain(callee, lang);
+
+    // Receiver candidates: the immediate SSA receiver, plus any ancestor
+    // reached by walking back through intermediate `SsaOp::Call.receiver`
+    // chains (Rust parses `conn.execute(&sql, []).unwrap()` as one outer
+    // call whose receiver is another call, and so on).  We stop once we find
+    // a typed value or run out of receivers.
+    let receiver_candidates = receiver_candidates_for_type_lookup(receiver, ssa, lang);
+
     // 1. Try static type first (existing behavior)
     if let Some(tf) = type_facts {
-        if let Some(receiver_type) = tf.get_type(receiver) {
-            if let Some(prefix) = receiver_type.label_prefix() {
-                let method = callee.rsplit('.').next().unwrap_or(callee);
-                let qualified = format!("{}.{}", prefix, method);
-                let labels = crate::labels::classify_all(lang.as_str(), &qualified, extra_labels);
-                if !labels.is_empty() {
-                    return labels;
+        for rv in &receiver_candidates {
+            if let Some(receiver_type) = tf.get_type(*rv) {
+                if let Some(prefix) = receiver_type.label_prefix() {
+                    for method in &method_candidates {
+                        let qualified = format!("{}.{}", prefix, method);
+                        let labels =
+                            crate::labels::classify_all(lang.as_str(), &qualified, extra_labels);
+                        if !labels.is_empty() {
+                            return labels;
+                        }
+                    }
                 }
             }
         }
@@ -4258,17 +4299,105 @@ fn resolve_type_qualified_labels(
 
     // 2. Try flow-sensitive type from PathEnv (Phase 16)
     if let Some(env) = path_env {
-        let types = env.get(receiver).types;
-        if let Some(kind) = types.as_singleton() {
-            if let Some(prefix) = kind.label_prefix() {
-                let method = callee.rsplit('.').next().unwrap_or(callee);
-                let qualified = format!("{}.{}", prefix, method);
-                return crate::labels::classify_all(lang.as_str(), &qualified, extra_labels);
+        for rv in &receiver_candidates {
+            let types = env.get(*rv).types;
+            if let Some(kind) = types.as_singleton() {
+                if let Some(prefix) = kind.label_prefix() {
+                    for method in &method_candidates {
+                        let qualified = format!("{}.{}", prefix, method);
+                        let labels =
+                            crate::labels::classify_all(lang.as_str(), &qualified, extra_labels);
+                        if !labels.is_empty() {
+                            return labels;
+                        }
+                    }
+                }
             }
         }
     }
 
     SmallVec::new()
+}
+
+/// Walk back through `SsaOp::Call.receiver` chains to collect candidate SSA
+/// values for type-fact lookup.  Needed for languages (Rust) where a chain
+/// like `conn.execute(x).unwrap()` is represented as a single outer call
+/// whose receiver is itself a call expression — the stable base identifier
+/// (`conn`) is several receivers up.
+fn receiver_candidates_for_type_lookup(
+    start: SsaValue,
+    ssa: Option<&SsaBody>,
+    lang: Lang,
+) -> SmallVec<[SsaValue; 4]> {
+    let mut out: SmallVec<[SsaValue; 4]> = SmallVec::new();
+    out.push(start);
+    if !matches!(lang, Lang::Rust) {
+        return out;
+    }
+    let Some(body) = ssa else {
+        return out;
+    };
+    let mut current = start;
+    for _ in 0..8 {
+        // Find the instruction defining `current`.
+        let mut next_receiver: Option<SsaValue> = None;
+        'scan: for block in &body.blocks {
+            for inst in block.phis.iter().chain(block.body.iter()) {
+                if inst.value == current {
+                    if let SsaOp::Call {
+                        receiver: Some(rv), ..
+                    } = &inst.op
+                    {
+                        next_receiver = Some(*rv);
+                    }
+                    break 'scan;
+                }
+            }
+        }
+        match next_receiver {
+            Some(rv) if !out.contains(&rv) => {
+                out.push(rv);
+                current = rv;
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// Extract candidate method names from a chained-call callee text.
+///
+/// Tree-sitter constructs `a.foo(x).bar()` as nested method-call nodes.  The
+/// CFG records the outermost callee text (here `a.foo(x).bar`), which means
+/// the last `.`-segment is the terminal method (`bar`).  When the terminal
+/// is an identity-preserving method (`.unwrap()`, `.expect()`, `.await`,
+/// `.clone()`, etc.), the *real* sink verb is the preceding segment.  This
+/// helper walks back through identity methods to return all plausible
+/// terminals in priority order (most-specific first).
+fn method_candidates_from_chain(callee: &str, lang: Lang) -> SmallVec<[String; 4]> {
+    let mut out: SmallVec<[String; 4]> = SmallVec::new();
+    // Normalize: strip `(...)` groups so we index into `.`-segments directly.
+    // Use the same normalization used for label classification so this mirrors
+    // matcher behavior.
+    let normalized = crate::labels::normalize_chained_call_for_classify(callee);
+    let segments: Vec<&str> = normalized.split('.').collect();
+    if segments.is_empty() {
+        return out;
+    }
+    // Walk from the end, peeling identity methods.
+    let mut i = segments.len();
+    while i > 0 {
+        let seg = segments[i - 1];
+        if !seg.is_empty() {
+            out.push(seg.to_string());
+        }
+        if matches!(lang, Lang::Rust) && crate::ssa::type_facts::is_identity_method(seg) {
+            i -= 1;
+            continue;
+        }
+        break;
+    }
+    out
 }
 
 /// Suppress sinks from known non-sink callees (e.g., `System.out.println` in Java).
@@ -4297,8 +4426,14 @@ fn is_type_safe_for_sink(
     sink_caps: Cap,
     type_facts: &crate::ssa::type_facts::TypeFactResult,
 ) -> bool {
-    // Suppress SQL injection and path traversal (FILE_IO) for int-typed values
-    let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO;
+    // Int-typed values cannot carry injection payloads for these caps:
+    //   SQL_QUERY   — digits can't form meta SQL tokens
+    //   FILE_IO     — digits can't form path traversal sequences
+    //   SHELL_ESCAPE — digits can't form shell metacharacters
+    // Rationale for SHELL_ESCAPE: once a value is parsed to a numeric type
+    // (Rust `parse::<u32>()`, JS `parseInt`, etc.) its string representation is
+    // bounded to `[0-9-+.eE]`, none of which are shell metacharacters.
+    let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO | Cap::SHELL_ESCAPE;
     if !sink_caps.intersects(type_suppressible) {
         return false;
     }
@@ -4323,7 +4458,7 @@ fn type_safe_for_taint_sink(kind: &crate::ssa::type_facts::TypeKind, cap: Cap) -
     use crate::ssa::type_facts::TypeKind;
     match kind {
         TypeKind::Int | TypeKind::Bool => {
-            cap.intersects(Cap::SQL_QUERY | Cap::FILE_IO | Cap::CODE_EXEC)
+            cap.intersects(Cap::SQL_QUERY | Cap::FILE_IO | Cap::CODE_EXEC | Cap::SHELL_ESCAPE)
         }
         _ => false,
     }
@@ -4401,6 +4536,16 @@ fn is_abstract_safe_for_sink(
 
     // SSRF — string prefix with locked host
     if sink_caps.intersects(Cap::SSRF) {
+        // Inline template-literal prefix attached to the CFG node directly
+        // (covers sinks whose URL is a template literal argument without an
+        // intermediate Assign to seed the abstract domain).
+        let node_info = &cfg[inst.cfg_node];
+        if let Some(prefix) = node_info.string_prefix.as_deref() {
+            let synthetic = crate::abstract_interp::StringFact::from_prefix(prefix);
+            if is_string_safe_for_ssrf(&synthetic) {
+                return true;
+            }
+        }
         if used
             .iter()
             .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string))
@@ -4409,11 +4554,14 @@ fn is_abstract_safe_for_sink(
         }
     }
 
-    // Dual gate: SQL_QUERY / FILE_IO with proven Int type AND bounded interval.
-    // Both conditions required: type proves the value IS an integer (not a string
-    // that happened to parse), interval proves it's bounded (not arbitrary).
-    // Traces through Assign chains so "const_string + tainted_int" is caught.
-    if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO) {
+    // Dual gate: SQL_QUERY / FILE_IO / SHELL_ESCAPE with proven Int type AND
+    // bounded interval.  Both conditions required: type proves the value IS an
+    // integer (not a string that happened to parse), interval proves it's
+    // bounded (not arbitrary).  Traces through Assign chains so
+    // "const_string + tainted_int" is caught.  SHELL_ESCAPE is included
+    // because a bounded integer's decimal representation can't contain shell
+    // metacharacters.
+    if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO | Cap::SHELL_ESCAPE) {
         if let Some(tf) = type_facts {
             let leaves = trace_tainted_leaf_values(inst, state, ssa, cfg);
             if !leaves.is_empty()
@@ -4442,6 +4590,16 @@ fn is_call_abstract_safe(
 ) -> bool {
     // SSRF — check if the URL argument (first arg) has a safe prefix.
     if sink_caps.intersects(Cap::SSRF) {
+        // Inline template-literal prefix from the call AST itself
+        // (e.g. `axios.get(\`https://host/…${x}\`)` has no intermediate Assign
+        // to seed a StringFact — check the node-attached prefix directly).
+        let node_info = &cfg[inst.cfg_node];
+        if let Some(prefix) = node_info.string_prefix.as_deref() {
+            let synthetic = crate::abstract_interp::StringFact::from_prefix(prefix);
+            if is_string_safe_for_ssrf(&synthetic) {
+                return true;
+            }
+        }
         if let Some(first_arg) = args.first() {
             if !first_arg.is_empty()
                 && first_arg
@@ -4454,7 +4612,7 @@ fn is_call_abstract_safe(
     }
 
     // Dual gate for Call sinks (same as non-Call path)
-    if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO) {
+    if sink_caps.intersects(Cap::SQL_QUERY | Cap::FILE_IO | Cap::SHELL_ESCAPE) {
         if let Some(tf) = type_facts {
             let leaves = trace_tainted_leaf_values(inst, state, ssa, cfg);
             if !leaves.is_empty()
@@ -4561,10 +4719,42 @@ fn trace_single_leaf(
                 leaves.push(v);
             }
         }
+        SsaOp::Call { callee, args, .. } if is_stringify_callee(callee) => {
+            // String-producing conversion of already-bounded values.  Trace
+            // through the arguments so the dual-gate check sees the upstream
+            // Int/bounded leaves.  Examples: `x.to_string()`, `format!(...)`.
+            let mut found = false;
+            for arg in args {
+                for &u in arg {
+                    if state.get(u).is_some() {
+                        trace_single_leaf(u, state, ssa, cfg, leaves, depth + 1);
+                        found = true;
+                    }
+                }
+            }
+            if !found {
+                leaves.push(v);
+            }
+        }
         _ => {
             leaves.push(v);
         }
     }
+}
+
+/// Call verbs that convert a value to a String without introducing attacker-
+/// controlled metacharacters.  Used by [`trace_single_leaf`] to peek past the
+/// String-typed result when the upstream value is Int/bounded.
+///
+/// Normalizes the callee (strips `(…)` groups) and peels trailing identity
+/// methods so chains like `.to_string().as_str()` resolve correctly.
+fn is_stringify_callee(callee: &str) -> bool {
+    let base = crate::ssa::type_facts::peel_identity_suffix(callee);
+    let suffix = base.rsplit(['.', ':']).next().unwrap_or(&base);
+    matches!(
+        suffix,
+        "to_string" | "to_owned" | "format" | "String" | "str"
+    )
 }
 
 /// SSRF safety: prefix includes scheme + full host + path separator.

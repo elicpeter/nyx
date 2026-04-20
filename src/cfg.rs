@@ -195,6 +195,15 @@ pub struct NodeInfo {
     /// `:name`) AND the call has >= 2 arguments (the params array/tuple).
     /// Both CFG analysis and SSA taint suppress findings on such nodes.
     pub parameterized_query: bool,
+    /// Constant leading string prefix recovered from the node's RHS when it
+    /// is a template literal (JS/TS) with a leading `string_fragment` or an
+    /// equivalent constant-string-then-interpolation shape.  Populated for
+    /// assignment-like nodes (`variable_declarator`, `assignment_expression`,
+    /// `lexical_declaration`).  Consumed by the abstract string domain in
+    /// `transfer_abstract` to seed a `StringFact::from_prefix` on the result
+    /// SSA value so SSRF prefix-suppression can fire for values constructed
+    /// from template literals.
+    pub string_prefix: Option<String>,
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -437,6 +446,23 @@ fn root_member_receiver(n: Node, code: &[u8]) -> Option<String> {
             }
             "member_expression" | "attribute" => {
                 cur = cur.child_by_field_name("object")?;
+            }
+            // Rust `x.y` is `field_expression` with a `value` field.
+            "field_expression" => {
+                cur = cur.child_by_field_name("value")?;
+            }
+            // Drill through nested calls / method chains to find the base
+            // identifier.  E.g. `Connection::open(p).unwrap().execute(...)` —
+            // the receiver of `.execute` is the `.unwrap()` call whose
+            // object is `Connection::open(p)`; we want the leftmost plain
+            // identifier the chain resolves to (for SSA var_stacks lookup).
+            "call_expression" => {
+                cur = cur.child_by_field_name("function")?;
+            }
+            "method_call_expression" => {
+                cur = cur
+                    .child_by_field_name("object")
+                    .or_else(|| cur.child_by_field_name("receiver"))?;
             }
             _ => return None,
         }
@@ -2158,6 +2184,164 @@ fn extract_bin_op(ast: Node, lang: &str) -> Option<BinOp> {
     None
 }
 
+/// Find the RHS value node of an assignment-like AST node (variable declarator,
+/// lexical declaration, assignment expression). Used by helpers that need to
+/// inspect what an identifier is being initialized to.
+fn assignment_rhs<'a>(ast: Node<'a>) -> Option<Node<'a>> {
+    match ast.kind() {
+        "variable_declarator" | "assignment_expression" | "assignment" => ast
+            .child_by_field_name("value")
+            .or_else(|| ast.child_by_field_name("right")),
+        "variable_declaration" | "lexical_declaration" => {
+            // Walk direct children for the first variable_declarator with a value.
+            let mut w = ast.walk();
+            ast.named_children(&mut w)
+                .find(|c| c.kind() == "variable_declarator")
+                .and_then(|d| {
+                    d.child_by_field_name("value")
+                        .or_else(|| d.child_by_field_name("right"))
+                })
+        }
+        "expression_statement" => {
+            // expression_statement wraps an assignment_expression
+            let mut w = ast.walk();
+            ast.named_children(&mut w).find_map(|c| match c.kind() {
+                "assignment_expression" | "assignment" => c
+                    .child_by_field_name("right")
+                    .or_else(|| c.child_by_field_name("value")),
+                _ => None,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Extract a constant leading string prefix from an assignment-like node's
+/// RHS when the RHS is a JS/TS template literal beginning with a
+/// `string_fragment` or a binary `+` expression whose left operand is a string
+/// literal. Returns `None` if the grammar does not expose such a shape.
+///
+/// The recovered prefix is used by the abstract string domain to seed a
+/// `StringFact::from_prefix` on the result SSA value. For SSRF detection,
+/// when the prefix contains `scheme://host/`, the sink is suppressed because
+/// the attacker cannot reach a different host.
+fn extract_template_prefix(ast: Node, lang: &str, code: &[u8]) -> Option<String> {
+    // Only JS/TS expose `template_string` nodes; cheap early exit elsewhere.
+    if !matches!(lang, "javascript" | "typescript") {
+        return None;
+    }
+
+    // Assignment-like node: inspect the RHS directly.
+    if let Some(rhs) = assignment_rhs(ast) {
+        if let Some(p) = prefix_of_expression(rhs, code) {
+            return Some(p);
+        }
+    }
+
+    // Call expression (including sink call nodes): inspect the first
+    // positional argument. Covers `axios.get(\`https://host/…${x}\`)` shape
+    // where the template literal is inline at the sink.
+    if matches!(ast.kind(), "call_expression" | "call" | "new_expression") {
+        let args = ast
+            .child_by_field_name("arguments")
+            .or_else(|| ast.child_by_field_name("argument_list"));
+        if let Some(args_node) = args {
+            let mut w = args_node.walk();
+            if let Some(first) = args_node.named_children(&mut w).next() {
+                if let Some(p) = prefix_of_expression(first, code) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Return the leading constant string of `node` if it is a template literal or
+/// a left-associated `"lit" + x` binary expression. Used by
+/// `extract_template_prefix` for both assignment RHS and call arguments.
+///
+/// Also descends through `await` / `yield` wrappers and into the first
+/// argument of a call expression — this covers the common sink shape
+/// `await axios.get(\`https://host/…${x}\`)` where the template literal lives
+/// inside a call inside an `await` wrapper.
+fn prefix_of_expression(node: Node, code: &[u8]) -> Option<String> {
+    // Unwrap trivial wrappers (parentheses, TS `as` / type assertions, await/yield).
+    let mut cur = node;
+    for _ in 0..6 {
+        match cur.kind() {
+            "parenthesized_expression" => {
+                cur = cur.named_child(0)?;
+            }
+            "as_expression" | "type_assertion" | "satisfies_expression" | "non_null_expression" => {
+                cur = cur
+                    .child_by_field_name("expression")
+                    .or_else(|| cur.named_child(0))?;
+            }
+            "await_expression" | "yield_expression" => {
+                cur = cur.named_child(0)?;
+            }
+            "call_expression" | "call" | "new_expression" => {
+                // Descend into the first positional argument (e.g.
+                // `axios.get(\`https://…${x}\`)` — the URL we want to lock
+                // is the template-literal first argument of the call).
+                let args = cur
+                    .child_by_field_name("arguments")
+                    .or_else(|| cur.child_by_field_name("argument_list"))?;
+                let mut w = args.walk();
+                cur = args.named_children(&mut w).next()?;
+            }
+            _ => break,
+        }
+    }
+
+    // Case 1: template literal — `\`scheme://host/…${x}…\``.
+    if cur.kind() == "template_string" {
+        let mut w = cur.walk();
+        let first_child = cur.named_children(&mut w).next()?;
+        // Leading fragment only counts when the very first piece is a literal
+        // text fragment (not an interpolation like `\`${x}…\``).
+        if first_child.kind() == "string_fragment" {
+            let frag = text_of(first_child, code)?;
+            if !frag.is_empty() {
+                return Some(frag);
+            }
+        }
+        return None;
+    }
+
+    // Case 2: `"scheme://host/" + x` — LHS is a string literal.
+    if cur.kind() == "binary_expression" {
+        let mut w2 = cur.walk();
+        let mut ops = cur.children(&mut w2).filter(|c| !c.is_named());
+        if !ops.any(|c| c.kind() == "+") {
+            return None;
+        }
+        let left = cur.named_child(0)?;
+        if matches!(left.kind(), "string" | "string_fragment") {
+            let raw = text_of(left, code)?;
+            let trimmed = if (raw.starts_with('"') && raw.ends_with('"'))
+                || (raw.starts_with('\'') && raw.ends_with('\''))
+                || (raw.starts_with('`') && raw.ends_with('`'))
+            {
+                if raw.len() >= 2 {
+                    raw[1..raw.len() - 1].to_string()
+                } else {
+                    raw
+                }
+            } else {
+                raw
+            };
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+
+    None
+}
+
 /// Extract the numeric literal operand from a binary expression (Phase 26).
 ///
 /// When a binary expression has one identifier operand (captured in `uses`)
@@ -2675,14 +2859,24 @@ fn push_node<'a>(
                 let recv_node = cn
                     .child_by_field_name("object")
                     .or_else(|| cn.child_by_field_name("receiver"))
-                    .or_else(|| cn.child_by_field_name("scope"));
+                    .or_else(|| cn.child_by_field_name("scope"))
+                    // Rust `method_call_expression` names the receiver "value".
+                    .or_else(|| cn.child_by_field_name("value"));
                 if let Some(rn) = recv_node
                     && matches!(rn.kind(), "identifier" | "variable_name")
                     && let Some(recv_text) = text_of(rn, code)
                 {
                     Some(recv_text)
-                } else if recv_node.is_some() {
-                    root_receiver_text(cn, lang, code)
+                } else if let Some(rn) = recv_node {
+                    // Complex receiver (chain / field access / nested call).
+                    // Drill through member/field/call nodes to the leftmost
+                    // plain identifier so var_stacks lookup resolves the SSA
+                    // value, which is what Phase-10 type-qualified resolution
+                    // anchors on.  Falls back to `root_receiver_text` (which
+                    // returns raw text like "conn.execute") only if drilling
+                    // fails — preserving prior behavior for types we can't
+                    // structurally reduce.
+                    root_member_receiver(rn, code).or_else(|| root_receiver_text(cn, lang, code))
                 } else {
                     None
                 }
@@ -2690,12 +2884,16 @@ fn push_node<'a>(
             Kind::CallFn => {
                 // JS/TS `obj.method(x)`: call_expression.function = member_expression.
                 // Python `obj.method(x)`: call.function = attribute.
+                // Rust `obj.method(x)`: call_expression.function = field_expression
+                //    (field on `value`, not `object` — value can be another call
+                //    for chained forms like `Connection::open(p).unwrap().execute(...)`).
                 // Pull the receiver from the object/attribute-owner field.
                 let func_child = cn.child_by_field_name("function");
                 let recv_node = match func_child {
                     Some(fc) if fc.kind() == "member_expression" || fc.kind() == "attribute" => {
                         fc.child_by_field_name("object")
                     }
+                    Some(fc) if fc.kind() == "field_expression" => fc.child_by_field_name("value"),
                     _ => None,
                 };
                 if let Some(rn) = recv_node {
@@ -2761,6 +2959,9 @@ fn push_node<'a>(
                 .any(|ch| ch.kind() == "do_block" || ch.kind() == "block")
         });
 
+    let string_prefix = extract_template_prefix(ast, lang, code)
+        .or_else(|| call_ast.and_then(|cn| extract_template_prefix(cn, lang, code)));
+
     let idx = g.add_node(NodeInfo {
         kind,
         call: CallMeta {
@@ -2795,6 +2996,7 @@ fn push_node<'a>(
         managed_resource: is_raii_managed || is_ruby_block_managed,
         in_defer: false,
         parameterized_query,
+        string_prefix,
     });
 
     debug!(

@@ -1,5 +1,385 @@
 # Nyx Benchmark Results
 
+## Rust Weak Spot Fixes (2026-04-20)
+
+Scanner version: 0.5.0
+Analysis mode: Full (taint + AST patterns + state analysis)
+Corpus: 262 cases (155 vulnerable, 107 safe) across 10 languages
+
+### Motivation
+
+The 2026-04-20 Rust Honesty Expansion recorded four honest FNs (rs-path-005,
+rs-ssrf-003, rs-sqli-001, rs-deser-001) where entire sink-API families had no
+rules, plus six FPs (rs-safe-003, -006, -007, -008, -009, -010, -011) where
+common Rust safe-patterns were not recognized. Rust rule-level precision and
+recall both dropped below threshold (P=0.682, R=0.789, F1=0.732). This phase
+closes all four honest FNs and one FP (rs-safe-006) without regressing any
+other language or adding fixture-only matchers.
+
+### Changes
+
+1. **Rust sink rule families added** (`src/labels/rust.rs`):
+   - `FILE_IO`: `fs::remove_file`, `fs::remove_dir`, `fs::remove_dir_all`,
+     `fs::rename`, `fs::copy` — round out the path-traversal sink family.
+   - `SSRF`: `reqwest::Client::new`, `reqwest::Client.get/post/head/put/delete`,
+     `HttpClient.get/post/send` — reqwest / generic HttpClient builder chain.
+   - `SQL_QUERY` (new class for Rust): `rusqlite::Connection.execute/query*`,
+     `sqlx::query*`, `diesel::sql_query`, `postgres::Client.execute/query*`,
+     `DatabaseConnection.execute/query*`.
+   - `DESERIALIZE` (new class for Rust): `serde_yaml::from_str/from_slice/from_reader`,
+     `bincode::deserialize`, `rmp_serde::from_slice/from_read`,
+     `ciborium::from_reader`, `ron::de::from_str/from_bytes/from_reader`,
+     `toml::from_str`. **Not** added: `serde_json::from_str` (per feedback,
+     JSON parsing is not intrinsically dangerous deserialization).
+
+2. **Phase 10 type-suppression extended to SHELL_ESCAPE**
+   (`src/taint/ssa_transfer.rs`): `is_type_safe_for_sink`,
+   `is_abstract_safe_for_sink`, `is_call_abstract_safe`, and
+   `type_safe_for_taint_sink` now include `Cap::SHELL_ESCAPE` alongside
+   `Cap::SQL_QUERY | Cap::FILE_IO`. Taint flow from a provably int-typed value
+   (e.g., `port: u16` from `parse::<u16>()`) into `Command::new(…).arg(port.to_string())`
+   is suppressed. Structural `cfg-unguarded-sink` still fires for high-risk
+   sinks per the established structural-detection principle.
+
+3. **Identity-method peeling for constructor typing**
+   (`src/ssa/type_facts.rs`): new `peel_identity_suffix()` normalizes callee
+   text by stripping trailing identity methods (`unwrap`, `expect`, `clone`,
+   `as_ref`, `as_str`, `into`, `to_owned`). `constructor_type()` Rust branch
+   now matches against the peeled base, so `Connection::open("app.db").unwrap`
+   correctly types the result as `DatabaseConnection`. `is_int_producing_callee`
+   also peels, and accepts `parse` (Rust idiom).
+
+4. **Stringify-callee leaf tracing** (`src/taint/ssa_transfer.rs`):
+   `trace_single_leaf` now recurses through `to_string`, `to_owned`, `format`,
+   `String`, and `str` calls to find the actual tainted source leaf. This
+   closes rs-safe-006: `port.to_string()` on a typed-safe int propagates the
+   typed-safety claim to the underlying parse result.
+
+5. **Character-class validation patterns** (`src/taint/path_state.rs`):
+   `classify_condition` now recognizes Rust idioms like
+   `.all(|c| c.is_ascii_alphanumeric())`, `.all(char::is_alphanumeric)`, and
+   `.all(|c| c.is_numeric())`. (This change compiled and is exercised by the
+   path-state test suite, but does not yet close rs-safe-009 — see limitations.)
+
+6. **Rust field-expression receiver plumbing** (`src/cfg.rs`):
+   `root_member_receiver` now handles Rust's `field_expression` and its
+   wrapping `call_expression`. This was required for the new
+   `rusqlite::Connection.execute` and `reqwest::Client.get` receiver-based
+   matchers to fire.
+
+### Regression guards (new fixtures)
+
+| Case | Kind | What it proves |
+|------|------|----------------|
+| `rs-path-005` | TP | `fs::remove_file(user_path)` now flagged — FILE_IO family complete |
+| `rs-ssrf-003` | TP | `reqwest::Client::new().get(url).send()` builder chain flagged |
+| `rs-sqli-001` | TP | `conn.execute(format!("SELECT … {}", user_id))` flagged (new SQL class) |
+| `rs-deser-001` | TP | `serde_yaml::from_str(&payload)` flagged (new DESERIALIZE class) |
+| `rs-safe-006` | TN | `parse::<u32>() → Command::new(…).arg(n.to_string())` no longer flagged |
+
+### Rust Metrics (rule-level)
+
+| Metric | Before (Honesty Expansion) | After |
+|--------|----------------------------|-------|
+| TP     | 15                         | 19    |
+| FP     | 7                          | 6     |
+| FN     | 4                          | 0     |
+| TN     | 5                          | 6     |
+| Precision | 68.2%                   | 76.0% |
+| Recall | 78.9%                      | 100.0% |
+| F1     | 73.2%                      | 86.4% |
+
+Delta: TP +4, FP -1, FN -4, TN +1. Precision +7.8pp, Recall +21.1pp, F1 +13.2pp.
+
+### Overall Metrics
+
+| Level | TP | FP | FN | TN | Precision | Recall | F1 |
+|-------|----|----|----|----|-----------|--------|----|
+| File-level | 155 | 16 | 0 | 90 | 90.6% | 100.0% | 95.1% |
+| Rule-level | 154 | 16 | 1 | 90 | 90.6% | 99.4% | 94.8% |
+
+Delta vs Rust Honesty Expansion: TP +7, FP -2, FN -5, TN +3. Precision +1.5pp,
+Recall +3.3pp, F1 +2.3pp. All gates pass: P 90.6% ≥ 77.7%, R 99.4% ≥ 90.0%,
+F1 94.8% ≥ 83.5%.
+
+### Known Rust Weak Spots (remaining)
+
+The following FPs persist and are bounded by deeper engine work rather than
+rule additions:
+
+| Case | Pattern | Why it persists |
+|------|---------|-----------------|
+| rs-safe-003 | `let _input = …; Command::new("sh").arg(cmd)` where `cmd` is literal | `cfg-unguarded-sink` structural finding fires on SHELL_ESCAPE sink because `env::var` source is present in the same function scope, even when the tainted variable (`_input`) is not used in the sink argument. Structural detection for high-risk sinks is intentional. |
+| rs-safe-007 | Nested interprocedural `sanitize_input` via `canonicalize_path` | Rust has no `.replace()` sanitizer rule; the fixture relies on `.replace("..", "")` chains, which the scanner conservatively does not credit as path-traversal sanitizers. |
+| rs-safe-008 | `if input.contains(";") \|\| input.contains("\|") { return; }` dominator | Rust `contains` negative-validation return pattern not yet modeled by `classify_condition()`. |
+| rs-safe-009 | `match raw.as_str() { s if s.chars().all(is_alphanumeric) => … }` | Match-arm guards produce CFG branches but do not surface as `StmtKind::If` condition nodes, so `classify_condition` is never invoked. New character-class rule added but unreached. |
+| rs-safe-010 | `let cmd = static_table.get(key).copied().unwrap_or("safe")` | `HashMap::get().copied().unwrap_or(literal)` is structurally a static lookup with bounded string range; engine does not model map-as-sanitizer semantics. |
+| rs-safe-011 | `parse::<u16>() → Command::new(…).arg(port.to_string())` (cfg-unguarded-sink) | Phase 10 type-suppression clears the taint-flow finding. The `cfg-unguarded-sink` LOW structural finding on SHELL_ESCAPE still fires because `AnalysisContext` has no access to `TypeFactResult`. Fixing requires plumbing type facts into cfg-analysis — deferred to preserve structural-detection guarantees for high-risk sinks. |
+
+These are documented rather than suppressed to keep the benchmark honest.
+
+---
+
+## TypeScript Weak Spot Fixes (2026-04-20)
+
+Scanner version: 0.5.0
+Analysis mode: Full (taint + AST patterns + state analysis)
+Corpus: 262 cases (155 vulnerable, 107 safe) across 10 languages
+
+### Motivation
+
+The 2026-04-20 TypeScript Coverage Expansion documented three engine weak
+spots. This phase closes all three:
+
+1. `ts-safe-003` false positive: `encodeURIComponent → axios` cap-overlap
+2. `ts-ssrf-002` false negative: Fastify framework context only from `package.json`
+3. TSX / JSX grammar was not wired
+
+### Changes
+
+1. **Prefix-locked SSRF suppression via StringFact** — extended
+   `src/cfg.rs::extract_template_prefix` to also consult the first positional
+   argument of a sink call (unwraps `await`/`yield`/`as`/parentheses). When
+   the URL argument is a template literal or `"lit" + x` whose leading
+   constant contains `scheme://host/`, a `StringFact::from_prefix` is seeded
+   on the call node. `is_abstract_safe_for_sink` and `is_call_abstract_safe`
+   in `src/taint/ssa_transfer.rs` now consult this node-attached prefix
+   directly — the existing `is_string_safe_for_ssrf` host check stays the
+   single source of truth for SSRF lock semantics. No caps were widened.
+2. **In-file framework detection** — added
+   `utils::project::detect_in_file_frameworks` (bounded head scan for
+   `'fastify'`/`'express'`/`'koa'` module specifiers in JS/TS).
+   `ParsedFile::from_source` now augments `LangAnalysisRules` with rules for
+   frameworks revealed by imports but missed by `package.json`.
+3. **TSX / JSX grammar** — wired `tree_sitter_typescript::LANGUAGE_TSX` for
+   `.tsx` and `tree_sitter_javascript::LANGUAGE` for `.jsx` in
+   `lang_for_path`. TSX uses the `typescript` slug (all TS KINDS/RULES/
+   PARAM_CONFIG apply). JSX nodes are structural and flow through
+   existing lowering.
+
+### Regression guards (new fixtures)
+
+| Case | Kind | What it proves |
+|------|------|----------------|
+| `ts-ssrf-003` | FN guard | `encodeURIComponent(host)` into `\`https://${encodedHost}/…\`` — prefix `"https://"` has no post-`://` slash, so suppression must NOT fire. Still reports SSRF (TP). |
+| `ts-xss-005` | TSX TP | `dangerouslySetInnerHTML={{__html: bio}}` in a `.tsx` file — exercises LANGUAGE_TSX wiring end-to-end. |
+| `ts-safe-010` | TSX TN | `<div>{bio}</div>` (React auto-escapes text children). Guards against over-flagging JSX expressions. |
+
+### TypeScript Metrics (rule-level)
+
+| Metric | Before (2026-04-20 Expansion) | After |
+|--------|-------------------------------|-------|
+| TP     | 22                            | 25    |
+| FP     | 1                             | 0     |
+| FN     | 1                             | 0     |
+| TN     | 8                             | 10    |
+| Precision | 95.7%                      | 100.0% |
+| Recall | 95.7%                         | 100.0% |
+| F1     | 95.7%                         | 100.0% |
+
+### Overall Metrics
+
+| Level | TP | FP | FN | TN | Precision | Recall | F1 |
+|-------|----|----|----|----|-----------|--------|----|
+| File-level | 153 | 17 | 2 | 89 | 90.0% | 98.7% | 94.2% |
+| Rule-level | 152 | 17 | 3 | 89 | 89.9% | 98.1% | 93.8% |
+
+All gates pass: Precision 89.9% ≥ 77.7%, Recall 98.1% ≥ 90.0%, F1 93.8% ≥ 83.5%.
+
+### Known Weak Spots (updated)
+
+The three TypeScript weak spots listed under the 2026-04-20 Coverage
+Expansion are **closed**. No new TypeScript weak spots have been introduced.
+
+---
+
+## Rust Honesty Expansion (2026-04-20)
+
+Scanner version: 0.5.0
+Corpus: 31 Rust cases (19 vulnerable, 12 safe) — previously 18 cases (10 vuln, 8 safe).
+
+### Motivation
+
+The prior Rust corpus reported 100% recall / 71.4% precision, but used a narrow
+sampling: every vulnerable case used `env::var` as the source, and coverage was
+limited to three classes (cmdi, path_traversal, ssrf). That inflated recall and
+hid unsupported classes. This expansion adds realistic adversarial cases,
+including honest false negatives in classes with no Rust sink rules.
+
+### Changes
+
+**+13 Rust cases** (9 vulnerable, 4 safe):
+
+| Case | Purpose | Outcome |
+|------|---------|---------|
+| rs-cmdi-005 | `format!()` interpolation into `sh -c` | TP |
+| rs-cmdi-006 | `match` expression binding `env::var` | TP |
+| rs-cmdi-007 | `String` + `&str` concat via `+` | TP |
+| rs-cmdi-cross-001 | Cross-file helper propagation (`mod transform`) | TP |
+| rs-path-005 | `fs::remove_file(user)` — no sink rule | **FN** (honest gap) |
+| rs-ssrf-003 | `reqwest::Client::new().get().send()` builder chain | **FN** (honest gap) |
+| rs-sqli-001 | `rusqlite::Connection.execute` with `format!` | **FN** (class has no Rust rules) |
+| rs-deser-001 | `serde_yaml::from_str(tainted)` | **FN** (class has no Rust rules) |
+| rs-xss-001 | Axum `Path<String>` → `Html(format!(…))` (framework) | TP |
+| rs-safe-009 | `match` guard restricting to ASCII alphanumeric | **FP** |
+| rs-safe-010 | `HashMap::get` with tainted key, static value | **FP** |
+| rs-safe-011 | `parse::<u16>()` type-narrowing before Command | **FP** |
+| rs-safe-cross-001 | Cross-file `sanitize_shell` helper | TN |
+
+The four FN cases are intentional: they exercise vulnerability classes and API
+shapes the Rust ruleset does not currently cover. Recording them as FN keeps
+the benchmark honest rather than pretending Rust has coverage it lacks.
+
+### Rust metrics (rule-level)
+
+| Scope | TP | FP | FN | TN | Precision | Recall | F1 |
+|-------|----|----|----|----|-----------|--------|----|
+| Rust (prior) | 10 | 4 | 0 | 4 | 71.4% | 100.0% | 83.3% |
+| Rust (current) | 15 | 7 | 4 | 5 | **68.2%** | **78.9%** | **73.2%** |
+
+Delta: TP +5, FP +3, FN +4, TN +1. Precision −3.2pp, Recall −21.1pp, F1 −10.1pp.
+The headline drop is a correction, not a regression: the prior numbers
+understated both the scanner's weak spots (ssrf builder chains, missing
+`remove_file` sink) and its unsupported classes (SQLi, deserialization).
+
+### Rust by vuln class (rule-level)
+
+| Class | TP | FP | FN | Precision | Recall | F1 |
+|-------|----|----|----|-----------|--------|----|
+| cmdi | 8 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| path_traversal | 4 | 0 | 1 | 100.0% | 80.0% | 88.9% |
+| ssrf | 2 | 0 | 1 | 100.0% | 66.7% | 80.0% |
+| xss | 1 | 0 | 0 | 100.0% | 100.0% | 100.0% |
+| sqli | 0 | 0 | 1 | — | 0.0% | 0.0% |
+| deser | 0 | 0 | 1 | — | 0.0% | 0.0% |
+| safe | 0 | 7 | 0 | 0.0% | — | — |
+
+### What the Rust corpus still does not cover
+
+- Unsafe FFI / `std::mem::transmute` — no rule, not benchmarked
+- Tokio `process::Command` async variants — not distinguished from sync
+- `std::fs::copy`, `std::fs::rename`, `remove_dir_all` — no sink rules
+- `hyper`, `surf`, `ureq` SSRF clients — not in `reqwest` rule family
+- Rocket / Actix framework positives — rules exist, no benchmark cases yet
+
+### Overall corpus metrics after this expansion (rule-level)
+
+| Level | TP | FP | FN | TN | Precision | Recall | F1 |
+|-------|----|----|----|----|-----------|--------|----|
+| File-level | 148 | 18 | 5 | 87 | 89.2% | 96.7% | 92.8% |
+| Rule-level | 147 | 18 | 6 | 87 | 89.1% | 96.1% | 92.5% |
+
+Thresholds (Phase 19 baseline minus 5pp) still hold: P≥0.777, R≥0.900, F1≥0.835.
+
+---
+
+## TypeScript Coverage Expansion (2026-04-20)
+
+Scanner version: 0.5.0
+Analysis mode: Full (taint + AST patterns + state analysis)
+Corpus: 246 cases (144 vulnerable, 102 safe) across 10 languages
+
+### Changes from Phase 19
+- **TypeScript corpus expansion**: 0 → 32 cases (23 vulnerable + 9 safe) — TS is now a first-class benchmarked language
+- **12 vuln classes covered for TS**: xss, sqli, cmdi, code_injection, ssrf, open_redirect, path_traversal, crypto, secrets, insecure_config, prototype, interproc, type_system
+- **Adversarial cases included**: type-system stressors (generics, interface dispatch, decorators, discriminated unions, optional chaining, `as any` casts), framework context (Fastify), cap-overlap sanitizers, interprocedural sanitizer wrapping, parameterized queries
+
+### Overall Metrics
+
+| Level | TP | FP | FN | TN | Precision | Recall | F1 |
+|-------|----|----|----|----|-----------|--------|----|
+| File-level | 143 | 15 | 1 | 86 | 90.5% | 99.3% | 94.7% |
+| Rule-level | 142 | 15 | 2 | 86 | 90.4% | 98.6% | 94.4% |
+
+Delta vs Phase 19: TP +27, FP -9, FN -4, TN +18. Precision +7.7pp, Recall +3.6pp, F1 +5.9pp. New TS cases lift aggregate quality while exposing engine weak spots.
+
+### TypeScript Metrics (rule-level)
+
+| Metric | Value |
+|--------|-------|
+| TP | 22 |
+| FP | 1 |
+| FN | 1 |
+| TN | 8 |
+| Precision | 95.7% |
+| Recall | 95.7% |
+| F1 | 95.7% |
+
+### Per Language (rule-level)
+
+| Language | TP | FP | FN | TN | Precision | Recall | F1 |
+|----------|----|----|----|----|-----------|--------|----|
+| C | 12 | 2 | 0 | 6 | 85.7% | 100.0% | 92.3% |
+| C++ | 12 | 3 | 0 | 5 | 80.0% | 100.0% | 88.9% |
+| Go | 16 | 1 | 0 | 11 | 94.1% | 100.0% | 97.0% |
+| Java | 13 | 1 | 0 | 9 | 92.9% | 100.0% | 96.3% |
+| JavaScript | 15 | 1 | 0 | 11 | 93.8% | 100.0% | 96.8% |
+| PHP | 13 | 2 | 0 | 9 | 86.7% | 100.0% | 92.9% |
+| Python | 17 | 0 | 0 | 12 | 100.0% | 100.0% | 100.0% |
+| Ruby | 12 | 0 | 1 | 11 | 100.0% | 92.3% | 96.0% |
+| Rust | 10 | 4 | 0 | 4 | 71.4% | 100.0% | 83.3% |
+| TypeScript | 22 | 1 | 1 | 8 | 95.7% | 95.7% | 95.7% |
+
+### TypeScript Case Breakdown
+
+| Vuln Class | Cases | TP | FP | FN | TN |
+|------------|-------|----|----|----|----|
+| xss | 4 | 4 | 0 | 0 | 0 |
+| sqli | 2 | 2 | 0 | 0 | 0 |
+| cmdi | 2 | 2 | 0 | 0 | 0 |
+| code_injection | 2 | 2 | 0 | 0 | 0 |
+| ssrf | 2 | 1 | 0 | 1 | 0 |
+| open_redirect | 1 | 1 | 0 | 0 | 0 |
+| path_traversal | 1 | 1 | 0 | 0 | 0 |
+| crypto | 1 | 1 | 0 | 0 | 0 |
+| secrets | 1 | 1 | 0 | 0 | 0 |
+| insecure_config | 2 | 2 | 0 | 0 | 0 |
+| prototype | 1 | 1 | 0 | 0 | 0 |
+| interproc | 1 | 1 | 0 | 0 | 0 |
+| type_system | 3 | 3 | 0 | 0 | 0 |
+| safe | 9 | 0 | 1 | 0 | 8 |
+
+### TypeScript Adversarial Cases (engine weak spots exposed)
+
+| Case | Category | Outcome | What it tests |
+|------|----------|---------|---------------|
+| ts-xss-003 | type_system | TP | Generic identity function `identity<T>(x: T): T` — taint flows through erased generic |
+| ts-xss-004 | type_system | TP | Optional chain adversarial source `req?.query?.name` |
+| ts-type_system-001 | type_system | TP | Discriminated union narrowing (`kind==='ping'`) then exec |
+| ts-type_system-002 | type_system | TP | Interface dispatch via `impl: Runner = new ShellRunner()` |
+| ts-type_system-003 | type_system | TP | Decorator `@log` wrapping Service.run → exec |
+| ts-safe-003 | cap-overlap | FP | encodeURIComponent (Cap::URL_ENCODE) → axios (Cap::SSRF) — caps don't match, sanitizer not credited |
+| ts-safe-007 | interproc | TN | Interprocedural `cleanHtml()` wrapping DOMPurify — engine correctly credits wrapper |
+| ts-safe-009 | parameterized | TN | `pool.query('... WHERE id = $1', [id])` — parameterized query not flagged |
+| ts-ssrf-002 | framework | FN | Fastify `request.query.url` → fetch — Fastify context requires package.json presence |
+
+### TypeScript Known Weak Spots
+
+All three weak spots below were closed in the **TypeScript Weak Spot Fixes
+(2026-04-20)** phase — see that section for implementation detail.
+
+- ~~**Cap-overlap sanitizers**~~: `encodeURIComponent → axios` false positive
+  closed by extending `StringFact`-backed prefix-locked SSRF suppression to
+  inline template-literal call arguments. Caps were **not** widened.
+- ~~**Framework context detection** (Fastify)~~: closed by per-file import
+  detection (`detect_in_file_frameworks`) that augments `LangAnalysisRules`
+  when `package.json` isn't available.
+- ~~**TSX/JSX not supported**~~: closed by wiring
+  `tree_sitter_typescript::LANGUAGE_TSX` and `tree_sitter_javascript::LANGUAGE`
+  for `.tsx` / `.jsx` respectively.
+
+### Thresholds
+
+Regression thresholds unchanged from Phase 19 baseline.
+
+| Metric | Baseline | Threshold |
+|--------|----------|-----------|
+| Rule-level Precision | 90.4% | 77.7% |
+| Rule-level Recall | 98.6% | 90.0% |
+| Rule-level F1 | 94.4% | 83.5% |
+
+---
+
 ## Phase 19 — Benchmark Expansion and Precision Gate (2026-03-24)
 
 Scanner version: 0.5.0

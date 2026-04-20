@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-03-27T17:19:26Z",
+  "timestamp": "2026-04-20T19:26:25Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:b451c90b076c864997451658d67d464f2a3d56cdb6e473e6c29ee9e60776b2f9",
-  "corpus_size": 214,
-  "cases_run": 213,
+  "ground_truth_hash": "sha256:f61d0a58422b8a22bd1c18609847908762af5009fdc993211f4fc5affc3dfa7c",
+  "corpus_size": 262,
+  "cases_run": 261,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -1029,13 +1029,17 @@
       "language": "go",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "TN",
-      "outcome_rule_level": "TN",
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [],
-      "all_finding_ids": [],
-      "security_finding_count": 0,
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -1112,13 +1116,16 @@
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
       "all_finding_ids": [
         "state-resource-leak",
+        "go.auth.missing_ownership_check",
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "security_finding_count": 3,
+      "security_finding_count": 4,
       "non_security_finding_count": 0
     },
     {
@@ -1156,13 +1163,16 @@
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "go.auth.missing_ownership_check"
+      ],
       "all_finding_ids": [
         "state-resource-leak",
+        "go.auth.missing_ownership_check",
         "go.sqli.query_concat",
         "taint-unsanitised-flow (source 9:2)"
       ],
-      "security_finding_count": 3,
+      "security_finding_count": 4,
       "non_security_finding_count": 0
     },
     {
@@ -1832,10 +1842,10 @@
       "outcome_location_level": null,
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
-        "taint-unsanitised-flow (source 8:20)"
+        "taint-unsanitised-flow (source 9:5)"
       ],
       "all_finding_ids": [
-        "taint-unsanitised-flow (source 8:20)"
+        "taint-unsanitised-flow (source 9:5)"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
@@ -2716,14 +2726,11 @@
       "matched_rule_ids": [
         "py.cmdi.subprocess_shell"
       ],
-      "unexpected_rule_ids": [
-        "cfg-unguarded-sink"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "cfg-unguarded-sink",
         "py.cmdi.subprocess_shell"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -2825,14 +2832,11 @@
       "matched_rule_ids": [
         "py.deser.pickle_loads"
       ],
-      "unexpected_rule_ids": [
-        "cfg-unguarded-sink"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "cfg-unguarded-sink",
         "py.deser.pickle_loads"
       ],
-      "security_finding_count": 2,
+      "security_finding_count": 1,
       "non_security_finding_count": 0
     },
     {
@@ -3052,15 +3056,15 @@
       "outcome_location_level": "TP",
       "matched_rule_ids": [
         "state-resource-leak",
-        "state-resource-leak",
         "taint-unsanitised-flow (source 5:5)"
       ],
       "unexpected_rule_ids": [
+        "cfg-resource-leak",
         "py.sqli.execute_format"
       ],
       "all_finding_ids": [
         "state-resource-leak",
-        "state-resource-leak",
+        "cfg-resource-leak",
         "py.sqli.execute_format",
         "taint-unsanitised-flow (source 5:5)"
       ],
@@ -3078,14 +3082,15 @@
       "outcome_location_level": "TP",
       "matched_rule_ids": [
         "state-resource-leak",
-        "state-resource-leak",
         "py.sqli.execute_format",
         "taint-unsanitised-flow (source 5:5)"
       ],
-      "unexpected_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-resource-leak"
+      ],
       "all_finding_ids": [
         "state-resource-leak",
-        "state-resource-leak",
+        "cfg-resource-leak",
         "py.sqli.execute_format",
         "taint-unsanitised-flow (source 5:5)"
       ],
@@ -3190,14 +3195,14 @@
       "vuln_class": "sqli",
       "is_vulnerable": true,
       "outcome_file_level": "TP",
-      "outcome_rule_level": "TP",
-      "outcome_location_level": "TP",
-      "matched_rule_ids": [
-        "taint-unsanitised-flow (source 8:3)"
+      "outcome_rule_level": "FN",
+      "outcome_location_level": "FN",
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
       ],
-      "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "taint-unsanitised-flow (source 8:3)"
+        "cfg-unguarded-sink"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
@@ -3305,6 +3310,110 @@
       "non_security_finding_count": 2
     },
     {
+      "case_id": "rs-cmdi-005",
+      "file": "rust/cmdi/cmdi_format_macro.rs",
+      "language": "rust",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-cmdi-006",
+      "file": "rust/cmdi/cmdi_match_source.rs",
+      "language": "rust",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-cmdi-007",
+      "file": "rust/cmdi/cmdi_string_concat.rs",
+      "language": "rust",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-cmdi-cross-001",
+      "file": "rust/cmdi/cross_propagation/",
+      "language": "rust",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-deser-001",
+      "file": "rust/deser/deser_serde_yaml.rs",
+      "language": "rust",
+      "vuln_class": "deser",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
       "case_id": "rs-path-001",
       "file": "rust/path_traversal/path_read.rs",
       "language": "rust",
@@ -3370,6 +3479,27 @@
     {
       "case_id": "rs-path-004",
       "file": "rust/path_traversal/path_file_create.rs",
+      "language": "rust",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-path-005",
+      "file": "rust/path_traversal/path_remove.rs",
       "language": "rust",
       "vuln_class": "path_traversal",
       "is_vulnerable": true,
@@ -3484,20 +3614,17 @@
       "language": "rust",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "taint-unsanitised-flow (source 5:5)"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "rs.quality.unwrap",
         "rs.quality.expect",
-        "rs.quality.unwrap",
-        "taint-unsanitised-flow (source 5:5)"
+        "rs.quality.unwrap"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 0,
       "non_security_finding_count": 3
     },
     {
@@ -3511,12 +3638,12 @@
       "outcome_location_level": null,
       "matched_rule_ids": [],
       "unexpected_rule_ids": [
-        "taint-unsanitised-flow (source 12:1)"
+        "taint-unsanitised-flow (source 13:5)"
       ],
       "all_finding_ids": [
         "rs.quality.unwrap",
         "rs.quality.unwrap",
-        "taint-unsanitised-flow (source 12:1)"
+        "taint-unsanitised-flow (source 13:5)"
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 2
@@ -3541,6 +3668,110 @@
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-safe-009",
+      "file": "rust/safe/safe_match_guard.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-safe-010",
+      "file": "rust/safe/safe_static_map_lookup.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "taint-unsanitised-flow (source 6:5)"
+      ],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 6:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-safe-011",
+      "file": "rust/safe/safe_parsed_port.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "FP",
+      "outcome_rule_level": "FP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.expect",
+        "cfg-unguarded-sink",
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 3
+    },
+    {
+      "case_id": "rs-safe-cross-001",
+      "file": "rust/cmdi/cross_sanitizer/",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "rs-sqli-001",
+      "file": "rust/sqli/sqli_rusqlite_format.rs",
+      "language": "rust",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 3
     },
     {
       "case_id": "rs-ssrf-001",
@@ -3581,6 +3812,45 @@
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-ssrf-003",
+      "file": "rust/ssrf/ssrf_client_builder.rs",
+      "language": "rust",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 4:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-xss-001",
+      "file": "rust/xss/axum_html/",
+      "language": "rust",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 3:16)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 3:16)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
     },
     {
       "case_id": "ruby-cmdi-001",
@@ -3967,25 +4237,673 @@
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-cmdi-001",
+      "file": "typescript/cmdi/cmdi_exec_template.ts",
+      "language": "typescript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-cmdi-002",
+      "file": "typescript/cmdi/cmdi_async_wrapper.ts",
+      "language": "typescript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 9:5)",
+        "taint-unsanitised-flow (source 9:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 9:5)",
+        "taint-unsanitised-flow (source 9:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-code_injection-001",
+      "file": "typescript/code_injection/code_exec_eval.ts",
+      "language": "typescript",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)",
+        "ts.code_exec.eval"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 5:5)",
+        "ts.code_exec.eval"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-code_injection-002",
+      "file": "typescript/code_injection/code_exec_new_function.ts",
+      "language": "typescript",
+      "vuln_class": "code_injection",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "ts.code_exec.new_function",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "ts.code_exec.new_function",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-crypto-001",
+      "file": "typescript/crypto/weak_hash_md5.ts",
+      "language": "typescript",
+      "vuln_class": "crypto",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "ts.crypto.weak_hash_import"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "ts.crypto.weak_hash_import"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-insecure_config-001",
+      "file": "typescript/insecure_config/reject_unauthorized.ts",
+      "language": "typescript",
+      "vuln_class": "insecure_config",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "ts.config.reject_unauthorized"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "ts.config.reject_unauthorized"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-insecure_config-002",
+      "file": "typescript/insecure_config/cookie_httponly.ts",
+      "language": "typescript",
+      "vuln_class": "insecure_config",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "ts.config.insecure_session_httponly"
+      ],
+      "unexpected_rule_ids": [
+        "ts.secrets.hardcoded_secret"
+      ],
+      "all_finding_ids": [
+        "ts.secrets.hardcoded_secret",
+        "ts.config.insecure_session_httponly"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-interproc-001",
+      "file": "typescript/interprocedural/interproc_class_method.ts",
+      "language": "typescript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 14:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 14:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-open_redirect-001",
+      "file": "typescript/open_redirect/location_href.ts",
+      "language": "typescript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)",
+        "ts.xss.location_assign"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 5:5)",
+        "ts.xss.location_assign"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-path_traversal-001",
+      "file": "typescript/path_traversal/path_traversal_sendfile.ts",
+      "language": "typescript",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-prototype-001",
+      "file": "typescript/prototype/proto_assignment.ts",
+      "language": "typescript",
+      "vuln_class": "prototype",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "ts.prototype.proto_assignment"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "ts.prototype.proto_assignment",
+        "ts.quality.as_any"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "ts-safe-001",
+      "file": "typescript/safe/safe_dompurify.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-002",
+      "file": "typescript/safe/safe_number_coerce.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-003",
+      "file": "typescript/safe/safe_encode_uri.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-004",
+      "file": "typescript/safe/safe_hardcoded_url.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-005",
+      "file": "typescript/safe/safe_validator_escape.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-006",
+      "file": "typescript/safe/safe_typeof_guard.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-007",
+      "file": "typescript/safe/safe_interproc_sanitizer.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-008",
+      "file": "typescript/safe/safe_constant_query.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-009",
+      "file": "typescript/safe/safe_parameterized.ts",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-safe-010",
+      "file": "typescript/safe/safe_jsx_text.tsx",
+      "language": "typescript",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-secrets-001",
+      "file": "typescript/secrets/fallback_secret.ts",
+      "language": "typescript",
+      "vuln_class": "secrets",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "ts.secrets.fallback_secret"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "ts.secrets.fallback_secret"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-sqli-001",
+      "file": "typescript/sqli/sqli_template_literal.ts",
+      "language": "typescript",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-sqli-002",
+      "file": "typescript/sqli/sqli_prisma_raw.ts",
+      "language": "typescript",
+      "vuln_class": "sqli",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 8:5)",
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 8:5)",
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-ssrf-001",
+      "file": "typescript/ssrf/ssrf_axios_user_url.ts",
+      "language": "typescript",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-ssrf-002",
+      "file": "typescript/ssrf/ssrf_fastify_fetch.ts",
+      "language": "typescript",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 8:5)",
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 8:5)",
+        "taint-unsanitised-flow (source 8:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-ssrf-003",
+      "file": "typescript/ssrf/ssrf_encoded_host.ts",
+      "language": "typescript",
+      "vuln_class": "ssrf",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-type_system-001",
+      "file": "typescript/type_system/discriminated_union_narrow.ts",
+      "language": "typescript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-type_system-002",
+      "file": "typescript/type_system/interface_dispatch.ts",
+      "language": "typescript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 18:5)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 18:5)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-type_system-003",
+      "file": "typescript/type_system/decorator_passthrough.ts",
+      "language": "typescript",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 22:13)"
+      ],
+      "unexpected_rule_ids": [
+        "cfg-unguarded-sink"
+      ],
+      "all_finding_ids": [
+        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 22:13)"
+      ],
+      "security_finding_count": 2,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-xss-001",
+      "file": "typescript/xss/xss_typed_innerhtml.ts",
+      "language": "typescript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-xss-002",
+      "file": "typescript/xss/xss_as_any_cast.ts",
+      "language": "typescript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "ts.quality.as_any",
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "ts-xss-003",
+      "file": "typescript/xss/xss_generic_identity.ts",
+      "language": "typescript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 9:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 9:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-xss-004",
+      "file": "typescript/xss/xss_optional_chain_source.ts",
+      "language": "typescript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 5:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "ts-xss-005",
+      "file": "typescript/xss/xss_dangerously_set_inner_html.tsx",
+      "language": "typescript",
+      "vuln_class": "xss",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "taint-unsanitised-flow (source 7:5)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
     }
   ],
   "aggregate_file_level": {
-    "tp": 121,
-    "fp": 13,
+    "tp": 155,
+    "fp": 16,
     "fn_": 0,
-    "tn": 79,
-    "precision": 0.9029850746268657,
+    "tn": 90,
+    "precision": 0.9064327485380117,
     "recall": 1.0,
-    "f1": 0.9490196078431373
+    "f1": 0.950920245398773
   },
   "aggregate_rule_level": {
-    "tp": 121,
-    "fp": 13,
-    "fn_": 0,
-    "tn": 79,
-    "precision": 0.9029850746268657,
-    "recall": 1.0,
-    "f1": 0.9490196078431373
+    "tp": 154,
+    "fp": 16,
+    "fn_": 1,
+    "tn": 90,
+    "precision": 0.9058823529411765,
+    "recall": 0.9935483870967742,
+    "f1": 0.9476923076923077
   },
   "by_language": {
     "c": {
@@ -4008,12 +4926,12 @@
     },
     "go": {
       "tp": 16,
-      "fp": 0,
+      "fp": 1,
       "fn_": 0,
-      "tn": 12,
-      "precision": 1.0,
+      "tn": 11,
+      "precision": 0.9411764705882353,
       "recall": 1.0,
-      "f1": 1.0
+      "f1": 0.9696969696969697
     },
     "java": {
       "tp": 13,
@@ -4052,22 +4970,31 @@
       "f1": 1.0
     },
     "ruby": {
-      "tp": 13,
+      "tp": 12,
+      "fp": 0,
+      "fn_": 1,
+      "tn": 11,
+      "precision": 1.0,
+      "recall": 0.9230769230769231,
+      "f1": 0.9600000000000001
+    },
+    "rust": {
+      "tp": 19,
+      "fp": 6,
+      "fn_": 0,
+      "tn": 6,
+      "precision": 0.76,
+      "recall": 1.0,
+      "f1": 0.8636363636363636
+    },
+    "typescript": {
+      "tp": 25,
       "fp": 0,
       "fn_": 0,
-      "tn": 11,
+      "tn": 10,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
-    },
-    "rust": {
-      "tp": 10,
-      "fp": 4,
-      "fn_": 0,
-      "tn": 4,
-      "precision": 0.7142857142857143,
-      "recall": 1.0,
-      "f1": 0.8333333333333333
     }
   },
   "by_vuln_class": {
@@ -4081,7 +5008,7 @@
       "f1": 1.0
     },
     "cmdi": {
-      "tp": 32,
+      "tp": 42,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -4090,7 +5017,16 @@
       "f1": 1.0
     },
     "code_injection": {
-      "tp": 8,
+      "tp": 10,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "crypto": {
+      "tp": 1,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -4099,7 +5035,7 @@
       "f1": 1.0
     },
     "deser": {
-      "tp": 6,
+      "tp": 7,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -4116,8 +5052,26 @@
       "recall": 1.0,
       "f1": 1.0
     },
+    "insecure_config": {
+      "tp": 2,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
     "path_traversal": {
-      "tp": 16,
+      "tp": 18,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "prototype": {
+      "tp": 1,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -4127,15 +5081,15 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 13,
+      "fp": 16,
       "fn_": 0,
-      "tn": 79,
+      "tn": 90,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
     },
-    "sqli": {
-      "tp": 19,
+    "secrets": {
+      "tp": 1,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -4143,8 +5097,17 @@
       "recall": 1.0,
       "f1": 1.0
     },
+    "sqli": {
+      "tp": 21,
+      "fp": 0,
+      "fn_": 1,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 0.9545454545454546,
+      "f1": 0.9767441860465117
+    },
     "ssrf": {
-      "tp": 16,
+      "tp": 20,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -4153,7 +5116,7 @@
       "f1": 1.0
     },
     "xss": {
-      "tp": 14,
+      "tp": 21,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -4164,31 +5127,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 86,
-      "fp": 41,
-      "fn_": 35,
-      "tn": 51,
-      "precision": 0.6771653543307087,
-      "recall": 0.7107438016528925,
-      "f1": 0.6935483870967742
+      "tp": 105,
+      "fp": 52,
+      "fn_": 50,
+      "tn": 54,
+      "precision": 0.6687898089171974,
+      "recall": 0.6774193548387096,
+      "f1": 0.673076923076923
     },
     ">=Low": {
-      "tp": 86,
-      "fp": 43,
-      "fn_": 35,
-      "tn": 49,
-      "precision": 0.6666666666666666,
-      "recall": 0.7107438016528925,
-      "f1": 0.688
+      "tp": 105,
+      "fp": 55,
+      "fn_": 50,
+      "tn": 51,
+      "precision": 0.65625,
+      "recall": 0.6774193548387096,
+      "f1": 0.6666666666666667
     },
     ">=Medium": {
-      "tp": 86,
-      "fp": 43,
-      "fn_": 35,
-      "tn": 49,
-      "precision": 0.6666666666666666,
-      "recall": 0.7107438016528925,
-      "f1": 0.688
+      "tp": 105,
+      "fp": 55,
+      "fn_": 50,
+      "tn": 51,
+      "precision": 0.65625,
+      "recall": 0.6774193548387096,
+      "f1": 0.6666666666666667
     }
   }
 }
