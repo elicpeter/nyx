@@ -2037,16 +2037,25 @@ fn transfer_inst(
                 }
             }
 
-            // Apply explicit sanitizer labels
+            // Apply explicit sanitizer labels.  When a callee summary has
+            // already resolved the call, `return_bits` reflects the summary's
+            // precise propagation + sanitization; re-unioning `use_caps` here
+            // would restore taint the summary already stripped and clobber
+            // any cross-procedural sanitization (e.g. an interprocedural
+            // path-traversal sanitizer whose caller also carries a label-only
+            // sanitizer matching on callee name).  Only collect `use_caps`
+            // when no summary applied — that is the original pure-label
+            // sanitizer-wrapper code path.
             if !sanitizer_bits.is_empty() {
-                // Collect uses taint then strip bits
-                let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
-                return_bits |= use_caps;
-                for orig in &use_origins {
-                    if return_origins.len() < MAX_ORIGINS
-                        && !return_origins.iter().any(|o| o.node == orig.node)
-                    {
-                        return_origins.push(*orig);
+                if !resolved_callee {
+                    let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
+                    return_bits |= use_caps;
+                    for orig in &use_origins {
+                        if return_origins.len() < MAX_ORIGINS
+                            && !return_origins.iter().any(|o| o.node == orig.node)
+                        {
+                            return_origins.push(*orig);
+                        }
                     }
                 }
                 return_bits &= !sanitizer_bits;

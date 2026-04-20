@@ -360,26 +360,27 @@ Incremental indexing significantly reduces scan time for subsequent runs on unch
 
 ### Detection Accuracy
 
-Measured against a 95-case corpus (55 vulnerable, 40 safe) across Go, Java, JavaScript, PHP, and Python covering 8 vulnerability classes. Full results in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
+Measured against a 262-case ground-truth corpus (155 vulnerable, 107 safe) across 10 languages (C, C++, Go, Java, JavaScript, PHP, Python, Ruby, Rust, TypeScript) covering 14 vulnerability classes. Full per-phase results live in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
+
+Current rule-level baseline:
 
 | Metric | Score |
 |---|---|
-| Precision | 65.4% |
-| Recall | 96.4% |
-| F1 | 77.9% |
+| Precision | 91.1% |
+| Recall | 99.4% |
+| F1 | 95.1% |
 
-Per vulnerability class:
+The benchmark is wired as a CI regression gate. Every pull request runs `tests/benchmark_test.rs::benchmark_evaluation` in release mode under the `benchmark-gate` job and fails if rule-level Precision, Recall, or F1 drops below the thresholds encoded in the test:
 
-| Class | Precision | Recall |
+| Metric | Floor | Current baseline |
 |---|---|---|
-| Command injection | 100% | 100% |
-| SQL injection | 100% | 100% |
-| Code injection | 100% | 100% |
-| Deserialization | 100% | 100% |
-| Path traversal | 100% | 100% |
-| Format string | 100% | 100% |
-| SSRF | 100% | 83.3% |
-| XSS | 100% | 88.9% |
+| Precision | ≥ 86.1% | 91.1% |
+| Recall | ≥ 94.4% | 99.4% |
+| F1 | ≥ 90.1% | 95.1% |
+
+Floors sit ~5 pp below the measured 262-case baseline. Tighten them when an improvement lands; never relax them to accommodate a regression.
+
+The same job also runs `tests/perf_tests.rs` with `NYX_CI_BENCH=1` and enforces per-fixture wall-clock budgets (see each fixture's `expectations.json`).
 
 Recall is strong across all classes. Precision is limited by false positives on safe code where sanitization, reassignment, or type-checking patterns are not yet recognized by the taint engine. Improving precision is an active focus area.
 

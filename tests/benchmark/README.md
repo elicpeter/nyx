@@ -93,9 +93,29 @@ Run the benchmark. `results/latest.json` is overwritten each time:
 cargo test benchmark_evaluation -- --ignored --nocapture
 ```
 
-## Regression and trend tracking
+## Regression gate (CI)
 
-Compare `latest.json` across commits to track directional improvement:
-- Rule IDs may evolve as the scanner improves.
-- Focus on precision/recall trends, not absolute numbers.
-- The first run establishes the baseline; no hard thresholds are enforced initially.
+The accuracy regression floor is enforced in CI by the `benchmark-gate` job in
+`.github/workflows/ci.yml`. Each pull request runs:
+
+```bash
+cargo test --release --all-features --test benchmark_test -- --ignored --nocapture benchmark_evaluation
+```
+
+and fails if the corpus rule-level metrics fall below the thresholds encoded
+at the bottom of `tests/benchmark_test.rs`:
+
+| Metric | Floor | Current baseline (262 cases) |
+|---|---|---|
+| Precision | ≥ 0.861 | 0.911 |
+| Recall | ≥ 0.944 | 0.994 |
+| F1 | ≥ 0.901 | 0.951 |
+
+The floors sit ~5 pp below the current 262-case baseline — a single-case
+flip is ~0.6 pp on this corpus, so 5 pp absorbs honest FP↔TN trades while
+still tripping on a real regression in a whole vulnerability class. The `results/latest.json` artifact is
+uploaded from the CI job for comparison across runs. The Rust job cache is
+warm, so the gate typically adds only a few seconds on top of the build.
+
+Updating the thresholds is a deliberate change — raise them when you land a
+measurable, durable improvement; never relax them to paper over a regression.

@@ -1757,6 +1757,138 @@ fn extract_kwargs(call_node: Node, code: &[u8]) -> Vec<(String, Vec<String>)> {
     out
 }
 
+/// Caps that a search literal is known to strip, provided the replacement
+/// itself does not reintroduce any dangerous sequence.
+///
+/// Policy is deliberately narrow and conservative: only literals that contain
+/// *known-dangerous* payloads earn a strip credit, so an arbitrary
+/// `.replace("foo", "bar")` is never promoted to a sanitizer.
+///   * `..`, `/`, `\\`  → path-traversal → `Cap::FILE_IO`
+///   * `<`, `>`         → HTML metachars → `Cap::HTML_ESCAPE`
+fn caps_stripped_by_literal_pattern(search: &str) -> Cap {
+    let mut caps = Cap::empty();
+    if search.contains("..") || search.contains('/') || search.contains('\\') {
+        caps |= Cap::FILE_IO;
+    }
+    if search.contains('<') || search.contains('>') {
+        caps |= Cap::HTML_ESCAPE;
+    }
+    caps
+}
+
+/// Maximum number of `.replace(LIT, LIT)` hops we'll walk on a single chain.
+const MAX_REPLACE_CHAIN_HOPS: usize = 16;
+
+/// Recognise a Rust `param.replace(LIT, LIT)[.replace(LIT, LIT)]*` chain whose
+/// receiver bottoms out at a plain identifier, and infer which caps the chain
+/// provably strips.
+///
+/// In tree-sitter-rust a method call is encoded as a `call_expression` whose
+/// `function` field is a `field_expression` (`receiver.method`). Chained method
+/// calls therefore nest `call_expression` nodes recursively through the
+/// `field_expression.value` slot.  The detector walks that nest, requiring
+/// every hop to be a pure literal-to-literal `replace` / `replacen` call and
+/// the innermost receiver to be a bare identifier.  Returns the union of caps
+/// stripped across the chain when at least one literal contains a recognised
+/// dangerous pattern, or `None` when the pattern doesn't apply (so the caller
+/// falls back to normal unresolved-call propagation).
+fn detect_rust_replace_chain_sanitizer(call_ast: Node, code: &[u8]) -> Option<Cap> {
+    fn is_rust_str_literal(k: &str) -> bool {
+        matches!(k, "string_literal" | "raw_string_literal")
+    }
+
+    fn extract_rust_str_content<'a>(n: Node<'a>, code: &'a [u8]) -> Option<String> {
+        // A `string_literal` node in tree-sitter-rust has a `string_content`
+        // child that holds the unquoted bytes.  Fall back to whole-node text
+        // with outer-character trimming only as a last resort.
+        let mut cur = n.walk();
+        for c in n.named_children(&mut cur) {
+            if c.kind() == "string_content" {
+                return text_of(c, code);
+            }
+        }
+        let raw = text_of(n, code)?;
+        if raw.len() >= 2 {
+            Some(
+                raw.trim_start_matches('r')
+                    .trim_start_matches('#')
+                    .trim_end_matches('#')
+                    .trim_matches('"')
+                    .to_string(),
+            )
+        } else {
+            None
+        }
+    }
+
+    let mut current = call_ast;
+    let mut earned = Cap::empty();
+
+    for _ in 0..MAX_REPLACE_CHAIN_HOPS {
+        if current.kind() != "call_expression" {
+            // Chain base: must be a plain identifier (parameter / local) to
+            // qualify.  A base that's another expression (field access,
+            // nested non-method call, …) breaks the sanitizer invariant.
+            if current.kind() == "identifier" && !earned.is_empty() {
+                return Some(earned);
+            }
+            return None;
+        }
+
+        // Must be a method-style call: function is a field_expression whose
+        // `field` names a `replace`-like method.
+        let func = current.child_by_field_name("function")?;
+        if func.kind() != "field_expression" {
+            return None;
+        }
+        let method_ident = func.child_by_field_name("field")?;
+        let method_name = text_of(method_ident, code)?;
+        if method_name != "replace" && method_name != "replacen" {
+            return None;
+        }
+
+        let args_node = current.child_by_field_name("arguments")?;
+        let mut cursor = args_node.walk();
+        let positional: Vec<Node<'_>> = args_node
+            .named_children(&mut cursor)
+            .filter(|c| {
+                !matches!(
+                    c.kind(),
+                    "keyword_argument"
+                        | "named_argument"
+                        | "spread_element"
+                        | "list_splat"
+                        | "dictionary_splat"
+                        | "splat_argument"
+                        | "hash_splat_argument"
+                )
+            })
+            .collect();
+        let (arg0, arg1) = match positional.as_slice() {
+            [a, b, ..] => (*a, *b),
+            _ => return None,
+        };
+        if !is_rust_str_literal(arg0.kind()) || !is_rust_str_literal(arg1.kind()) {
+            return None;
+        }
+        let search = extract_rust_str_content(arg0, code)?;
+        let replacement = extract_rust_str_content(arg1, code)?;
+
+        // If the replacement itself contains a dangerous sequence, this hop
+        // can reintroduce the pattern that a later hop tries to strip.  Be
+        // conservative: abandon all credit.
+        if !caps_stripped_by_literal_pattern(&replacement).is_empty() {
+            return None;
+        }
+        earned |= caps_stripped_by_literal_pattern(&search);
+
+        // Walk to receiver via field_expression.value.
+        current = func.child_by_field_name("value")?;
+    }
+
+    None
+}
+
 /// Like `first_call_ident`, but also checks if `n` itself is a call node.
 /// `first_call_ident` only searches children, so when `n` IS the call
 /// expression (e.g. the argument `sanitize(cmd)`), this function catches it.
@@ -2732,6 +2864,22 @@ fn push_node<'a>(
                 labels.push(gated_label);
                 if !payload.is_empty() {
                     sink_payload_args = Some(payload.to_vec());
+                }
+            }
+        }
+    }
+
+    // Pattern-based sanitizer synthesis: recognise a Rust
+    // `param.replace(LIT, LIT)[.replace(LIT, LIT)]*` chain that provably strips
+    // path-traversal or HTML metacharacters.  The CFG collapses the whole
+    // chain into a single call node, so detection must inspect the AST of
+    // that node directly.  Only fires when no Sanitizer label already
+    // classifies this node — existing label rules win.
+    if lang == "rust" && !labels.iter().any(|l| matches!(l, DataLabel::Sanitizer(_))) {
+        if let Some(cn) = call_ast {
+            if cn.kind() == "call_expression" || cn.kind() == "method_call_expression" {
+                if let Some(caps) = detect_rust_replace_chain_sanitizer(cn, code) {
+                    labels.push(DataLabel::Sanitizer(caps));
                 }
             }
         }
@@ -8008,6 +8156,128 @@ def outer(cmd):
             callee_names.iter().any(|c| c.starts_with("<anon@")),
             "IIFE call site should record `<anon@BYTE>` callee, got: {:?}",
             callee_names
+        );
+    }
+
+    /// Helper: collect every Sanitizer cap set that landed on any CFG node in
+    /// the function body for a Rust snippet.  Used by the replace-chain
+    /// detector tests.
+    fn rust_body_sanitizer_caps(src: &[u8]) -> Vec<Cap> {
+        let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+        cfg.node_indices()
+            .flat_map(|i| cfg[i].taint.labels.clone())
+            .filter_map(|l| match l {
+                DataLabel::Sanitizer(c) => Some(c),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn replace_chain_strips_file_io_for_path_traversal_literals() {
+        // `.replace("..", "").replace("/", "_")` should earn FILE_IO stripping.
+        let src = br#"
+fn sanitize_input(s: &str) -> String {
+    s.replace("..", "").replace("/", "_")
+}
+"#;
+        let caps = rust_body_sanitizer_caps(src);
+        assert!(
+            caps.iter().any(|c| c.contains(Cap::FILE_IO)),
+            "Expected a Sanitizer(FILE_IO) on the replace chain; got {:?}",
+            caps
+        );
+    }
+
+    #[test]
+    fn replace_chain_strips_html_escape_for_angle_brackets() {
+        // Stripping `<` and `>` earns HTML_ESCAPE, not FILE_IO.
+        let src = br#"
+fn strip_tags(s: &str) -> String {
+    s.replace("<", "").replace(">", "")
+}
+"#;
+        let caps = rust_body_sanitizer_caps(src);
+        assert!(
+            caps.iter().any(|c| c.contains(Cap::HTML_ESCAPE)),
+            "Expected a Sanitizer(HTML_ESCAPE) on angle-bracket strip; got {:?}",
+            caps
+        );
+        assert!(
+            !caps.iter().any(|c| c.contains(Cap::FILE_IO)),
+            "Angle-bracket strip should NOT earn FILE_IO credit; got {:?}",
+            caps
+        );
+    }
+
+    #[test]
+    fn replace_chain_rejects_unrecognised_literals() {
+        // `.replace("foo", "bar")` contains no dangerous pattern — must NOT be
+        // credited as a sanitizer.  Preserves the FP→TN guard: replace calls
+        // that don't strip anything dangerous must stay transparent to taint.
+        let src = br#"
+fn rewrite(s: &str) -> String {
+    s.replace("foo", "bar").replace("baz", "qux")
+}
+"#;
+        let caps = rust_body_sanitizer_caps(src);
+        assert!(
+            caps.is_empty(),
+            "Generic replace chain should not earn sanitizer credit; got {:?}",
+            caps
+        );
+    }
+
+    #[test]
+    fn replace_chain_rejects_when_replacement_reintroduces_pattern() {
+        // `.replace("x", "..")` strips `x` but *reintroduces* `..` — be
+        // maximally conservative and abandon all credit for this chain.
+        let src = br#"
+fn evil(s: &str) -> String {
+    s.replace("x", "..")
+}
+"#;
+        let caps = rust_body_sanitizer_caps(src);
+        assert!(
+            caps.is_empty(),
+            "Replacement reintroducing dangerous pattern must kill credit; got {:?}",
+            caps
+        );
+    }
+
+    #[test]
+    fn replace_chain_rejects_dynamic_arg() {
+        // `.replace(var, "")` — search is not a literal; pattern analysis can
+        // say nothing about what was stripped.  Must not earn credit.
+        let src = br#"
+fn dynamic(s: &str, needle: &str) -> String {
+    s.replace(needle, "")
+}
+"#;
+        let caps = rust_body_sanitizer_caps(src);
+        assert!(
+            caps.is_empty(),
+            "Dynamic replace arg must not earn credit; got {:?}",
+            caps
+        );
+    }
+
+    #[test]
+    fn replace_chain_rejects_non_identifier_base() {
+        // `get_s().replace("..", "")` — innermost receiver is a call, not a
+        // parameter.  We have no reason to believe `get_s()` returns a value
+        // that benefits the caller; refuse credit.
+        let src = br#"
+fn base_is_call() -> String {
+    get_s().replace("..", "")
+}
+"#;
+        let caps = rust_body_sanitizer_caps(src);
+        assert!(
+            caps.is_empty(),
+            "Non-identifier chain base must not earn credit; got {:?}",
+            caps
         );
     }
 }

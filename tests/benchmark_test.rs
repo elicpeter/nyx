@@ -629,23 +629,29 @@ fn benchmark_evaluation() {
     println!("\nResults written to: {}", results_path.display());
     println!("=== Benchmark complete ===\n");
 
-    // ── Regression thresholds (Phase 19 baseline minus 5pp) ────────
-    // Baseline (2026-03-24, Phase 19): P=0.827 R=0.950 F1=0.885
-    // Expanded corpus: 214 cases across 9 languages (C, C++, Rust added)
+    // ── Regression thresholds (current baseline minus 5pp) ─────────
+    // Baseline (2026-04-20): P=0.911 R=0.994 F1=0.951 on the 262-case
+    // corpus (TP=154 FP=15 FN=1 TN=91).  Floors sit 5pp below that
+    // baseline: a single-case flip is ~0.6pp on this corpus, so 5pp is
+    // generous enough to avoid churn on honest FP↔TN trades while still
+    // catching a real regression in a vulnerability class.
+    //
+    // When you land a durable, measurable improvement, tighten these
+    // floors — do not relax them to paper over a regression.
     let rule = &results.aggregate_rule_level;
     assert!(
-        rule.precision >= 0.777,
-        "Rule-level precision {:.3} fell below threshold 0.777 (baseline 0.827)",
+        rule.precision >= 0.861,
+        "Rule-level precision {:.3} fell below threshold 0.861 (baseline 0.911)",
         rule.precision,
     );
     assert!(
-        rule.recall >= 0.900,
-        "Rule-level recall {:.3} fell below threshold 0.900 (baseline 0.950)",
+        rule.recall >= 0.944,
+        "Rule-level recall {:.3} fell below threshold 0.944 (baseline 0.994)",
         rule.recall,
     );
     assert!(
-        rule.f1 >= 0.835,
-        "Rule-level F1 {:.3} fell below threshold 0.835 (baseline 0.885)",
+        rule.f1 >= 0.901,
+        "Rule-level F1 {:.3} fell below threshold 0.901 (baseline 0.951)",
         rule.f1,
     );
 }

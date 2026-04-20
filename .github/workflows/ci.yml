@@ -141,3 +141,45 @@ jobs:
 
       - name: Rust tests (beta)
         run: cargo nextest run --all-features
+
+  benchmark-gate:
+    # Accuracy + performance regression gate.
+    #
+    # Accuracy: runs the ground-truth corpus (~262 cases across 10 languages) and
+    # asserts rule-level Precision/Recall/F1 stay within the thresholds encoded
+    # in tests/benchmark_test.rs.  Deterministic — no wall-clock component.
+    #
+    # Performance: runs tests/perf_tests.rs under NYX_CI_BENCH=1 so each fixture
+    # checks against its `performance_expectations` budget with the lenient CI
+    # multiplier applied in-file.  Release build keeps budgets stable across
+    # runners; the per-fixture budgets live beside each fixture's
+    # expectations.json and can be adjusted without touching CI.
+    name: benchmark-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+          # Give the release build its own cache bucket so it doesn't
+          # thrash the debug cache shared by the other test jobs.
+          cache-key: benchmark-gate-release
+
+      - name: Accuracy regression gate (P/R/F1)
+        run: cargo test --release --all-features --test benchmark_test -- --ignored --nocapture benchmark_evaluation
+
+      - name: Performance regression gate
+        env:
+          NYX_CI_BENCH: "1"
+        run: cargo test --release --all-features --test perf_tests -- --nocapture
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: tests/benchmark/results/latest.json
+          if-no-files-found: warn

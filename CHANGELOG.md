@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Benchmark regression gate wired into CI** — the `benchmark_evaluation` test in `tests/benchmark_test.rs` is now executed by a dedicated `benchmark-gate` job in `.github/workflows/ci.yml`, so the rule-level Precision/Recall/F1 floors actually block merges that regress accuracy on the 262-case ground-truth corpus. Floors rebaselined to current state − 5 pp: P≥0.861, R≥0.944, F1≥0.901 (baseline P=0.911, R=0.994, F1=0.951) — the previous Phase-19 floors left 9–13 pp of slack and would not have caught a meaningful regression. The job also runs `tests/perf_tests.rs` with `NYX_CI_BENCH=1` in release mode to enforce per-fixture wall-clock budgets, and uploads `tests/benchmark/results/latest.json` as a build artifact. The per-fixture perf budgets now use a min-of-samples summary with a warm-up run, a 2.0× lenient CI multiplier, and the `NYX_CI_BENCH` opt-in (no more auto-trigger on `GITHUB_ACTIONS`) so the debug-mode test jobs do not flake on shared-runner wall-clock noise.
+
 ### Added
 
 - **Localhost UI and hostile-repo security hardening** — tightened Nyx's trust boundaries for malicious repositories, persisted scan artifacts, and browser traffic to the local web UI.

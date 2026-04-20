@@ -7,7 +7,11 @@
 #   - cargo test (summary only)
 #   - frontend format:check, lint, typecheck, tests (summary only)
 #
-# Usage:  ./scripts/check.sh [--rust-only] [--frontend-only]
+# Usage:  ./scripts/check.sh [--rust-only] [--frontend-only] [--bench]
+#
+# --bench additionally runs the CI benchmark gate (release build of the
+# accuracy + perf regression tests; same commands the benchmark-gate CI job
+# runs).  Opt-in because a release build is slow on a cold cache.
 
 set -uo pipefail
 
@@ -17,12 +21,14 @@ cd "$REPO_ROOT"
 
 DO_RUST=1
 DO_FRONTEND=1
+DO_BENCH=0
 for arg in "$@"; do
     case "$arg" in
         --rust-only)      DO_FRONTEND=0 ;;
         --frontend-only)  DO_RUST=0 ;;
+        --bench)          DO_BENCH=1 ;;
         -h|--help)
-            sed -n '2,10p' "$0"; exit 0 ;;
+            sed -n '2,14p' "$0"; exit 0 ;;
         *) echo "unknown arg: $arg"; exit 2 ;;
     esac
 done
@@ -67,6 +73,13 @@ if [[ $DO_RUST -eq 1 ]]; then
     run_quiet "cargo fmt --check"    cargo fmt --all -- --check
     run_quiet "cargo clippy"         cargo clippy --all-targets --all-features -- -D warnings
     run_quiet "cargo test"           cargo test --all-features --no-fail-fast
+fi
+
+if [[ $DO_BENCH -eq 1 ]]; then
+    run_quiet "benchmark-gate accuracy (release)" \
+        cargo test --release --all-features --test benchmark_test -- --ignored benchmark_evaluation
+    run_quiet "benchmark-gate perf (release)" \
+        env NYX_CI_BENCH=1 cargo test --release --all-features --test perf_tests
 fi
 
 if [[ $DO_FRONTEND -eq 1 && $HAS_FRONTEND -eq 1 ]]; then
