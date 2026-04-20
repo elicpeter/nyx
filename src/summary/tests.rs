@@ -1402,7 +1402,7 @@ fn free_function_and_method_with_same_name_resolve_separately() {
 fn disambig_separates_same_name_closures_in_same_container() {
     let mut gs = GlobalSummaries::new();
     let (k1, s1) = fs_with(
-        "src/f.js".as_ref(),
+        "src/f.js",
         "outer",
         "<anon>",
         0,
@@ -1411,7 +1411,7 @@ fn disambig_separates_same_name_closures_in_same_container() {
         0x01,
     );
     let (k2, s2) = fs_with(
-        "src/f.js".as_ref(),
+        "src/f.js",
         "outer",
         "<anon>",
         0,

@@ -879,17 +879,17 @@ impl GlobalSummaries {
         }
 
         // ── Step 2: namespace_qualifier (non-authoritative) ─────────
-        if let Some(nq) = q.namespace_qualifier {
-            if let Some(key) = try_qualified(nq) {
-                return CalleeResolution::Resolved(key);
-            }
+        if let Some(nq) = q.namespace_qualifier
+            && let Some(key) = try_qualified(nq)
+        {
+            return CalleeResolution::Resolved(key);
         }
 
         // ── Step 3: caller self-container ───────────────────────────
-        if let Some(cc) = q.caller_container {
-            if let Some(key) = try_qualified(cc) {
-                return CalleeResolution::Resolved(key);
-            }
+        if let Some(cc) = q.caller_container
+            && let Some(key) = try_qualified(cc)
+        {
+            return CalleeResolution::Resolved(key);
         }
 
         // ── Step 4: same-namespace unique leaf ──────────────────────
@@ -921,10 +921,10 @@ impl GlobalSummaries {
         }
 
         // ── Step 5: receiver_var tie-break (soft) ───────────────────
-        if let Some(rv) = q.receiver_var {
-            if let Some(key) = try_qualified(rv) {
-                return CalleeResolution::Resolved(key);
-            }
+        if let Some(rv) = q.receiver_var
+            && let Some(key) = try_qualified(rv)
+        {
+            return CalleeResolution::Resolved(key);
         }
 
         // ── Step 5.5: bare-call free-function preference ────────────

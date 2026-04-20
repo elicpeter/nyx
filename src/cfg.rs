@@ -2702,15 +2702,12 @@ fn normalize_decorator_name(raw: &str) -> String {
     // If a call syntax leaked through (e.g. `UseGuards(AuthGuard)`), keep only
     // the head — callers that want the arg handle it separately.
     let head = trimmed
-        .split(|c: char| matches!(c, '(' | ' ' | '\t' | '\n'))
+        .split(['(', ' ', '\t', '\n'])
         .next()
         .unwrap_or(trimmed);
     let head = head.trim_end_matches('!').trim_end_matches('?');
     // Keep only the last path segment so `module.name` / `a::b::c` become `c`.
-    let head = head
-        .rsplit(|c: char| matches!(c, '.' | ':'))
-        .next()
-        .unwrap_or(head);
+    let head = head.rsplit(['.', ':']).next().unwrap_or(head);
     head.to_ascii_lowercase()
 }
 
