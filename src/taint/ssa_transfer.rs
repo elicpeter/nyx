@@ -3319,12 +3319,8 @@ fn collect_block_events(
             // Phase 2: pick primary sink sites (if any) from the resolved
             // callee summary.  Multi-site cases emit one event per matching
             // [`SinkSite`] so each downstream Finding carries one attribution.
-            let primary_sites = pick_primary_sink_sites(
-                inst,
-                &tainted,
-                sink_caps,
-                &sink_info.param_to_sink_sites,
-            );
+            let primary_sites =
+                pick_primary_sink_sites(inst, &tainted, sink_caps, &sink_info.param_to_sink_sites);
             emit_ssa_taint_events(
                 events,
                 inst.cfg_node,
@@ -3386,12 +3382,7 @@ fn pick_primary_sink_sites(
             if (site.cap & sink_caps).is_empty() {
                 continue;
             }
-            let key = (
-                site.file_rel.clone(),
-                site.line,
-                site.col,
-                site.cap.bits(),
-            );
+            let key = (site.file_rel.clone(), site.line, site.col, site.cap.bits());
             if seen.insert(key) {
                 out.push(site.clone());
             }
@@ -3421,12 +3412,7 @@ fn pick_primary_sink_sites_from_resolved(
             if (site.cap & sink_caps).is_empty() {
                 continue;
             }
-            let key = (
-                site.file_rel.clone(),
-                site.line,
-                site.col,
-                site.cap.bits(),
-            );
+            let key = (site.file_rel.clone(), site.line, site.col, site.cap.bits());
             if seen.insert(key) {
                 out.push(site.clone());
             }
@@ -6059,8 +6045,8 @@ pub fn extract_ssa_func_summary(
     module_aliases: Option<&HashMap<SsaValue, smallvec::SmallVec<[String; 2]>>>,
     locator: Option<&crate::summary::SinkSiteLocator<'_>>,
 ) -> crate::summary::ssa_summary::SsaFuncSummary {
-    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
     use crate::summary::SinkSite;
+    use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
 
     let effective_params = param_count.min(MAX_PROBE_PARAMS);
 

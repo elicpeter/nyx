@@ -142,10 +142,7 @@ pub(crate) fn line_snippet(src: &[u8], byte_offset: usize) -> Option<String> {
 /// Union two `SmallVec<[SinkSite; 1]>` lists with `(file_rel, line, col,
 /// cap)` dedup.  Preserves insertion order of `existing` then appends any
 /// new sites from `incoming` not already present.
-pub(crate) fn union_sink_sites(
-    existing: &mut SmallVec<[SinkSite; 1]>,
-    incoming: &[SinkSite],
-) {
+pub(crate) fn union_sink_sites(existing: &mut SmallVec<[SinkSite; 1]>, incoming: &[SinkSite]) {
     for site in incoming {
         let key = site.dedup_key();
         if !existing.iter().any(|s| s.dedup_key() == key) {

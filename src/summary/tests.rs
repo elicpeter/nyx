@@ -3162,7 +3162,10 @@ fn ssa_summary_serde_round_trip_with_sink_sites() {
     // Cap-derivation helpers still produce the expected unions.
     let caps = back.param_to_sink_caps();
     assert_eq!(caps.len(), 2);
-    assert!(caps.iter().any(|&(i, c)| i == 0 && c == (site_a.cap | site_b.cap)));
+    assert!(
+        caps.iter()
+            .any(|&(i, c)| i == 0 && c == (site_a.cap | site_b.cap))
+    );
     assert!(caps.iter().any(|&(i, c)| i == 1 && c == site_b.cap));
     assert_eq!(back.total_param_sink_caps(), site_a.cap | site_b.cap);
 }

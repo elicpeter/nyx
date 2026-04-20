@@ -91,9 +91,7 @@ impl SsaFuncSummary {
         self.param_to_sink
             .iter()
             .map(|(idx, sites)| {
-                let caps = sites
-                    .iter()
-                    .fold(Cap::empty(), |acc, s| acc | s.cap);
+                let caps = sites.iter().fold(Cap::empty(), |acc, s| acc | s.cap);
                 (*idx, caps)
             })
             .collect()
