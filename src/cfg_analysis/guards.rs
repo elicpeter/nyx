@@ -309,11 +309,7 @@ fn sink_args_typed_safe(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: Cap) 
 /// Thin wrapper around [`crate::ssa::type_facts::is_type_safe_for_sink`] kept
 /// local so the unit tests here can exercise the exact predicate used at the
 /// `cfg-unguarded-sink` emission site.
-fn type_facts_suppress(
-    values: &[SsaValue],
-    sink_caps: Cap,
-    type_facts: &TypeFactResult,
-) -> bool {
+fn type_facts_suppress(values: &[SsaValue], sink_caps: Cap, type_facts: &TypeFactResult) -> bool {
     crate::ssa::type_facts::is_type_safe_for_sink(values, sink_caps, type_facts)
 }
 
@@ -344,12 +340,8 @@ fn sink_args_static_map_safe(ctx: &AnalysisContext, sink: NodeIndex, sink_caps: 
         return false;
     };
 
-    let sm = crate::ssa::static_map::analyze(
-        &facts.ssa,
-        ctx.cfg,
-        Some(ctx.lang),
-        &facts.const_values,
-    );
+    let sm =
+        crate::ssa::static_map::analyze(&facts.ssa, ctx.cfg, Some(ctx.lang), &facts.const_values);
     if sm.is_empty() {
         return false;
     }

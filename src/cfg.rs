@@ -2056,10 +2056,7 @@ fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<Option<Strin
             continue;
         }
         let literal = match kind {
-            "string"
-            | "string_literal"
-            | "interpreted_string_literal"
-            | "raw_string_literal" => {
+            "string" | "string_literal" | "interpreted_string_literal" | "raw_string_literal" => {
                 let raw = text_of(child, code);
                 raw.and_then(|s| strip_literal_quotes(&s, child, code))
             }

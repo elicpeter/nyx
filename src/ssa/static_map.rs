@@ -223,7 +223,11 @@ pub fn analyze(
     }
     let canonicalise = |v: SsaValue| -> Option<SsaValue> {
         let c = resolve_alias(v, &aliases);
-        if candidates.contains_key(&c) { Some(c) } else { None }
+        if candidates.contains_key(&c) {
+            Some(c)
+        } else {
+            None
+        }
     };
 
     // ── 3. Walk every instruction, classifying references to any candidate.
@@ -261,12 +265,8 @@ pub fn analyze(
                         match classify_map_use(callee, &map_var) {
                             MapUse::Insert => {
                                 let node_info = &cfg[inst.cfg_node];
-                                let value_lit = node_info
-                                    .call
-                                    .arg_string_literals
-                                    .get(1)
-                                    .cloned()
-                                    .flatten();
+                                let value_lit =
+                                    node_info.call.arg_string_literals.get(1).cloned().flatten();
                                 match value_lit {
                                     Some(lit) => {
                                         inserted.entry(map).or_default().insert(lit);
@@ -410,19 +410,13 @@ mod tests {
         // A bare `.unwrap()` after `.get(k)` panics rather than bounding,
         // so we refuse to treat it as safe.  The caller would need a proven
         // `.contains_key` guard; that is out of scope here.
-        assert_eq!(
-            classify_map_use("t.get(k).unwrap", "t"),
-            MapUse::Escape
-        );
+        assert_eq!(classify_map_use("t.get(k).unwrap", "t"), MapUse::Escape);
     }
 
     #[test]
     fn classify_rejects_other_receiver() {
         // `other.insert` does not belong to `table` — receiver mismatch.
-        assert_eq!(
-            classify_map_use("other.insert", "table"),
-            MapUse::Escape
-        );
+        assert_eq!(classify_map_use("other.insert", "table"), MapUse::Escape);
     }
 
     #[test]

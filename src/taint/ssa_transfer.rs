@@ -4656,10 +4656,7 @@ fn is_call_abstract_safe(
     // group.  Mirrors the non-Call path so suppression fires regardless of
     // which branch the sink detector took.
     if sink_caps.intersects(Cap::SHELL_ESCAPE) && !args.is_empty() {
-        let all_values: Vec<SsaValue> = args
-            .iter()
-            .flat_map(|g| g.iter().copied())
-            .collect();
+        let all_values: Vec<SsaValue> = args.iter().flat_map(|g| g.iter().copied()).collect();
         if !all_values.is_empty() && is_static_map_shell_safe(&all_values, static_map) {
             return true;
         }

@@ -132,10 +132,7 @@ impl StringFact {
     }
 
     pub fn is_top(&self) -> bool {
-        !self.is_bottom
-            && self.prefix.is_none()
-            && self.suffix.is_none()
-            && self.domain.is_none()
+        !self.is_bottom && self.prefix.is_none() && self.suffix.is_none() && self.domain.is_none()
     }
 
     pub fn is_bottom(&self) -> bool {
@@ -147,9 +144,7 @@ impl StringFact {
     /// when the payload is provably bounded to a safe set of words.
     pub fn is_finite_shell_safe(&self) -> bool {
         match &self.domain {
-            Some(values) if !values.is_empty() => {
-                values.iter().all(|s| is_shell_safe_literal(s))
-            }
+            Some(values) if !values.is_empty() => values.iter().all(|s| is_shell_safe_literal(s)),
             _ => false,
         }
     }
@@ -500,10 +495,8 @@ mod tests {
     #[test]
     fn join_finite_sets_overflow_to_top() {
         // 9 + 9 = 18 > MAX_DOMAIN_SIZE = 16 → domain collapses to None.
-        let a =
-            StringFact::finite_set((0..9).map(|n| format!("a{n}")).collect::<Vec<_>>());
-        let b =
-            StringFact::finite_set((0..9).map(|n| format!("b{n}")).collect::<Vec<_>>());
+        let a = StringFact::finite_set((0..9).map(|n| format!("a{n}")).collect::<Vec<_>>());
+        let b = StringFact::finite_set((0..9).map(|n| format!("b{n}")).collect::<Vec<_>>());
         let j = a.join(&b);
         assert!(j.domain.is_none());
     }
@@ -648,8 +641,9 @@ mod tests {
 
     #[test]
     fn finite_set_overflow_is_top() {
-        let many: Vec<String> =
-            (0..(MAX_DOMAIN_SIZE + 1)).map(|n| format!("v{n}")).collect();
+        let many: Vec<String> = (0..(MAX_DOMAIN_SIZE + 1))
+            .map(|n| format!("v{n}"))
+            .collect();
         let f = StringFact::finite_set(many);
         assert!(f.domain.is_none());
     }
@@ -676,12 +670,9 @@ mod tests {
     fn is_finite_shell_safe_only_when_bounded() {
         assert!(!StringFact::top().is_finite_shell_safe());
         assert!(!StringFact::from_prefix("ls").is_finite_shell_safe());
+        assert!(StringFact::finite_set(vec!["ls".into(), "cat".into()]).is_finite_shell_safe());
         assert!(
-            StringFact::finite_set(vec!["ls".into(), "cat".into()]).is_finite_shell_safe()
-        );
-        assert!(
-            !StringFact::finite_set(vec!["ls".into(), "rm;reboot".into()])
-                .is_finite_shell_safe()
+            !StringFact::finite_set(vec!["ls".into(), "rm;reboot".into()]).is_finite_shell_safe()
         );
     }
 }
