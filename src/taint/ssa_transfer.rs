@@ -4821,8 +4821,10 @@ struct ResolvedSummary {
     source_to_callback: Vec<(usize, Cap)>,
     /// How receiver (`self`/`this`) taint flows to the return value.
     /// Matches `SsaFuncSummary::receiver_to_return` semantics.
+    #[allow(dead_code)]
     receiver_to_return: Option<crate::summary::ssa_summary::TaintTransform>,
     /// Caps that receiver taint reaches at internal sinks.
+    #[allow(dead_code)]
     receiver_to_sink: Cap,
 }
 

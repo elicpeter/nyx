@@ -525,8 +525,10 @@ fn lookup_canonical_func_key(
         .keys()
         .filter(|k| k.lang == lang && k.name == func_name && k.arity == Some(param_count));
     let first = matches.next().cloned();
-    if first.is_some() && matches.next().is_none() {
-        return first.unwrap();
+    if let Some(first) = first
+        && matches.next().is_none()
+    {
+        return first;
     }
     if let Some(name_only) = local_summaries
         .keys()

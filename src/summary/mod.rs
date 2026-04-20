@@ -805,13 +805,14 @@ impl GlobalSummaries {
     /// 5. **Receiver-variable tie-break** — if the same-namespace
     ///    lookup misses but the raw call came with a receiver variable,
     ///    try `{receiver_var}::{name}` as a last qualified attempt.
+    ///
     /// 5.5. **Bare-call free-function preference** — for a truly bare
-    ///    call (no receiver type, no namespace qualifier, no receiver
-    ///    variable), if exactly one same-namespace arity-matched
-    ///    candidate has an empty container, resolve to it.  A class
-    ///    method cannot be invoked with bare-call syntax from outside
-    ///    its class, so this disambiguation is safe even when same-name
-    ///    methods exist elsewhere in the file.
+    ///      call (no receiver type, no namespace qualifier, no receiver
+    ///      variable), if exactly one same-namespace arity-matched
+    ///      candidate has an empty container, resolve to it.  A class
+    ///      method cannot be invoked with bare-call syntax from outside
+    ///      its class, so this disambiguation is safe even when same-name
+    ///      methods exist elsewhere in the file.
     /// 6. **Leaf-name fallback** — arity-filtered same-language lookup.
     ///    Unique → resolved.  Multiple + we had any qualified hint →
     ///    Ambiguous (refuse to guess when a qualifier exists but

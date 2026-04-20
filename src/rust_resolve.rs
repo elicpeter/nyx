@@ -337,9 +337,9 @@ fn join_segments(prefix: &[String], suffix: &[String]) -> String {
 /// Resolution order:
 /// 1. If the call is qualified (`Some(qualifier)`):
 ///    a. Try the full qualifier as an exact alias (e.g. `use foo::bar::baz; baz::quux();`
-///       lifts `baz` → `foo::bar::baz`).
+///    lifts `baz` → `foo::bar::baz`).
 ///    b. Otherwise try the qualifier's first segment as an alias and graft
-///       the remaining segments + `name` on top.
+///    the remaining segments + `name` on top.
 /// 2. If the call is unqualified, try `name` directly in the alias map.
 /// 3. Otherwise return `None` and let the caller fall back to wildcards or
 ///    bare-name lookup.
