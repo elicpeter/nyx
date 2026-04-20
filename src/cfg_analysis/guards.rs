@@ -269,8 +269,9 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
     for idx in ctx.cfg.node_indices() {
         let info = &ctx.cfg[idx];
 
-        // If-condition guards: allowlist checks, type checks, and validation
-        // calls in branch conditions act as guards for all downstream sinks.
+        // If-condition guards: allowlist checks, type checks, validation
+        // calls, shell-metachar rejections, and bounded-length checks in
+        // branch conditions act as guards for downstream sinks.
         if info.kind == StmtKind::If {
             if let Some(cond_text) = &info.condition_text {
                 let kind = classify_condition(cond_text);
@@ -281,6 +282,15 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
                         | PredicateKind::ValidationCall
                 ) {
                     result.push((idx, Cap::all()));
+                } else if matches!(
+                    kind,
+                    PredicateKind::ShellMetaValidated | PredicateKind::BoundedLength
+                ) {
+                    // Shell-metachar rejection and bounded-length checks only
+                    // guard shell-family sinks.  Keep scope tight so unrelated
+                    // sinks (SQL, XSS) aren't silenced when a shell gate
+                    // happens to sit upstream.
+                    result.push((idx, Cap::SHELL_ESCAPE | Cap::CODE_EXEC));
                 }
             }
         }

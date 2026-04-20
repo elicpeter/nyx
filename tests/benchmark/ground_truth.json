@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 259
+    "corpus_size": 264
   },
   "cases": [
     {
@@ -6441,6 +6441,53 @@
       ],
       "disabled": false,
       "notes": "Input validated with allowlist check before Command"
+    },
+    {
+      "case_id": "rs-safe-009",
+      "file": "rust/safe/safe_shell_metachar.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "validated",
+        "shell-metachar"
+      ],
+      "disabled": false,
+      "notes": "Input rejected when containing shell metacharacters before Command"
+    },
+    {
+      "case_id": "rs-sqli-002",
+      "file": "rust/sqli/sqli_metachar_gate_wrong_sink.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [[13, 13]],
+      "expected_source_lines": [[5, 5]],
+      "tags": ["sqli", "shell-metachar-gate"],
+      "disabled": false,
+      "notes": "Shell-metachar rejection is not a SQL sanitizer; SQL injection must still fire"
     },
     {
       "case_id": "rs-cmdi-005",

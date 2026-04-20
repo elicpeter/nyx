@@ -1142,6 +1142,78 @@ fn push_condition_node<'a>(
     })
 }
 
+/// For a Rust `let <pattern> = match <scrutinee> { <arm> if <guard> => .., ... }`,
+/// find the first guarded `match_arm` and return the guard expression node plus
+/// the primary let-binding name.  Returns `None` when the let-value is not a
+/// `match_expression` or no arm has a guard.
+///
+/// The guard lives on the tree-sitter `match_pattern` node as the field
+/// `condition` (present whenever the pattern is followed by `if <expr>`).
+fn detect_rust_let_match_guard<'a>(ast: Node<'a>, code: &[u8]) -> Option<(Node<'a>, String)> {
+    if ast.kind() != "let_declaration" {
+        return None;
+    }
+    let value = ast.child_by_field_name("value")?;
+    if value.kind() != "match_expression" {
+        return None;
+    }
+    let body = value.child_by_field_name("body")?;
+
+    let mut cursor = body.walk();
+    let guard = body.children(&mut cursor).find_map(|arm| {
+        if !matches!(arm.kind(), "match_arm" | "last_match_arm") {
+            return None;
+        }
+        let pattern = arm.child_by_field_name("pattern")?;
+        pattern.child_by_field_name("condition")
+    })?;
+
+    let pat = ast.child_by_field_name("pattern")?;
+    let mut idents = Vec::new();
+    collect_idents(pat, code, &mut idents);
+    let name = idents.into_iter().next()?;
+
+    Some((guard, name))
+}
+
+/// Synthesize a `StmtKind::If` CFG node carrying a Rust match-arm guard's
+/// condition text and vars.  The let-binding name is added to `condition_vars`
+/// so `apply_branch_predicates` narrows validation to that specific variable
+/// — the variable that receives the arm's value and flows to downstream sinks.
+fn emit_rust_match_guard_if<'a>(
+    g: &mut Cfg,
+    guard: Node<'a>,
+    let_name: &str,
+    code: &'a [u8],
+    enclosing_func: Option<&str>,
+) -> NodeIndex {
+    let mut vars = Vec::new();
+    collect_idents(guard, code, &mut vars);
+    vars.push(let_name.to_string());
+    vars.sort();
+    vars.dedup();
+    vars.truncate(MAX_COND_VARS);
+    let text = text_of(guard, code).map(|t| {
+        if t.len() > MAX_CONDITION_TEXT_LEN {
+            t[..MAX_CONDITION_TEXT_LEN].to_string()
+        } else {
+            t
+        }
+    });
+    let span = (guard.start_byte(), guard.end_byte());
+    g.add_node(NodeInfo {
+        kind: StmtKind::If,
+        ast: AstMeta {
+            span,
+            enclosing_func: enclosing_func.map(|s| s.to_string()),
+        },
+        condition_text: text,
+        condition_vars: vars,
+        condition_negated: false,
+        ..Default::default()
+    })
+}
+
 /// Recursively decompose a boolean condition into a chain of `StmtKind::If` nodes
 /// with short-circuit edges.
 ///
@@ -5884,6 +5956,36 @@ fn build_sub<'a>(
                     next_body_id,
                     current_body_id,
                 );
+            }
+
+            // Rust match-guard synthesis: `let <name> = match <scrutinee> { <arm> if <guard> => .., ... }`
+            // collapses to this single Call node, hiding the guard from the predicate-classification
+            // pipeline. Append a synthetic If node (condition_vars includes <name>) so validation
+            // predicates like `.chars().all(|c| c.is_ascii_*())` narrow taint on the guarded branch.
+            if lang == "rust"
+                && let Some((guard, let_name)) = detect_rust_let_match_guard(ast, code)
+            {
+                let if_node = emit_rust_match_guard_if(g, guard, &let_name, code, enclosing_func);
+                connect_all(g, &[node], if_node, EdgeKind::Seq);
+                let true_gate = g.add_node(NodeInfo {
+                    kind: StmtKind::Seq,
+                    ast: AstMeta {
+                        span: (ast.end_byte(), ast.end_byte()),
+                        enclosing_func: enclosing_func.map(|s| s.to_string()),
+                    },
+                    ..Default::default()
+                });
+                let false_gate = g.add_node(NodeInfo {
+                    kind: StmtKind::Seq,
+                    ast: AstMeta {
+                        span: (ast.end_byte(), ast.end_byte()),
+                        enclosing_func: enclosing_func.map(|s| s.to_string()),
+                    },
+                    ..Default::default()
+                });
+                connect_all(g, &[if_node], true_gate, EdgeKind::True);
+                connect_all(g, &[if_node], false_gate, EdgeKind::False);
+                return vec![true_gate, false_gate];
             }
 
             vec![node]

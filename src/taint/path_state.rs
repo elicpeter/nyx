@@ -23,10 +23,207 @@ pub enum PredicateKind {
     AllowlistCheck,
     /// Type-check guard: `typeof x`, `isinstance(x, int)`, `is_numeric(x)`
     TypeCheck,
+    /// Negative-validation of shell metacharacters:
+    /// `x.contains(";")`, `x.match(/[;|&]/)`, `";" in x`, etc.
+    ///
+    /// The **true branch is the REJECT path** (early return / panic / throw)
+    /// and the **false branch is the validated path**.  Use inverted polarity
+    /// when applying branch predicates.
+    ShellMetaValidated,
+    /// Bounded-length rejection: `x.len() > N` / `x.length < N` with N >= 2.
+    ///
+    /// Commonly paired with [`ShellMetaValidated`] in OR-chain rejection
+    /// idioms (`if x.len() > MAX || x.contains(";") { reject }`).  Counts as
+    /// a dominator guard for `cfg-unguarded-sink` purposes, but intentionally
+    /// does **not** mark variables as validated — the rejection direction is
+    /// ambiguous from the condition alone (a `.len() > 5 { sink(x) }`
+    /// gate is a precondition, not a rejection).
+    BoundedLength,
     /// Comparison operators: `x == 5`, `x > threshold`
     Comparison,
     /// Generic boolean test — cannot classify further.
     Unknown,
+}
+
+/// Single-character shell metacharacters that a rejection check commonly
+/// guards against before constructing a shell command.
+///
+/// Presence of any of these in user input is sufficient to enable shell
+/// injection, so rejecting input that contains them is a real sanitizer.
+/// `"foo"` or other non-metachar needles don't qualify — a rejection of
+/// those is business logic, not security.
+const SHELL_METACHARS: &[&str] = &[";", "|", "&", "`", "$", ">", "<", "\n", "\r", "\0"];
+
+/// Check whether `text` matches a shell-metachar rejection idiom.
+///
+/// Recognizes:
+/// - Rust / Java / Go: `x.contains("<METACHAR>")`
+/// - JS / TS:          `x.includes("<METACHAR>")`
+/// - Python:           `"<METACHAR>" in x`
+/// - Ruby:             `x.include?("<METACHAR>")`
+/// - Regex form:       `x.match(/[;|&]/)` / `re.search(r"[;|&]", x)` with a
+///   character class containing only metacharacters.
+///
+/// Returns `false` if the needle is a non-metachar literal or cannot be
+/// extracted — falls through to broader classification.
+fn is_shell_metachar_rejection(text: &str) -> bool {
+    // Method-call form: `.contains(…)` / `.includes(…)` / `.include?(…)`
+    for method in [".contains(", ".includes(", ".include?("] {
+        if let Some(idx) = text.find(method) {
+            let args_start = idx + method.len();
+            if let Some(needle) = extract_first_string_arg(&text[args_start..]) {
+                if SHELL_METACHARS.contains(&needle.as_str()) {
+                    return true;
+                }
+            }
+        }
+    }
+    // Python membership form: `"<METACHAR>" in x` (but not `x in ALLOWED`)
+    if let Some(needle) = extract_python_in_needle(text) {
+        if SHELL_METACHARS.contains(&needle.as_str()) {
+            return true;
+        }
+    }
+    // Regex character-class form: `.match(/[;|&]/)` / `re.search(r"[…]", …)`
+    if is_metachar_regex_class(text) {
+        return true;
+    }
+    false
+}
+
+/// Extract the first string literal argument from a slice starting just after
+/// an opening `(` in a call expression.  Returns the raw inner text of the
+/// literal (without surrounding quotes).
+///
+/// Handles `"..."`, `'...'`, and simple escapes `\"`, `\'`, `\\`.
+fn extract_first_string_arg(after_open: &str) -> Option<String> {
+    let bytes = after_open.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return None;
+    }
+    let quote = bytes[i];
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    i += 1;
+    let mut out = Vec::new();
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\\' && i + 1 < bytes.len() {
+            match bytes[i + 1] {
+                b'n' => out.push(b'\n'),
+                b'r' => out.push(b'\r'),
+                b't' => out.push(b'\t'),
+                b'0' => out.push(b'\0'),
+                c => out.push(c),
+            }
+            i += 2;
+            continue;
+        }
+        if b == quote {
+            return String::from_utf8(out).ok();
+        }
+        out.push(b);
+        i += 1;
+    }
+    None
+}
+
+/// For Python `"<METACHAR>" in x` (needle on the left side of ` in `), return
+/// the needle.  Returns `None` for `x in ALLOWED` (identifier on the left) —
+/// that is an allowlist check, not a rejection.
+fn extract_python_in_needle(text: &str) -> Option<String> {
+    let pos = text.find(" in ")?;
+    let left = text[..pos].trim();
+    // Strip leading `!` / `not` for rejection contexts
+    let left = left.strip_prefix('!').unwrap_or(left).trim();
+    let bytes = left.as_bytes();
+    let quote = *bytes.first()?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    if bytes.last() != Some(&quote) || bytes.len() < 2 {
+        return None;
+    }
+    let inner = &left[1..left.len() - 1];
+    Some(inner.to_string())
+}
+
+/// Detect regex character classes that contain only shell metacharacters:
+/// `[;|&]`, `[;&`$]`, etc.  Missing: escape-class metacharacters inside the
+/// class (e.g. `[\n]`) — conservative, returns false there.
+fn is_metachar_regex_class(text: &str) -> bool {
+    // Find `[` followed by content and `]`, anywhere in the text.
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        if let Some(close) = after.find(']') {
+            let inner = &after[..close];
+            if !inner.is_empty()
+                && inner
+                    .chars()
+                    .all(|c| SHELL_METACHARS.iter().any(|m| m.starts_with(c)))
+            {
+                return true;
+            }
+            rest = &after[close + 1..];
+        } else {
+            break;
+        }
+    }
+    false
+}
+
+/// Check whether `text` looks like a bounded-length rejection:
+/// `x.len() > N`, `x.len() < N`, `x.length >= N`, etc. where `N` is an
+/// integer literal >= 2.  Excludes `> 0` / `>= 1` / `< 1` — those are
+/// non-empty checks, which are not length-bound validations.
+fn is_bounded_length_check(lower: &str) -> bool {
+    const PROBES: &[&str] = &[
+        ".len()", ".length", // JS/TS/Java `.length` property (no parens)
+    ];
+    for probe in PROBES {
+        let mut rest = lower;
+        while let Some(pos) = rest.find(probe) {
+            let after = &rest[pos + probe.len()..];
+            // Skip the optional `()` that `.length` never has but `.len` does.
+            let after = after.trim_start();
+            let after = after.strip_prefix("()").unwrap_or(after);
+            let after = after.trim_start();
+            for op in [">=", "<=", ">", "<"] {
+                if let Some(tail) = after.strip_prefix(op) {
+                    let tail = tail.trim_start();
+                    if let Some(n) = parse_leading_uint(tail) {
+                        if n >= 2 {
+                            return true;
+                        }
+                    }
+                    break;
+                }
+            }
+            rest = &rest[pos + probe.len()..];
+        }
+    }
+    false
+}
+
+/// Parse a leading non-negative integer literal (decimal only).
+fn parse_leading_uint(s: &str) -> Option<u64> {
+    let mut n: u64 = 0;
+    let mut any = false;
+    for c in s.chars() {
+        if let Some(d) = c.to_digit(10) {
+            n = n.checked_mul(10)?.checked_add(d as u64)?;
+            any = true;
+        } else {
+            break;
+        }
+    }
+    any.then_some(n)
 }
 
 /// Classify a raw condition text into a [`PredicateKind`].
@@ -88,6 +285,16 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         return PredicateKind::EmptyCheck;
     }
 
+    // ── Shell-metachar negative validation ───────────────────────────────
+    //
+    // Matched BEFORE AllowlistCheck so that `x.contains(";")` is recognized
+    // as a rejection idiom rather than a membership test.  Checked on the
+    // raw (non-lowercased) text so metacharacter comparisons stay
+    // case-accurate — `;` / `|` / `&` have no case.
+    if is_shell_metachar_rejection(text) {
+        return PredicateKind::ShellMetaValidated;
+    }
+
     // ── Allowlist / membership checks ────────────────────────────────────
     if lower.contains(".includes(")
         || lower.contains(".include?(")
@@ -122,6 +329,19 @@ pub fn classify_condition(text: &str) -> PredicateKind {
         || (lower.contains(".all(") && lower.contains("is_numeric("))
     {
         return PredicateKind::TypeCheck;
+    }
+
+    // ── Bounded-length rejection ─────────────────────────────────────────
+    //
+    // `.len() > N` / `.length < N` with N >= 2.  Pairs with
+    // ShellMetaValidated in OR-chain rejection patterns.  Kept as its own
+    // kind (not TypeCheck) because the rejection direction is ambiguous: a
+    // `.len() > 5 { sink(x) }` gate is a precondition, not a rejection, so
+    // marking condition vars as validated on the true branch would silence
+    // legitimate findings.  `cfg-unguarded-sink` still treats this as a
+    // dominator guard (structural intent), just without SSA-level validation.
+    if is_bounded_length_check(&lower) {
+        return PredicateKind::BoundedLength;
     }
 
     // ── Call-based kinds (require `(` to be present) ─────────────────────
@@ -193,6 +413,13 @@ pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<Stri
         }
         PredicateKind::TypeCheck => {
             let target = extract_type_check_target(text);
+            (kind, target)
+        }
+        PredicateKind::ShellMetaValidated => {
+            // The receiver of `.contains(…)` / `.includes(…)` is the value
+            // being validated.  Reuses the validation extractor which already
+            // handles `x.method(arg)` → `"x"`.
+            let target = extract_validation_target(text);
             (kind, target)
         }
         _ => (kind, None),
@@ -810,5 +1037,192 @@ mod tests {
         let (kind, target) = classify_condition_with_target("obj instanceof Integer");
         assert_eq!(kind, PredicateKind::TypeCheck);
         assert_eq!(target.as_deref(), Some("obj"));
+    }
+
+    // ── ShellMetaValidated classification ─────────────────────────────────
+
+    #[test]
+    fn classify_shell_metachar_contains_rust() {
+        assert_eq!(
+            classify_condition("input.contains(\";\")"),
+            PredicateKind::ShellMetaValidated
+        );
+        assert_eq!(
+            classify_condition("cmd.contains(\"|\")"),
+            PredicateKind::ShellMetaValidated
+        );
+        assert_eq!(
+            classify_condition("s.contains(\"&\")"),
+            PredicateKind::ShellMetaValidated
+        );
+        assert_eq!(
+            classify_condition("s.contains(\"`\")"),
+            PredicateKind::ShellMetaValidated
+        );
+        assert_eq!(
+            classify_condition("s.contains(\"$\")"),
+            PredicateKind::ShellMetaValidated
+        );
+    }
+
+    #[test]
+    fn classify_shell_metachar_includes_js() {
+        assert_eq!(
+            classify_condition("input.includes(';')"),
+            PredicateKind::ShellMetaValidated
+        );
+        assert_eq!(
+            classify_condition("cmd.includes(\"|\")"),
+            PredicateKind::ShellMetaValidated
+        );
+    }
+
+    #[test]
+    fn classify_shell_metachar_include_question_ruby() {
+        assert_eq!(
+            classify_condition("cmd.include?(\";\")"),
+            PredicateKind::ShellMetaValidated
+        );
+    }
+
+    #[test]
+    fn classify_shell_metachar_python_in() {
+        assert_eq!(
+            classify_condition("\";\" in cmd"),
+            PredicateKind::ShellMetaValidated
+        );
+        assert_eq!(
+            classify_condition("'|' in cmd"),
+            PredicateKind::ShellMetaValidated
+        );
+    }
+
+    #[test]
+    fn classify_shell_metachar_regex_class() {
+        assert_eq!(
+            classify_condition("cmd.match(/[;|&]/)"),
+            PredicateKind::ShellMetaValidated
+        );
+        assert_eq!(
+            classify_condition("re.search(\"[;|&]\", cmd)"),
+            PredicateKind::ShellMetaValidated
+        );
+    }
+
+    #[test]
+    fn classify_non_metachar_contains_stays_allowlist() {
+        // `x.contains("foo")` must NOT be credited as a shell-metachar
+        // rejection.  It falls back to the existing AllowlistCheck behavior.
+        assert_eq!(
+            classify_condition("input.contains(\"foo\")"),
+            PredicateKind::AllowlistCheck
+        );
+        assert_eq!(
+            classify_condition("path.contains(\"..\")"),
+            PredicateKind::AllowlistCheck
+        );
+        assert_eq!(
+            classify_condition("name.contains(\"admin\")"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    #[test]
+    fn classify_allowlist_membership_unaffected() {
+        // `x in ALLOWED` (identifier on left) remains AllowlistCheck.
+        // Only a quoted metachar on the LEFT of ` in ` triggers ShellMeta.
+        assert_eq!(
+            classify_condition("cmd in ALLOWED"),
+            PredicateKind::AllowlistCheck
+        );
+        assert_eq!(
+            classify_condition("cmd not in ALLOWED"),
+            PredicateKind::AllowlistCheck
+        );
+    }
+
+    #[test]
+    fn target_shell_metachar_receiver() {
+        let (kind, target) = classify_condition_with_target("input.contains(\";\")");
+        assert_eq!(kind, PredicateKind::ShellMetaValidated);
+        assert_eq!(target.as_deref(), Some("input"));
+    }
+
+    // ── Bounded-length TypeCheck ──────────────────────────────────────────
+
+    #[test]
+    fn classify_bounded_length_rust_len() {
+        assert_eq!(
+            classify_condition("input.len() > 100"),
+            PredicateKind::BoundedLength
+        );
+        assert_eq!(
+            classify_condition("s.len() >= 256"),
+            PredicateKind::BoundedLength
+        );
+        assert_eq!(
+            classify_condition("s.len() < 4096"),
+            PredicateKind::BoundedLength
+        );
+    }
+
+    #[test]
+    fn classify_bounded_length_js_length() {
+        assert_eq!(
+            classify_condition("input.length > 100"),
+            PredicateKind::BoundedLength
+        );
+    }
+
+    #[test]
+    fn classify_non_empty_len_stays_comparison() {
+        // `.len() > 0` is a non-empty check, NOT a bounded-length validation.
+        // Must fall through to Comparison.
+        assert_eq!(
+            classify_condition("input.len() > 0"),
+            PredicateKind::Comparison
+        );
+        assert_eq!(
+            classify_condition("s.len() >= 1"),
+            PredicateKind::Comparison
+        );
+    }
+
+    // ── Helper sanity ─────────────────────────────────────────────────────
+
+    #[test]
+    fn shell_metachar_rejection_detects_common_chars() {
+        for m in &[";", "|", "&", "`", "$", ">", "<"] {
+            let text = format!("x.contains(\"{m}\")");
+            assert!(
+                is_shell_metachar_rejection(&text),
+                "should detect metachar {m:?} in {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_metachar_rejection_rejects_non_metachar() {
+        assert!(!is_shell_metachar_rejection("x.contains(\"foo\")"));
+        assert!(!is_shell_metachar_rejection("x.contains(\"admin\")"));
+        assert!(!is_shell_metachar_rejection("x.contains(\"..\")"));
+    }
+
+    #[test]
+    fn shell_metachar_rejection_handles_escapes() {
+        assert!(is_shell_metachar_rejection("x.contains(\"\\n\")"));
+    }
+
+    #[test]
+    fn bounded_length_rejects_zero_and_one() {
+        assert!(!is_bounded_length_check("x.len() > 0"));
+        assert!(!is_bounded_length_check("x.len() >= 1"));
+        assert!(!is_bounded_length_check("x.len() < 1"));
+    }
+
+    #[test]
+    fn bounded_length_accepts_small_bounds() {
+        assert!(is_bounded_length_check("x.len() > 2"));
+        assert!(is_bounded_length_check("x.len() <= 256"));
     }
 }

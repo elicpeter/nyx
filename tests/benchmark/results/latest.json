@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-20T21:10:30Z",
+  "timestamp": "2026-04-20T21:29:19Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -3648,19 +3648,16 @@
       "language": "rust",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "cfg-unguarded-sink"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "rs.quality.unwrap",
-        "cfg-unguarded-sink",
         "rs.quality.unwrap"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 0,
       "non_security_finding_count": 2
     },
     {
@@ -3669,19 +3666,16 @@
       "language": "rust",
       "vuln_class": "safe",
       "is_vulnerable": false,
-      "outcome_file_level": "FP",
-      "outcome_rule_level": "FP",
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
       "outcome_location_level": null,
       "matched_rule_ids": [],
-      "unexpected_rule_ids": [
-        "taint-unsanitised-flow (source 5:5)"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
         "rs.quality.unwrap",
-        "rs.quality.unwrap",
-        "taint-unsanitised-flow (source 5:5)"
+        "rs.quality.unwrap"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 0,
       "non_security_finding_count": 2
     },
     {
@@ -4883,21 +4877,21 @@
   ],
   "aggregate_file_level": {
     "tp": 155,
-    "fp": 14,
+    "fp": 12,
     "fn_": 0,
-    "tn": 92,
-    "precision": 0.9171597633136095,
+    "tn": 94,
+    "precision": 0.9281437125748503,
     "recall": 1.0,
-    "f1": 0.9567901234567902
+    "f1": 0.9627329192546584
   },
   "aggregate_rule_level": {
     "tp": 154,
-    "fp": 14,
+    "fp": 12,
     "fn_": 1,
-    "tn": 92,
-    "precision": 0.9166666666666666,
+    "tn": 94,
+    "precision": 0.927710843373494,
     "recall": 0.9935483870967742,
-    "f1": 0.9535603715170278
+    "f1": 0.9595015576323986
   },
   "by_language": {
     "c": {
@@ -4974,12 +4968,12 @@
     },
     "rust": {
       "tp": 19,
-      "fp": 4,
+      "fp": 2,
       "fn_": 0,
-      "tn": 8,
-      "precision": 0.8260869565217391,
+      "tn": 10,
+      "precision": 0.9047619047619048,
       "recall": 1.0,
-      "f1": 0.9047619047619047
+      "f1": 0.9500000000000001
     },
     "typescript": {
       "tp": 25,
@@ -5075,9 +5069,9 @@
     },
     "safe": {
       "tp": 0,
-      "fp": 14,
+      "fp": 12,
       "fn_": 0,
-      "tn": 92,
+      "tn": 94,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -5122,30 +5116,30 @@
   "by_confidence": {
     ">=High": {
       "tp": 105,
-      "fp": 51,
+      "fp": 49,
       "fn_": 50,
-      "tn": 55,
-      "precision": 0.6730769230769231,
+      "tn": 57,
+      "precision": 0.6818181818181818,
       "recall": 0.6774193548387096,
-      "f1": 0.67524115755627
+      "f1": 0.6796116504854368
     },
     ">=Low": {
       "tp": 105,
-      "fp": 54,
+      "fp": 52,
       "fn_": 50,
-      "tn": 52,
-      "precision": 0.660377358490566,
+      "tn": 54,
+      "precision": 0.6687898089171974,
       "recall": 0.6774193548387096,
-      "f1": 0.6687898089171974
+      "f1": 0.673076923076923
     },
     ">=Medium": {
       "tp": 105,
-      "fp": 54,
+      "fp": 52,
       "fn_": 50,
-      "tn": 52,
-      "precision": 0.660377358490566,
+      "tn": 54,
+      "precision": 0.6687898089171974,
       "recall": 0.6774193548387096,
-      "f1": 0.6687898089171974
+      "f1": 0.673076923076923
     }
   }
 }

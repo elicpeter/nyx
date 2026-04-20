@@ -1319,6 +1319,17 @@ fn apply_branch_predicates(
         }
     }
 
+    // ShellMetaValidated: inverted polarity — the FALSE branch (no metachar
+    // found) is the validated path; the TRUE branch is the rejection path.
+    if kind == PredicateKind::ShellMetaValidated && !polarity {
+        for var in condition_vars {
+            if let Some(sym) = interner.get(var) {
+                state.validated_may.insert(sym);
+                state.validated_must.insert(sym);
+            }
+        }
+    }
+
     // Whitelisted predicate kinds: update PredicateSummary bits
     if let Some(bit_idx) = predicate_kind_bit(kind) {
         for var in condition_vars {
