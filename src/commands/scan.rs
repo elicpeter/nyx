@@ -326,15 +326,17 @@ pub(crate) fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
 }
 
 /// Collapse `taint-unsanitised-flow` findings that share the same primary
-/// sink location, rule base, and severity into a single finding by keeping
-/// the tightest source (closest to the sink in the same function; tiebreak
-/// by source line asc, source col asc).
+/// sink line, rule base, and severity into a single finding by keeping the
+/// tightest source (closest to the sink in the same function; tiebreak by
+/// source line asc, source col asc).
 ///
 /// Rule IDs of the form `taint-unsanitised-flow (source L:C)` share a single
-/// base `taint-unsanitised-flow` — two findings at the same (path, line, col)
-/// whose only difference is their source are collapsed to one. Findings with
-/// different base rule IDs (e.g. `js.code_exec.eval`) or different severities
-/// are left untouched per guardrails.
+/// base `taint-unsanitised-flow`. The grouping key is column-agnostic —
+/// multiple flows to the same sink line differing only in column or source
+/// are collapsed to one. The rule_id preserves the source location, so the
+/// kept representative still identifies which flow was reported. Findings
+/// with different base rule IDs (e.g. `js.code_exec.eval`) or different
+/// severities are left untouched per guardrails.
 pub(crate) fn deduplicate_taint_flows(diags: &mut Vec<Diag>) {
     use std::collections::HashMap;
 
@@ -344,14 +346,14 @@ pub(crate) fn deduplicate_taint_flows(diags: &mut Vec<Diag>) {
         id.starts_with(TAINT_BASE)
     }
 
-    // Group candidates by (path, line, col, severity). Only `taint-unsanitised-flow`
+    // Group candidates by (path, line, severity). Only `taint-unsanitised-flow`
     // rule IDs participate; findings with other bases (e.g. `js.code_exec.eval`)
     // are left untouched per guardrails.
-    let mut groups: HashMap<(String, usize, usize, Severity), Vec<usize>> = HashMap::new();
+    let mut groups: HashMap<(String, usize, Severity), Vec<usize>> = HashMap::new();
     for (i, d) in diags.iter().enumerate() {
         if is_taint_flow(&d.id) {
             groups
-                .entry((d.path.clone(), d.line, d.col, d.severity))
+                .entry((d.path.clone(), d.line, d.severity))
                 .or_default()
                 .push(i);
         }
@@ -2238,6 +2240,23 @@ mod dedup_taint_flow_tests {
         diags[1].id = "js.code_exec.eval".into();
         deduplicate_taint_flows(&mut diags);
         assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn dedup_collapses_same_line_different_columns() {
+        // Two findings at line 10 but different columns — the widened key
+        // (path, line, severity) collapses them; the tighter source wins.
+        let mut diags = vec![
+            make_taint("a.rs", 10, 3, 4, 1),
+            make_taint("a.rs", 10, 17, 8, 1),
+        ];
+        deduplicate_taint_flows(&mut diags);
+        assert_eq!(diags.len(), 1);
+        assert!(
+            diags[0].id.contains("(source 8:1)"),
+            "should keep tighter source (distance 2), got id={}",
+            diags[0].id
+        );
     }
 
     #[test]
