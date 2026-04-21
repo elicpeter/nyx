@@ -7,6 +7,7 @@ pub mod display;
 pub mod heap;
 #[allow(dead_code)]
 pub mod ir;
+pub mod invariants;
 pub mod lower;
 pub mod pointsto;
 pub mod static_map;
