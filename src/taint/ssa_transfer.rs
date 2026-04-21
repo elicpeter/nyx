@@ -1339,7 +1339,20 @@ fn compute_succ_states(
         Terminator::Goto(target) => {
             smallvec::smallvec![(*target, exit_state.clone())]
         }
-        Terminator::Return(_) | Terminator::Unreachable => SmallVec::new(),
+        Terminator::Return(_) | Terminator::Unreachable => {
+            // `block.succs` is authoritative for analysis flow; the terminator
+            // is advisory.  Lowering records finally/cleanup continuation
+            // edges on the try-body's succs even when the structured
+            // terminator is `Return`/`Unreachable`.  Propagate the exit state
+            // across those edges (determinism: iterate in stored order) so
+            // downstream analysis sees the flow.  Empty `succs` preserves the
+            // true-terminal fast path.
+            block
+                .succs
+                .iter()
+                .map(|s| (*s, exit_state.clone()))
+                .collect()
+        }
     }
 }
 

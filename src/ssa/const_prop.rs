@@ -378,7 +378,21 @@ fn process_terminator(
                 }
             }
         }
-        Terminator::Return(_) | Terminator::Unreachable => {}
+        Terminator::Return(_) | Terminator::Unreachable => {
+            // `block.succs` is authoritative; the terminator is advisory.
+            // Finally/cleanup continuation edges live on `succs` even when
+            // the structured terminator is `Return`/`Unreachable`. Mark them
+            // executable so SCCP reaches downstream (e.g. finally) blocks.
+            for &target in &block.succs {
+                mark_edge_executable(
+                    block.id,
+                    target,
+                    executable_edges,
+                    executable_blocks,
+                    cfg_worklist,
+                );
+            }
+        }
     }
 }
 

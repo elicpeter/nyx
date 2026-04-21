@@ -170,7 +170,10 @@ fn check_terminator_succ_agreement(body: &SsaBody, errors: &mut Vec<String>) {
             }
             Terminator::Return(_) | Terminator::Unreachable => {
                 // Loose by design — cleanup/finally continuation edges in
-                // `succs` are expected and carry downstream analysis flow.
+                // `succs` are expected.  Downstream consumers (taint
+                // `compute_succ_states`, SCCP `process_terminator`) treat
+                // `succs` as authoritative and propagate across these edges,
+                // so the terminator shape must not forbid them.
             }
         }
     }
