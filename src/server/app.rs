@@ -7,7 +7,8 @@ use axum::Router;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 /// Events broadcast over SSE to connected clients.
@@ -53,12 +54,28 @@ pub struct AppState {
     pub db_pool: Option<Arc<Pool<SqliteConnectionManager>>>,
 }
 
+/// 50 MiB cap on request bodies — generous for config uploads, tight
+/// enough to prevent OOM from a rogue client.
+const MAX_BODY_BYTES: usize = 50 * 1024 * 1024;
+
+/// CSP allowing self-hosted scripts only; `'unsafe-inline'` on styles is
+/// required by the Vite-built React bundle's inlined CSS.
+const CSP: &str = "default-src 'self'; \
+    script-src 'self'; \
+    style-src 'self' 'unsafe-inline'; \
+    img-src 'self' data:; \
+    connect-src 'self'";
+
 /// Build the main axum router with all API routes and static asset fallback.
 pub fn build_router(state: AppState) -> Router {
+    use axum::extract::DefaultBodyLimit;
+    use axum::http::{HeaderName, HeaderValue, header};
     use axum::middleware;
     use tower_http::compression::CompressionLayer;
+    use tower_http::set_header::SetResponseHeaderLayer;
 
     let security = Arc::clone(&state.security);
+
     Router::new()
         .nest("/api", routes::api_routes())
         .fallback(crate::server::assets::static_handler)
@@ -67,6 +84,23 @@ pub fn build_router(state: AppState) -> Router {
             crate::server::security::guard_requests,
         ))
         .layer(CompressionLayer::new())
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CSP),
+        ))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
 
@@ -190,6 +224,75 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn security_headers_present_on_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = build_router(test_state(dir.path().to_path_buf(), 9700));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .header("host", "localhost:9700")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let headers = response.headers();
+        assert_eq!(
+            headers.get("x-frame-options").and_then(|v| v.to_str().ok()),
+            Some("DENY"),
+        );
+        assert_eq!(
+            headers
+                .get("x-content-type-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("nosniff"),
+        );
+        assert_eq!(
+            headers.get("referrer-policy").and_then(|v| v.to_str().ok()),
+            Some("no-referrer"),
+        );
+        let csp = headers
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(csp.contains("default-src 'self'"), "CSP was: {csp}");
+        assert!(csp.contains("script-src 'self'"), "CSP was: {csp}");
+    }
+
+    /// Panic inside a thread that holds a write guard on the shared config lock.
+    /// With `parking_lot::RwLock`, the lock must remain usable afterwards —
+    /// this is the poison-recovery contract we rely on in every route handler.
+    #[tokio::test]
+    async fn config_lock_survives_panic_in_write_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path().to_path_buf(), 9700);
+
+        let lock = Arc::clone(&state.config);
+        let join = std::thread::spawn(move || {
+            let _guard = lock.write();
+            panic!("simulated handler panic while holding write lock");
+        });
+        assert!(join.join().is_err(), "worker thread was expected to panic");
+
+        // A follow-up request that reads the config must still succeed.
+        let app = build_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/config")
+                    .header("host", "localhost:9700")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[cfg(unix)]

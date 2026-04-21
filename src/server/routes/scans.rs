@@ -45,7 +45,7 @@ async fn start_scan(
     let req = body.map(|b| b.0).unwrap_or_default();
     let scan_root = resolve_requested_scan_root(req.scan_root.as_deref(), &state.scan_root)?;
 
-    let config = state.config.read().unwrap().clone();
+    let config = state.config.read().clone();
     let event_tx = state.event_tx.clone();
     let db_pool = state.db_pool.clone();
     let database_dir = state.database_dir.clone();

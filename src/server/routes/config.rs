@@ -51,14 +51,14 @@ pub fn routes() -> Router<AppState> {
 }
 
 async fn get_config(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let config = state.config.read().unwrap();
+    let config = state.config.read();
     Json(serde_json::to_value(&*config).unwrap_or_default())
 }
 
 // ── Custom rules (existing endpoints) ────────────────────────────────────────
 
 async fn list_rules(State(state): State<AppState>) -> Json<Vec<RuleView>> {
-    let config = state.config.read().unwrap();
+    let config = state.config.read();
     let mut rules = Vec::new();
     for (lang, lang_cfg) in &config.analysis.languages {
         for rule in &lang_cfg.rules {
@@ -91,7 +91,7 @@ async fn add_rule(
     }
 
     {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         let lang_cfg = config
             .analysis
             .languages
@@ -126,7 +126,7 @@ async fn remove_rule(
     let cap_name: CapName = rule.cap.parse().map_err(|e: String| bad_request(&e))?;
 
     let removed = {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         if let Some(lang_cfg) = config.analysis.languages.get_mut(&rule.lang) {
             let before = lang_cfg.rules.len();
             lang_cfg.rules.retain(|r| {
@@ -139,7 +139,7 @@ async fn remove_rule(
     };
 
     if removed {
-        let config = state.config.read().unwrap();
+        let config = state.config.read();
         let local_path = state.config_dir.join("nyx.local");
         let _ = config_cmd::save_local_config(&local_path, &config);
         let _ = state.event_tx.send(ServerEvent::ConfigChanged);
@@ -151,7 +151,7 @@ async fn remove_rule(
 // ── Terminators ──────────────────────────────────────────────────────────────
 
 async fn list_terminators(State(state): State<AppState>) -> Json<Vec<TerminatorView>> {
-    let config = state.config.read().unwrap();
+    let config = state.config.read();
     let mut terminators = Vec::new();
     for (lang, lang_cfg) in &config.analysis.languages {
         for name in &lang_cfg.terminators {
@@ -173,7 +173,7 @@ async fn add_terminator(
     }
 
     {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         let lang_cfg = config
             .analysis
             .languages
@@ -197,7 +197,7 @@ async fn remove_terminator(
     Json(term): Json<TerminatorView>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let removed = {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         if let Some(lang_cfg) = config.analysis.languages.get_mut(&term.lang) {
             let before = lang_cfg.terminators.len();
             lang_cfg.terminators.retain(|n| n != &term.name);
@@ -208,7 +208,7 @@ async fn remove_terminator(
     };
 
     if removed {
-        let config = state.config.read().unwrap();
+        let config = state.config.read();
         let local_path = state.config_dir.join("nyx.local");
         let _ = config_cmd::save_local_config(&local_path, &config);
         let _ = state.event_tx.send(ServerEvent::ConfigChanged);
@@ -221,7 +221,7 @@ async fn remove_terminator(
 
 fn list_by_kind(state: &AppState, target_kind: &str) -> Vec<LabelEntryView> {
     let builtins = labels::enumerate_builtin_rules();
-    let config = state.config.read().unwrap();
+    let config = state.config.read();
 
     let mut out: Vec<LabelEntryView> = builtins
         .iter()
@@ -278,7 +278,7 @@ fn add_by_kind(
     }
 
     {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         let lang_cfg = config
             .analysis
             .languages
@@ -312,7 +312,7 @@ fn remove_by_kind(state: &AppState, entry: LabelEntryView, target_kind: RuleKind
     };
 
     let removed = {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         if let Some(lang_cfg) = config.analysis.languages.get_mut(&entry.lang) {
             let before = lang_cfg.rules.len();
             lang_cfg.rules.retain(|r| {
@@ -325,7 +325,7 @@ fn remove_by_kind(state: &AppState, entry: LabelEntryView, target_kind: RuleKind
     };
 
     if removed {
-        let config = state.config.read().unwrap();
+        let config = state.config.read();
         let local_path = state.config_dir.join("nyx.local");
         let _ = config_cmd::save_local_config(&local_path, &config);
         let _ = state.event_tx.send(ServerEvent::ConfigChanged);
@@ -414,7 +414,7 @@ const BUILTIN_PROFILE_NAMES: &[&str] = &[
 ];
 
 async fn list_profiles(State(state): State<AppState>) -> Json<Vec<ProfileView>> {
-    let config = state.config.read().unwrap();
+    let config = state.config.read();
     let mut profiles: Vec<ProfileView> = Vec::new();
 
     // Built-in profiles
@@ -456,7 +456,7 @@ async fn save_profile(
             .map_err(|e| bad_request(&e.to_string()))?;
 
     {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         config.profiles.insert(name.clone(), settings);
         let local_path = state.config_dir.join("nyx.local");
         config_cmd::save_local_config(&local_path, &config)
@@ -475,14 +475,14 @@ async fn delete_profile(
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if BUILTIN_PROFILE_NAMES.contains(&name.as_str()) {
-        let config = state.config.read().unwrap();
+        let config = state.config.read();
         if !config.profiles.contains_key(&name) {
             return Err(bad_request("cannot delete built-in profile"));
         }
     }
 
     let removed = {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         let existed = config.profiles.remove(&name).is_some();
         if existed {
             let local_path = state.config_dir.join("nyx.local");
@@ -503,7 +503,7 @@ async fn activate_profile(
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         config
             .apply_profile(&name)
             .map_err(|e| bad_request(&e.to_string()))?;
@@ -524,7 +524,7 @@ async fn set_triage_sync(
         .ok_or_else(|| bad_request("missing enabled field"))?;
 
     {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         config.server.triage_sync = enabled;
         // Note: triage_sync is in the server section, which save_local_config
         // doesn't currently persist. We write the full config here.

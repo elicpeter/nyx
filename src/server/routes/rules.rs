@@ -18,7 +18,7 @@ pub fn routes() -> Router<AppState> {
 
 /// Build the full list of rules: built-in + custom, with disabled state applied.
 fn build_rule_list(state: &AppState) -> Vec<RuleInfo> {
-    let config = state.config.read().unwrap();
+    let config = state.config.read();
     let mut rules = labels::enumerate_builtin_rules();
 
     // Mark disabled rules
@@ -146,7 +146,7 @@ async fn toggle_rule(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         if let Some(pos) = config.analysis.disabled_rules.iter().position(|r| r == &id) {
             config.analysis.disabled_rules.remove(pos);
         } else {
@@ -198,7 +198,7 @@ async fn clone_rule(
 
     let new_id;
     {
-        let mut config = state.config.write().unwrap();
+        let mut config = state.config.write();
         let lang_cfg = config
             .analysis
             .languages

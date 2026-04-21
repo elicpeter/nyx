@@ -115,11 +115,20 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
             };
             let rule_index = rule_index_map[base];
 
-            // Make path relative to scan root if possible
-            let uri = Path::new(&d.path)
-                .strip_prefix(scan_root)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| d.path.clone());
+            // Make path relative to scan root. Fall back to a deterministic
+            // sentinel instead of the absolute path — SARIF must not leak
+            // home-directory or host-specific prefixes.
+            let uri = match Path::new(&d.path).strip_prefix(scan_root) {
+                Ok(p) => p.to_string_lossy().to_string(),
+                Err(_) => {
+                    tracing::warn!(
+                        path = %d.path,
+                        scan_root = %scan_root.display(),
+                        "SARIF: finding path is outside scan root; redacting"
+                    );
+                    "<out-of-root>".to_string()
+                }
+            };
 
             // Prefer the per-finding message (e.g. from state analysis) over the generic rule description.
             let msg_text = d
@@ -524,7 +533,10 @@ mod tests {
     }
 
     #[test]
-    fn build_sarif_path_outside_scan_root_kept_as_is() {
+    fn build_sarif_path_outside_scan_root_is_redacted() {
+        // Absolute host paths leak home-directory information — SARIF must
+        // substitute a deterministic token when a finding falls outside the
+        // scan root.
         let mut diag = make_diag("rule-x", Severity::High);
         diag.path = "/other/place/file.rs".into();
         let sarif = build_sarif(&[diag], Path::new("/workspace"));
@@ -533,7 +545,7 @@ mod tests {
                 ["uri"]
                 .as_str()
                 .unwrap();
-        assert_eq!(uri, "/other/place/file.rs");
+        assert_eq!(uri, "<out-of-root>");
     }
 
     #[test]

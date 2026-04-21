@@ -136,12 +136,11 @@ pub fn spawn_file_walker(root: &Path, cfg: &Config) -> (Receiver<Paths>, JoinHan
                         };
                         let is_file = metadata.file_type().is_file();
                         let under_limit = max_bytes == 0 || metadata.len() <= max_bytes;
+                        // Always canonicalize and verify containment — a symlink
+                        // in the tree can escape the root even when follow=false
+                        // if the walker resolves it at metadata time.
                         let path_allowed = canonical_root.as_ref().is_none_or(|root| {
-                            if follow {
-                                path_stays_within_root(root, e.path()).unwrap_or(false)
-                            } else {
-                                true
-                            }
+                            path_stays_within_root(root, e.path()).unwrap_or(false)
                         });
 
                         if is_file && under_limit && path_allowed {
@@ -300,5 +299,38 @@ fn walker_follow_symlinks_does_not_escape_root() {
     assert!(
         all.iter().all(|path| path != &link),
         "symlink escapes must not be scanned: {all:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn walker_no_follow_symlinks_still_rejects_outside_paths() {
+    // Pre-existing symlink to an out-of-root file must be excluded even when
+    // follow_symlinks=false — the walker may surface the resolved path on
+    // some platforms.
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("secret.rs");
+    std::fs::write(&outside_file, "fn leaked() {}").unwrap();
+
+    let link = tmp.path().join("escape.rs");
+    symlink(&outside_file, &link).unwrap();
+
+    let mut cfg = Config::default();
+    cfg.scanner.follow_symlinks = false;
+    cfg.performance.worker_threads = Some(1);
+    cfg.performance.channel_multiplier = 1;
+    cfg.performance.batch_size = 4;
+
+    let (rx, handle) = spawn_file_walker(tmp.path(), &cfg);
+    handle.join().ok();
+    let all: Vec<_> = rx.into_iter().flatten().collect();
+
+    assert!(
+        all.iter()
+            .all(|path| !path.starts_with(outside.path()) && path != &link),
+        "symlink target outside root must not be scanned: {all:?}"
     );
 }

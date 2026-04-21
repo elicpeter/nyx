@@ -319,11 +319,7 @@ async fn remove_suppression(
 // ── Auto-sync helper ────────────────────────────────────────────────────────
 
 fn auto_sync_to_file(state: &AppState) {
-    let sync_enabled = state
-        .config
-        .read()
-        .map(|c| c.server.triage_sync)
-        .unwrap_or(true);
+    let sync_enabled = state.config.read().server.triage_sync;
     if !sync_enabled {
         return;
     }
@@ -416,11 +412,7 @@ async fn import_triage_file(
 async fn get_sync_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let path = crate::server::triage_sync::triage_file_path(&state.scan_root).ok();
     let file = crate::server::triage_sync::load_triage_file(&state.scan_root);
-    let sync_enabled = state
-        .config
-        .read()
-        .map(|c| c.server.triage_sync)
-        .unwrap_or(true);
+    let sync_enabled = state.config.read().server.triage_sync;
 
     Json(serde_json::json!({
         "file_path": path.as_ref().map(|p| p.to_string_lossy().to_string()),

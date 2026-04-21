@@ -87,6 +87,7 @@ bytesize  = "2.3.1"
 chrono    = { version = "0.4.44", default-features = false, features = ["std", "clock", "serde"] }
 thiserror = "2.0.18"
 dashmap = "6.1.0"
+parking_lot = "0.12"
 petgraph = { version = "0.8.3", features = ["serde-1"] }
 bitflags = "2.11.0"
 phf = { version = "0.13.1", features = ["macros"] }
@@ -96,5 +97,5 @@ uuid = { version = "1", features = ["v4"] }
 axum = { version = "0.8", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"], optional = true }
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
-tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace"], optional = true }
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace", "set-header", "limit"], optional = true }
 z3 = { version = "0.19.15", optional = true}
