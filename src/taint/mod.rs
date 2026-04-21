@@ -349,6 +349,7 @@ fn analyse_body_with_seed(
                 points_to: Some(&opt.points_to),
                 dynamic_pts: Some(&dynamic_pts),
                 import_bindings,
+                promisify_aliases: None,
                 module_aliases: if opt.module_aliases.is_empty() {
                     None
                 } else {

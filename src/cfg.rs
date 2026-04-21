@@ -320,6 +320,21 @@ pub struct ImportBinding {
 /// CommonJS `const { A: B } = require(...)` patterns.
 pub type ImportBindings = HashMap<String, ImportBinding>;
 
+/// A single promisify alias binding: local name bound to `util.promisify(X)`
+/// carries the labels of its wrapped callee `X`.
+#[derive(Debug, Clone)]
+pub struct PromisifyAlias {
+    /// The wrapped callee's canonical textual name (e.g. `child_process.exec`
+    /// or `fs.readFile`).  Used directly for label classification so downstream
+    /// sink / source detection treats the alias the same as the original.
+    pub wrapped: String,
+}
+
+/// Per-file map from local binding name to its promisify wrap origin.
+/// Populated for JS/TS files at CFG construction time for patterns like
+/// `const alias = util.promisify(wrapped)` or `const alias = promisify(wrapped)`.
+pub type PromisifyAliases = HashMap<String, PromisifyAlias>;
+
 /// All CFGs for a file.
 #[derive(Debug)]
 pub struct FileCfg {
@@ -327,6 +342,9 @@ pub struct FileCfg {
     pub summaries: FuncSummaries,
     /// Import alias bindings: local alias → (original name, module path).
     pub import_bindings: ImportBindings,
+    /// Promisify wrapper aliases: local name → wrapped callee name.
+    /// Only populated for JS/TS files.
+    pub promisify_aliases: PromisifyAliases,
 }
 
 impl FileCfg {
@@ -6696,6 +6714,121 @@ fn extract_import_bindings(tree: &Tree, code: &[u8]) -> ImportBindings {
     bindings
 }
 
+/// Walk the AST and collect promisify-alias bindings for JS/TS.
+///
+/// Recognises declarations of the forms:
+///   - `const alias = util.promisify(wrapped)`
+///   - `const alias = promisify(wrapped)`   (when `promisify` was destructured
+///      from `util`, matched structurally without tracking the import)
+///
+/// The `wrapped` callee is stored as its canonical textual form (e.g.
+/// `child_process.exec`).  Only single-argument calls are captured; wrappers
+/// that rename more than the first argument are skipped conservatively.
+///
+/// The walk recurses through function bodies so aliases declared inside a
+/// handler are still recorded (they are file-local bindings regardless).
+fn extract_promisify_aliases(tree: &Tree, code: &[u8]) -> PromisifyAliases {
+    let mut aliases = PromisifyAliases::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        match node.kind() {
+            "lexical_declaration" | "variable_declaration" => {
+                let mut c = node.walk();
+                for decl in node.children(&mut c) {
+                    if decl.kind() != "variable_declarator" {
+                        continue;
+                    }
+                    let (name_node, value_node) = match (
+                        decl.child_by_field_name("name"),
+                        decl.child_by_field_name("value"),
+                    ) {
+                        (Some(n), Some(v)) => (n, v),
+                        _ => continue,
+                    };
+                    if name_node.kind() != "identifier" {
+                        continue;
+                    }
+                    let alias_name = match text_of(name_node, code) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    if let Some(wrapped) = extract_promisify_wrapped(value_node, code) {
+                        aliases.insert(alias_name, PromisifyAlias { wrapped });
+                    }
+                }
+            }
+            "assignment_expression" => {
+                let (Some(lhs), Some(rhs)) = (
+                    node.child_by_field_name("left"),
+                    node.child_by_field_name("right"),
+                ) else {
+                    continue;
+                };
+                if lhs.kind() != "identifier" {
+                    continue;
+                }
+                let alias_name = match text_of(lhs, code) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if let Some(wrapped) = extract_promisify_wrapped(rhs, code) {
+                    aliases.insert(alias_name, PromisifyAlias { wrapped });
+                }
+            }
+            _ => {}
+        }
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            stack.push(child);
+        }
+    }
+    aliases
+}
+
+/// If `value` is a call expression of the shape `util.promisify(X)` or
+/// `promisify(X)`, return the textual representation of `X` (`child_process.exec`,
+/// `fs.readFile`, `foo`).  Otherwise `None`.
+fn extract_promisify_wrapped(value: Node, code: &[u8]) -> Option<String> {
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    let func = value.child_by_field_name("function")?;
+    let func_text = match func.kind() {
+        "identifier" => text_of(func, code)?,
+        "member_expression" => member_expr_text(func, code)?,
+        _ => return None,
+    };
+    let matches = matches!(func_text.as_str(), "util.promisify" | "promisify");
+    if !matches {
+        return None;
+    }
+    let args = value.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let mut wrapped: Option<String> = None;
+    let mut arg_count = 0;
+    for arg in args.children(&mut cursor) {
+        if arg.is_extra() {
+            continue;
+        }
+        match arg.kind() {
+            "," | "(" | ")" => continue,
+            _ => {}
+        }
+        arg_count += 1;
+        if arg_count == 1 {
+            wrapped = match arg.kind() {
+                "identifier" => text_of(arg, code),
+                "member_expression" => member_expr_text(arg, code),
+                _ => None,
+            };
+        }
+    }
+    if arg_count != 1 {
+        return None;
+    }
+    wrapped
+}
+
 /// Extract the module path from a `require('...')` call expression.
 fn extract_require_module(node: Node, code: &[u8]) -> Option<String> {
     if node.kind() != "call_expression" {
@@ -6846,10 +6979,58 @@ pub(crate) fn build_cfg<'a>(
         HashMap::new()
     };
 
+    // Extract promisify-alias bindings (JS/TS only).  Applies a post-pass
+    // over every call node whose callee is a recorded alias so the wrapped
+    // function's labels (source/sanitizer/sink) carry through to the alias.
+    let promisify_aliases = if matches!(lang, "javascript" | "typescript" | "tsx") {
+        extract_promisify_aliases(tree, code)
+    } else {
+        HashMap::new()
+    };
+
+    let extra = analysis_rules.map(|r| r.extra_labels.as_slice());
+    if !promisify_aliases.is_empty() {
+        apply_promisify_labels(&mut bodies, &promisify_aliases, lang, extra);
+    }
+
     FileCfg {
         bodies,
         summaries,
         import_bindings,
+        promisify_aliases,
+    }
+}
+
+/// Walk every CFG node in every body; for Call nodes whose callee matches a
+/// promisify alias, classify the wrapped callee and union the resulting labels
+/// into `info.taint.labels` (dedup by variant+caps).  The displayed callee
+/// text is left unchanged so diagnostics still surface the alias name.
+fn apply_promisify_labels(
+    bodies: &mut [BodyCfg],
+    aliases: &PromisifyAliases,
+    lang: &str,
+    extra: Option<&[crate::labels::RuntimeLabelRule]>,
+) {
+    for body in bodies.iter_mut() {
+        let indices: Vec<NodeIndex> = body.graph.node_indices().collect();
+        for idx in indices {
+            let Some(callee) = body.graph[idx].call.callee.clone() else {
+                continue;
+            };
+            let Some(alias) = aliases.get(&callee) else {
+                continue;
+            };
+            let wrapped_labels = classify_all(lang, &alias.wrapped, extra);
+            if wrapped_labels.is_empty() {
+                continue;
+            }
+            let info = &mut body.graph[idx];
+            for lbl in wrapped_labels {
+                if !info.taint.labels.contains(&lbl) {
+                    info.taint.labels.push(lbl);
+                }
+            }
+        }
     }
 }
 
@@ -8200,6 +8381,76 @@ mod cfg_tests {
         let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
         let file_cfg = parse_to_file_cfg(src, "java", ts_lang);
         assert!(file_cfg.import_bindings.is_empty());
+    }
+
+    // ── Promisify alias binding tests ───────────────────────────────
+
+    #[test]
+    fn js_promisify_alias_member_expression() {
+        let src = b"const execAsync = util.promisify(child_process.exec);";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        let alias = file_cfg
+            .promisify_aliases
+            .get("execAsync")
+            .expect("execAsync should be recorded");
+        assert_eq!(alias.wrapped, "child_process.exec");
+    }
+
+    #[test]
+    fn js_promisify_alias_bare_identifier() {
+        // `promisify` imported directly from util (destructured).
+        let src = b"const run = promisify(foo);";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        assert_eq!(
+            file_cfg.promisify_aliases.get("run").map(|a| a.wrapped.as_str()),
+            Some("foo")
+        );
+    }
+
+    #[test]
+    fn js_promisify_labels_carry_to_alias_call() {
+        // The post-pass should union `child_process.exec`'s Sink(SHELL_ESCAPE)
+        // into every call site of the alias.
+        let src = b"const runAsync = util.promisify(child_process.exec);\n\
+                    function f(userCmd) { runAsync(userCmd); }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        assert!(file_cfg.promisify_aliases.contains_key("runAsync"));
+        let any_runasync_sink = file_cfg.bodies.iter().any(|b| {
+            b.graph.node_weights().any(|n| {
+                n.call.callee.as_deref() == Some("runAsync")
+                    && n.taint.labels.iter().any(|lbl| {
+                        matches!(
+                            lbl,
+                            crate::labels::DataLabel::Sink(c)
+                                if c.intersects(crate::labels::Cap::SHELL_ESCAPE)
+                        )
+                    })
+            })
+        });
+        assert!(
+            any_runasync_sink,
+            "runAsync call site should inherit child_process.exec's SHELL_ESCAPE sink"
+        );
+    }
+
+    #[test]
+    fn js_promisify_ignored_for_non_js_langs() {
+        let src = b"const x = util.promisify(exec)";
+        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+        assert!(file_cfg.promisify_aliases.is_empty());
+    }
+
+    #[test]
+    fn js_promisify_non_call_value_ignored() {
+        // RHS is not a promisify call — no binding should be captured.
+        let src = b"const execAsync = child_process.exec;";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+        assert!(file_cfg.promisify_aliases.is_empty());
     }
 
     #[test]

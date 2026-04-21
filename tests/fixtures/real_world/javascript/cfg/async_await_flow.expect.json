@@ -13,13 +13,13 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         5,
         9
       ],
       "evidence_contains": [],
-      "notes": "execAsync is a promisified wrapper; scanner cannot trace through util.promisify to recognize it as a sink"
+      "notes": "userCmd (auto-seeded user* handler param) flows to execAsync — promisify binding + hardcoded execAsync matcher fire CMD_INJECT"
     },
     {
       "rule_id": "taint-unsanitised-flow",
@@ -30,7 +30,7 @@
         19
       ],
       "evidence_contains": [],
-      "notes": "fetch response flows to child_process.exec but fetch is not a recognized source"
+      "notes": "fetch response flows to child_process.exec but fetch is not modeled as a source of external data (future work: dual-label fetch)"
     },
     {
       "rule_id": "cfg-unguarded-sink",

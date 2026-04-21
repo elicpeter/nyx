@@ -971,6 +971,7 @@ pub fn analyse_function_taint(
         points_to: Some(&opt.points_to),
         dynamic_pts: None,
         import_bindings: None,
+        promisify_aliases: None,
         module_aliases: if opt.module_aliases.is_empty() {
             None
         } else {

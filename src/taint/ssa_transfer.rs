@@ -550,6 +550,12 @@ pub struct SsaTaintTransfer<'a> {
     /// Used in `resolve_callee` to map aliased import names back to their
     /// original exported symbol before summary lookup.
     pub import_bindings: Option<&'a crate::cfg::ImportBindings>,
+    /// Promisify alias bindings: `const alias = util.promisify(wrapped)` for
+    /// JS/TS.  Used in `resolve_callee` so summary lookup for `alias(...)` falls
+    /// back to `wrapped`'s summary.  Label-based sink/source detection is
+    /// handled by a CFG post-pass that unions the wrapped callee's labels into
+    /// every matching call-site's `info.taint.labels`.
+    pub promisify_aliases: Option<&'a crate::cfg::PromisifyAliases>,
     /// Module aliases from `require()` calls: SSA value → possible module names.
     /// Used to resolve dynamic dispatch (e.g., `lib.request()` where
     /// `lib = require("http")`) for sink label matching.
@@ -1634,6 +1640,7 @@ fn inline_analyse_callee(
         points_to: Some(&callee_body.opt.points_to),
         dynamic_pts: None, // no inter-procedural container propagation at k>1
         import_bindings: transfer.import_bindings,
+        promisify_aliases: transfer.promisify_aliases,
         module_aliases: None, // callee body has its own const_values; module aliases not propagated
         static_map: None, // static-map seeding is caller-body local, not propagated to inlined callees
         auto_seed_handler_params: transfer.auto_seed_handler_params,
@@ -6154,6 +6161,7 @@ pub fn extract_ssa_func_summary(
             points_to: None,
             dynamic_pts: None,
             import_bindings: None,
+            promisify_aliases: None,
             module_aliases,
             static_map: None,
             auto_seed_handler_params: false,
@@ -6362,6 +6370,7 @@ pub fn extract_ssa_func_summary(
             points_to: None,
             dynamic_pts: None,
             import_bindings: None,
+            promisify_aliases: None,
             module_aliases: None,
             static_map: None,
             auto_seed_handler_params: false,

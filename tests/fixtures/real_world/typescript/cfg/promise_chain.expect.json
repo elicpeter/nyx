@@ -14,13 +14,13 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         5,
         10
       ],
       "evidence_contains": [],
-      "notes": "input flows to execAsync but execAsync is a promisified wrapper not recognized as a taint sink"
+      "notes": "input (auto-seeded handler param) flows through execAsync — promisify-aware alias + hardcoded execAsync matcher fire CMD_INJECT"
     },
     {
       "rule_id": "cfg-unguarded-sink",

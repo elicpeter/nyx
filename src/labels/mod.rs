@@ -365,13 +365,32 @@ const JS_TS_HANDLER_PARAM_NAMES: &[&str] = &[
 ];
 
 /// Check whether a JS/TS formal parameter name strongly implies user input.
+///
+/// Matches the curated exact-name list (case-insensitive) *and* any identifier
+/// that begins with a `user` prefix followed by an uppercase letter (camelCase)
+/// or underscore (snake_case).  The prefix rule captures common handler
+/// parameter names such as `userCmd`, `userPath`, `userData`, and `user_input`
+/// without broadening into generic words that just contain "user".
 pub fn is_js_ts_handler_param_name(name: &str) -> bool {
     if name.is_empty() || !name.is_ascii() {
         return false;
     }
-    JS_TS_HANDLER_PARAM_NAMES
+    if JS_TS_HANDLER_PARAM_NAMES
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(name))
+    {
+        return true;
+    }
+    // camelCase / snake_case `user*` prefix: requires at least one
+    // distinguishing character after the prefix so `user` alone does not match.
+    let bytes = name.as_bytes();
+    if bytes.len() >= 5
+        && bytes[..4].eq_ignore_ascii_case(b"user")
+        && (bytes[4].is_ascii_uppercase() || bytes[4] == b'_')
+    {
+        return true;
+    }
+    false
 }
 
 #[inline(always)]
@@ -1105,6 +1124,27 @@ pub fn custom_rule_id(lang: &str, kind: &str, matchers: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handler_param_names_exact_and_prefix() {
+        // Exact names still match.
+        assert!(is_js_ts_handler_param_name("cmd"));
+        assert!(is_js_ts_handler_param_name("input"));
+        assert!(is_js_ts_handler_param_name("userId"));
+        assert!(is_js_ts_handler_param_name("USERID"));
+        // camelCase `user*` prefix.
+        assert!(is_js_ts_handler_param_name("userCmd"));
+        assert!(is_js_ts_handler_param_name("userData"));
+        assert!(is_js_ts_handler_param_name("userPath"));
+        // snake_case prefix.
+        assert!(is_js_ts_handler_param_name("user_cmd"));
+        // Bare `user` does not match (no distinguishing suffix).
+        assert!(!is_js_ts_handler_param_name("user"));
+        assert!(!is_js_ts_handler_param_name("userx"));
+        // Other names unaffected.
+        assert!(!is_js_ts_handler_param_name("url"));
+        assert!(!is_js_ts_handler_param_name("value"));
+    }
 
     #[test]
     fn classify_none_extra_unchanged() {
