@@ -653,6 +653,13 @@ fn run_path(
                 }
             }
             Terminator::Goto(target) => {
+                // Single-path explorer: follows the terminator's single logical
+                // successor. For collapsed ≥3-way fanouts (src/ssa/lower.rs
+                // `three_successor_collapse`) the explorer only walks the first
+                // successor; the other CFG succs may carry additional witnesses
+                // but are intentionally skipped here to preserve the budget
+                // model. Finding emission itself is not affected: the taint
+                // engine propagates across `block.succs` authoritatively.
                 if !reachable.contains(target) {
                     // Successor not on any source-to-sink path.
                     // Still try to extract a witness from accumulated state.

@@ -318,14 +318,21 @@ fn process_terminator(
     cfg_worklist: &mut VecDeque<BlockId>,
 ) {
     match &block.terminator {
-        Terminator::Goto(target) => {
-            mark_edge_executable(
-                block.id,
-                *target,
-                executable_edges,
-                executable_blocks,
-                cfg_worklist,
-            );
+        Terminator::Goto(_) => {
+            // `block.succs` is authoritative. For collapsed ≥3-way fanouts
+            // (see src/ssa/lower.rs `three_successor_collapse`) the terminator
+            // only records the first successor; marking just that one would
+            // leave the others unreachable for SCCP. Iterate succs so every
+            // CFG successor is marked executable.
+            for &target in &block.succs {
+                mark_edge_executable(
+                    block.id,
+                    target,
+                    executable_edges,
+                    executable_blocks,
+                    cfg_worklist,
+                );
+            }
         }
         Terminator::Branch {
             cond,

@@ -902,6 +902,12 @@ pub fn execute_callee(
                     break;
                 }
                 Terminator::Goto(target) => {
+                    // Single-path callee explorer: follows the terminator's
+                    // single logical successor. Collapsed ≥3-way fanouts
+                    // (src/ssa/lower.rs `three_successor_collapse`) forfeit
+                    // the other CFG succs here, which is acceptable because
+                    // this walker only refines witnesses for findings already
+                    // raised by the taint engine (which uses `block.succs`).
                     path.predecessor = Some(path.current_block);
                     path.current_block = *target;
                 }

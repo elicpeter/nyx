@@ -1336,8 +1336,18 @@ fn compute_succ_states(
                 ]
             }
         }
-        Terminator::Goto(target) => {
-            smallvec::smallvec![(*target, exit_state.clone())]
+        Terminator::Goto(_) => {
+            // `block.succs` is authoritative. The terminator target records
+            // the single logical successor (or the first of a collapsed
+            // ≥3-way fanout — see src/ssa/lower.rs `three_successor_collapse`).
+            // Propagating only the terminator target would drop flow to the
+            // other successors; iterate `succs` instead so every downstream
+            // block receives the exit state.
+            block
+                .succs
+                .iter()
+                .map(|s| (*s, exit_state.clone()))
+                .collect()
         }
         Terminator::Return(_) | Terminator::Unreachable => {
             // `block.succs` is authoritative for analysis flow; the terminator
@@ -7392,5 +7402,160 @@ mod primary_sink_location_tests {
         assert_eq!(loc.line, 42);
         assert_eq!(loc.col, 10);
         assert_eq!(loc.snippet, "Command::new(cmd).status()");
+    }
+}
+
+#[cfg(test)]
+mod goto_succ_propagation_tests {
+    //! Regression guard for the 3-successor Goto collapse in
+    //! `src/ssa/lower.rs` (see `three_successor_collapse_produces_goto`).
+    //!
+    //! Lowering collapses ≥3-successor blocks to `Terminator::Goto(first)`
+    //! but preserves the full successor list on `block.succs`. Flow
+    //! consumers (this module's `compute_succ_states`, SCCP's
+    //! `process_terminator`) must treat `block.succs` as authoritative.
+    //! Without that, taint exits only through the first successor and all
+    //! downstream blocks on the other edges silently drop it.
+    use super::*;
+    use crate::cfg::Cfg;
+    use crate::state::symbol::SymbolInterner;
+    use petgraph::Graph;
+    use smallvec::smallvec;
+
+    #[test]
+    fn goto_propagates_to_every_succ_on_three_way_collapse() {
+        // Build a block with Terminator::Goto(1) but succs = [1, 2, 3] — the
+        // shape lowering emits for a 3-way fanout.
+        let block = SsaBlock {
+            id: BlockId(0),
+            phis: vec![],
+            body: vec![],
+            terminator: Terminator::Goto(BlockId(1)),
+            preds: smallvec![],
+            succs: smallvec![BlockId(1), BlockId(2), BlockId(3)],
+        };
+
+        let ssa = SsaBody {
+            blocks: vec![block.clone()],
+            entry: BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        };
+
+        let cfg: Cfg = Graph::new();
+        let interner = SymbolInterner::new();
+        let local_summaries: FuncSummaries = std::collections::HashMap::new();
+
+        let transfer = SsaTaintTransfer {
+            lang: Lang::JavaScript,
+            namespace: "",
+            interner: &interner,
+            local_summaries: &local_summaries,
+            global_summaries: None,
+            interop_edges: &[],
+            global_seed: None,
+            const_values: None,
+            type_facts: None,
+            ssa_summaries: None,
+            extra_labels: None,
+            base_aliases: None,
+            callee_bodies: None,
+            inline_cache: None,
+            context_depth: 0,
+            callback_bindings: None,
+            points_to: None,
+            dynamic_pts: None,
+            import_bindings: None,
+            promisify_aliases: None,
+            module_aliases: None,
+            static_map: None,
+            auto_seed_handler_params: false,
+        };
+
+        // A non-bottom exit state — the test only cares that *every* succ
+        // receives a clone of it, so any distinguishable state works.
+        let mut exit_state = SsaTaintState::initial();
+        exit_state.values.push((
+            SsaValue(42),
+            VarTaint {
+                caps: crate::labels::Cap::all(),
+                origins: smallvec::SmallVec::new(),
+                uses_summary: false,
+            },
+        ));
+
+        let succ_states = compute_succ_states(&block, &cfg, &ssa, &transfer, &exit_state);
+
+        assert_eq!(
+            succ_states.len(),
+            3,
+            "Goto with 3 succs must propagate to all 3 successors, got {:?}",
+            succ_states.iter().map(|(b, _)| *b).collect::<Vec<_>>()
+        );
+
+        let targets: Vec<BlockId> = succ_states.iter().map(|(b, _)| *b).collect();
+        assert_eq!(targets, vec![BlockId(1), BlockId(2), BlockId(3)]);
+
+        for (bid, state) in &succ_states {
+            assert!(
+                state.values.iter().any(|(v, _)| *v == SsaValue(42)),
+                "succ {:?} did not receive the exit state taint",
+                bid
+            );
+        }
+    }
+
+    #[test]
+    fn goto_single_successor_still_works() {
+        // Normal Goto with a single successor: behavior unchanged.
+        let block = SsaBlock {
+            id: BlockId(0),
+            phis: vec![],
+            body: vec![],
+            terminator: Terminator::Goto(BlockId(1)),
+            preds: smallvec![],
+            succs: smallvec![BlockId(1)],
+        };
+        let ssa = SsaBody {
+            blocks: vec![block.clone()],
+            entry: BlockId(0),
+            value_defs: vec![],
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        };
+        let cfg: Cfg = Graph::new();
+        let interner = SymbolInterner::new();
+        let local_summaries: FuncSummaries = std::collections::HashMap::new();
+        let transfer = SsaTaintTransfer {
+            lang: Lang::JavaScript,
+            namespace: "",
+            interner: &interner,
+            local_summaries: &local_summaries,
+            global_summaries: None,
+            interop_edges: &[],
+            global_seed: None,
+            const_values: None,
+            type_facts: None,
+            ssa_summaries: None,
+            extra_labels: None,
+            base_aliases: None,
+            callee_bodies: None,
+            inline_cache: None,
+            context_depth: 0,
+            callback_bindings: None,
+            points_to: None,
+            dynamic_pts: None,
+            import_bindings: None,
+            promisify_aliases: None,
+            module_aliases: None,
+            static_map: None,
+            auto_seed_handler_params: false,
+        };
+        let exit_state = SsaTaintState::initial();
+
+        let succ_states = compute_succ_states(&block, &cfg, &ssa, &transfer, &exit_state);
+        assert_eq!(succ_states.len(), 1);
+        assert_eq!(succ_states[0].0, BlockId(1));
     }
 }

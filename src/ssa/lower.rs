@@ -1131,11 +1131,20 @@ fn rename_variables(
                 condition,
             }
         } else {
-            // More than 2 successors — use Goto to first (shouldn't happen in practice)
+            // More than 2 successors — collapse to Goto(first). The full
+            // successor list is preserved on `block.succs`; flow consumers
+            // that match `Terminator::Goto` must treat `succs` as
+            // authoritative (see `compute_succ_states` in
+            // src/taint/ssa_transfer.rs and `process_terminator` in
+            // src/ssa/const_prop.rs).
+            //
+            // TODO: introduce `Terminator::Switch(SmallVec<[BlockId; 4]>)`
+            // and retire this ad-hoc collapse so the structured terminator
+            // matches the CFG fanout exactly.
             tracing::warn!(
                 block = block_idx,
                 num_succs = succs.len(),
-                "block has {} successors, collapsing to Goto(first) — paths may be lost",
+                "block has {} successors, collapsing to Goto(first) — succs authoritative for flow",
                 succs.len()
             );
             Terminator::Goto(BlockId(succs[0] as u32))
@@ -1816,7 +1825,8 @@ mod tests {
     #[test]
     fn three_successor_collapse_produces_goto() {
         // Build a CFG where a single node has 3 successors (unusual but possible
-        // via manual graph construction). The lowering should collapse to Goto(first).
+        // via manual graph construction). The lowering should collapse to Goto(first)
+        // while preserving the full succ list on `block.succs`.
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let branch = cfg.add_node(make_node(StmtKind::If));
@@ -1839,14 +1849,30 @@ mod tests {
 
         // The block corresponding to the 3-successor node should have a Goto terminator
         // (collapsed from 3 successors), not a Branch
-        let has_goto = ssa
+        let collapsed_block = ssa
             .blocks
             .iter()
-            .any(|b| matches!(b.terminator, Terminator::Goto(_)));
-        assert!(
-            has_goto,
-            "3-successor collapse should produce a Goto terminator"
+            .find(|b| matches!(b.terminator, Terminator::Goto(_)) && b.succs.len() >= 3)
+            .expect("expected a block with a Goto terminator and ≥3 succs");
+
+        // Invariant: the CFG successor list must retain all three entries
+        // even though the terminator only records the first. Flow consumers
+        // (taint `compute_succ_states`, SCCP `process_terminator`) rely on
+        // `block.succs` being authoritative.
+        assert_eq!(
+            collapsed_block.succs.len(),
+            3,
+            "3-successor collapse must retain all succs on block.succs, got {:?}",
+            collapsed_block.succs
         );
+
+        // And the Goto target must be the first succ (deterministic ordering).
+        if let Terminator::Goto(target) = collapsed_block.terminator {
+            assert_eq!(
+                target, collapsed_block.succs[0],
+                "Goto target must match succs[0] after collapse"
+            );
+        }
     }
 
     #[test]
