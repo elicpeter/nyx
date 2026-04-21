@@ -433,4 +433,3 @@ fn scan_of_mixed_hostile_directory_is_bounded() {
         "normal.js should still produce findings: {diags:?}",
     );
 }
-
