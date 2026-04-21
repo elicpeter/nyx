@@ -73,6 +73,25 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: false,
     },
+    // Backtick shell execution: tree-sitter-ruby represents `` `cmd` `` as a
+    // `subshell` node with no callee field. push_node normalises the synthetic
+    // callee name to "subshell" and extract_arg_uses lifts interpolation
+    // identifiers into positional args, so any tainted `#{var}` participates
+    // in sink detection.
+    LabelRule {
+        matchers: &["subshell"],
+        label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+        case_sensitive: true,
+    },
+    // File I/O sinks: user-controlled paths flowing into File.open/File.new
+    // are a path-traversal / arbitrary-read vector.  File.open also participates
+    // in the resource-lifecycle acquire/release pair (cfg_analysis::RUBY_RESOURCES),
+    // so this entry is additive — it does not disturb resource-leak detection.
+    LabelRule {
+        matchers: &["File.open", "File.new", "File.read", "IO.read"],
+        label: DataLabel::Sink(Cap::FILE_IO),
+        case_sensitive: false,
+    },
     LabelRule {
         matchers: &["eval"],
         label: DataLabel::Sink(Cap::CODE_EXEC),
@@ -187,6 +206,10 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "assignment"            => Kind::Assignment,
     "method"                => Kind::Function,
     "singleton_method"      => Kind::Function,
+    // Backtick shell execution: treat as a synthetic call so push_node
+    // classifies it as a sink and extract_arg_uses lifts interpolation
+    // identifiers into positional args.
+    "subshell"              => Kind::CallFn,
 
     // trivia
     "comment"               => Kind::Trivia,

@@ -564,6 +564,11 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                 if lang == "cpp" && c.kind() == "delete_expression" {
                     return Some("delete".to_string());
                 }
+                // Ruby backtick subshell: no `function` field, normalise to
+                // the synthetic callee so assignment-wrapped subshells classify.
+                if lang == "ruby" && c.kind() == "subshell" {
+                    return Some("subshell".to_string());
+                }
                 return match lookup(lang, c.kind()) {
                     Kind::CallFn => c
                         .child_by_field_name("function")
@@ -1786,6 +1791,28 @@ fn check_inner_call_args(node: Node, code: &[u8]) -> bool {
 /// Returns one `Vec<String>` per argument (in parameter-position order).
 /// Returns empty if argument list can't be found or contains spread/keyword args.
 fn extract_arg_uses(call_node: Node, code: &[u8]) -> Vec<Vec<String>> {
+    // Ruby `subshell` (backticks) has no `arguments` field — its children are
+    // string fragments and `interpolation` nodes. Lift each interpolation's
+    // identifiers into a positional arg so taint flows from `#{var}` into the
+    // synthetic "subshell" sink.
+    if call_node.kind() == "subshell" {
+        let mut result = Vec::new();
+        let mut cursor = call_node.walk();
+        for child in call_node.named_children(&mut cursor) {
+            if child.kind() == "interpolation" {
+                let mut idents = Vec::new();
+                let mut paths = Vec::new();
+                collect_idents_with_paths(child, code, &mut idents, &mut paths);
+                let mut combined = paths;
+                combined.extend(idents);
+                if !combined.is_empty() {
+                    result.push(combined);
+                }
+            }
+        }
+        return result;
+    }
+
     let Some(args_node) = call_node.child_by_field_name("arguments") else {
         return Vec::new();
     };
@@ -2878,6 +2905,14 @@ fn push_node<'a>(
         } else if ast.kind() == "delete_expression" {
             text = "delete".to_string();
         }
+    }
+
+    // Ruby backtick shell execution: the `subshell` AST node has no
+    // `function`/`method` field so the CallFn text extraction above yields
+    // "".  Stamp a synthetic callee name so the Sink(SHELL_ESCAPE) rule in
+    // labels/ruby.rs fires.
+    if lang == "ruby" && ast.kind() == "subshell" {
+        text = "subshell".to_string();
     }
 
     // If this is a declaration/expression wrapper or an assignment that
