@@ -2,6 +2,7 @@
   "description": "Go func literal captures tainted r.URL.Query().Get, then invoked; capture-based taint must reach exec.Command inside the closure",
   "tags": ["taint", "closure", "func-literal", "cmdi"],
   "modes": ["full"],
+  "strict_unexpected": ["taint-unsanitised-flow"],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -9,6 +10,13 @@
       "line_range": [10, 13],
       "evidence_contains": [],
       "notes": "run := func(){ exec.Command(\"sh\", \"-c\", q) }() — Go short-var decl binds anon literal as `run`"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [14, 14],
+      "evidence_contains": [],
+      "notes": "outer run() invocation re-reports the flow via inline callee analysis — tainted capture reaches exec.Command in body"
     }
   ]
 }

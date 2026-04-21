@@ -9,6 +9,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -20,6 +23,28 @@
       ],
       "evidence_contains": [],
       "notes": "$_FILES['upload']['name'] flows into file path without sanitization"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        5,
+        5
+      ],
+      "evidence_contains": [],
+      "notes": "uploaded filename concatenated into $target and echoed — XSS via tainted filename in response"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        11,
+        11
+      ],
+      "evidence_contains": [],
+      "notes": "$_FILES['upload']['tmp_name'] flows into move_uploaded_file path arg; tmp_name is PHP-generated (not user-controlled) but scanner treats $_FILES broadly as tainted — aspirationally suppressible"
     }
   ]
 }

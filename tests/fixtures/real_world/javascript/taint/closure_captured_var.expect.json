@@ -2,6 +2,7 @@
   "description": "Closure captures tainted outer var; closure invoked in same scope reaches eval sink",
   "tags": ["taint", "closure", "code-exec", "express"],
   "modes": ["full"],
+  "strict_unexpected": ["taint-unsanitised-flow"],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -9,6 +10,13 @@
       "line_range": [7, 9],
       "evidence_contains": [],
       "notes": "req.query.q captured by inner fn and flows to eval(q) inside captured closure"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [9, 9],
+      "evidence_contains": [],
+      "notes": "outer fn() invocation at line 9 re-reports the flow via inline callee analysis — tainted capture reaches eval in body"
     }
   ]
 }

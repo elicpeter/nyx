@@ -10,6 +10,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -21,6 +24,17 @@
       ],
       "evidence_contains": [],
       "notes": "input (auto-seeded handler param) flows through execAsync — promisify-aware alias + hardcoded execAsync matcher fire CMD_INJECT"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "safePipeline sanitizes via regex replace (alphanumeric allowlist) but scanner does not model .replace() with regex as a sanitizer; current behavior is to report the flow to execAsync — aspirationally suppressible once replace-based sanitizers are recognized"
     },
     {
       "rule_id": "cfg-unguarded-sink",
@@ -42,7 +56,7 @@
         4
       ],
       "evidence_contains": [],
-      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 4 \u2014 taint active but no confirmed flow"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 4 — taint active but no confirmed flow"
     }
   ]
 }

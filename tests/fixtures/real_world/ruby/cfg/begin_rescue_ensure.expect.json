@@ -2,6 +2,7 @@
   "description": "File handle management with begin/rescue/ensure vs early return leak",
   "tags": ["cfg", "resource-leak", "begin-rescue-ensure", "file-io", "ruby"],
   "modes": ["full"],
+  "strict_unexpected": ["taint-unsanitised-flow"],
   "expected": [
     {
       "rule_id": "cfg-resource-leak",
@@ -32,6 +33,14 @@
       "line_range": [2, 2],
       "evidence_contains": [],
       "notes": "noise: state engine does not yet model Ruby ensure blocks; possible-leak is conservative — aspirational suppression"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": "MEDIUM",
+      "must_match": false,
+      "line_range": [6, 7],
+      "evidence_contains": [],
+      "notes": "rescue IOError => e is modeled as a tainted-exception source; puts e.message at line 7 is an output sink — medium-severity flow incidental to this CFG fixture, aspirationally suppressible"
     }
   ]
 }

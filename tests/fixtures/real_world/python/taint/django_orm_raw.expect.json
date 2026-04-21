@@ -2,6 +2,7 @@
   "description": "Django ORM raw SQL injection: request.GET flows to User.objects.raw()",
   "tags": ["taint", "sqli", "django"],
   "modes": ["full"],
+  "strict_unexpected": ["taint-unsanitised-flow"],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -10,6 +11,14 @@
       "line_range": [4, 6],
       "evidence_contains": [],
       "notes": "request.GET.get('q') flows to User.objects.raw() — SQL injection via Django ORM"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [6, 6],
+      "evidence_contains": [],
+      "notes": "User.objects.raw results wrapped in str(...) and flow to HttpResponse — tainted query results reach a response sink"
     }
   ]
 }

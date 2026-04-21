@@ -2,6 +2,7 @@
   "description": "SSRF: user-controlled URL from $_GET flows to file_get_contents() (dual Source+Sink label)",
   "tags": ["taint", "ssrf", "multi-label"],
   "modes": ["full"],
+  "strict_unexpected": ["taint-unsanitised-flow"],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -10,6 +11,14 @@
       "line_range": [1, 7],
       "evidence_contains": [],
       "notes": "$_GET['url'] flows to file_get_contents($url) — file_get_contents has dual Source+Sink(SSRF) labels"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [5, 5],
+      "evidence_contains": [],
+      "notes": "file_get_contents response assigned to $content and echoed — SSRF-fetched content flows to echo (XSS-like response sink)"
     }
   ]
 }

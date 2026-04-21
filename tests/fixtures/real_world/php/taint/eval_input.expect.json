@@ -9,6 +9,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "php.code_exec.eval",
@@ -53,6 +56,17 @@
       ],
       "evidence_contains": [],
       "notes": "$_GET['expr'] concatenated and flows into eval()"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        7,
+        7
+      ],
+      "evidence_contains": [],
+      "notes": "eval return value assigned to $result and echoed — tainted eval output flows to echo (XSS-like response sink)"
     }
   ]
 }

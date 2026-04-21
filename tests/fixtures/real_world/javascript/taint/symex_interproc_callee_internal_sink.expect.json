@@ -9,6 +9,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -20,6 +23,17 @@
       ],
       "evidence_contains": [],
       "notes": "req.query.msg flows through processAndStore which has an internal db.query sink"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        8
+      ],
+      "evidence_contains": [],
+      "notes": "callee-internal flow: tainted input param reaches client.query inside processAndStore during inline callee analysis"
     }
   ]
 }

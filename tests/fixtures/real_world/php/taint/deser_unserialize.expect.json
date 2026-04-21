@@ -9,6 +9,9 @@
   "modes": [
     "full"
   ],
+  "strict_unexpected": [
+    "taint-unsanitised-flow"
+  ],
   "expected": [
     {
       "rule_id": "php.deser.unserialize",
@@ -31,6 +34,28 @@
       ],
       "evidence_contains": [],
       "notes": "$_COOKIE['session_data'] flows into unserialize()"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [
+        4,
+        4
+      ],
+      "evidence_contains": [],
+      "notes": "unserialized $obj->name echoed — tainted object-property flows to echo (XSS-like response sink)"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [
+        9,
+        9
+      ],
+      "evidence_contains": [],
+      "notes": "$_COOKIE['json_data'] → json_decode → echo $safe_obj->name; scanner does not model json_decode as a sanitizer, so taint propagates to echo — aspirationally suppressible"
     }
   ]
 }

@@ -2,6 +2,7 @@
   "description": "SSRF: user-controlled URL from $_GET flows to curl_exec()",
   "tags": ["taint", "ssrf", "curl"],
   "modes": ["full"],
+  "strict_unexpected": ["taint-unsanitised-flow"],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
@@ -10,6 +11,14 @@
       "line_range": [1, 9],
       "evidence_contains": [],
       "notes": "$_GET['url'] flows to curl_exec($ch) without URL validation"
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [8, 8],
+      "evidence_contains": [],
+      "notes": "curl_exec response assigned to $result and echoed — SSRF-fetched content flows to echo (XSS-like response sink)"
     }
   ]
 }
