@@ -6762,7 +6762,7 @@ fn extract_import_bindings(tree: &Tree, code: &[u8]) -> ImportBindings {
 /// Recognises declarations of the forms:
 ///   - `const alias = util.promisify(wrapped)`
 ///   - `const alias = promisify(wrapped)`   (when `promisify` was destructured
-///      from `util`, matched structurally without tracking the import)
+///     from `util`, matched structurally without tracking the import)
 ///
 /// The `wrapped` callee is stored as its canonical textual form (e.g.
 /// `child_process.exec`).  Only single-argument calls are captured; wrappers

@@ -112,7 +112,7 @@ fn check_pred_succ_symmetry(body: &SsaBody, errors: &mut Vec<String>) {
                 ));
                 continue;
             }
-            if !body.blocks[sidx].preds.iter().any(|&p| p == block.id) {
+            if !body.blocks[sidx].preds.contains(&block.id) {
                 errors.push(format!(
                     "block {:?} lists succ {:?} but {:?} does not list {:?} as pred",
                     block.id, succ, succ, block.id
@@ -128,7 +128,7 @@ fn check_pred_succ_symmetry(body: &SsaBody, errors: &mut Vec<String>) {
                 ));
                 continue;
             }
-            if !body.blocks[pidx].succs.iter().any(|&s| s == block.id) {
+            if !body.blocks[pidx].succs.contains(&block.id) {
                 errors.push(format!(
                     "block {:?} lists pred {:?} but {:?} does not list {:?} as succ",
                     block.id, pred, pred, block.id
@@ -198,16 +198,16 @@ fn check_phi_placement_and_arity(body: &SsaBody, errors: &mut Vec<String>) {
                     block.id, inst.value
                 ));
             }
-            if let SsaOp::Phi(ref ops) = inst.op {
-                if ops.len() > block.preds.len() {
-                    errors.push(format!(
-                        "block {:?} phi for {:?} has {} operand(s) > {} pred(s)",
-                        block.id,
-                        inst.value,
-                        ops.len(),
-                        block.preds.len()
-                    ));
-                }
+            if let SsaOp::Phi(ref ops) = inst.op
+                && ops.len() > block.preds.len()
+            {
+                errors.push(format!(
+                    "block {:?} phi for {:?} has {} operand(s) > {} pred(s)",
+                    block.id,
+                    inst.value,
+                    ops.len(),
+                    block.preds.len()
+                ));
             }
         }
     }
@@ -218,7 +218,7 @@ fn check_phi_operand_sources(body: &SsaBody, errors: &mut Vec<String>) {
         for inst in &block.phis {
             if let SsaOp::Phi(ref ops) = inst.op {
                 for &(pred_bid, operand_value) in ops.iter() {
-                    if !block.preds.iter().any(|&p| p == pred_bid) {
+                    if !block.preds.contains(&pred_bid) {
                         errors.push(format!(
                             "block {:?} phi for {:?} references non-pred {:?} (preds: {:?})",
                             block.id, inst.value, pred_bid, block.preds

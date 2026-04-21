@@ -330,10 +330,10 @@ fn match_expectations(
     let mut matched = 0;
 
     for exp in expectations {
-        if let Some(ref m) = exp.modes {
-            if !m.iter().any(|s| s.eq_ignore_ascii_case(active_mode)) {
-                continue;
-            }
+        if let Some(ref m) = exp.modes
+            && !m.iter().any(|s| s.eq_ignore_ascii_case(active_mode))
+        {
+            continue;
         }
 
         // must_not_match wins over any other assertion combo.

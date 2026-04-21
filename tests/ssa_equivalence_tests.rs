@@ -160,13 +160,13 @@ fn diag_fingerprint(diags: &[Diag]) -> String {
     for d in diags {
         let _ = writeln!(
             out,
-            "{id}|{path}|{line}|{col}|{sev}|{cat}|{pv}|{gk}|{sup}",
+            "{id}|{path}|{line}|{col}|{sev}|{cat:?}|{pv}|{gk}|{sup}",
             id = d.id,
             path = d.path,
             line = d.line,
             col = d.col,
             sev = d.severity.as_db_str(),
-            cat = format!("{:?}", d.category),
+            cat = d.category,
             pv = d.path_validated,
             gk = d.guard_kind.as_deref().unwrap_or(""),
             sup = d.suppressed,
