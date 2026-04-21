@@ -352,6 +352,54 @@ State analysis requires `mode = "full"` or `mode = "taint"`. It has no effect in
 
 ---
 
+## Upgrading
+
+### Engine-version mismatch is handled automatically
+
+Nyx stores the scanner's `CARGO_PKG_VERSION` in the project index database.
+When the version recorded in the DB differs from the running binary — or the
+row is missing entirely — every cached summary, SSA body, and file-hash row
+is wiped on the next open so the next scan rebuilds the index against the new
+engine. No flag is needed; CI pipelines keep working across upgrades.
+
+The rebuild is logged at `info` level:
+
+```
+engine version changed (0.4.0 → 0.5.0), rebuilding index
+```
+
+If you see this once per upgrade it is working as intended. If you see it on
+every scan, the metadata row is not being persisted — file an issue.
+
+### Forcing a reindex
+
+Use `--index rebuild` to throw away the current project's cached summaries
+and re-run pass 1 against the current rules. Useful after editing
+`nyx.local` rules, after an upgrade that changed label definitions without
+changing the engine version, or when you want a known-clean baseline:
+
+```bash
+nyx scan --index rebuild .
+```
+
+This clears the current project's rows in `files`, `function_summaries`,
+`ssa_function_summaries`, and `ssa_function_bodies`; other projects sharing
+the same DB directory are untouched.
+
+### Recovering from a corrupt database
+
+If the `.sqlite` file itself is damaged (e.g. from a killed scan or full
+disk) and `nyx scan` fails to open it, delete the file and let the next
+scan recreate it:
+
+```bash
+rm "$(nyx config path)"/<project>.sqlite*
+```
+
+On the next scan Nyx builds a fresh index from scratch.
+
+---
+
 ## Reserved Fields
 
 Some config fields are defined but not yet implemented. They are marked `(RESERVED)` in the default config and accept values without effect. This allows forward-compatible config files — settings will activate when the feature is implemented without requiring config changes.

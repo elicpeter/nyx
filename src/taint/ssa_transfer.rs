@@ -400,16 +400,57 @@ pub struct SsaTaintEvent {
 }
 
 // ── Context-Sensitive Inline Analysis ──────────────────────────────────
+//
+// # Cache key scope and origin attribution
+//
+// The inline-analysis cache below ([`InlineCache`]) is keyed by
+// `(FuncKey, ArgTaintSig)`, where [`ArgTaintSig`] encodes **per-arg capability
+// bits only** — not the identity of the source [`TaintOrigin`]s that produced
+// those caps.  This is a deliberate trade-off:
+//
+// * **Soundness is preserved.**  Capability flow through the callee body is
+//   determined entirely by the seed caps; two callers with identical
+//   `ArgTaintSig` provably produce the same return caps and the same
+//   callee-internal sink activations.
+//
+// * **Origin attribution is non-deterministic across callers with matching
+//   caps but differing origins.**  The first caller to populate a cache entry
+//   writes its origin set into `return_taint.origins`; every later caller
+//   with the same `ArgTaintSig` reads back those origins and unions them
+//   into its own state.  Attribution remains deterministic within a single
+//   file analysis (the cache is a per-scope `RefCell` populated in a fixed
+//   traversal order), but an individual caller's finding may display an
+//   origin that was seeded by a sibling call site.
+//
+// The engine prefers cap-based correctness over origin-attribution stability.
+// If a future change makes origin identity load-bearing for a finding field
+// (e.g. a new `primary_source_site` attribution path that reads
+// `return_taint.origins` and trusts them to belong to the current caller),
+// the fix is to either (a) extend `ArgTaintSig` with a truncated origin-set
+// hash, accepting the resulting cache-miss cost, or (b) re-derive origins at
+// the call site from the caller's own argument taint rather than from the
+// cached `InlineResult`.  Today no downstream consumer assumes this — the
+// two read sites (inline-result return-taint union, cross-file summary
+// resolution) treat cached origins as best-effort provenance.
 
 /// Maximum SSA blocks in a callee body before skipping inline analysis.
 const MAX_INLINE_BLOCKS: usize = 500;
 
 /// Compact cache key: per-arg-position cap bits (sorted, non-empty only).
-/// Two calls with identical `ArgTaintSig` produce identical inline results.
+///
+/// Two calls with identical `ArgTaintSig` produce identical inline results
+/// for soundness purposes (return caps, callee-internal sink activations).
+/// Origin identity is **not** part of the key — see the module-level note
+/// above on origin-attribution non-determinism.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ArgTaintSig(SmallVec<[(usize, u16); 4]>);
 
 /// Cached result of inline-analyzing a callee with specific argument taint.
+///
+/// The `return_taint.origins` set is populated by the first caller that
+/// populated the cache entry; later callers with matching caps but different
+/// origins read back those same origins.  Cap bits are authoritative; origins
+/// are best-effort provenance.
 #[derive(Clone, Debug)]
 pub(crate) struct InlineResult {
     /// Taint on the return value after inline analysis.
@@ -421,7 +462,8 @@ pub(crate) struct InlineResult {
 /// Keyed by the callee's canonical [`FuncKey`] rather than a bare string name
 /// so that same-name definitions (e.g. two `process/1` methods on different
 /// classes in the same file) never share or overwrite each other's cache
-/// entries.
+/// entries.  See the module-level note above for the cap-vs-origin trade-off
+/// in the `ArgTaintSig` component of the key.
 pub(crate) type InlineCache = HashMap<(FuncKey, ArgTaintSig), InlineResult>;
 
 /// Minimal CFG node metadata embedded in cross-file callee bodies.
