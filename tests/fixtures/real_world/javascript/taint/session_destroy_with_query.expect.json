@@ -5,11 +5,9 @@
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [4, 9],
-      "evidence_contains": [],
-      "notes": "req.query.next is assigned to returnTo but never flows to a sink — session.destroy callback has static redirect"
+      "notes": "req.query.next is assigned to returnTo but never flows to a sink — must NOT fire (regression guard)"
     }
   ]
 }

@@ -23,13 +23,12 @@
     {
       "rule_id": "cfg-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         8,
         13
       ],
-      "evidence_contains": [],
-      "notes": "cfg-resource-leak may be suppressed by state-resource-leak on same line"
+      "notes": "Dedup: cfg-resource-leak suppressed by state-resource-leak on same line (regression guard)"
     }
   ]
 }

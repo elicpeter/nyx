@@ -13,19 +13,15 @@
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [7, 8],
-      "evidence_contains": [],
-      "notes": "parseFromString with text/xml — safe MIME, no finding"
+      "notes": "parseFromString with text/xml — safe MIME, must NOT fire (regression guard)"
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [10, 11],
-      "evidence_contains": [],
-      "notes": "parseFromString with application/xml — safe MIME, no finding"
+      "notes": "parseFromString with application/xml — safe MIME, must NOT fire (regression guard)"
     },
     {
       "rule_id": "taint-unsanitised-flow",
@@ -45,11 +41,9 @@
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [20, 21],
-      "evidence_contains": [],
-      "notes": "parseFromString with constant payload — dangerous MIME but safe payload, no finding"
+      "notes": "parseFromString with constant payload — dangerous MIME but safe payload, must NOT fire (regression guard)"
     }
   ]
 }

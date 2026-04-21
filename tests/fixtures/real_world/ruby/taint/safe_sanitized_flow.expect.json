@@ -13,13 +13,12 @@
     {
       "rule_id": "rb.cmdi.system_interp",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         5,
         5
       ],
-      "evidence_contains": [],
-      "notes": "noise: system() with Shellwords.escape-sanitized input; AST-level rule fires but input is properly sanitized in safe_* fixture"
+      "notes": "Shellwords.escape sanitizes input — rb.cmdi.system_interp must NOT fire (regression guard, Layer B suppression)"
     }
   ]
 }

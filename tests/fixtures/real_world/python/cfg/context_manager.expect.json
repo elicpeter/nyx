@@ -35,35 +35,32 @@
     {
       "rule_id": "cfg-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         8,
         8
       ],
-      "evidence_contains": [],
-      "notes": "noise: open() inside with statement \u2014 context manager auto-closes; scanner doesn't recognize with-block"
+      "notes": "open() inside with statement — context manager auto-closes; must NOT fire (regression guard for with-block recognition)"
     },
     {
       "rule_id": "state-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         13,
         13
       ],
-      "evidence_contains": [],
-      "notes": "noise: open() inside with statement in nested context \u2014 context manager auto-closes"
+      "notes": "open() inside with statement in nested context — must NOT fire (regression guard)"
     },
     {
       "rule_id": "state-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         14,
         14
       ],
-      "evidence_contains": [],
-      "notes": "noise: open() inside with statement in nested context \u2014 context manager auto-closes"
+      "notes": "open() inside with statement in nested context — must NOT fire (regression guard)"
     }
   ]
 }

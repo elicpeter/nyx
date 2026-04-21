@@ -24,13 +24,12 @@
     {
       "rule_id": "state-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         6,
         6
       ],
-      "evidence_contains": [],
-      "notes": "noise: state-resource-leak on fs.openSync in processFile; the fd IS properly closed in the finally block at line 13, so this is a false positive"
+      "notes": "fd IS properly closed in finally block at line 13 — state-resource-leak must NOT fire (regression guard for finally tracking)"
     },
     {
       "rule_id": "state-resource-leak-possible",
@@ -41,7 +40,7 @@
         6
       ],
       "evidence_contains": [],
-      "notes": "noise: state-resource-leak-possible on fs.openSync in processFile; the fd IS properly closed in the finally block at line 13, so this is a false positive"
+      "notes": "noise: state-resource-leak-possible fires because close is inside `if (fd !== undefined)` conditional; conservative may-leak signal is actually reasonable"
     }
   ]
 }

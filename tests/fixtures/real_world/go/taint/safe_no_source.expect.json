@@ -12,13 +12,12 @@
     {
       "rule_id": "state-resource-leak-possible",
       "severity": "LOW",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         13,
         13
       ],
-      "evidence_contains": [],
-      "notes": "noise: os.Open on line 13 in safe fixture \u2014 f.Close() is properly deferred on line 18"
+      "notes": "f.Close() properly deferred — state-resource-leak-possible must NOT fire (regression guard for defer)"
     }
   ]
 }

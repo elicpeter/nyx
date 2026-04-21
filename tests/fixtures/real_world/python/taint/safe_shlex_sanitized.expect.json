@@ -13,14 +13,12 @@
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         8,
         12
       ],
-      "evidence_contains": [],
-      "notes": "shlex.quote sanitizes shell metacharacters; should not fire if sanitizer is recognized"
+      "notes": "shlex.quote sanitizes shell metacharacters; must NOT fire (regression guard for CMD sanitizer)"
     }
   ]
 }

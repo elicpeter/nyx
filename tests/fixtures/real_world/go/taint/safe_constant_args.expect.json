@@ -12,24 +12,22 @@
     {
       "rule_id": "state-resource-leak-possible",
       "severity": "LOW",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         9,
         9
       ],
-      "evidence_contains": [],
-      "notes": "noise: os.Open on line 9 in safe fixture — f.Close() is properly deferred on line 14"
+      "notes": "f.Close() properly deferred on line 14 — state-resource-leak-possible must NOT fire (regression guard for defer)"
     },
     {
       "rule_id": "state-use-after-close",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         16,
         16
       ],
-      "evidence_contains": [],
-      "notes": "noise: f.Read on line 16 in safe fixture — f.Close() is deferred (line 14), f is still open here"
+      "notes": "f.Close() is deferred (line 14), f still open at line 16 — state-use-after-close must NOT fire (regression guard for defer-ordering)"
     }
   ]
 }

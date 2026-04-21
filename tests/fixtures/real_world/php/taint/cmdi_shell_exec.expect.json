@@ -35,13 +35,12 @@
     {
       "rule_id": "php.cmdi.system",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         8,
         8
       ],
-      "evidence_contains": [],
-      "notes": "noise: AST pattern match on shell_exec at line 8; the input is sanitized via escapeshellarg at line 7, making this a false positive from a taint perspective although the pattern match is technically correct"
+      "notes": "escapeshellarg sanitizes input at line 7 — php.cmdi.system must NOT fire on line 8 (regression guard, Layer B suppression)"
     }
   ]
 }

@@ -47,13 +47,12 @@
     {
       "rule_id": "java.xss.getwriter_print",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         11,
         11
       ],
-      "evidence_contains": [],
-      "notes": "response.getWriter().println(\"Done\") — constant string; Layer B correctly suppresses because taint confirmed no unsafe flow to this sink"
+      "notes": "response.getWriter().println(\"Done\") — constant string, Layer B suppresses (regression guard)"
     },
     {
       "rule_id": "taint-unsanitised-flow",

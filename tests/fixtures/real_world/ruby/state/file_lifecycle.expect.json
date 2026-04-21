@@ -48,35 +48,32 @@
     {
       "rule_id": "cfg-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         15,
         15
       ],
-      "evidence_contains": [],
-      "notes": "cfg-resource-leak for double_close — may be suppressed by state finding on same line"
+      "notes": "Dedup: cfg-resource-leak suppressed by state-double-close (regression guard)"
     },
     {
       "rule_id": "cfg-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         21,
         21
       ],
-      "evidence_contains": [],
-      "notes": "cfg-resource-leak for use_after_close — may be suppressed by state finding on same line"
+      "notes": "Dedup: cfg-resource-leak suppressed by state-use-after-close (regression guard)"
     },
     {
       "rule_id": "cfg-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         8,
         8
       ],
-      "evidence_contains": [],
-      "notes": "cfg-resource-leak for read_and_close — may be suppressed by state finding on same line"
+      "notes": "Properly closed: cfg-resource-leak must NOT fire on read_and_close (regression guard)"
     }
   ]
 }

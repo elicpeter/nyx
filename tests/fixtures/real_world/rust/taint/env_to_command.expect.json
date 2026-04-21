@@ -38,18 +38,9 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [17, 17],
-      "evidence_contains": [],
-      "notes": "TN: env::var at line 14 flows to Command::new at line 17 in run_safe_command; allowlist check (allowed.contains) now recognized as validation guard"
-    },
-    {
-      "rule_id": "taint-unsanitised-flow",
-      "severity": "HIGH",
-      "must_match": false,
-      "line_range": [17, 17],
-      "evidence_contains": [],
-      "notes": "noise: second taint flow to Command::new at line 17 from source 5:5 — cross-function leakage from run_user_command"
+      "notes": "run_safe_command is guarded by `allowed.contains(...)` allowlist check — no taint finding at line 17, regardless of source function (regression guard for validation-guard recognition and cross-function isolation)"
     }
   ]
 }

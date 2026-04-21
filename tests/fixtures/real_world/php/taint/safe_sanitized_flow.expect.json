@@ -13,13 +13,12 @@
     {
       "rule_id": "php.cmdi.system",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         5,
         5
       ],
-      "evidence_contains": [],
-      "notes": "noise: AST pattern match on system(\"ls \" . $safe) where $safe is sanitized via escapeshellarg at line 4; the input is properly sanitized, so this is not a real vulnerability"
+      "notes": "escapeshellarg sanitizes input — php.cmdi.system must NOT fire (regression guard, Layer B suppression)"
     }
   ]
 }

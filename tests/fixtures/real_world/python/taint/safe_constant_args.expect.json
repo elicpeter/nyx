@@ -12,24 +12,22 @@
     {
       "rule_id": "py.cmdi.os_system",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         4,
         4
       ],
-      "evidence_contains": [],
-      "notes": "noise: py.cmdi.os_system on os.system('ls -la /tmp') \u2014 AST pattern fires but args are hardcoded constants, no real vulnerability in this safe fixture"
+      "notes": "Constant arg to os.system — py.cmdi.os_system must NOT fire (regression guard)"
     },
     {
       "rule_id": "cfg-unguarded-sink",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         5,
         5
       ],
-      "evidence_contains": [],
-      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 5 \u2014 taint active but no confirmed flow"
+      "notes": "No taint source in fixture — cfg-unguarded-sink must NOT fire (regression guard)"
     }
   ]
 }

@@ -5,11 +5,9 @@
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [5, 8],
-      "evidence_contains": [],
-      "notes": "DOMPurify.sanitize applied before destructuring — bindings are safe"
+      "notes": "DOMPurify.sanitize applied before destructuring — bindings are safe (regression guard)"
     }
   ]
 }

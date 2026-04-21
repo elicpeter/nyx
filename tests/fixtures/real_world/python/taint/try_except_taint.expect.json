@@ -24,13 +24,12 @@
     {
       "rule_id": "py.cmdi.os_system",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         4,
         4
       ],
-      "evidence_contains": [],
-      "notes": "noise: AST pattern match suppressed by Layer B — taint finding at same sink confirms the vulnerability"
+      "notes": "Layer B suppression: AST pattern must NOT fire when taint finding at same sink confirms (regression guard)"
     }
   ]
 }

@@ -23,14 +23,12 @@
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         21,
         25
       ],
-      "evidence_contains": [],
-      "notes": "Case 2: tainted.passthrough('safe') — offset maps param 0 to 'safe' (not tainted), so no finding"
+      "notes": "Case 2: tainted.passthrough('safe') — offset maps param 0 to 'safe' (not tainted), so no finding (regression guard)"
     }
   ]
 }

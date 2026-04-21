@@ -5,11 +5,9 @@
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [4, 8],
-      "evidence_contains": [],
-      "notes": "req.session.destroy with static callback and /login redirect should not fire"
+      "notes": "req.session.destroy with static callback and /login redirect must NOT fire (regression guard)"
     }
   ]
 }

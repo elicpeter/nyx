@@ -12,24 +12,22 @@
     {
       "rule_id": "rb.cmdi.system_interp",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         1,
         1
       ],
-      "evidence_contains": [],
-      "notes": "noise: rb.cmdi.system_interp AST pattern fires on constant/sanitized args in safe fixture"
+      "notes": "Constant arg to system — rb.cmdi.system_interp must NOT fire (regression guard)"
     },
     {
       "rule_id": "rb.cmdi.system_interp",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         2,
         2
       ],
-      "evidence_contains": [],
-      "notes": "noise: rb.cmdi.system_interp AST pattern fires on constant/sanitized args in safe fixture"
+      "notes": "Constant arg to system — rb.cmdi.system_interp must NOT fire (regression guard)"
     }
   ]
 }

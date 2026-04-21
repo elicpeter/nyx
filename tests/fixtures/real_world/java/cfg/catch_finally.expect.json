@@ -22,13 +22,12 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         10,
         11
       ],
-      "evidence_contains": [],
-      "notes": "noise: exception message e.getMessage() flows to System.err.println \u2014 standard error handling, not a security issue"
+      "notes": "e.getMessage() → System.err.println is standard error handling, not a security issue — must NOT fire (regression guard for known-safe callee exclusion)"
     }
   ]
 }

@@ -46,24 +46,22 @@
     {
       "rule_id": "cfg-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         11,
         11
       ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+      "notes": "Duplicate-suppression: cfg-resource-leak deduplicates against state findings (regression guard)"
     },
     {
       "rule_id": "cfg-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         12,
         12
       ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-resource-leak — low-value duplicate of more specific findings"
+      "notes": "Duplicate-suppression: cfg-resource-leak deduplicates against state findings (regression guard)"
     }
   ]
 }

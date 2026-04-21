@@ -13,11 +13,9 @@
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [13, 22],
-      "evidence_contains": [],
-      "notes": "DOMPurify.sanitize strips cap so res.send in catch should NOT fire"
+      "notes": "DOMPurify.sanitize strips cap so res.send in catch must NOT fire (regression guard)"
     }
   ]
 }

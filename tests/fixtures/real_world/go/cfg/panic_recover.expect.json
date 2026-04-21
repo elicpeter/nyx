@@ -23,13 +23,12 @@
     {
       "rule_id": "state-use-after-close",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         26,
         26
       ],
-      "evidence_contains": [],
-      "notes": "noise: f.Read on line 26 in safeOperation \u2014 f.Close() is deferred (line 24), f is still open here"
+      "notes": "f.Close() is deferred (line 24), f still open at read on line 26 — state-use-after-close must NOT fire (regression guard for defer-ordering)"
     }
   ]
 }

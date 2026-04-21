@@ -13,11 +13,9 @@
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [6, 7],
-      "evidence_contains": [],
-      "notes": "DOMPurify.sanitize strips HTML_ESCAPE cap so document.write should NOT fire"
+      "notes": "DOMPurify.sanitize strips HTML_ESCAPE cap so document.write must NOT fire (regression guard)"
     },
     {
       "rule_id": "js.xss.document_write",
@@ -33,7 +31,7 @@
       "must_match": false,
       "line_range": [7, 7],
       "evidence_contains": [],
-      "notes": "noise: document.write after DOMPurify.sanitize — AST pattern cannot track sanitization"
+      "notes": "noise: document.write after DOMPurify.sanitize — AST pattern cannot track sanitization (Layer B suppression still relies on taint signal)"
     }
   ]
 }

@@ -5,11 +5,9 @@
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [4, 8],
-      "evidence_contains": [],
-      "notes": "obj.safe overwritten with constant; field-aware suppression should prevent base ident bleed"
+      "notes": "obj.safe overwritten with constant; field-aware suppression must prevent base ident bleed (regression guard)"
     }
   ]
 }

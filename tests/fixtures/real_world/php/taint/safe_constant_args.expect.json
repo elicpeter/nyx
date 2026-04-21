@@ -12,24 +12,22 @@
     {
       "rule_id": "php.cmdi.system",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         3,
         3
       ],
-      "evidence_contains": [],
-      "notes": "noise: php.cmdi.system AST pattern fires on constant/sanitized args in safe fixture"
+      "notes": "Constant string arg — php.cmdi.system must NOT fire (regression guard)"
     },
     {
       "rule_id": "php.cmdi.system",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         4,
         4
       ],
-      "evidence_contains": [],
-      "notes": "noise: php.cmdi.system AST pattern fires on constant/sanitized args in safe fixture"
+      "notes": "Constant string arg — php.cmdi.system must NOT fire (regression guard)"
     }
   ]
 }

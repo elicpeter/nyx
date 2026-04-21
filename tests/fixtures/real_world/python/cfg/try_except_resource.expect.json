@@ -52,7 +52,7 @@
         6
       ],
       "evidence_contains": [],
-      "notes": "noise: resource leak finding \u2014 secondary to primary fixture purpose"
+      "notes": "noise: cursor not explicitly closed even though conn is \u2014 aspirational cursor-ownership tracking"
     }
   ]
 }

@@ -13,11 +13,9 @@
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [10, 10],
-      "evidence_contains": [],
-      "notes": "Parameterized query with ? and bind array — safe, must NOT fire"
+      "notes": "Parameterized query with ? and bind array — safe, must NOT fire (regression guard)"
     },
     {
       "rule_id": "state-resource-leak",

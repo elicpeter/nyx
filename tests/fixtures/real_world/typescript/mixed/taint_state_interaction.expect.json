@@ -22,18 +22,16 @@
     {
       "rule_id": "state-resource-leak",
       "severity": "LOW",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [16, 16],
-      "evidence_contains": [],
-      "notes": "FP: processUserFileSafe uses try/finally — state engine does not model finally for TS"
+      "notes": "processUserFileSafe uses try/finally — state-resource-leak must NOT fire (regression guard for TS finally tracking)"
     },
     {
       "rule_id": "cfg-resource-leak",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [16, 16],
-      "evidence_contains": [],
-      "notes": "noise: fs.openSync in processUserFileSafe uses try/finally to ensure close; no leak path"
+      "notes": "fs.openSync closed via try/finally — cfg-resource-leak must NOT fire (regression guard)"
     }
   ]
 }

@@ -12,13 +12,12 @@
     {
       "rule_id": "cfg-unguarded-sink",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         6,
         6
       ],
-      "evidence_contains": [],
-      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 6 \u2014 taint active but no confirmed flow"
+      "notes": "No taint source in fixture — cfg-unguarded-sink must NOT fire (regression guard)"
     }
   ]
 }
