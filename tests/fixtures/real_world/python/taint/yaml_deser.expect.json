@@ -25,13 +25,14 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         6,
         12
       ],
+      "modes": ["full"],
       "evidence_contains": [],
-      "notes": "User data flows into yaml.load - aspirational taint finding"
+      "notes": "User data flows into yaml.load (full mode only; AST mode does not run taint analysis)"
     },
     {
       "rule_id": "cfg-unguarded-sink",

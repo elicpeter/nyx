@@ -808,6 +808,7 @@ fn first_member_text(n: Node, code: &[u8]) -> Option<String> {
     }
 }
 
+
 /// Check whether any descendant of `n` is a call expression.
 /// Collect function-expression nodes nested inside a call's arguments.
 ///
@@ -1739,10 +1740,18 @@ fn has_only_literal_args(call_node: Node, code: &[u8]) -> bool {
         return false;
     };
     let mut cursor = args.walk();
+    let mut any_arg = false;
     for ch in args.named_children(&mut cursor) {
+        any_arg = true;
         if !is_syntactic_literal(ch, code) {
             return false;
         }
+    }
+    // Zero-arg calls are not "all literal" — taint can still flow via a
+    // non-literal receiver (e.g. `tainted.readObject()`), and the sink-
+    // suppression gate (`info.all_args_literal`) must not skip these.
+    if !any_arg {
+        return false;
     }
     // Walk nested call expressions in the callee chain.
     check_inner_call_args(call_node, code)

@@ -108,6 +108,14 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::DESERIALIZE),
         case_sensitive: false,
     },
+    // Reflection / dynamic class resolution — arbitrary class instantiation from
+    // user-controlled names enables gadget chains (similar risk profile to
+    // deserialization). Rails adds `constantize`/`safe_constantize` to String.
+    LabelRule {
+        matchers: &["constantize", "safe_constantize"],
+        label: DataLabel::Sink(Cap::DESERIALIZE),
+        case_sensitive: false,
+    },
     // SQL injection: ActiveRecord unsafe raw-query execution APIs.
     LabelRule {
         matchers: &["find_by_sql", "connection.execute", "select_all"],

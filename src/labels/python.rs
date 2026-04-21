@@ -32,6 +32,11 @@ pub static RULES: &[LabelRule] = &[
             "flask_request.files",
             "flask_request.data",
             "flask_request.values",
+            // Flask request methods (method-call form of the attributes above)
+            "request.get_data",
+            "request.get_json",
+            "flask_request.get_data",
+            "flask_request.get_json",
             "input",
         ],
         label: DataLabel::Source(Cap::all()),
