@@ -301,12 +301,10 @@ pub fn analyze(
                         }
                     }
                 }
-                SsaOp::Assign(uses) => {
-                    if uses.len() != 1 {
-                        for &u in uses {
-                            if let Some(canon) = canonicalise(u) {
-                                invalid.insert(canon);
-                            }
+                SsaOp::Assign(uses) if uses.len() != 1 => {
+                    for &u in uses {
+                        if let Some(canon) = canonicalise(u) {
+                            invalid.insert(canon);
                         }
                     }
                 }

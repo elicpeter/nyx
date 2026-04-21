@@ -409,7 +409,7 @@ pub(crate) fn deduplicate_taint_flows(diags: &mut Vec<Diag>) {
             continue;
         }
         let mut scored: Vec<(usize, _)> = indices.iter().map(|&i| (i, score(&diags[i]))).collect();
-        scored.sort_by(|a, b| a.1.cmp(&b.1));
+        scored.sort_by_key(|a| a.1);
         // Keep scored[0], drop the rest.
         for &(i, _) in scored.iter().skip(1) {
             drop.push(i);
