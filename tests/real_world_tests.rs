@@ -39,6 +39,20 @@ struct RealWorldExpectations {
     /// Which analysis modes this fixture targets.
     #[serde(default = "default_modes")]
     modes: Vec<String>,
+    /// Rule-id prefixes whose unexpected findings promote from
+    /// informational to hard failure. A diag is "unexpected" if it is
+    /// not consumed by any `expected` entry; if its `id` starts with any
+    /// prefix here, the suite fails. Default empty → all extras remain
+    /// informational (pre-existing behavior).
+    ///
+    /// Use this to lock in precision for fixtures whose expected set is
+    /// exhaustive for a given rule family. Typical value:
+    /// `["taint-unsanitised-flow"]` — any extra taint flow is a
+    /// precision regression. AST-pattern families (`*.code_exec.*`,
+    /// `*.quality.*`) are intentionally excluded by default since they
+    /// fire syntactically and bystander triggers aren't precision drift.
+    #[serde(default)]
+    strict_unexpected: Vec<String>,
     /// Expected findings.
     expected: Vec<ExpectedFinding>,
 }
@@ -242,6 +256,9 @@ struct MatchResult {
     forbidden_violations: Vec<(ExpectedFinding, Diag)>,
     count_violations: Vec<(ExpectedFinding, usize)>,
     unexpected: Vec<Diag>,
+    /// Subset of `unexpected` whose rule-id matched a `strict_unexpected`
+    /// prefix for this fixture — these cause hard failure.
+    strict_unexpected: Vec<Diag>,
     matched: usize,
 }
 
@@ -303,6 +320,7 @@ fn match_expectations(
     expectations: &[ExpectedFinding],
     fixture_file: &str,
     active_mode: &str,
+    strict_prefixes: &[String],
 ) -> MatchResult {
     let mut hard_misses = Vec::new();
     let mut soft_misses = Vec::new();
@@ -395,7 +413,9 @@ fn match_expectations(
         }
     }
 
-    // Unexpected = diags not matched by any expectation (informational only).
+    // Unexpected = diags not matched by any expectation. Informational by
+    // default; promoted to hard-failure if the fixture's `strict_unexpected`
+    // list contains a prefix of the diag's rule-id.
     let unexpected: Vec<Diag> = diags
         .iter()
         .enumerate()
@@ -403,12 +423,23 @@ fn match_expectations(
         .map(|(_, d)| d.clone())
         .collect();
 
+    let strict_unexpected: Vec<Diag> = if strict_prefixes.is_empty() {
+        Vec::new()
+    } else {
+        unexpected
+            .iter()
+            .filter(|d| strict_prefixes.iter().any(|p| d.id.starts_with(p)))
+            .cloned()
+            .collect()
+    };
+
     MatchResult {
         hard_misses,
         soft_misses,
         forbidden_violations,
         count_violations,
         unexpected,
+        strict_unexpected,
         matched,
     }
 }
@@ -533,12 +564,14 @@ fn real_world_fixture_suite() {
     let mut total_soft_misses = 0;
     let mut total_forbidden = 0;
     let mut total_count_violations = 0;
+    let mut total_strict_unexpected = 0;
     let mut total_matched = 0;
     let mut total_unexpected = 0;
     let mut failure_details: Vec<String> = Vec::new();
     let mut soft_miss_details: Vec<String> = Vec::new();
     let mut forbidden_details: Vec<String> = Vec::new();
     let mut count_violation_details: Vec<String> = Vec::new();
+    let mut strict_unexpected_details: Vec<String> = Vec::new();
 
     // Reject (must_not_match && max_count) at parse time. `must_not_match`
     // overrides `must_match` in `match_expectations` (pre-existing semantics),
@@ -568,8 +601,13 @@ fn real_world_fixture_suite() {
                 .to_string_lossy()
                 .to_string();
 
-            let result =
-                match_expectations(&diags, &fixture.expectations.expected, &fixture_file, mode_str);
+            let result = match_expectations(
+                &diags,
+                &fixture.expectations.expected,
+                &fixture_file,
+                mode_str,
+                &fixture.expectations.strict_unexpected,
+            );
 
             total_matched += result.matched;
             total_unexpected += result.unexpected.len();
@@ -603,6 +641,24 @@ fn real_world_fixture_suite() {
                 total_forbidden += result.forbidden_violations.len();
             }
 
+            if !result.strict_unexpected.is_empty() {
+                let prefixes = fixture.expectations.strict_unexpected.join(",");
+                let mut msg = format!(
+                    "STRICT {fixture_label} [{mode_str}] (prefixes=[{prefixes}]):"
+                );
+                for d in &result.strict_unexpected {
+                    msg.push_str(&format!(
+                        "\n       STRICT unexpected: {}:{} [{}] {} — not consumed by any expectation",
+                        d.path,
+                        d.line,
+                        d.severity.as_db_str(),
+                        d.id
+                    ));
+                }
+                strict_unexpected_details.push(msg);
+                total_strict_unexpected += result.strict_unexpected.len();
+            }
+
             if !result.count_violations.is_empty() {
                 let mut msg = format!("COUNT {fixture_label} [{mode_str}]:");
                 for (exp, count) in &result.count_violations {
@@ -631,11 +687,12 @@ fn real_world_fixture_suite() {
 
             if verbose {
                 eprintln!(
-                    "  {fixture_label} [{mode_str}]: {} matched, {} hard misses, {} forbidden, {} count violations, {} soft misses, {} unexpected",
+                    "  {fixture_label} [{mode_str}]: {} matched, {} hard misses, {} forbidden, {} count violations, {} strict unexpected, {} soft misses, {} unexpected",
                     result.matched,
                     result.hard_misses.len(),
                     result.forbidden_violations.len(),
                     result.count_violations.len(),
+                    result.strict_unexpected.len(),
                     result.soft_misses.len(),
                     result.unexpected.len()
                 );
@@ -660,11 +717,12 @@ fn real_world_fixture_suite() {
     // Print summary.
     eprintln!("\n────────────────────────────────────────────────────");
     eprintln!(
-        "RESULTS: {} matched, {} hard failures, {} forbidden violations, {} count violations, {} soft misses, {} unexpected",
+        "RESULTS: {} matched, {} hard failures, {} forbidden violations, {} count violations, {} strict unexpected, {} soft misses, {} unexpected",
         total_matched,
         total_hard_fails,
         total_forbidden,
         total_count_violations,
+        total_strict_unexpected,
         total_soft_misses,
         total_unexpected
     );
@@ -691,6 +749,15 @@ fn real_world_fixture_suite() {
         }
     }
 
+    if !strict_unexpected_details.is_empty() {
+        eprintln!(
+            "\n=== STRICT UNEXPECTED (unconsumed diag matched fixture's strict_unexpected prefix) ==="
+        );
+        for msg in &strict_unexpected_details {
+            eprintln!("{msg}");
+        }
+    }
+
     if !soft_miss_details.is_empty() {
         eprintln!("\n=== SOFT MISSES (must_match=false, informational) ===");
         for msg in &soft_miss_details {
@@ -698,13 +765,17 @@ fn real_world_fixture_suite() {
         }
     }
 
-    // Hard failures, forbidden violations, and count violations cause failure.
+    // Hard failures, forbidden violations, count violations, and strict
+    // unexpected findings all cause failure. Soft misses and unexpected diags
+    // outside the strict_unexpected prefix set remain informational.
     assert_eq!(
-        total_hard_fails + total_forbidden + total_count_violations,
+        total_hard_fails + total_forbidden + total_count_violations + total_strict_unexpected,
         0,
         "{total_hard_fails} expected findings not found (must_match=true); \
          {total_forbidden} forbidden findings present (must_not_match=true); \
-         {total_count_violations} count violations (max_count exceeded). \
+         {total_count_violations} count violations (max_count exceeded); \
+         {total_strict_unexpected} strict-unexpected diags (unconsumed finding matched a \
+         fixture's strict_unexpected prefix). \
          Run with NYX_TEST_VERBOSE=1 for details."
     );
 }
