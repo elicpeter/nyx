@@ -344,6 +344,30 @@ pub fn param_config(lang: &str) -> &'static ParamConfig {
         .unwrap_or(&DEFAULT_PARAM_CONFIG)
 }
 
+/// Lowercase names whose use as a JS/TS function parameter strongly suggests
+/// the binding carries attacker-controlled input (handler dispatch functions,
+/// controller methods, command wrappers).  When the taint engine enters a
+/// function whose formal parameter matches one of these names and no caller
+/// taint has been supplied, it auto-seeds the parameter as a `UserInput`
+/// source so sinks downstream of the parameter still fire.
+const JS_TS_HANDLER_PARAM_NAMES: &[&str] = &[
+    "userinput",
+    "userid",
+    "payload",
+    "cmd",
+    "input",
+];
+
+/// Check whether a JS/TS formal parameter name strongly implies user input.
+pub fn is_js_ts_handler_param_name(name: &str) -> bool {
+    if name.is_empty() || !name.is_ascii() {
+        return false;
+    }
+    JS_TS_HANDLER_PARAM_NAMES
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(name))
+}
+
 #[inline(always)]
 pub fn lookup(lang: &str, raw: &str) -> Kind {
     CLASSIFIERS

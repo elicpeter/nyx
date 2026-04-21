@@ -24,13 +24,13 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         4,
         8
       ],
       "evidence_contains": [],
-      "notes": "userInput is a function param, not a recognized source; requires interprocedural analysis"
+      "notes": "userInput flows to eval via handler param-as-source heuristic"
     },
     {
       "rule_id": "taint-unsanitised-flow",

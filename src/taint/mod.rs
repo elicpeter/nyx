@@ -355,6 +355,7 @@ fn analyse_body_with_seed(
                     Some(&opt.module_aliases)
                 },
                 static_map: static_map_opt.as_ref(),
+                auto_seed_handler_params: matches!(lang, Lang::JavaScript | Lang::TypeScript),
             };
             let (events, block_states) =
                 ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);

@@ -561,6 +561,13 @@ pub struct SsaTaintTransfer<'a> {
     /// suppression can clear command-injection findings whose payload is
     /// provably metacharacter-free.
     pub static_map: Option<&'a crate::ssa::static_map::StaticMapResult>,
+    /// When `true`, JS/TS formal parameters whose names strongly imply user
+    /// input (see [`crate::labels::is_js_ts_handler_param_name`]) are
+    /// auto-seeded with a `UserInput` source on entry.  Defaults to `false`
+    /// so summary probes and non-JS/TS pipelines keep their existing
+    /// baseline-subtraction semantics; the findings pipeline flips this on
+    /// to detect handler-style flows that have no registered caller.
+    pub auto_seed_handler_params: bool,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -1629,6 +1636,7 @@ fn inline_analyse_callee(
         import_bindings: transfer.import_bindings,
         module_aliases: None, // callee body has its own const_values; module aliases not propagated
         static_map: None, // static-map seeding is caller-body local, not propagated to inlined callees
+        auto_seed_handler_params: transfer.auto_seed_handler_params,
     };
 
     // Use the callee's own body graph for inline analysis (per-body CFGs
@@ -2472,6 +2480,7 @@ fn transfer_inst(
             // `SelfParam` receives the same treatment as positional `Param`:
             // both represent inbound values whose taint comes from the
             // surrounding scope via the global seed map.
+            let mut seeded_from_scope = false;
             if let Some(seed) = &transfer.global_seed {
                 if let Some(var_name) = ssa
                     .value_defs
@@ -2499,6 +2508,41 @@ fn transfer_inst(
                                 caps: taint.caps,
                                 origins: remapped_origins,
                                 uses_summary: true,
+                            },
+                        );
+                        seeded_from_scope = true;
+                    }
+                }
+            }
+
+            // Handler-param auto-seed: JS/TS formal parameters whose names
+            // imply user input (e.g. `userInput`, `payload`, `cmd`) start
+            // tainted so downstream sinks still fire when a function has
+            // no registered caller (typical for controller methods and
+            // handler dispatch functions). Skipped in summary-extraction
+            // mode so baseline probes keep their intrinsic-source contract.
+            if transfer.auto_seed_handler_params
+                && !seeded_from_scope
+                && matches!(&inst.op, SsaOp::Param { .. })
+                && matches!(transfer.lang, Lang::JavaScript | Lang::TypeScript)
+            {
+                if let Some(var_name) = ssa
+                    .value_defs
+                    .get(inst.value.0 as usize)
+                    .and_then(|vd| vd.var_name.as_deref())
+                {
+                    if crate::labels::is_js_ts_handler_param_name(var_name) {
+                        let origin = TaintOrigin {
+                            node: inst.cfg_node,
+                            source_kind: SourceKind::UserInput,
+                            source_span: None,
+                        };
+                        state.set(
+                            inst.value,
+                            VarTaint {
+                                caps: Cap::all(),
+                                origins: SmallVec::from_elem(origin, 1),
+                                uses_summary: false,
                             },
                         );
                     }
@@ -6112,6 +6156,7 @@ pub fn extract_ssa_func_summary(
             import_bindings: None,
             module_aliases,
             static_map: None,
+            auto_seed_handler_params: false,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);
@@ -6319,6 +6364,7 @@ pub fn extract_ssa_func_summary(
             import_bindings: None,
             module_aliases: None,
             static_map: None,
+            auto_seed_handler_params: false,
         };
         detect_source_to_callback_from_states(
             ssa,
