@@ -1,5 +1,5 @@
 {
-  "description": "Stream operations with SQL concat in map and exec in forEach lambda",
+  "description": "Stream operations with SQL concat in map lambda and exec in forEach lambda — both sinks must fire from inside lambda bodies",
   "tags": [
     "cfg",
     "sqli",
@@ -14,32 +14,33 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
+      "modes": ["full"],
       "line_range": [
-        10,
-        17
+        18,
+        25
       ],
       "evidence_contains": [],
-      "notes": "cmd parameter inside lambda flows to Runtime.exec \u2014 scanner may not track taint through lambda bodies"
+      "notes": "cmd lambda parameter (handler-param name) auto-seeded as UserInput flows to Runtime.exec inside forEach lambda body"
     },
     {
       "rule_id": "java.sqli.execute_concat",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         6,
-        10
+        16
       ],
       "evidence_contains": [],
-      "notes": "SQL string concatenation inside stream map lambda \u2014 AST pattern may not match inside lambda context"
+      "notes": "SQL string concatenation inside executeQuery call inside stream map lambda body — AST pattern descends into lambda bodies"
     },
     {
       "rule_id": "java.cmdi.runtime_exec",
       "severity": "HIGH",
       "must_match": true,
       "line_range": [
-        15,
-        15
+        22,
+        22
       ],
       "evidence_contains": [],
       "notes": "Runtime.getRuntime().exec(cmd) inside forEach lambda; AST pattern correctly matches the exec call"
@@ -49,11 +50,11 @@
       "severity": "MEDIUM",
       "must_match": false,
       "line_range": [
-        13,
-        13
+        22,
+        22
       ],
       "evidence_contains": [],
-      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 13 \u2014 taint active but no confirmed flow"
+      "notes": "structural: cfg-unguarded-sink on Runtime.exec sink inside forEach lambda"
     }
   ]
 }

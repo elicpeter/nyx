@@ -2522,16 +2522,17 @@ fn transfer_inst(
                 }
             }
 
-            // Handler-param auto-seed: JS/TS formal parameters whose names
-            // imply user input (e.g. `userInput`, `payload`, `cmd`) start
-            // tainted so downstream sinks still fire when a function has
-            // no registered caller (typical for controller methods and
-            // handler dispatch functions). Skipped in summary-extraction
-            // mode so baseline probes keep their intrinsic-source contract.
+            // Handler-param auto-seed: formal parameters whose names imply
+            // user input (e.g. `userInput`, `payload`, `cmd`) start tainted
+            // so downstream sinks still fire when a function has no
+            // registered caller (typical for controller methods, handler
+            // dispatch functions, and stream lambda bodies). Skipped in
+            // summary-extraction mode so baseline probes keep their
+            // intrinsic-source contract. Gate is set by the caller — e.g.
+            // always-on for JS/TS, only AnonymousFunction bodies for Java.
             if transfer.auto_seed_handler_params
                 && !seeded_from_scope
                 && matches!(&inst.op, SsaOp::Param { .. })
-                && matches!(transfer.lang, Lang::JavaScript | Lang::TypeScript)
             {
                 if let Some(var_name) = ssa
                     .value_defs

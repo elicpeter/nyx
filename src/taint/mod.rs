@@ -286,8 +286,15 @@ fn analyse_body_with_seed(
     // i.e. the parent body actually has taint to propagate.  Without a seed,
     // Param ops would just introduce unused SSA values.
     let has_nonempty_seed = seed.is_some_and(|s| !s.is_empty());
-    let use_scoped_lowering =
-        !is_toplevel && (matches!(lang, Lang::JavaScript | Lang::TypeScript) || has_nonempty_seed);
+    // Scoped lowering creates SsaOp::Param ops for formal parameters, required
+    // for handler-param auto-seeding to fire. Java lambda bodies need this too
+    // so that `cmd -> Runtime.exec(cmd)` picks up `cmd` as a handler param.
+    let is_java_lambda =
+        lang == Lang::Java && body.meta.kind == crate::cfg::BodyKind::AnonymousFunction;
+    let use_scoped_lowering = !is_toplevel
+        && (matches!(lang, Lang::JavaScript | Lang::TypeScript)
+            || has_nonempty_seed
+            || is_java_lambda);
     let ssa_result = if use_scoped_lowering {
         let func_name = body
             .meta
@@ -356,7 +363,9 @@ fn analyse_body_with_seed(
                     Some(&opt.module_aliases)
                 },
                 static_map: static_map_opt.as_ref(),
-                auto_seed_handler_params: matches!(lang, Lang::JavaScript | Lang::TypeScript),
+                auto_seed_handler_params: matches!(lang, Lang::JavaScript | Lang::TypeScript)
+                    || (lang == Lang::Java
+                        && body.meta.kind == crate::cfg::BodyKind::AnonymousFunction),
             };
             let (events, block_states) =
                 ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);
