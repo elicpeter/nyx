@@ -643,9 +643,8 @@ fn real_world_fixture_suite() {
 
             if !result.strict_unexpected.is_empty() {
                 let prefixes = fixture.expectations.strict_unexpected.join(",");
-                let mut msg = format!(
-                    "STRICT {fixture_label} [{mode_str}] (prefixes=[{prefixes}]):"
-                );
+                let mut msg =
+                    format!("STRICT {fixture_label} [{mode_str}] (prefixes=[{prefixes}]):");
                 for d in &result.strict_unexpected {
                     msg.push_str(&format!(
                         "\n       STRICT unexpected: {}:{} [{}] {} — not consumed by any expectation",

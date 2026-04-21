@@ -813,7 +813,6 @@ fn first_member_text(n: Node, code: &[u8]) -> Option<String> {
     }
 }
 
-
 /// Check whether any descendant of `n` is a call expression.
 /// Collect function-expression nodes nested inside a call's arguments.
 ///
@@ -8448,7 +8447,10 @@ mod cfg_tests {
         let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
         let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
         assert_eq!(
-            file_cfg.promisify_aliases.get("run").map(|a| a.wrapped.as_str()),
+            file_cfg
+                .promisify_aliases
+                .get("run")
+                .map(|a| a.wrapped.as_str()),
             Some("foo")
         );
     }

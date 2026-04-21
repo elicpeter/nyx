@@ -356,13 +356,7 @@ pub fn param_config(lang: &str) -> &'static ParamConfig {
 /// function whose formal parameter matches one of these names and no caller
 /// taint has been supplied, it auto-seeds the parameter as a `UserInput`
 /// source so sinks downstream of the parameter still fire.
-const JS_TS_HANDLER_PARAM_NAMES: &[&str] = &[
-    "userinput",
-    "userid",
-    "payload",
-    "cmd",
-    "input",
-];
+const JS_TS_HANDLER_PARAM_NAMES: &[&str] = &["userinput", "userid", "payload", "cmd", "input"];
 
 /// Check whether a JS/TS formal parameter name strongly implies user input.
 ///
