@@ -57,6 +57,11 @@ struct ExpectedFinding {
     /// If true, missing this finding is a hard failure. If false, it's a soft miss.
     #[serde(default = "default_must_match")]
     must_match: bool,
+    /// If true, presence of a matching finding is a hard failure (regression guard).
+    /// Overrides `must_match`. Useful for locking in FP suppressions — sanitizer
+    /// wrappers, gated sinks, field-aware absence, Layer-B suppressions, etc.
+    #[serde(default)]
+    must_not_match: bool,
     /// Line number or range [start, end] where finding should appear.
     #[serde(default)]
     line_range: Option<(usize, usize)>,
@@ -217,8 +222,62 @@ fn scan_fixture(fixture: &Fixture, mode: AnalysisMode) -> Vec<Diag> {
 struct MatchResult {
     hard_misses: Vec<(ExpectedFinding, String)>,
     soft_misses: Vec<(ExpectedFinding, String)>,
+    forbidden_violations: Vec<(ExpectedFinding, Diag)>,
     unexpected: Vec<Diag>,
     matched: usize,
+}
+
+fn diag_matches_expectation(d: &Diag, exp: &ExpectedFinding, fixture_file: &str) -> bool {
+    if !d.id.contains(&exp.rule_id) {
+        return false;
+    }
+    if !d.path.contains(fixture_file) && fixture_file != d.path {
+        return false;
+    }
+    if let Some(ref sev) = exp.severity
+        && d.severity.as_db_str() != sev.to_uppercase()
+    {
+        return false;
+    }
+    if let Some((start, end)) = exp.line_range
+        && (d.line < start || d.line > end)
+    {
+        return false;
+    }
+    for substr in &exp.evidence_contains {
+        let msg = d.message.as_deref().unwrap_or("");
+        let ev_text = if let Some(ev) = &d.evidence {
+            let mut parts = Vec::new();
+            if let Some(src) = &ev.source {
+                parts.push(format!(
+                    "source: {}",
+                    src.snippet.as_deref().unwrap_or(&src.kind)
+                ));
+            }
+            if let Some(snk) = &ev.sink {
+                parts.push(format!(
+                    "sink: {}",
+                    snk.snippet.as_deref().unwrap_or(&snk.kind)
+                ));
+            }
+            for note in &ev.notes {
+                parts.push(note.clone());
+            }
+            if let Some(ref sym) = ev.symbolic
+                && let Some(ref w) = sym.witness
+            {
+                parts.push(w.clone());
+            }
+            parts.join(" ")
+        } else {
+            String::new()
+        };
+        let combined = format!("{msg} {ev_text}");
+        if !combined.to_lowercase().contains(&substr.to_lowercase()) {
+            return false;
+        }
+    }
+    true
 }
 
 fn match_expectations(
@@ -228,73 +287,35 @@ fn match_expectations(
 ) -> MatchResult {
     let mut hard_misses = Vec::new();
     let mut soft_misses = Vec::new();
+    let mut forbidden_violations = Vec::new();
     let mut matched_indices: Vec<bool> = vec![false; diags.len()];
     let mut matched = 0;
 
     for exp in expectations {
-        let found = diags.iter().enumerate().any(|(i, d)| {
-            if matched_indices[i] {
-                return false;
-            }
-            if !d.id.contains(&exp.rule_id) {
-                return false;
-            }
-            // Check file
-            if !d.path.contains(fixture_file) && fixture_file != d.path {
-                return false;
-            }
-            // Check severity if specified
-            if let Some(ref sev) = exp.severity
-                && d.severity.as_db_str() != sev.to_uppercase()
-            {
-                return false;
-            }
-            // Check line range if specified
-            if let Some((start, end)) = exp.line_range
-                && (d.line < start || d.line > end)
-            {
-                return false;
-            }
-            // Check evidence substrings
-            for substr in &exp.evidence_contains {
-                let msg = d.message.as_deref().unwrap_or("");
-                let ev_text = if let Some(ev) = &d.evidence {
-                    let mut parts = Vec::new();
-                    if let Some(src) = &ev.source {
-                        parts.push(format!(
-                            "source: {}",
-                            src.snippet.as_deref().unwrap_or(&src.kind)
-                        ));
-                    }
-                    if let Some(snk) = &ev.sink {
-                        parts.push(format!(
-                            "sink: {}",
-                            snk.snippet.as_deref().unwrap_or(&snk.kind)
-                        ));
-                    }
-                    for note in &ev.notes {
-                        parts.push(note.clone());
-                    }
-                    // Phase 28: Include symbolic witness in evidence search
-                    if let Some(ref sym) = ev.symbolic
-                        && let Some(ref w) = sym.witness
-                    {
-                        parts.push(w.clone());
-                    }
-                    parts.join(" ")
-                } else {
-                    String::new()
-                };
-                let combined = format!("{msg} {ev_text}");
-                if !combined.to_lowercase().contains(&substr.to_lowercase()) {
-                    return false;
+        if exp.must_not_match {
+            // Forbidden-finding assertion: non-consuming scan for any matching diag.
+            // Presence = hard failure (regression guard).
+            for d in diags {
+                if diag_matches_expectation(d, exp, fixture_file) {
+                    forbidden_violations.push((exp.clone(), d.clone()));
                 }
             }
-            matched_indices[i] = true;
-            true
-        });
+            continue;
+        }
 
-        if found {
+        let mut found_idx: Option<usize> = None;
+        for (i, d) in diags.iter().enumerate() {
+            if matched_indices[i] {
+                continue;
+            }
+            if diag_matches_expectation(d, exp, fixture_file) {
+                found_idx = Some(i);
+                break;
+            }
+        }
+
+        if let Some(i) = found_idx {
+            matched_indices[i] = true;
             matched += 1;
         } else {
             let reason = format!(
@@ -320,6 +341,7 @@ fn match_expectations(
     MatchResult {
         hard_misses,
         soft_misses,
+        forbidden_violations,
         unexpected,
         matched,
     }
@@ -443,10 +465,12 @@ fn real_world_fixture_suite() {
 
     let mut total_hard_fails = 0;
     let mut total_soft_misses = 0;
+    let mut total_forbidden = 0;
     let mut total_matched = 0;
     let mut total_unexpected = 0;
     let mut failure_details: Vec<String> = Vec::new();
     let mut soft_miss_details: Vec<String> = Vec::new();
+    let mut forbidden_details: Vec<String> = Vec::new();
 
     for fixture in &active {
         let fixture_label = format!("{}/{}/{}", fixture.lang, fixture.category, fixture.name);
@@ -478,6 +502,23 @@ fn real_world_fixture_suite() {
                 total_hard_fails += result.hard_misses.len();
             }
 
+            if !result.forbidden_violations.is_empty() {
+                let mut msg = format!("FORB  {fixture_label} [{mode_str}]:");
+                for (exp, diag) in &result.forbidden_violations {
+                    msg.push_str(&format!(
+                        "\n       FORBIDDEN (must_not_match): {}:{} [{}] {} matched rule_id='{}' — {}",
+                        diag.path,
+                        diag.line,
+                        diag.severity.as_db_str(),
+                        diag.id,
+                        exp.rule_id,
+                        exp.notes
+                    ));
+                }
+                forbidden_details.push(msg);
+                total_forbidden += result.forbidden_violations.len();
+            }
+
             if !result.soft_misses.is_empty() {
                 let mut msg = format!("SOFT  {fixture_label} [{mode_str}]:");
                 for (exp, reason) in &result.soft_misses {
@@ -489,9 +530,10 @@ fn real_world_fixture_suite() {
 
             if verbose {
                 eprintln!(
-                    "  {fixture_label} [{mode_str}]: {} matched, {} hard misses, {} soft misses, {} unexpected",
+                    "  {fixture_label} [{mode_str}]: {} matched, {} hard misses, {} forbidden, {} soft misses, {} unexpected",
                     result.matched,
                     result.hard_misses.len(),
+                    result.forbidden_violations.len(),
                     result.soft_misses.len(),
                     result.unexpected.len()
                 );
@@ -516,14 +558,21 @@ fn real_world_fixture_suite() {
     // Print summary.
     eprintln!("\n────────────────────────────────────────────────────");
     eprintln!(
-        "RESULTS: {} matched, {} hard failures, {} soft misses, {} unexpected",
-        total_matched, total_hard_fails, total_soft_misses, total_unexpected
+        "RESULTS: {} matched, {} hard failures, {} forbidden violations, {} soft misses, {} unexpected",
+        total_matched, total_hard_fails, total_forbidden, total_soft_misses, total_unexpected
     );
     eprintln!("────────────────────────────────────────────────────");
 
     if !failure_details.is_empty() {
         eprintln!("\n=== HARD FAILURES (must_match=true) ===");
         for msg in &failure_details {
+            eprintln!("{msg}");
+        }
+    }
+
+    if !forbidden_details.is_empty() {
+        eprintln!("\n=== FORBIDDEN VIOLATIONS (must_not_match=true) ===");
+        for msg in &forbidden_details {
             eprintln!("{msg}");
         }
     }
@@ -535,10 +584,12 @@ fn real_world_fixture_suite() {
         }
     }
 
-    // Hard failures cause test failure.
+    // Hard failures and forbidden violations both cause test failure.
     assert_eq!(
-        total_hard_fails, 0,
-        "{total_hard_fails} expected findings not found (must_match=true). \
+        total_hard_fails + total_forbidden,
+        0,
+        "{total_hard_fails} expected findings not found (must_match=true); \
+         {total_forbidden} forbidden findings present (must_not_match=true). \
          Run with NYX_TEST_VERBOSE=1 for details."
     );
 }
