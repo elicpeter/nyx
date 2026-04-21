@@ -286,6 +286,79 @@ fn ssa_lowering_is_deterministic() {
     );
 }
 
+// ── Tier 2b: Strict 10× determinism on multi-phi bodies ──────────────────
+
+/// Stronger determinism check than Tier 2: for every body in the corpus
+/// that carries ≥ 2 phis (where phi ordering is the most likely culprit
+/// for hasher-driven non-determinism), lower the CFG ten times in a row
+/// and assert every fingerprint matches the first — bit-for-bit, with no
+/// sort tolerance.  Runs are interleaved across fixtures so that
+/// process-wide hasher state between lowerings is as adversarial as we
+/// can make it without `PYTHONHASHSEED`-style seeding.
+#[test]
+fn ssa_lowering_is_deterministic_strict_10x() {
+    let fixtures = discover_fixtures();
+    let cfg = test_config(AnalysisMode::Full);
+    let mut failures: Vec<String> = Vec::new();
+    let mut bodies_checked: usize = 0;
+    let mut multi_phi_bodies: usize = 0;
+
+    for fixture in &fixtures {
+        let Ok(Some((file_cfg, _))) = build_cfg_for_file(&fixture.source_path, &cfg) else {
+            continue;
+        };
+        for body in each_body(&file_cfg.bodies) {
+            // Lower once up front to detect multi-phi bodies cheaply; skip
+            // trivially-phi-less bodies so the 10× loop stays bounded.
+            let Ok(first) = lower_to_ssa(&body.graph, body.entry, None, true) else {
+                continue;
+            };
+            let phi_count: usize = first.blocks.iter().map(|b| b.phis.len()).sum();
+            if phi_count < 2 {
+                continue;
+            }
+            multi_phi_bodies += 1;
+
+            let expected = body_fingerprint(&first);
+            for i in 1..10 {
+                let Ok(again) = lower_to_ssa(&body.graph, body.entry, None, true) else {
+                    failures.push(format!(
+                        "{} body={:?}: lowering failed on iteration {i} after succeeding earlier",
+                        fixture.name,
+                        body.meta.name.as_deref().unwrap_or("<toplevel>"),
+                    ));
+                    break;
+                };
+                let fp = body_fingerprint(&again);
+                if fp != expected {
+                    failures.push(format!(
+                        "{} body={:?}: fingerprint diverged on iteration {i}\n  --- expected ---\n{expected}  --- got ---\n{fp}",
+                        fixture.name,
+                        body.meta.name.as_deref().unwrap_or("<toplevel>"),
+                    ));
+                    break;
+                }
+                bodies_checked += 1;
+            }
+        }
+    }
+
+    assert!(
+        multi_phi_bodies >= 10,
+        "expected to cover >= 10 multi-phi bodies for a meaningful strict-determinism check, got {multi_phi_bodies}",
+    );
+    assert!(
+        bodies_checked > 80,
+        "sanity: expected >80 (body × iteration) samples, got {bodies_checked}"
+    );
+    assert!(
+        failures.is_empty(),
+        "SSA lowering is non-deterministic in {} body/fixture combo(s) under 10× strict comparison:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
 // ── Tier 3: Optimization idempotence ─────────────────────────────────────
 
 #[test]

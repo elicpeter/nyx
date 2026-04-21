@@ -14,7 +14,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
 use petgraph::visit::{Bfs, EdgeRef};
 use smallvec::SmallVec;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use super::ir::*;
 
@@ -472,7 +472,7 @@ fn compute_dominance_frontiers(
 fn identify_external_uses(
     cfg: &Cfg,
     blocks_nodes: &[Vec<NodeIndex>],
-    var_defs: &HashMap<String, HashSet<usize>>,
+    var_defs: &BTreeMap<String, HashSet<usize>>,
 ) -> Vec<String> {
     let mut used: HashSet<String> = HashSet::new();
     for nodes in blocks_nodes {
@@ -558,8 +558,8 @@ fn collect_var_defs(
     cfg: &Cfg,
     blocks_nodes: &[Vec<NodeIndex>],
     nop_nodes: &HashSet<NodeIndex>,
-) -> HashMap<String, HashSet<usize>> {
-    let mut defs: HashMap<String, HashSet<usize>> = HashMap::new();
+) -> BTreeMap<String, HashSet<usize>> {
+    let mut defs: BTreeMap<String, HashSet<usize>> = BTreeMap::new();
 
     for (block_idx, nodes) in blocks_nodes.iter().enumerate() {
         for &node in nodes {
@@ -600,13 +600,18 @@ fn collect_var_defs(
 }
 
 /// Cytron-style phi insertion: returns phi_placements[block] = set of var names needing phis.
+///
+/// Returns a `BTreeSet<String>` per block so downstream consumers that iterate
+/// the set (notably `rename_variables`) observe a deterministic, alphabetical
+/// order regardless of the underlying hasher state.  The Cytron algorithm
+/// itself is order-independent — only its observers are.
 fn insert_phis(
-    var_defs: &HashMap<String, HashSet<usize>>,
+    var_defs: &BTreeMap<String, HashSet<usize>>,
     dom_frontiers: &[HashSet<usize>],
     _num_blocks: usize,
-) -> Vec<HashSet<String>> {
+) -> Vec<BTreeSet<String>> {
     let num_blocks = dom_frontiers.len();
-    let mut phi_placements: Vec<HashSet<String>> = vec![HashSet::new(); num_blocks];
+    let mut phi_placements: Vec<BTreeSet<String>> = vec![BTreeSet::new(); num_blocks];
 
     for (var, def_blocks) in var_defs {
         let mut worklist: VecDeque<usize> = def_blocks.iter().copied().collect();
@@ -657,7 +662,7 @@ fn rename_variables(
     blocks_nodes: &[Vec<NodeIndex>],
     block_succs: &[Vec<usize>],
     block_preds: &[Vec<usize>],
-    phi_placements: &[HashSet<String>],
+    phi_placements: &[BTreeSet<String>],
     dom_tree_children: &[Vec<usize>],
     filtered_edges: &[(NodeIndex, NodeIndex, EdgeKind)],
     external_vars: &[String],
@@ -683,7 +688,11 @@ fn rename_variables(
         })
         .collect();
 
-    let mut phi_values: Vec<HashMap<String, SsaValue>> = vec![HashMap::new(); num_blocks];
+    // `BTreeMap` guarantees a deterministic (alphabetical) iteration order when
+    // pushing phi values onto `var_stacks` and when filling operands on
+    // successor phis — both sites are observable in SSA numbering if they
+    // reordered between runs.
+    let mut phi_values: Vec<BTreeMap<String, SsaValue>> = vec![BTreeMap::new(); num_blocks];
 
     // Pre-create phi instructions for all blocks (operands filled during rename)
     for (block_idx, vars) in phi_placements.iter().enumerate() {
@@ -719,12 +728,12 @@ fn rename_variables(
         blocks_nodes: &[Vec<NodeIndex>],
         block_succs: &[Vec<usize>],
         block_preds: &[Vec<usize>],
-        phi_placements: &[HashSet<String>],
+        phi_placements: &[BTreeSet<String>],
         dom_tree_children: &[Vec<usize>],
         filtered_edges: &[(NodeIndex, NodeIndex, EdgeKind)],
         var_stacks: &mut HashMap<String, Vec<SsaValue>>,
         ssa_blocks: &mut [SsaBlock],
-        phi_values: &mut [HashMap<String, SsaValue>],
+        phi_values: &mut [BTreeMap<String, SsaValue>],
         value_defs: &mut Vec<ValueDef>,
         cfg_node_map: &mut HashMap<NodeIndex, SsaValue>,
         next_value: &mut u32,

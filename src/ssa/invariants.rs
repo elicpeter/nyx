@@ -354,10 +354,10 @@ fn check_reachability(body: &SsaBody, errors: &mut Vec<String>) {
 /// not part of the fingerprint, so renumbering between runs does not cause
 /// spurious diffs — only shape changes do.
 ///
-/// Phi instructions within a block are emitted order-independently (operand
-/// counts are sorted) because `phi_placements` is driven by a `HashSet`,
-/// which legitimately does not preserve insertion order — only the *set* of
-/// phis placed in a block is semantically meaningful.
+/// Phis are emitted in their natural (insertion) order.  Lowering now drives
+/// phi placement through a `BTreeSet`, so that order is deterministic
+/// (alphabetical by `var_name`) and any divergence between runs is a real
+/// regression rather than hasher noise.
 pub fn body_fingerprint(body: &SsaBody) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -374,18 +374,15 @@ pub fn body_fingerprint(body: &SsaBody) -> String {
             block.body.len(),
             terminator_kind(&block.terminator),
         );
-        // Phis: emit order-independently.  See doc comment above.
-        let mut phi_sigs: Vec<(usize, Option<String>)> = block
-            .phis
-            .iter()
-            .filter_map(|inst| match &inst.op {
-                SsaOp::Phi(ops) => Some((ops.len(), inst.var_name.clone())),
-                _ => None,
-            })
-            .collect();
-        phi_sigs.sort();
-        for (ops, name) in phi_sigs {
-            let _ = writeln!(out, "    phi var={} operands={}", name.unwrap_or_default(), ops);
+        for inst in &block.phis {
+            if let SsaOp::Phi(ref ops) = inst.op {
+                let _ = writeln!(
+                    out,
+                    "    phi var={} operands={}",
+                    inst.var_name.as_deref().unwrap_or(""),
+                    ops.len(),
+                );
+            }
         }
         for inst in &block.body {
             let _ = writeln!(out, "    {}", op_kind(&inst.op));
@@ -549,6 +546,79 @@ mod tests {
         let a = lower_to_ssa(&cfg, entry, None, true).unwrap();
         let b = lower_to_ssa(&cfg, entry, None, true).unwrap();
         assert_eq!(body_fingerprint(&a), body_fingerprint(&b));
+    }
+
+    #[test]
+    fn phis_are_emitted_in_alphabetical_order() {
+        // Diamond CFG with multiple variables defined on both sides:
+        // Entry → If → [True: a=, b=, c=] [False: a=, b=, c=] → Join → Exit
+        // Join should carry phis for a, b, and c, emitted alphabetically
+        // as a consequence of the BTreeSet-backed phi_placements.
+        fn defs(vars: &[&str]) -> NodeInfo {
+            // Chain multiple Seq nodes; tests/fixtures route each `def(var)`
+            // through its own node, so build a little sub-block here.
+            // For a single NodeInfo we can only record one define; callers
+            // emit one node per variable.
+            NodeInfo {
+                taint: TaintMeta {
+                    defines: Some(vars[0].into()),
+                    ..Default::default()
+                },
+                ..make_node(StmtKind::Seq)
+            }
+        }
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let if_n = cfg.add_node(make_node(StmtKind::If));
+
+        // True branch defines c, then a, then b (intentionally non-alphabetical
+        // to prove the fingerprint order is driven by lowering, not source).
+        let t_c = cfg.add_node(defs(&["c"]));
+        let t_a = cfg.add_node(defs(&["a"]));
+        let t_b = cfg.add_node(defs(&["b"]));
+
+        // False branch: same vars, different order to make sure neither side
+        // accidentally sets the ordering downstream.
+        let f_b = cfg.add_node(defs(&["b"]));
+        let f_c = cfg.add_node(defs(&["c"]));
+        let f_a = cfg.add_node(defs(&["a"]));
+
+        let join = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                uses: vec!["a".into(), "b".into(), "c".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, if_n, EdgeKind::Seq);
+        cfg.add_edge(if_n, t_c, EdgeKind::True);
+        cfg.add_edge(t_c, t_a, EdgeKind::Seq);
+        cfg.add_edge(t_a, t_b, EdgeKind::Seq);
+        cfg.add_edge(t_b, join, EdgeKind::Seq);
+        cfg.add_edge(if_n, f_b, EdgeKind::False);
+        cfg.add_edge(f_b, f_c, EdgeKind::Seq);
+        cfg.add_edge(f_c, f_a, EdgeKind::Seq);
+        cfg.add_edge(f_a, join, EdgeKind::Seq);
+        cfg.add_edge(join, exit, EdgeKind::Seq);
+
+        let body = lower_to_ssa(&cfg, entry, None, true).unwrap();
+        let join_block = body
+            .blocks
+            .iter()
+            .find(|b| b.phis.len() >= 3)
+            .expect("join block should carry phis for a, b, c");
+        let names: Vec<&str> = join_block
+            .phis
+            .iter()
+            .filter_map(|inst| inst.var_name.as_deref())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["a", "b", "c"],
+            "phis within a block must be emitted in alphabetical var_name order"
+        );
     }
 
     #[test]
