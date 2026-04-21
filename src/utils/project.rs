@@ -79,38 +79,63 @@ fn read_bounded(path: &Path) -> Option<String> {
 
 /// Scan file source bytes for import statements referencing known web
 /// frameworks. Used to augment the project-level [`FrameworkContext`] with
-/// per-file signals, so that single-file scans (no package.json nearby) still
-/// trigger framework-conditional rules.
+/// per-file signals, so that single-file scans (no package.json / go.mod /
+/// Gemfile nearby) still trigger framework-conditional rules.
 ///
-/// Intentionally a coarse byte-level substring check against the module
-/// specifier in quoted form (e.g. `'fastify'`) — JavaScript / TypeScript only,
-/// where framework-conditional rules target `framework_rules(ctx)` in
-/// `labels/javascript.rs` and `labels/typescript.rs`. Returns an empty list for
-/// other languages.
+/// Intentionally a coarse byte-level substring check against the quoted module
+/// specifier (e.g. `'fastify'`, `"github.com/labstack/echo/v4"`,
+/// `'sinatra'`). Only the first 8 KiB of the file are inspected — imports /
+/// requires live at the top. Returns an empty list for languages without a
+/// framework detection policy here.
 pub fn detect_in_file_frameworks(bytes: &[u8], lang_slug: &str) -> Vec<DetectedFramework> {
-    if !matches!(lang_slug, "javascript" | "typescript" | "js" | "ts") {
-        return Vec::new();
-    }
-    // Only look at a bounded prefix — imports are at the top of the file.
     let head_len = bytes.len().min(8 * 1024);
     let head = match std::str::from_utf8(&bytes[..head_len]) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    let mut fws = Vec::new();
     let matches_module = |name: &str| {
         // Quoted single or double, as appears in `from 'fastify'` /
-        // `require("fastify")` / `import('fastify')`.
+        // `require("fastify")` / `import('fastify')` / `require 'sinatra'`.
         head.contains(&format!("'{name}'")) || head.contains(&format!("\"{name}\""))
     };
-    if matches_module("fastify") {
-        fws.push(DetectedFramework::Fastify);
-    }
-    if matches_module("express") {
-        fws.push(DetectedFramework::Express);
-    }
-    if matches_module("koa") || matches_module("@koa/router") || matches_module("koa-router") {
-        fws.push(DetectedFramework::Koa);
+    let mut fws = Vec::new();
+    match lang_slug {
+        "javascript" | "typescript" | "js" | "ts" => {
+            if matches_module("fastify") {
+                fws.push(DetectedFramework::Fastify);
+            }
+            if matches_module("express") {
+                fws.push(DetectedFramework::Express);
+            }
+            if matches_module("koa")
+                || matches_module("@koa/router")
+                || matches_module("koa-router")
+            {
+                fws.push(DetectedFramework::Koa);
+            }
+        }
+        "go" => {
+            // Go imports are quoted module paths. Match a distinctive prefix
+            // so any major version (`/v3`, `/v4`, …) still detects.
+            if head.contains("\"github.com/labstack/echo") {
+                fws.push(DetectedFramework::Echo);
+            }
+            if head.contains("\"github.com/gin-gonic/gin\"") {
+                fws.push(DetectedFramework::Gin);
+            }
+        }
+        "ruby" | "rb" => {
+            // Ruby requires: `require 'sinatra'` or `require 'sinatra/base'`.
+            if matches_module("sinatra") || matches_module("sinatra/base") {
+                fws.push(DetectedFramework::Sinatra);
+            }
+            // Rails apps don't always `require 'rails'` directly (they load
+            // via config/boot.rb), but when they do, surface it.
+            if matches_module("rails") || matches_module("rails/all") {
+                fws.push(DetectedFramework::Rails);
+            }
+        }
+        _ => {}
     }
     fws
 }
@@ -450,4 +475,49 @@ fn framework_context_has_is_false_for_absent_framework() {
     assert!(!ctx.has(DetectedFramework::Express));
     assert!(!ctx.has(DetectedFramework::Flask));
     assert!(!ctx.has(DetectedFramework::Spring));
+}
+
+#[test]
+fn detect_in_file_frameworks_go_echo() {
+    let src = b"package main\nimport (\n\t\"net/http\"\n\t\"github.com/labstack/echo/v4\"\n)\nfunc x() {}\n";
+    let fws = detect_in_file_frameworks(src, "go");
+    assert!(fws.contains(&DetectedFramework::Echo));
+    assert!(!fws.contains(&DetectedFramework::Gin));
+}
+
+#[test]
+fn detect_in_file_frameworks_go_gin() {
+    let src = b"package main\nimport \"github.com/gin-gonic/gin\"\n";
+    let fws = detect_in_file_frameworks(src, "go");
+    assert!(fws.contains(&DetectedFramework::Gin));
+    assert!(!fws.contains(&DetectedFramework::Echo));
+}
+
+#[test]
+fn detect_in_file_frameworks_ruby_sinatra() {
+    let src = b"require 'sinatra'\nget '/' do\n  'hi'\nend\n";
+    let fws = detect_in_file_frameworks(src, "ruby");
+    assert!(fws.contains(&DetectedFramework::Sinatra));
+    assert!(!fws.contains(&DetectedFramework::Rails));
+}
+
+#[test]
+fn detect_in_file_frameworks_ruby_sinatra_base() {
+    let src = b"require \"sinatra/base\"\nclass App < Sinatra::Base; end\n";
+    let fws = detect_in_file_frameworks(src, "ruby");
+    assert!(fws.contains(&DetectedFramework::Sinatra));
+}
+
+#[test]
+fn detect_in_file_frameworks_plain_go_no_framework() {
+    let src = b"package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"hi\") }\n";
+    let fws = detect_in_file_frameworks(src, "go");
+    assert!(fws.is_empty());
+}
+
+#[test]
+fn detect_in_file_frameworks_plain_ruby_no_framework() {
+    let src = b"require 'json'\nputs JSON.parse('{}')\n";
+    let fws = detect_in_file_frameworks(src, "ruby");
+    assert!(fws.is_empty());
 }

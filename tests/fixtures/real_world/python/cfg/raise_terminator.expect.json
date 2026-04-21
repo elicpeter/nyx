@@ -14,24 +14,24 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         14,
         21
       ],
       "evidence_contains": [],
-      "notes": "Validator raise acts as guard - ideally no taint finding since invalid input is rejected"
+      "notes": "Validator raise acts as guard - no taint finding should fire for subprocess.run([validated]) because invalid input is rejected upstream"
     },
     {
       "rule_id": "cfg-unguarded-sink",
       "severity": null,
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         15,
         20
       ],
       "evidence_contains": [],
-      "notes": "Subprocess call is guarded by validate_cmd raise - should not trigger"
+      "notes": "Subprocess call is guarded by validate_cmd raise - cfg-unguarded-sink must not fire on this list-arg subprocess call"
     }
   ]
 }
