@@ -34,22 +34,14 @@
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": "HIGH",
-      "must_match": false,
+      "severity": null,
+      "must_not_match": true,
       "line_range": [
         18,
         18
       ],
       "evidence_contains": [],
-      "notes": "noise: taint-unsanitised-flow — secondary flow or cross-function leakage"
-    },
-    {
-      "rule_id": "taint-unsanitised-flow",
-      "severity": "HIGH",
-      "must_match": false,
-      "line_range": [18, 18],
-      "evidence_contains": [],
-      "notes": "noise: second taint flow to same sink at line 18 from source 8:5 — cross-function taint leakage"
+      "notes": "run_cmd_safe has `cmd not in allowed` allowlist guard at line 16-17 that validates cmd — scanner correctly suppresses taint flow to subprocess.run at line 18. Regression guard."
     }
   ]
 }

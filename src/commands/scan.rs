@@ -305,6 +305,11 @@ pub fn handle(
 
 /// Assign confidence, rank, and truncate diagnostics.
 pub(crate) fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
+    // 0. Collapse duplicate taint-unsanitised-flow findings at the same
+    //    primary location. Runs first so subsequent confidence / ranking
+    //    sees a single representative per (sink, rule_base, severity).
+    deduplicate_taint_flows(diags);
+
     // 1. Compute confidence first (needed by ranking).
     for d in diags.iter_mut() {
         if d.confidence.is_none() {
@@ -317,6 +322,106 @@ pub(crate) fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
     }
     if let Some(max) = cfg.output.max_results {
         diags.truncate(max as usize);
+    }
+}
+
+/// Collapse `taint-unsanitised-flow` findings that share the same primary
+/// sink location, rule base, and severity into a single finding by keeping
+/// the tightest source (closest to the sink in the same function; tiebreak
+/// by source line asc, source col asc).
+///
+/// Rule IDs of the form `taint-unsanitised-flow (source L:C)` share a single
+/// base `taint-unsanitised-flow` — two findings at the same (path, line, col)
+/// whose only difference is their source are collapsed to one. Findings with
+/// different base rule IDs (e.g. `js.code_exec.eval`) or different severities
+/// are left untouched per guardrails.
+pub(crate) fn deduplicate_taint_flows(diags: &mut Vec<Diag>) {
+    use std::collections::HashMap;
+
+    const TAINT_BASE: &str = "taint-unsanitised-flow";
+
+    fn is_taint_flow(id: &str) -> bool {
+        id.starts_with(TAINT_BASE)
+    }
+
+    // Group candidates by (path, line, col, severity). Only `taint-unsanitised-flow`
+    // rule IDs participate; findings with other bases (e.g. `js.code_exec.eval`)
+    // are left untouched per guardrails.
+    let mut groups: HashMap<(String, usize, usize, Severity), Vec<usize>> = HashMap::new();
+    for (i, d) in diags.iter().enumerate() {
+        if is_taint_flow(&d.id) {
+            groups
+                .entry((d.path.clone(), d.line, d.col, d.severity))
+                .or_default()
+                .push(i);
+        }
+    }
+
+    // Score each candidate finding. Lower score = tighter / preferred.
+    // (same_function_flag, hop_count, source_distance, source_line, source_col)
+    fn score(d: &Diag) -> (u32, u32, usize, u32, u32) {
+        let ev = d.evidence.as_ref();
+        let src = ev.and_then(|e| e.source.as_ref());
+        let src_line = src.map(|s| s.line).unwrap_or(u32::MAX);
+        let src_col = src.map(|s| s.col).unwrap_or(u32::MAX);
+        // Same-function check: first flow_step (Source) and the step at the
+        // sink share an `enclosing_func`. If flow_steps are absent or the
+        // function markers are missing, treat as "unknown" — worse than a
+        // confirmed same-function match but better than a confirmed mismatch.
+        let same_function_flag: u32 = ev
+            .and_then(|e| {
+                let steps = &e.flow_steps;
+                if steps.is_empty() {
+                    return None;
+                }
+                let first = &steps[0];
+                let last = &steps[steps.len() - 1];
+                match (first.function.as_ref(), last.function.as_ref()) {
+                    (Some(a), Some(b)) => Some(if a == b { 0u32 } else { 2u32 }),
+                    _ => Some(1u32),
+                }
+            })
+            .unwrap_or(1u32);
+        let sink_line = d.line as u32;
+        let source_distance = if src_line == u32::MAX {
+            usize::MAX
+        } else {
+            (sink_line as i64 - src_line as i64).unsigned_abs() as usize
+        };
+        let hop_count = ev
+            .and_then(|e| e.hop_count)
+            .map(|h| h as u32)
+            .unwrap_or(u32::MAX);
+        (
+            same_function_flag,
+            hop_count,
+            source_distance,
+            src_line,
+            src_col,
+        )
+    }
+
+    let mut drop: Vec<usize> = Vec::new();
+    for indices in groups.values() {
+        if indices.len() <= 1 {
+            continue;
+        }
+        let mut scored: Vec<(usize, _)> = indices.iter().map(|&i| (i, score(&diags[i]))).collect();
+        scored.sort_by(|a, b| a.1.cmp(&b.1));
+        // Keep scored[0], drop the rest.
+        for &(i, _) in scored.iter().skip(1) {
+            drop.push(i);
+        }
+    }
+
+    if drop.is_empty() {
+        return;
+    }
+    drop.sort_unstable();
+    drop.dedup();
+    // Remove in reverse order to preserve earlier indices.
+    for &i in drop.iter().rev() {
+        diags.remove(i);
     }
 }
 
@@ -1999,6 +2104,159 @@ fn apply_suppressions(diags: &mut [Diag]) {
                 diags[i].suppression = Some(meta);
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  deduplicate_taint_flows tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod dedup_taint_flow_tests {
+    use super::*;
+    use crate::evidence::{Evidence, FlowStep, FlowStepKind, SpanEvidence};
+
+    fn make_taint(path: &str, line: usize, col: usize, source_line: u32, source_col: u32) -> Diag {
+        Diag {
+            path: path.into(),
+            line,
+            col,
+            severity: Severity::High,
+            id: format!("taint-unsanitised-flow (source {source_line}:{source_col})"),
+            category: FindingCategory::Security,
+            path_validated: false,
+            guard_kind: None,
+            message: None,
+            labels: vec![],
+            confidence: None,
+            evidence: Some(Evidence {
+                source: Some(SpanEvidence {
+                    path: path.into(),
+                    line: source_line,
+                    col: source_col,
+                    kind: "source".into(),
+                    snippet: None,
+                }),
+                sink: Some(SpanEvidence {
+                    path: path.into(),
+                    line: line as u32,
+                    col: col as u32,
+                    kind: "sink".into(),
+                    snippet: None,
+                }),
+                hop_count: Some(1),
+                flow_steps: vec![
+                    FlowStep {
+                        step: 1,
+                        kind: FlowStepKind::Source,
+                        file: path.into(),
+                        line: source_line,
+                        col: source_col,
+                        snippet: None,
+                        variable: None,
+                        callee: None,
+                        function: Some("f".into()),
+                        is_cross_file: false,
+                    },
+                    FlowStep {
+                        step: 2,
+                        kind: FlowStepKind::Sink,
+                        file: path.into(),
+                        line: line as u32,
+                        col: col as u32,
+                        snippet: None,
+                        variable: None,
+                        callee: None,
+                        function: Some("f".into()),
+                        is_cross_file: false,
+                    },
+                ],
+                ..Default::default()
+            }),
+            rank_score: None,
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+            rollup: None,
+        }
+    }
+
+    #[test]
+    fn dedup_collapses_two_sources_to_same_sink_keeps_tighter_source() {
+        // Two findings at line 10: one with source at line 3 (distance 7),
+        // one with source at line 8 (distance 2). The closer source wins.
+        let mut diags = vec![
+            make_taint("a.rs", 10, 5, 3, 1),
+            make_taint("a.rs", 10, 5, 8, 1),
+        ];
+        deduplicate_taint_flows(&mut diags);
+        assert_eq!(diags.len(), 1);
+        assert!(
+            diags[0].id.contains("(source 8:1)"),
+            "should keep tighter source, got id={}",
+            diags[0].id
+        );
+    }
+
+    #[test]
+    fn dedup_does_not_drop_different_sink_locations() {
+        let mut diags = vec![
+            make_taint("a.rs", 10, 5, 3, 1),
+            make_taint("a.rs", 12, 5, 3, 1),
+        ];
+        deduplicate_taint_flows(&mut diags);
+        assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn dedup_does_not_drop_across_severities() {
+        let mut diags = vec![
+            make_taint("a.rs", 10, 5, 3, 1),
+            make_taint("a.rs", 10, 5, 8, 1),
+        ];
+        diags[1].severity = Severity::Medium;
+        deduplicate_taint_flows(&mut diags);
+        assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn dedup_does_not_drop_across_paths() {
+        let mut diags = vec![
+            make_taint("a.rs", 10, 5, 3, 1),
+            make_taint("b.rs", 10, 5, 3, 1),
+        ];
+        deduplicate_taint_flows(&mut diags);
+        assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn dedup_leaves_non_taint_rule_ids_alone() {
+        let mut diags = vec![
+            make_taint("a.rs", 10, 5, 3, 1),
+            make_taint("a.rs", 10, 5, 8, 1),
+        ];
+        diags[1].id = "js.code_exec.eval".into();
+        deduplicate_taint_flows(&mut diags);
+        assert_eq!(diags.len(), 2);
+    }
+
+    #[test]
+    fn dedup_prefers_same_function_over_cross_function() {
+        // Two findings at line 10: one from same function, one from cross-function.
+        let mut diags = vec![
+            make_taint("a.rs", 10, 5, 8, 1),
+            make_taint("a.rs", 10, 5, 2, 1),
+        ];
+        // Second one is cross-function (different enclosing_func on the Source step).
+        if let Some(ev) = diags[1].evidence.as_mut() {
+            if let Some(first) = ev.flow_steps.first_mut() {
+                first.function = Some("other".into());
+            }
+        }
+        deduplicate_taint_flows(&mut diags);
+        assert_eq!(diags.len(), 1);
+        // Kept should be the same-function one (source 8:1).
+        assert!(diags[0].id.contains("(source 8:1)"));
     }
 }
 

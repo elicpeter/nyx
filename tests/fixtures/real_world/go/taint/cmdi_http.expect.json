@@ -67,20 +67,13 @@
       "rule_id": "taint-unsanitised-flow",
       "severity": "HIGH",
       "must_match": true,
+      "max_count": 1,
       "line_range": [
         20,
         20
       ],
       "evidence_contains": [],
-      "notes": "TP: tainted command output (source line 17) flows to fmt.Fprintf HTTP response in unsafePing"
-    },
-    {
-      "rule_id": "taint-unsanitised-flow",
-      "severity": "HIGH",
-      "must_match": false,
-      "line_range": [20, 20],
-      "evidence_contains": [],
-      "notes": "noise: second taint flow to fmt.Fprintf at line 20 from source 10:2 — cross-function taint leakage from pingHandler"
+      "notes": "TP: tainted command output (source line 17) flows to fmt.Fprintf HTTP response in unsafePing. Exactly one finding after dedup; cross-function pingHandler leak collapses into this one."
     }
   ]
 }

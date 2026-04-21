@@ -44,6 +44,18 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
+      "must_match": true,
+      "max_count": 1,
+      "line_range": [
+        14,
+        14
+      ],
+      "evidence_contains": [],
+      "notes": "TP: getenv at line 11 flows to system(cmd) at line 14 in run_safe — scanner does not model strcmp as a validator, so the allowlist check does not sanitize. Exactly one finding after dedup."
+    },
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
       "must_match": false,
       "line_range": [
         9,
@@ -51,17 +63,6 @@
       ],
       "evidence_contains": [],
       "notes": "Safe version with strcmp allowlist — ideally suppressed but scanner may not model strcmp as validation"
-    },
-    {
-      "rule_id": "taint-unsanitised-flow",
-      "severity": "HIGH",
-      "must_match": false,
-      "line_range": [
-        14,
-        14
-      ],
-      "evidence_contains": [],
-      "notes": "noise: taint-unsanitised-flow — secondary flow or cross-function leakage"
     }
   ]
 }

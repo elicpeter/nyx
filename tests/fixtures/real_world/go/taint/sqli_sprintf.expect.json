@@ -17,7 +17,7 @@
         14
       ],
       "evidence_contains": [],
-      "notes": "TP: r.URL.Query().Get(\"id\") (source line 12) flows through fmt.Sprintf query into db.Query \u2014 SQL injection at the precise sink"
+      "notes": "TP: r.URL.Query().Get(\"id\") (source line 12) flows through fmt.Sprintf query into db.Query — SQL injection at the precise sink"
     },
     {
       "rule_id": "taint-unsanitised-flow",
@@ -28,18 +28,18 @@
         27
       ],
       "evidence_contains": [],
-      "notes": "getUserSafe uses parameterized query \u2014 should NOT produce a taint finding"
+      "notes": "getUserSafe uses parameterized query — should NOT produce a taint finding"
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": "HIGH",
-      "must_match": false,
+      "severity": null,
+      "must_not_match": true,
       "line_range": [
         25,
         25
       ],
       "evidence_contains": [],
-      "notes": "noise: taint-unsanitised-flow \u2014 secondary flow or cross-function leakage"
+      "notes": "getUserSafe at line 25 uses parameterized query ($1) — scanner correctly identifies safe binding, no taint finding. Regression guard."
     }
   ]
 }

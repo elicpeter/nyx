@@ -41,29 +41,19 @@
         7
       ],
       "evidence_contains": [],
-      "notes": "noise: req.query.expr flows to res.json \u2014 returning computed result is standard API behavior, not XSS"
+      "notes": "noise: req.query.expr flows to res.json — returning computed result is standard API behavior, not XSS"
     },
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": "HIGH",
-      "must_match": false,
+      "must_match": true,
+      "max_count": 1,
       "line_range": [
         16,
         16
       ],
       "evidence_contains": [],
-      "notes": "noise: taint flow to res.json in safe handler \u2014 parseFloat sanitizes input, and cross-function leakage from two-level solve"
-    },
-    {
-      "rule_id": "taint-unsanitised-flow",
-      "severity": "HIGH",
-      "must_match": false,
-      "line_range": [
-        16,
-        16
-      ],
-      "evidence_contains": [],
-      "notes": "noise: cross-function taint leakage from two-level solve \u2014 source from first handler leaking into second"
+      "notes": "Known noise: taint flow to res.json in safe handler — parseFloat sanitizes input, but scanner does not model it. Exactly one finding after dedup; cross-handler two-level-solve leak collapses into this one."
     },
     {
       "rule_id": "cfg-unguarded-sink",
@@ -74,7 +64,7 @@
         4
       ],
       "evidence_contains": [],
-      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 4 \u2014 taint active but no confirmed flow"
+      "notes": "structural: cfg-unguarded-sink on high-risk sink at line 4 — taint active but no confirmed flow"
     }
   ]
 }

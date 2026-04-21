@@ -79,6 +79,15 @@ struct ExpectedFinding {
     /// coverage).
     #[serde(default)]
     modes: Option<Vec<String>>,
+    /// Upper bound on matching diags. When set, the count of diags that
+    /// match this expectation's filters (rule_id / severity / line_range /
+    /// evidence_contains) must not exceed this value. Composes with
+    /// `must_match: true` — a `must_match: true, max_count: 1` expectation
+    /// means "exactly one matching finding must exist". Mutually exclusive
+    /// with `must_not_match: true`; the combination is rejected at parse
+    /// time.
+    #[serde(default)]
+    max_count: Option<usize>,
 }
 
 fn default_must_match() -> bool {
@@ -231,6 +240,7 @@ struct MatchResult {
     hard_misses: Vec<(ExpectedFinding, String)>,
     soft_misses: Vec<(ExpectedFinding, String)>,
     forbidden_violations: Vec<(ExpectedFinding, Diag)>,
+    count_violations: Vec<(ExpectedFinding, usize)>,
     unexpected: Vec<Diag>,
     matched: usize,
 }
@@ -297,6 +307,7 @@ fn match_expectations(
     let mut hard_misses = Vec::new();
     let mut soft_misses = Vec::new();
     let mut forbidden_violations = Vec::new();
+    let mut count_violations: Vec<(ExpectedFinding, usize)> = Vec::new();
     let mut matched_indices: Vec<bool> = vec![false; diags.len()];
     let mut matched = 0;
 
@@ -306,6 +317,8 @@ fn match_expectations(
                 continue;
             }
         }
+
+        // must_not_match wins over any other assertion combo.
         if exp.must_not_match {
             // Forbidden-finding assertion: non-consuming scan for any matching diag.
             // Presence = hard failure (regression guard).
@@ -313,6 +326,44 @@ fn match_expectations(
                 if diag_matches_expectation(d, exp, fixture_file) {
                     forbidden_violations.push((exp.clone(), d.clone()));
                 }
+            }
+            continue;
+        }
+
+        // When max_count is set, count all diags matching the expectation's
+        // filter (regardless of prior consumption) and validate against the
+        // cap. Then consume the first unmatched matching diag like the
+        // normal path so later expectations still see the rest.
+        if let Some(cap) = exp.max_count {
+            let total_matches = diags
+                .iter()
+                .filter(|d| diag_matches_expectation(d, exp, fixture_file))
+                .count();
+            if total_matches > cap {
+                count_violations.push((exp.clone(), total_matches));
+            }
+
+            let mut found_idx: Option<usize> = None;
+            for (i, d) in diags.iter().enumerate() {
+                if matched_indices[i] {
+                    continue;
+                }
+                if diag_matches_expectation(d, exp, fixture_file) {
+                    found_idx = Some(i);
+                    break;
+                }
+            }
+            if let Some(i) = found_idx {
+                matched_indices[i] = true;
+                matched += 1;
+            } else if exp.must_match {
+                hard_misses.push((
+                    exp.clone(),
+                    format!(
+                        "rule_id='{}' severity={:?} line_range={:?} max_count={}",
+                        exp.rule_id, exp.severity, exp.line_range, cap
+                    ),
+                ));
             }
             continue;
         }
@@ -356,6 +407,7 @@ fn match_expectations(
         hard_misses,
         soft_misses,
         forbidden_violations,
+        count_violations,
         unexpected,
         matched,
     }
@@ -480,11 +532,28 @@ fn real_world_fixture_suite() {
     let mut total_hard_fails = 0;
     let mut total_soft_misses = 0;
     let mut total_forbidden = 0;
+    let mut total_count_violations = 0;
     let mut total_matched = 0;
     let mut total_unexpected = 0;
     let mut failure_details: Vec<String> = Vec::new();
     let mut soft_miss_details: Vec<String> = Vec::new();
     let mut forbidden_details: Vec<String> = Vec::new();
+    let mut count_violation_details: Vec<String> = Vec::new();
+
+    // Reject (must_not_match && max_count) at parse time. `must_not_match`
+    // overrides `must_match` in `match_expectations` (pre-existing semantics),
+    // but there is no sensible interpretation of "forbidden, up to N of".
+    for fixture in &active {
+        let fixture_label = format!("{}/{}/{}", fixture.lang, fixture.category, fixture.name);
+        for (idx, exp) in fixture.expectations.expected.iter().enumerate() {
+            if exp.must_not_match && exp.max_count.is_some() {
+                panic!(
+                    "{}: expectation[{}] rule_id='{}' has both must_not_match and max_count set — these are mutually exclusive",
+                    fixture_label, idx, exp.rule_id
+                );
+            }
+        }
+    }
 
     for fixture in &active {
         let fixture_label = format!("{}/{}/{}", fixture.lang, fixture.category, fixture.name);
@@ -534,6 +603,23 @@ fn real_world_fixture_suite() {
                 total_forbidden += result.forbidden_violations.len();
             }
 
+            if !result.count_violations.is_empty() {
+                let mut msg = format!("COUNT {fixture_label} [{mode_str}]:");
+                for (exp, count) in &result.count_violations {
+                    msg.push_str(&format!(
+                        "\n       COUNT violation: rule_id='{}' severity={:?} line_range={:?} — {} matches exceed max_count={} — {}",
+                        exp.rule_id,
+                        exp.severity,
+                        exp.line_range,
+                        count,
+                        exp.max_count.unwrap_or(0),
+                        exp.notes
+                    ));
+                }
+                count_violation_details.push(msg);
+                total_count_violations += result.count_violations.len();
+            }
+
             if !result.soft_misses.is_empty() {
                 let mut msg = format!("SOFT  {fixture_label} [{mode_str}]:");
                 for (exp, reason) in &result.soft_misses {
@@ -545,10 +631,11 @@ fn real_world_fixture_suite() {
 
             if verbose {
                 eprintln!(
-                    "  {fixture_label} [{mode_str}]: {} matched, {} hard misses, {} forbidden, {} soft misses, {} unexpected",
+                    "  {fixture_label} [{mode_str}]: {} matched, {} hard misses, {} forbidden, {} count violations, {} soft misses, {} unexpected",
                     result.matched,
                     result.hard_misses.len(),
                     result.forbidden_violations.len(),
+                    result.count_violations.len(),
                     result.soft_misses.len(),
                     result.unexpected.len()
                 );
@@ -573,8 +660,13 @@ fn real_world_fixture_suite() {
     // Print summary.
     eprintln!("\n────────────────────────────────────────────────────");
     eprintln!(
-        "RESULTS: {} matched, {} hard failures, {} forbidden violations, {} soft misses, {} unexpected",
-        total_matched, total_hard_fails, total_forbidden, total_soft_misses, total_unexpected
+        "RESULTS: {} matched, {} hard failures, {} forbidden violations, {} count violations, {} soft misses, {} unexpected",
+        total_matched,
+        total_hard_fails,
+        total_forbidden,
+        total_count_violations,
+        total_soft_misses,
+        total_unexpected
     );
     eprintln!("────────────────────────────────────────────────────");
 
@@ -592,6 +684,13 @@ fn real_world_fixture_suite() {
         }
     }
 
+    if !count_violation_details.is_empty() {
+        eprintln!("\n=== COUNT VIOLATIONS (max_count exceeded) ===");
+        for msg in &count_violation_details {
+            eprintln!("{msg}");
+        }
+    }
+
     if !soft_miss_details.is_empty() {
         eprintln!("\n=== SOFT MISSES (must_match=false, informational) ===");
         for msg in &soft_miss_details {
@@ -599,12 +698,13 @@ fn real_world_fixture_suite() {
         }
     }
 
-    // Hard failures and forbidden violations both cause test failure.
+    // Hard failures, forbidden violations, and count violations cause failure.
     assert_eq!(
-        total_hard_fails + total_forbidden,
+        total_hard_fails + total_forbidden + total_count_violations,
         0,
         "{total_hard_fails} expected findings not found (must_match=true); \
-         {total_forbidden} forbidden findings present (must_not_match=true). \
+         {total_forbidden} forbidden findings present (must_not_match=true); \
+         {total_count_violations} count violations (max_count exceeded). \
          Run with NYX_TEST_VERBOSE=1 for details."
     );
 }

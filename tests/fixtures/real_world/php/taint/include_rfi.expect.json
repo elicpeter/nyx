@@ -23,14 +23,14 @@
     },
     {
       "rule_id": "taint-unsanitised-flow",
-      "severity": "HIGH",
-      "must_match": false,
+      "severity": null,
+      "must_not_match": true,
       "line_range": [
         9,
         9
       ],
       "evidence_contains": [],
-      "notes": "noise: taint-unsanitised-flow \u2014 secondary flow or cross-function leakage"
+      "notes": "The safe include at line 9 is protected by the in_array allowlist at line 8 — scanner correctly recognises the validator and suppresses the flow. Regression guard."
     }
   ]
 }
