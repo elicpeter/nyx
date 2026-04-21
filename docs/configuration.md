@@ -51,7 +51,7 @@ excluded_extensions = ["foo", "jpg"]
 |-------|------|---------|-------------|
 | `mode` | `"full"` \| `"ast"` \| `"taint"` | `"full"` | Analysis mode |
 | `min_severity` | `"Low"` \| `"Medium"` \| `"High"` | `"Low"` | Minimum severity to report |
-| `max_file_size_mb` | int \| null | null | Max file size in MiB; null = unlimited |
+| `max_file_size_mb` | int \| null | 16 | Max file size in MiB; null = unlimited. Default is a safe ceiling for untrusted repos — lift explicitly when scanning trusted codebases with large generated files |
 | `excluded_extensions` | [string] | `["jpg", "png", "gif", "mp4", ...]` | File extensions to skip |
 | `excluded_directories` | [string] | `["node_modules", ".git", "target", ...]` | Directories to skip |
 | `excluded_files` | [string] | `[]` | Specific files to skip |

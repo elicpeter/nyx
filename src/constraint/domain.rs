@@ -844,7 +844,14 @@ impl PathEnv {
         if self.unsat {
             return;
         }
-        self.refine_count += 1;
+        // `refine` (the outer entry) short-circuits at MAX_REFINE_PER_BLOCK,
+        // but `refine_single` is also invoked directly from `assume_eq`,
+        // `assume_neq`, and a few internal sites.  Large generated inputs
+        // (thousands of short statements on one line) can drive millions
+        // of calls and overflow a plain u16 `refine_count`.  Saturate to
+        // stay within bounds — the refinement pipeline is already
+        // idempotent past the cap, so saturation is semantically a no-op.
+        self.refine_count = self.refine_count.saturating_add(1);
 
         // Check size bound
         let pos = self.facts.binary_search_by_key(&v, |(k, _)| *k);

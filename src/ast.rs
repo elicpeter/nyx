@@ -22,11 +22,30 @@ use petgraph::graph::NodeIndex;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 use std::path::Path;
+use std::time::Instant;
 use tree_sitter::{Language, QueryCursor, StreamingIterator};
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
+}
+
+/// Per-file tree-sitter parse timeout in milliseconds.  Tree-sitter is
+/// generally fast, but adversarially-crafted inputs (deeply ambiguous
+/// grammar constructs, pathological backtracking) can drive it into very
+/// slow parses.  A 10 s ceiling per file lets a 10 000-file scan survive
+/// even if every file is hostile.  Overridable via the `NYX_PARSE_TIMEOUT_MS`
+/// environment variable (`0` disables the cap).
+pub(crate) const DEFAULT_PARSE_TIMEOUT_MS: u64 = 10_000;
+
+/// Resolve the effective parse-timeout budget in milliseconds.  Honours the
+/// `NYX_PARSE_TIMEOUT_MS` override; returns `0` when the cap is disabled.
+fn parse_timeout_ms() -> u64 {
+    match std::env::var("NYX_PARSE_TIMEOUT_MS") {
+        Ok(s) => s.parse::<u64>().unwrap_or(DEFAULT_PARSE_TIMEOUT_MS),
+        Err(_) => DEFAULT_PARSE_TIMEOUT_MS,
+    }
 }
 
 /// Convenience alias for node indices.
@@ -488,8 +507,12 @@ struct ParsedSource<'a> {
 }
 
 impl<'a> ParsedSource<'a> {
-    /// Parse bytes into a tree-sitter AST. Returns `None` for binary files or
-    /// unsupported languages.
+    /// Parse bytes into a tree-sitter AST. Returns `None` for binary files,
+    /// parse timeouts, or unsupported languages.  File-size filtering is
+    /// handled at the walker boundary via
+    /// [`ScannerConfig::max_file_size_mb`]; the timeout check here defends
+    /// against hostile inputs (pathological grammar ambiguities) that could
+    /// tie up a worker indefinitely even for files within the size cap.
     fn try_new(bytes: &'a [u8], path: &'a Path) -> NyxResult<Option<Self>> {
         if is_binary(bytes) {
             return Ok(None);
@@ -497,13 +520,41 @@ impl<'a> ParsedSource<'a> {
         let Some((ts_lang, lang_slug)) = lang_for_path(path) else {
             return Ok(None);
         };
-        let tree = PARSER.with(|cell| {
+        let timeout_ms = parse_timeout_ms();
+        let start = Instant::now();
+        let mut timed_out = false;
+        let parsed = PARSER.with(|cell| -> NyxResult<Option<tree_sitter::Tree>> {
             let mut parser = cell.borrow_mut();
             parser.set_language(&ts_lang)?;
-            parser
-                .parse(bytes, None)
-                .ok_or_else(|| NyxError::Other("tree-sitter failed".into()))
+            if timeout_ms == 0 {
+                return Ok(parser.parse(bytes, None));
+            }
+            let len = bytes.len();
+            let mut input = |i: usize, _pt: tree_sitter::Point| -> &[u8] {
+                if i < len { &bytes[i..] } else { &[] }
+            };
+            let mut progress = |_state: &tree_sitter::ParseState| -> ControlFlow<()> {
+                if start.elapsed().as_millis() as u64 >= timeout_ms {
+                    timed_out = true;
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            };
+            let options = tree_sitter::ParseOptions::new().progress_callback(&mut progress);
+            Ok(parser.parse_with_options(&mut input, None, Some(options)))
         })?;
+        let Some(tree) = parsed else {
+            if timed_out {
+                tracing::warn!(
+                    file = %path.display(),
+                    timeout_ms,
+                    "tree-sitter parse timed out; skipping file",
+                );
+                return Ok(None);
+            }
+            return Err(NyxError::Other("tree-sitter failed".into()));
+        };
         let file_path_str = path.to_string_lossy();
         Ok(Some(Self {
             tree,

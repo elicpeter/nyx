@@ -200,7 +200,7 @@ impl Default for ScannerConfig {
         Self {
             mode: AnalysisMode::Full,
             min_severity: Severity::Low,
-            max_file_size_mb: None,
+            max_file_size_mb: Some(16),
             excluded_extensions: vec![
                 "jpg", "png", "gif", "mp4", "avi", "mkv", "zip", "tar", "gz", "exe", "dll", "so",
             ]
