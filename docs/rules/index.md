@@ -61,19 +61,21 @@ Each language page lists all AST pattern rules with examples:
 
 ## Taint Label Coverage
 
-Taint analysis uses language-specific source/sink/sanitizer labels. Coverage varies by language:
+Taint analysis uses language-specific source/sink/sanitizer labels. Coverage depth is not uniform — see [Language Maturity](../language-maturity.md) for the full tier breakdown and known blind spots. Counts below are matcher families in `src/labels/<lang>.rs` as of scanner 0.5.0.
 
-| Language | Sources | Sinks | Sanitizers | Coverage |
-|----------|---------|-------|------------|----------|
-| Rust | Complete | Complete | Complete | Full |
-| JavaScript | Complete | Complete | Partial | Full |
-| TypeScript | Partial | Partial | Partial | Moderate |
-| Python | Partial | Complete | Partial | Moderate |
-| C | Partial | Complete | Minimal | Moderate |
-| C++ | Partial | Complete | Minimal | Moderate |
-| Java | Partial | Partial | Partial | Moderate |
-| Go | Complete | Complete | Partial | Full |
-| PHP | Complete | Complete | Partial | Full |
-| Ruby | Partial | Partial | Partial | Moderate |
+| Tier | Language | Sources | Sanitizers | Sinks | Gated sinks | Vuln classes |
+|------|----------|---------|------------|-------|-------------|--------------|
+| Stable | JavaScript | 3 | 10 | 24 | Yes | HTML, URL, JSON, Shell, SQL, Code, SSRF, File |
+| Stable | TypeScript | 3 | 10 | 24 | Yes | HTML, URL, JSON, Shell, SQL, Code, SSRF, File |
+| Stable | Python | 5 | 7 | 21 | Yes | HTML, URL, Shell, SQL, Code, SSRF, File, Deserialize |
+| Beta | Ruby | 3 | 7 | 15 | No | HTML, Shell, SQL, Code, SSRF, File, Deserialize |
+| Beta | Java | 3 | 8 | 10 | No | HTML, URL, Shell, SQL, Code, SSRF, Deserialize |
+| Beta | PHP | 3 | 7 | 10 | No | HTML, URL, Shell, SQL, Code, SSRF, File, Deserialize |
+| Beta | Go | 4 | 4 | 9 | No | HTML, URL, Shell, SQL, SSRF, Crypto, File |
+| Experimental | Rust | 6 | 2 | 11 | No | HTML, Shell, SQL, SSRF, Deserialize, File |
+| Experimental | C++ | 3 | 2 | 5 | No | Shell, File, SSRF, Format-String |
+| Experimental | C | 3 | 2 | 5 | No | Shell, File, SSRF, Format-String |
 
-"Starter" coverage means basic rules exist but many common library functions are not yet labeled. Contributions welcome.
+"Gated sinks" means Nyx recognizes argument-role-aware sinks (e.g. JavaScript's `setAttribute` is only dangerous on certain attribute names). Languages without gated sinks fall back to flagging the sink unconditionally when a tainted argument reaches it.
+
+Contributions are most impactful on Beta- and Experimental-tier languages — additional sink matchers, sanitizer rules, and gated-sink registrations directly move the needle on precision and recall. Benchmark fixtures belong under `tests/benchmark/corpus/<lang>/`.

@@ -9,6 +9,7 @@ Welcome to the Nyx documentation. Nyx is a multi-language static vulnerability s
 - [CLI Reference](cli.md) -- Every flag, subcommand, and option
 - [Configuration](configuration.md) -- Config file schema, precedence, custom rules
 - [Output Formats](output.md) -- Console, JSON, SARIF; exit codes; evidence fields
+- [Language Maturity](language-maturity.md) -- Per-language tier classification, rule depth, and known blind spots
 
 ## Detector Reference
 

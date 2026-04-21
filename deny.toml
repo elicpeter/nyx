@@ -38,15 +38,12 @@ allow = [
     # --- weak copyleft (GPL-compatible) ---
     "MPL-2.0",
     "LGPL-3.0",
-    "LGPL-3.0-only",
-    "LGPL-3.0-or-later",
     "EPL-2.0",
 
     # --- GPL family ---
     "GPL-3.0",
-    "GPL-3.0-only",
     "GPL-3.0-or-later",
-    "GPL-2.0-or-later",
+    "GPL-2.0",
 
     # --- Python / PSF ---
     "PSF-2.0",

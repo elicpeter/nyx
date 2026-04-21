@@ -86,7 +86,7 @@ r2d2 = "0.8.10"
 bytesize  = "2.3.1"
 chrono    = { version = "0.4.44", default-features = false, features = ["std", "clock", "serde"] }
 thiserror = "2.0.18"
-dashmap = "7.0.0-rc2"
+dashmap = "6.1.0"
 petgraph = { version = "0.8.3", features = ["serde-1"] }
 bitflags = "2.11.0"
 phf = { version = "0.13.1", features = ["macros"] }

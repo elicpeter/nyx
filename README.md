@@ -15,13 +15,15 @@
 
 **Nyx** is a Rust-native command-line tool that detects security vulnerabilities across 10 programming languages. It combines [`tree-sitter`](https://tree-sitter.github.io/) parsing, intra-procedural control-flow graphs, and cross-file taint analysis with an optional SQLite-backed index for incremental scans.
 
+Rule depth and detection confidence differ meaningfully between languages — Python, JavaScript, and TypeScript are the deepest, while C, C++, and Rust are narrower. See the [Language Maturity Matrix](docs/language-maturity.md) before committing Nyx to a CI gate on a given stack.
+
 ---
 
 ## Key Capabilities
 
 | Capability | Description |
 |---|---|
-| Multi-language support | Rust, C, C++, Java, Go, PHP, Python, Ruby, TypeScript, JavaScript |
+| Multi-language support | 10 languages across three maturity tiers — see [Language Maturity](docs/language-maturity.md). Stable: Python, JavaScript, TypeScript. Beta: Go, Java, Ruby, PHP. Experimental: C, C++, Rust. |
 | AST-level pattern matching | Language-specific queries written against precise parse trees |
 | Control-flow graph analysis | Auth gaps, unguarded sinks, unreachable security code, resource leaks, error fallthrough |
 | Cross-file taint tracking | Monotone forward dataflow taint analysis from sources through sanitizers to sinks with function summaries |
@@ -231,20 +233,15 @@ Ranking is enabled by default. Disable it with `--no-rank` or `output.attack_sur
 
 ## Supported Languages
 
-All 10 languages have full AST pattern matching and CFG/taint analysis. Resource leak detection is available where language-specific acquire/release pairs are defined.
+All 10 languages parse via tree-sitter and run through the full CFG + taint + AST pipeline, but **rule depth, cross-file confidence, and idiom coverage are not uniform**. The tiers below are grounded in benchmark F1 (see [Detection Accuracy](#detection-accuracy)) and the per-language weak-spot lists the maintainers keep open in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md). See [Language Maturity](docs/language-maturity.md) for per-dimension detail, known blind spots, and how to contribute.
 
-| Language | AST Patterns | CFG + Taint | Resource Leaks |
+| Tier | Languages | Rule-level F1 (latest) | Notes |
 |---|---|---|---|
-| Rust | Yes | Yes | Yes |
-| C | Yes | Yes | Yes |
-| C++ | Yes | Yes | Yes |
-| Java | Yes | Yes | Yes |
-| Go | Yes | Yes | Yes |
-| PHP | Yes | Yes | Yes |
-| Python | Yes | Yes | Yes |
-| Ruby | Yes | Yes | Yes |
-| TypeScript | Yes | Yes | Yes |
-| JavaScript | Yes | Yes | Yes |
+| **Stable** | Python, JavaScript, TypeScript | 96.8%–100.0% | Deep rule sets (20+ sinks, 7+ sanitizers), argument-role-aware gated sinks, framework detection (Flask/Django, Express/Koa/Fastify), majority of advanced-analysis (SSA / context-sensitive / symbolic-execution) fixtures. Safe to use as a CI gate. |
+| **Beta** | Go, Java, Ruby, PHP | 92.9%–97.0% | Solid mid-depth rule sets covering 7–8 vulnerability classes each. No gated sinks yet; some idioms (string interpolation, variable-typed method receivers, framework context) are incomplete. Usable in CI with light FP triage. |
+| **Experimental** | C, C++, Rust | 86.4%–92.3% | Narrower rule sets (C/C++: 5 sinks, 2 sanitizers). Rust has full source coverage but several FPs persist on adversarial safe cases pending engine work (match-arm guards, structural sinks with type facts). Treat findings as a starting point for review rather than authoritative. |
+
+Resource-leak detection is available for every tier where language-specific acquire/release pairs are defined.
 
 ---
 
@@ -446,6 +443,7 @@ Full documentation is available in the [`docs/`](docs/index.md) directory:
   - [State Model](docs/detectors/state.md): resource lifecycle, authentication state
   - [AST Patterns](docs/detectors/patterns.md): tree-sitter structural matching
 - [Rule Reference](docs/rules/index.md): per-language rule listings with examples
+- [Language Maturity](docs/language-maturity.md): honest per-language tier classification, known blind spots, and weak-spot list
 
 ---
 
