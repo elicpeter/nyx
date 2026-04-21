@@ -893,6 +893,38 @@ fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> V
     names
 }
 
+/// Index of the parameter that should be treated as a taint source because
+/// the function looks like a web framework request handler.
+///
+/// Currently scoped narrowly to JavaScript/TypeScript Express/Koa-style
+/// signatures: `(req, res, ...)`, `(request, response, ...)`, or `(ctx, ...)`.
+/// Detection mirrors the name-based heuristic in
+/// `cfg_analysis::auth::has_web_handler_params` (kept separate because cfg.rs
+/// runs before cfg_analysis can import it).
+fn web_handler_source_param_index(lang: &str, param_names: &[String]) -> Option<usize> {
+    if !matches!(lang, "javascript" | "typescript") {
+        return None;
+    }
+
+    let is_req = |p: &String| {
+        let l = p.to_ascii_lowercase();
+        l == "req" || l == "request"
+    };
+    let is_res = |p: &String| {
+        let l = p.to_ascii_lowercase();
+        l == "res" || l == "response"
+    };
+    let req_idx = param_names.iter().position(is_req);
+    if req_idx.is_some() && param_names.iter().any(is_res) {
+        return req_idx;
+    }
+
+    // Koa: leading `ctx` (often `(ctx, next)`).
+    param_names
+        .iter()
+        .position(|p| p.eq_ignore_ascii_case("ctx"))
+}
+
 /// Check if a callee name matches any configured terminator.
 fn is_configured_terminator(callee: &str, analysis_rules: Option<&LangAnalysisRules>) -> bool {
     if let Some(rules) = analysis_rules {
@@ -1331,6 +1363,32 @@ fn build_sub<'a>(
             let param_names = extract_param_names(ast, lang, code);
             let param_count = param_names.len();
 
+            // 1c) Seed a synthetic Source node for the request parameter of
+            // recognised web-framework handlers, so taint sees the request
+            // object as user input even without an explicit `req.body` read.
+            let body_pred = match web_handler_source_param_index(lang, &param_names)
+                .and_then(|i| param_names.get(i))
+            {
+                Some(name) => {
+                    let seed_idx = g.add_node(NodeInfo {
+                        kind: StmtKind::Seq,
+                        span: (ast.start_byte(), ast.end_byte()),
+                        label: Some(DataLabel::Source(Cap::all())),
+                        defines: Some(name.clone()),
+                        uses: Vec::new(),
+                        callee: Some(name.clone()),
+                        enclosing_func: Some(fn_name.clone()),
+                        call_ordinal: 0,
+                        condition_text: None,
+                        condition_vars: Vec::new(),
+                        condition_negated: false,
+                    });
+                    connect_all(g, &[entry_idx], seed_idx, EdgeKind::Seq);
+                    seed_idx
+                }
+                None => entry_idx,
+            };
+
             // 2) build its body with a fresh call ordinal counter for this function scope
             // Snapshot the current node count so we can iterate only over nodes
             // created within this function (avoids O(N²) scan of the full graph).
@@ -1354,7 +1412,7 @@ fn build_sub<'a>(
             let mut fn_continues = Vec::new();
             let body_exits = build_sub(
                 body,
-                &[entry_idx],
+                &[body_pred],
                 g,
                 lang,
                 code,
