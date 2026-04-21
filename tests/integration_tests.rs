@@ -203,6 +203,44 @@ fn cross_file_mixed_cap_sink() {
     validate_expectations(&diags, &dir);
 }
 
+/// Two different sinks on the same line (SQL + SHELL) must produce two
+/// distinct taint findings. Regression guard for the Phase 2a dedup fix:
+/// the grouping key includes sink capability bits, so `sink_sql(x);
+/// sink_shell(x);` no longer collapses into a single finding.
+#[test]
+fn dedup_same_line_different_sinks() {
+    let dir = fixture_path("dedup_same_line_different_sinks");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+
+    // Inspect the specific line where the two sinks live. Both findings
+    // must exist, and must carry different resolved sink cap bits.
+    let taint_on_target_line: Vec<&nyx_scanner::commands::scan::Diag> = diags
+        .iter()
+        .filter(|d| d.id.starts_with("taint-unsanitised-flow") && d.line == 10)
+        .collect();
+    assert!(
+        taint_on_target_line.len() >= 2,
+        "expected at least 2 taint findings on line 10 (dedup must not collapse \
+         different sinks), got {}: {:#?}",
+        taint_on_target_line.len(),
+        taint_on_target_line
+            .iter()
+            .map(|d| format!("{}:{} [caps={}]", d.path, d.line,
+                d.evidence.as_ref().map(|e| e.sink_caps).unwrap_or(0)))
+            .collect::<Vec<_>>()
+    );
+    let caps: HashSet<u16> = taint_on_target_line
+        .iter()
+        .map(|d| d.evidence.as_ref().map(|e| e.sink_caps).unwrap_or(0))
+        .collect();
+    assert!(
+        caps.len() >= 2,
+        "expected findings on line 10 to carry distinct sink_caps, got {:?}",
+        caps
+    );
+}
+
 // ── SCC SSA summary refinement ────────────────────────────────────────────
 
 #[test]

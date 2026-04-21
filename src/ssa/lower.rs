@@ -167,12 +167,17 @@ fn lower_to_ssa_inner(
             .collect();
     }
 
-    // 7b. Debug assertions: verify structural invariants
+    // 7b. Debug assertions: verify structural invariants.
     #[cfg(debug_assertions)]
     {
         debug_assert_bfs_ordering(&block_preds);
-        debug_assert_phi_operand_counts(&ssa_blocks, &block_preds);
     }
+    // Phi operand counts are a release-level invariant: an SSA body with
+    // fewer phi operands than block predecessors is unsound (downstream
+    // taint analysis assumes every predecessor contributes one operand).
+    // Keep this active in release builds so unsound lowering surfaces
+    // loudly rather than corrupting analysis silently.
+    assert_phi_operand_counts(&ssa_blocks, &block_preds);
 
     // 8. Map exception edges from CFG node indices to SSA block IDs
     let exception_edges: Vec<(BlockId, BlockId)> = raw_exception_edges
@@ -1325,20 +1330,52 @@ fn debug_assert_bfs_ordering(block_preds: &[Vec<usize>]) {
     }
 }
 
-/// Verify phi operand counts: each phi must have at most as many operands as
+/// Verify phi operand counts: each phi must have **no more** operands than
 /// the block has predecessors.
-#[cfg(debug_assertions)]
-fn debug_assert_phi_operand_counts(ssa_blocks: &[SsaBlock], block_preds: &[Vec<usize>]) {
+///
+/// Runs in release builds because the "too many operands" case is
+/// load-bearing for soundness — downstream taint, const, and abstract
+/// analyses iterate phi operands by `(pred_blk, value)` pairs, and an
+/// operand referencing a nonexistent predecessor either panics (bounds
+/// mismatch) or silently feeds garbage taint into the join.
+///
+/// # Why `<=` and not `==`
+///
+/// The current lowering pushes a phi operand only when the variable has a
+/// live reaching value on that predecessor edge (`rename_variables` at
+/// site L1153). On edges where the variable is not yet defined (e.g. a
+/// catch-block binding joining back with normal flow, or an early-return
+/// branch on a later-defined variable), no operand is pushed for that
+/// predecessor. Downstream consumers iterate `(pred_blk, value)` pairs
+/// rather than indexing positionally, so a missing operand is
+/// *interpreted as* "this predecessor contributes no taint from this phi"
+/// — operationally equivalent to an Undef operand.
+///
+/// A strict-equality invariant (`==`) is the right long-term shape (it
+/// would require every pred to contribute an explicit value, possibly an
+/// `SsaOp::Undef` sentinel), but forcing it today would crash real-world
+/// fixtures covering try/catch, rescue/ensure, and early-return patterns
+/// across all 10 languages. Promoting to `<=` in release catches the
+/// genuine unsoundness (more operands than preds) while leaving the
+/// stricter invariant for a follow-up that lands with a matching
+/// lowering change.
+fn assert_phi_operand_counts(ssa_blocks: &[SsaBlock], block_preds: &[Vec<usize>]) {
     for (i, block) in ssa_blocks.iter().enumerate() {
         for phi in &block.phis {
             if let SsaOp::Phi(ref operands) = phi.op {
-                debug_assert!(
+                assert!(
                     operands.len() <= block_preds[i].len(),
-                    "Block {} phi v{} has {} operands but block has {} predecessors",
+                    "SSA phi operand count exceeds predecessor count: block {} phi v{} \
+                     (var={:?}) has {} operands but block has {} predecessors. This is an \
+                     unsound SSA lowering — every operand must reference an existing \
+                     predecessor. preds={:?}, operand_preds={:?}",
                     i,
                     phi.value.0,
+                    phi.var_name,
                     operands.len(),
-                    block_preds[i].len()
+                    block_preds[i].len(),
+                    block_preds[i],
+                    operands.iter().map(|(b, _)| b.0).collect::<Vec<_>>(),
                 );
             }
         }
@@ -1785,16 +1822,161 @@ mod tests {
         debug_assert_bfs_ordering(&block_preds);
     }
 
+    /// Phase 2a regression guard: a catch block that joins an exception
+    /// predecessor and a normal control-flow predecessor must lower to a
+    /// consistent phi. For variables defined before the try (live on
+    /// *both* edges), the phi at the catch block has exactly two operands
+    /// — one per predecessor — and the release assertion accepts it.
     #[test]
-    fn phi_assertion_helper_accepts_valid_shapes() {
-        // Direct test with a phi that has fewer operands than preds
-        // (can happen when a variable is only defined on some paths)
+    fn catch_block_join_phi_has_operand_per_live_predecessor() {
+        // Entry → defines `x` → Try → (Seq) → Join ← (Exception via body) Catch
+        //                                                      ↑
+        //                         A phi for `x` at the join block should carry
+        //                         one operand from each of its two predecessors.
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let define_x = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let body = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let catch = cfg.add_node(NodeInfo {
+            catch_param: true,
+            taint: TaintMeta {
+                defines: Some("x".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let join = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, define_x, EdgeKind::Seq);
+        cfg.add_edge(define_x, body, EdgeKind::Seq);
+        cfg.add_edge(body, join, EdgeKind::Seq);
+        cfg.add_edge(body, catch, EdgeKind::Exception);
+        cfg.add_edge(catch, join, EdgeKind::Seq);
+        cfg.add_edge(join, exit, EdgeKind::Seq);
+
+        // Lowering must succeed — the assertion is active in release.
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+
+        // Locate the block containing a phi for `x`; it must be the join
+        // block with two reachable predecessors. The phi must have
+        // exactly two operands.
+        let phi_block = ssa
+            .blocks
+            .iter()
+            .find(|b| {
+                b.phis.iter().any(|p| {
+                    p.var_name.as_deref() == Some("x") && matches!(p.op, SsaOp::Phi(_))
+                })
+            })
+            .expect("expected a phi for `x` at the catch/normal join");
+        assert_eq!(
+            phi_block.preds.len(),
+            2,
+            "catch/normal join block must have 2 predecessors, got {}",
+            phi_block.preds.len()
+        );
+        let phi_for_x = phi_block
+            .phis
+            .iter()
+            .find(|p| p.var_name.as_deref() == Some("x"))
+            .unwrap();
+        if let SsaOp::Phi(ref operands) = phi_for_x.op {
+            assert_eq!(
+                operands.len(),
+                2,
+                "phi for `x` at the catch/normal join must have one operand per \
+                 predecessor, got {}",
+                operands.len()
+            );
+        } else {
+            panic!("expected SsaOp::Phi for `x`");
+        }
+    }
+
+    #[test]
+    fn phi_assertion_helper_accepts_exact_operand_count() {
+        // Direct test of the assertion helper: a phi with exactly as many
+        // operands as the block has predecessors must not panic.
         let dummy_node = NodeIndex::new(0);
         let block = SsaBlock {
             id: BlockId(1),
             phis: vec![SsaInst {
                 value: SsaValue(0),
-                op: SsaOp::Phi(smallvec::smallvec![(BlockId(0), SsaValue(1))]),
+                op: SsaOp::Phi(smallvec::smallvec![
+                    (BlockId(0), SsaValue(1)),
+                    (BlockId(2), SsaValue(2)),
+                ]),
+                cfg_node: dummy_node,
+                var_name: Some("x".into()),
+                span: (0, 0),
+            }],
+            body: vec![],
+            terminator: Terminator::Unreachable,
+            preds: smallvec::smallvec![BlockId(0), BlockId(2)],
+            succs: smallvec::smallvec![],
+        };
+        let block_preds = vec![vec![], vec![0, 2], vec![0]];
+        assert_phi_operand_counts(
+            &[
+                SsaBlock {
+                    id: BlockId(0),
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(BlockId(1)),
+                    preds: smallvec::smallvec![],
+                    succs: smallvec::smallvec![BlockId(1)],
+                },
+                block,
+                SsaBlock {
+                    id: BlockId(2),
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(BlockId(1)),
+                    preds: smallvec::smallvec![BlockId(0)],
+                    succs: smallvec::smallvec![BlockId(1)],
+                },
+            ],
+            &block_preds,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "SSA phi operand count exceeds predecessor count")]
+    fn phi_assertion_helper_rejects_more_operands_than_preds() {
+        // Phase 2a: promoted to release assertion. A phi with MORE operands
+        // than preds references a nonexistent predecessor — guaranteed
+        // unsound because downstream consumers either panic on the lookup
+        // or silently feed garbage taint into the join. This must fire
+        // regardless of debug/release.
+        let dummy_node = NodeIndex::new(0);
+        let block = SsaBlock {
+            id: BlockId(1),
+            phis: vec![SsaInst {
+                value: SsaValue(0),
+                op: SsaOp::Phi(smallvec::smallvec![
+                    (BlockId(0), SsaValue(1)),
+                    (BlockId(2), SsaValue(2)),
+                    (BlockId(3), SsaValue(3)),
+                ]),
                 cfg_node: dummy_node,
                 var_name: Some("x".into()),
                 span: (0, 0),
@@ -1805,8 +1987,48 @@ mod tests {
             succs: smallvec::smallvec![],
         };
         let block_preds = vec![vec![], vec![0, 2]];
-        // 1 operand <= 2 preds — should not panic
-        debug_assert_phi_operand_counts(
+        assert_phi_operand_counts(
+            &[
+                SsaBlock {
+                    id: BlockId(0),
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(BlockId(1)),
+                    preds: smallvec::smallvec![],
+                    succs: smallvec::smallvec![BlockId(1)],
+                },
+                block,
+            ],
+            &block_preds,
+        );
+    }
+
+    #[test]
+    fn phi_assertion_helper_accepts_fewer_operands_than_preds() {
+        // Partial phis — a variable that isn't yet defined on every
+        // incoming edge (e.g. caught exception binding, early-return
+        // branch on a later-defined var) legitimately produces fewer
+        // operands than preds. Downstream iterates by (pred_blk, value)
+        // pairs, so the missing operand is interpreted as "no taint from
+        // this predecessor" — equivalent to an Undef sentinel.
+        // See module docstring for the `==` follow-up plan.
+        let dummy_node = NodeIndex::new(0);
+        let block = SsaBlock {
+            id: BlockId(1),
+            phis: vec![SsaInst {
+                value: SsaValue(0),
+                op: SsaOp::Phi(smallvec::smallvec![(BlockId(0), SsaValue(1))]),
+                cfg_node: dummy_node,
+                var_name: Some("e".into()),
+                span: (0, 0),
+            }],
+            body: vec![],
+            terminator: Terminator::Unreachable,
+            preds: smallvec::smallvec![BlockId(0), BlockId(2)],
+            succs: smallvec::smallvec![],
+        };
+        let block_preds = vec![vec![], vec![0, 2]];
+        assert_phi_operand_counts(
             &[
                 SsaBlock {
                     id: BlockId(0),

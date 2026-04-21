@@ -201,6 +201,20 @@ pub struct Evidence {
     /// Symbolic constraint analysis verdict for this finding's taint path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbolic: Option<SymbolicVerdict>,
+
+    /// Resolved sink capability bits (u16 from `Cap::bits()`).
+    ///
+    /// Used by deduplication to distinguish findings that share a
+    /// `(path, line, severity)` key but target different sinks (e.g.
+    /// `sink_sql(x); sink_shell(x);` on the same line). 0 when the sink
+    /// caps could not be resolved at the CFG node (e.g. pure summary
+    /// resolution where the caller's sink node carries no label).
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub sink_caps: u16,
+}
+
+fn is_zero_u16(v: &u16) -> bool {
+    *v == 0
 }
 
 impl Evidence {
@@ -220,6 +234,7 @@ impl Evidence {
             && self.explanation.is_none()
             && self.confidence_limiters.is_empty()
             && self.symbolic.is_none()
+            && self.sink_caps == 0
     }
 }
 

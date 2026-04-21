@@ -326,17 +326,22 @@ pub(crate) fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
 }
 
 /// Collapse `taint-unsanitised-flow` findings that share the same primary
-/// sink line, rule base, and severity into a single finding by keeping the
-/// tightest source (closest to the sink in the same function; tiebreak by
-/// source line asc, source col asc).
+/// sink line, rule base, severity, **and sink capability bits** into a
+/// single finding by keeping the tightest source (closest to the sink in
+/// the same function; tiebreak by source line asc, source col asc).
 ///
 /// Rule IDs of the form `taint-unsanitised-flow (source L:C)` share a single
 /// base `taint-unsanitised-flow`. The grouping key is column-agnostic —
 /// multiple flows to the same sink line differing only in column or source
 /// are collapsed to one. The rule_id preserves the source location, so the
-/// kept representative still identifies which flow was reported. Findings
-/// with different base rule IDs (e.g. `js.code_exec.eval`) or different
-/// severities are left untouched per guardrails.
+/// kept representative still identifies which flow was reported.
+///
+/// The grouping key **includes the resolved sink capability bits** so that
+/// two different sinks on the same line (e.g. `sink_sql(x); sink_shell(x);`)
+/// are not collapsed into one finding — they represent materially different
+/// vulnerabilities and must surface independently. Findings with different
+/// base rule IDs (e.g. `js.code_exec.eval`) or different severities are
+/// left untouched per guardrails.
 pub(crate) fn deduplicate_taint_flows(diags: &mut Vec<Diag>) {
     use std::collections::HashMap;
 
@@ -346,14 +351,18 @@ pub(crate) fn deduplicate_taint_flows(diags: &mut Vec<Diag>) {
         id.starts_with(TAINT_BASE)
     }
 
-    // Group candidates by (path, line, severity). Only `taint-unsanitised-flow`
-    // rule IDs participate; findings with other bases (e.g. `js.code_exec.eval`)
-    // are left untouched per guardrails.
-    let mut groups: HashMap<(String, usize, Severity), Vec<usize>> = HashMap::new();
+    fn sink_cap_bits(d: &Diag) -> u16 {
+        d.evidence.as_ref().map(|e| e.sink_caps).unwrap_or(0)
+    }
+
+    // Group candidates by (path, line, severity, sink_cap_bits). Only
+    // `taint-unsanitised-flow` rule IDs participate; findings with other
+    // bases (e.g. `js.code_exec.eval`) are left untouched per guardrails.
+    let mut groups: HashMap<(String, usize, Severity, u16), Vec<usize>> = HashMap::new();
     for (i, d) in diags.iter().enumerate() {
         if is_taint_flow(&d.id) {
             groups
-                .entry((d.path.clone(), d.line, d.severity))
+                .entry((d.path.clone(), d.line, d.severity, sink_cap_bits(d)))
                 .or_default()
                 .push(i);
         }
@@ -465,6 +474,50 @@ fn log_unresolved_callees(call_graph: &CallGraph) {
     }
 }
 
+/// Stable note prefix for SCC-cap-derived diagnostics. Consumers (UI,
+/// downstream filters, tests) can match on this prefix to recognise
+/// findings whose analysis was truncated at the safety cap.
+pub const SCC_UNCONVERGED_NOTE_PREFIX: &str = "scc_unconverged:";
+
+/// Attach a low-confidence tag and a diagnostic note to every finding
+/// produced by an SCC batch that did not converge within the safety cap.
+///
+/// Called once per unconverged batch (after the pass-2 rayon parallelism
+/// has collected `iteration_diags`) so the cost is O(n) over the batch's
+/// findings — much cheaper than a per-finding `warn!`.
+///
+/// Confidence is **capped** at `Low` rather than unconditionally set:
+/// upstream analysis may have proven something particularly strong about
+/// an individual finding (e.g. high-confidence AST match). Capping
+/// preserves that attribution while still surfacing the degradation at
+/// the batch level.
+fn tag_unconverged_findings(diags: &mut [Diag], iterations: usize, cap: usize) {
+    use crate::evidence::{Confidence, Evidence};
+
+    for d in diags.iter_mut() {
+        d.confidence = match d.confidence {
+            Some(c) if c < Confidence::Low => Some(c), // already-lower preserved
+            _ => Some(Confidence::Low),
+        };
+        let note = format!(
+            "{SCC_UNCONVERGED_NOTE_PREFIX}SCC did not converge within {iterations} \
+             iterations (cap {cap}); results may be imprecise"
+        );
+        match d.evidence.as_mut() {
+            Some(ev) => {
+                if !ev.notes.iter().any(|n| n == &note) {
+                    ev.notes.push(note);
+                }
+            }
+            None => {
+                let mut ev = Evidence::default();
+                ev.notes.push(note);
+                d.evidence = Some(ev);
+            }
+        }
+    }
+}
+
 /// Safety cap on SCC fixed-point iterations.
 ///
 /// The convergence predicate is *snapshot equality* — we break as soon as
@@ -512,6 +565,26 @@ pub fn last_scc_max_iterations() -> usize {
     LAST_SCC_MAX_ITERATIONS.load(Ordering::Relaxed)
 }
 
+/// Test-only override for [`SCC_FIXPOINT_SAFETY_CAP`].  When non-zero,
+/// the SCC fix-point loop uses this value instead of the const cap.
+///
+/// Used by convergence tests to force a cap-hit on small fixtures
+/// without constructing pathological SCCs that would actually need 64+
+/// iterations.  Default 0 = no override; production behaviour unchanged.
+static SCC_FIXPOINT_CAP_OVERRIDE: AtomicUsize = AtomicUsize::new(0);
+
+/// Set (or clear) the test-only SCC fix-point cap override.  `cap = 0`
+/// restores the default.  Intended exclusively for integration tests
+/// that need to force cap-hit behaviour.
+pub fn set_scc_fixpoint_cap_override(cap: usize) {
+    SCC_FIXPOINT_CAP_OVERRIDE.store(cap, Ordering::Relaxed);
+}
+
+fn effective_scc_cap() -> usize {
+    let o = SCC_FIXPOINT_CAP_OVERRIDE.load(Ordering::Relaxed);
+    if o == 0 { SCC_FIXPOINT_SAFETY_CAP } else { o }
+}
+
 /// Run pass 2 analysis on a sequence of topo-ordered file batches.
 ///
 /// For batches with mutual recursion, iterates until summaries converge
@@ -540,10 +613,11 @@ fn run_topo_batches(
         if batch.has_mutual_recursion {
             // SCC fixed-point: iterate until summaries converge (snapshot
             // equality) or we hit the safety cap.
+            let scc_cap = effective_scc_cap();
             let mut iteration_diags = Vec::new();
             let mut converged = false;
             let mut iters_used: usize = 0;
-            for iter in 0..SCC_FIXPOINT_SAFETY_CAP {
+            for iter in 0..scc_cap {
                 iters_used = iter + 1;
                 let snap_before = global_summaries.snapshot_caps();
 
@@ -648,7 +722,7 @@ fn run_topo_batches(
                     batch = batch_idx,
                     files = batch.files.len(),
                     iterations = iters_used,
-                    cap = SCC_FIXPOINT_SAFETY_CAP,
+                    cap = scc_cap,
                     "SCC batch did not converge within safety cap — results \
                      may be imprecise. This usually indicates a very large \
                      mutually-recursive region or a non-monotone summary \
@@ -658,13 +732,20 @@ fn run_topo_batches(
                     l.warn(
                         format!(
                             "SCC batch {batch_idx} ({} files) did not converge \
-                             within {SCC_FIXPOINT_SAFETY_CAP} iterations",
+                             within {scc_cap} iterations",
                             batch.files.len()
                         ),
                         None,
                         None,
                     );
                 }
+
+                // Tag findings from an unconverged batch so operators know
+                // the results are potentially imprecise. Cap confidence at
+                // Low (overriding any higher pre-set) and append a note to
+                // the evidence so downstream UIs / reviewers can surface
+                // the degradation.
+                tag_unconverged_findings(&mut iteration_diags, iters_used, scc_cap);
             }
             // Count progress for these files once.
             pb.inc(batch.files.len() as u64);
@@ -2260,6 +2341,48 @@ mod dedup_taint_flow_tests {
     }
 
     #[test]
+    fn dedup_does_not_drop_different_sink_caps_on_same_line() {
+        // Two findings at line 10, same column, same severity — but with
+        // different resolved sink capability bits (SQL vs SHELL). They must
+        // NOT collapse: different sink kinds are materially different
+        // vulnerabilities. Phase 2a regression guard.
+        let mut diags = vec![
+            make_taint("a.rs", 10, 5, 3, 1),
+            make_taint("a.rs", 10, 5, 3, 1),
+        ];
+        if let Some(ev) = diags[0].evidence.as_mut() {
+            ev.sink_caps = crate::labels::Cap::SQL_QUERY.bits();
+        }
+        if let Some(ev) = diags[1].evidence.as_mut() {
+            ev.sink_caps = crate::labels::Cap::SHELL_ESCAPE.bits();
+        }
+        deduplicate_taint_flows(&mut diags);
+        assert_eq!(
+            diags.len(),
+            2,
+            "findings with different sink caps must not dedup"
+        );
+    }
+
+    #[test]
+    fn dedup_collapses_same_sink_caps_on_same_line() {
+        // Same line, same severity, same sink caps — this is the canonical
+        // dedup case (two flows to the same sink, differing only in source).
+        let mut diags = vec![
+            make_taint("a.rs", 10, 5, 3, 1),
+            make_taint("a.rs", 10, 5, 8, 1),
+        ];
+        if let Some(ev) = diags[0].evidence.as_mut() {
+            ev.sink_caps = crate::labels::Cap::SHELL_ESCAPE.bits();
+        }
+        if let Some(ev) = diags[1].evidence.as_mut() {
+            ev.sink_caps = crate::labels::Cap::SHELL_ESCAPE.bits();
+        }
+        deduplicate_taint_flows(&mut diags);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
     fn dedup_prefers_same_function_over_cross_function() {
         // Two findings at line 10: one from same function, one from cross-function.
         let mut diags = vec![
@@ -2276,6 +2399,90 @@ mod dedup_taint_flow_tests {
         assert_eq!(diags.len(), 1);
         // Kept should be the same-function one (source 8:1).
         assert!(diags[0].id.contains("(source 8:1)"));
+    }
+}
+
+#[cfg(test)]
+mod scc_tagging_tests {
+    use super::*;
+    use crate::evidence::{Confidence, Evidence};
+
+    fn make_diag(confidence: Option<Confidence>) -> Diag {
+        Diag {
+            path: "a.py".into(),
+            line: 1,
+            col: 1,
+            severity: Severity::High,
+            id: "taint-unsanitised-flow".into(),
+            category: FindingCategory::Security,
+            path_validated: false,
+            guard_kind: None,
+            message: None,
+            labels: vec![],
+            confidence,
+            evidence: Some(Evidence::default()),
+            rank_score: None,
+            rank_reason: None,
+            suppressed: false,
+            suppression: None,
+            rollup: None,
+        }
+    }
+
+    #[test]
+    fn tag_unconverged_caps_confidence_and_appends_note() {
+        let mut diags = vec![make_diag(Some(Confidence::High)), make_diag(None)];
+        tag_unconverged_findings(&mut diags, 64, 64);
+
+        assert_eq!(diags[0].confidence, Some(Confidence::Low));
+        assert_eq!(diags[1].confidence, Some(Confidence::Low));
+        for d in &diags {
+            let ev = d.evidence.as_ref().expect("evidence populated");
+            assert!(
+                ev.notes
+                    .iter()
+                    .any(|n| n.starts_with(SCC_UNCONVERGED_NOTE_PREFIX)),
+                "expected scc_unconverged note, got {:?}",
+                ev.notes
+            );
+        }
+    }
+
+    #[test]
+    fn tag_unconverged_preserves_lower_than_low_confidence() {
+        // Nothing is strictly below Low today, but the cap-at-Low logic
+        // should still produce Low as the floor when confidence is Low.
+        let mut diags = vec![make_diag(Some(Confidence::Low))];
+        tag_unconverged_findings(&mut diags, 10, 64);
+        assert_eq!(diags[0].confidence, Some(Confidence::Low));
+    }
+
+    #[test]
+    fn tag_unconverged_creates_evidence_when_missing() {
+        let mut d = make_diag(None);
+        d.evidence = None;
+        let mut diags = vec![d];
+        tag_unconverged_findings(&mut diags, 7, 64);
+
+        let ev = diags[0].evidence.as_ref().expect("evidence created");
+        assert!(
+            ev.notes
+                .iter()
+                .any(|n| n.starts_with(SCC_UNCONVERGED_NOTE_PREFIX))
+        );
+    }
+
+    #[test]
+    fn tag_unconverged_does_not_duplicate_notes_on_rerun() {
+        let mut diags = vec![make_diag(None)];
+        tag_unconverged_findings(&mut diags, 64, 64);
+        tag_unconverged_findings(&mut diags, 64, 64);
+        let notes = &diags[0].evidence.as_ref().unwrap().notes;
+        let count = notes
+            .iter()
+            .filter(|n| n.starts_with(SCC_UNCONVERGED_NOTE_PREFIX))
+            .count();
+        assert_eq!(count, 1, "should not duplicate scc_unconverged note");
     }
 }
 

@@ -258,6 +258,19 @@ fn build_taint_diag(
         .clone()
         .or_else(|| Some(short_call_site.clone()));
 
+    // Resolved sink capability bits — used by deduplication to distinguish
+    // sinks with different cap types on the same source line (e.g.
+    // `sink_sql(x); sink_shell(x);`).
+    let sink_caps_bits: u16 = cfg_graph[finding.sink]
+        .taint
+        .labels
+        .iter()
+        .filter_map(|l| match l {
+            crate::labels::DataLabel::Sink(c) => Some(c.bits()),
+            _ => None,
+        })
+        .fold(0u16, |acc, b| acc | b);
+
     let mut diag = Diag {
         path: primary_path.clone(),
         line: primary_line,
@@ -312,6 +325,7 @@ fn build_taint_diag(
             cap_specificity: Some(finding.cap_specificity),
             flow_steps,
             symbolic: finding.symbolic.clone(),
+            sink_caps: sink_caps_bits,
             ..Default::default()
         }),
         rank_score: None,
