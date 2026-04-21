@@ -4573,6 +4573,277 @@ fn build_begin_rescue<'a>(
 }
 
 // -------------------------------------------------------------------------
+//    switch handler — multi-way dispatch with fallthrough
+// -------------------------------------------------------------------------
+
+/// True for AST kinds that wrap a single switch case body.
+fn is_switch_case_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "switch_case"
+            | "switch_default"
+            | "case_statement"
+            | "default_statement"
+            | "expression_case"
+            | "default_case"
+            | "type_case"
+            | "type_switch_case"
+            | "communication_case"
+            | "switch_block_statement_group"
+    )
+}
+
+/// True for AST kinds that always represent the switch's `default` arm.
+/// For C/C++/Java, default is encoded as a child label inside a generic case
+/// kind; those are detected via `case_has_default_label` below.
+fn is_default_case_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "switch_default" | "default_statement" | "default_case"
+    )
+}
+
+/// Detect a `default` keyword among the immediate children of a case-like AST
+/// node. Used for grammars (C/C++/Java) where `default:` is encoded as a child
+/// label of an otherwise generic `case_statement` / `switch_block_statement_group`.
+fn case_has_default_label(case: Node<'_>) -> bool {
+    let mut cursor = case.walk();
+    for child in case.children(&mut cursor) {
+        let k = child.kind();
+        if k == "default" || k == "default_label" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Build CFG for a switch statement.
+///
+/// The dispatch is decomposed into a chain of binary `StmtKind::If` headers
+/// — one per non-default case — because the SSA terminator only models 0/1/2
+/// successors. A monolithic N-way header would otherwise be collapsed to
+/// `Goto(first)` and silently drop every other case. Each header's True edge
+/// reaches its case body; the False edge falls through to the next header (or
+/// the default body, if present, or the post-switch code).
+///
+/// Fall-through between adjacent case bodies (e.g. C/C++/Java/JS without
+/// `break`) is preserved by chaining the previous case's exits as additional
+/// predecessors of the next case's first node. `break` inside a case targets
+/// a fresh switch-scoped break list rather than the surrounding loop.
+#[allow(clippy::too_many_arguments)]
+fn build_switch<'a>(
+    ast: Node<'a>,
+    preds: &[NodeIndex],
+    g: &mut Cfg,
+    lang: &str,
+    code: &'a [u8],
+    summaries: &mut FuncSummaries,
+    file_path: &str,
+    enclosing_func: Option<&str>,
+    call_ordinal: &mut u32,
+    analysis_rules: Option<&LangAnalysisRules>,
+    _break_targets: &mut Vec<NodeIndex>,
+    continue_targets: &mut Vec<NodeIndex>,
+    throw_targets: &mut Vec<NodeIndex>,
+    bodies: &mut Vec<BodyCfg>,
+    next_body_id: &mut u32,
+    current_body_id: BodyId,
+) -> Vec<NodeIndex> {
+    // Locate the case container. Most grammars expose it as field "body"
+    // (JS/TS, Java, C, C++); Go puts cases as direct children of the switch.
+    let body = ast.child_by_field_name("body").or_else(|| {
+        let mut c = ast.walk();
+        ast.children(&mut c)
+            .find(|n| matches!(lookup(lang, n.kind()), Kind::Block))
+    });
+    let container = body.unwrap_or(ast);
+
+    // Collect case-like children in source order. Default goes through the
+    // same path as other cases but is tracked separately so the dispatch
+    // chain's tail can fall into it instead of past the switch.
+    let mut cases: Vec<(Node<'a>, bool)> = Vec::new();
+    {
+        let mut cursor = container.walk();
+        for case in container.children(&mut cursor) {
+            let k = case.kind();
+            if !is_switch_case_kind(k) {
+                continue;
+            }
+            let is_default = is_default_case_kind(k) || case_has_default_label(case);
+            cases.push((case, is_default));
+        }
+    }
+
+    // Grammar didn't expose recognisable case nodes — fall back to a single
+    // header + Block-style walk so nodes still get linked.
+    if cases.is_empty() {
+        let header = push_node(
+            g,
+            StmtKind::If,
+            ast,
+            lang,
+            code,
+            enclosing_func,
+            0,
+            analysis_rules,
+        );
+        connect_all(g, preds, header, EdgeKind::Seq);
+        let mut switch_breaks: Vec<NodeIndex> = Vec::new();
+        let mut frontier = vec![header];
+        let mut cursor = container.walk();
+        for child in container.children(&mut cursor) {
+            frontier = build_sub(
+                child,
+                &frontier,
+                g,
+                lang,
+                code,
+                summaries,
+                file_path,
+                enclosing_func,
+                call_ordinal,
+                analysis_rules,
+                &mut switch_breaks,
+                continue_targets,
+                throw_targets,
+                bodies,
+                next_body_id,
+                current_body_id,
+            );
+        }
+        let mut exits = switch_breaks;
+        exits.extend(frontier);
+        return exits;
+    }
+
+    // Reorder so the default arm (if any) sits at the tail of the cascade.
+    // Reordering case dispatch is semantically harmless (mutually exclusive
+    // pattern matches), and it keeps the chain a clean Branch(True→case,
+    // False→next). Fall-through chains are a separate Seq layer below.
+    let default_pos = cases.iter().position(|(_, d)| *d);
+    if let Some(pos) = default_pos
+        && pos != cases.len() - 1
+    {
+        let default_pair = cases.remove(pos);
+        cases.push(default_pair);
+    }
+    let has_default = default_pos.is_some();
+
+    let mut switch_breaks: Vec<NodeIndex> = Vec::new();
+    let mut fallthrough_exits: Vec<NodeIndex> = Vec::new();
+    let mut last_header_false: Option<NodeIndex> = None;
+    let mut chain_preds: Vec<NodeIndex> = preds.to_vec();
+
+    for (idx, (case, is_default)) in cases.iter().copied().enumerate() {
+        let is_last = idx + 1 == cases.len();
+
+        // Default at the chain tail doesn't get its own dispatch If — the
+        // previous header's False edge already targets it directly.
+        let case_first_preds: Vec<NodeIndex> = if is_default && is_last {
+            // First node of the default body becomes the False target of the
+            // previous header. Build the case with the previous chain_preds
+            // (the last header's "fall-through" branch) plus any fallthrough
+            // from the preceding case.
+            let mut p = chain_preds.clone();
+            p.append(&mut fallthrough_exits);
+            // `last_header_false` will receive a False edge once we know the
+            // first node of this body.
+            last_header_false = chain_preds.first().copied();
+            p
+        } else {
+            // Normal case: synthesize a per-case dispatch header. We tie it
+            // to the case AST so the node carries a useful span.
+            let header = push_node(
+                g,
+                StmtKind::If,
+                case,
+                lang,
+                code,
+                enclosing_func,
+                0,
+                analysis_rules,
+            );
+            // The dispatch header is purely structural (it stands in for the
+            // discriminant comparison). It must not inherit Sink/Source labels
+            // from the case body's text — push_node uses `text_of(ast)` for
+            // non-call kinds, which would let the body text drive classification.
+            g[header].taint.labels.clear();
+            g[header].call.callee = None;
+            g[header].call.sink_payload_args = None;
+            connect_all(g, &chain_preds, header, EdgeKind::Seq);
+            // If there was a previous header in the chain, that header's
+            // False edge needs to land on this header.
+            if let Some(prev) = last_header_false {
+                g.add_edge(prev, header, EdgeKind::False);
+            }
+
+            let mut p = vec![header];
+            p.append(&mut fallthrough_exits);
+            last_header_false = Some(header);
+            chain_preds = vec![header];
+            p
+        };
+
+        // Snapshot the next node index so we can attach the True edge to
+        // the case body's first emitted node.
+        let body_first_idx = NodeIndex::new(g.node_count());
+
+        let exits = build_sub(
+            case,
+            &case_first_preds,
+            g,
+            lang,
+            code,
+            summaries,
+            file_path,
+            enclosing_func,
+            call_ordinal,
+            analysis_rules,
+            &mut switch_breaks,
+            continue_targets,
+            throw_targets,
+            bodies,
+            next_body_id,
+            current_body_id,
+        );
+
+        // Wire the dispatch True edge from this header (or from the previous
+        // header for a tail-default) to the first node of the case body.
+        if body_first_idx.index() < g.node_count() {
+            let header_for_true = if is_default && is_last {
+                // The previous header's False already lands here via the
+                // EdgeKind::Seq inside `case_first_preds`; we additionally
+                // emit a False edge directly so SSA labels the branch.
+                if let Some(prev) = last_header_false {
+                    g.add_edge(prev, body_first_idx, EdgeKind::False);
+                }
+                None
+            } else {
+                // Last header in chain_preds is the only entry.
+                chain_preds.first().copied()
+            };
+            if let Some(h) = header_for_true {
+                g.add_edge(h, body_first_idx, EdgeKind::True);
+            }
+        }
+
+        fallthrough_exits = exits;
+        let _ = is_default;
+    }
+
+    // After the chain: the last non-default header (if no default arm) needs
+    // a False edge that escapes to the post-switch frontier.
+    let mut exits: Vec<NodeIndex> = switch_breaks;
+    exits.append(&mut fallthrough_exits);
+    if !has_default {
+        if let Some(prev) = last_header_false {
+            exits.push(prev);
+        }
+    }
+    exits
+}
+
+// -------------------------------------------------------------------------
 //    try/catch/finally handler
 // -------------------------------------------------------------------------
 
@@ -5528,6 +5799,25 @@ fn build_sub<'a>(
             continue_targets.push(cont);
             Vec::new()
         }
+
+        Kind::Switch => build_switch(
+            ast,
+            preds,
+            g,
+            lang,
+            code,
+            summaries,
+            file_path,
+            enclosing_func,
+            call_ordinal,
+            analysis_rules,
+            break_targets,
+            continue_targets,
+            throw_targets,
+            bodies,
+            next_body_id,
+            current_body_id,
+        ),
 
         // ─────────────────────────────────────────────────────────────────
         //  BLOCK: statements execute sequentially

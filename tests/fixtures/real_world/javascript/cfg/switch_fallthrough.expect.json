@@ -35,13 +35,13 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         10,
         14
       ],
       "evidence_contains": [],
-      "notes": "userInput flows to child_process.execSync but userInput is a param, not a recognized source"
+      "notes": "userInput flows to child_process.execSync via handler param-as-source heuristic; reachable via switch case 'exec' dispatch"
     },
     {
       "rule_id": "cfg-error-fallthrough",
@@ -57,13 +57,12 @@
     {
       "rule_id": "cfg-unreachable-sink",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         12,
         12
       ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unreachable-sink on child_process.execSync in exec case; the code is reachable when action === 'exec', low-value CFG finding"
+      "notes": "Regression guard: child_process.execSync in exec case is reachable via switch dispatch — cfg-unreachable-sink must NOT fire here"
     }
   ]
 }

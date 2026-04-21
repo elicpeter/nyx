@@ -120,6 +120,12 @@ pub enum Kind {
     CallWrapper,
     Try,
     Throw,
+    /// Multi-way dispatch (switch/match): a discriminant evaluates and routes
+    /// control to one of many case bodies. Cases with no terminating jump fall
+    /// through to the next case (where the surface language allows). The CFG
+    /// builder gives each case body the dispatch header as a predecessor so
+    /// reachability does not depend on sibling-case execution order.
+    Switch,
     Trivia,
     /// Simple sequential expression (e.g. cast/type-assertion) — treated like
     /// any other sequential statement in the CFG but explicitly classified so

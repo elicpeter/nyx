@@ -37,13 +37,12 @@
     {
       "rule_id": "cfg-unreachable-sink",
       "severity": "MEDIUM",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         8,
         8
       ],
-      "evidence_contains": [],
-      "notes": "noise: cfg-unreachable-sink \u2014 code is reachable via case label"
+      "notes": "Regression guard: system($input) in case 'exec' is reachable via switch dispatch; cfg-unreachable-sink must NOT fire (catches regressions in PHP switch_statement CFG handling)"
     }
   ]
 }

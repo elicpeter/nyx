@@ -74,7 +74,7 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "for_statement"         => Kind::For,
     "for_range_loop"        => Kind::For,
     "do_statement"          => Kind::While,
-    "switch_statement"      => Kind::Block,
+    "switch_statement"      => Kind::Switch,
     "case_statement"        => Kind::Block,
     "labeled_statement"     => Kind::Block,
 
