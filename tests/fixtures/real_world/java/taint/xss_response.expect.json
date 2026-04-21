@@ -32,15 +32,15 @@
       "notes": "source at 14:9 (request.getParameter(\"name\") in doPost) reported flowing to out.println on line 17; however line 15 sanitizes via .replace(\"<\",\"&lt;\").replace(\">\",\"&gt;\") so this is FP — scanner fails to recognize manual HTML entity escaping as sanitization"
     },
     {
-      "rule_id": "taint-unsanitised-flow",
+      "rule_id": "taint-unsanitised-flow (source 7:",
       "severity": "HIGH",
-      "must_match": false,
+      "must_not_match": true,
       "line_range": [
         17,
         17
       ],
       "evidence_contains": [],
-      "notes": "source at 7:9 (request.getParameter(\"name\") in doGet) reported flowing to line 17 in doPost; cross-method taint leakage — scanner conflates same-named variables across different methods. FP."
+      "notes": "regression guard: the doGet source at 7:9 must never flow to line 17 (inside doPost). Cross-method taint leakage was historically caused by same-name variable conflation across sibling methods sharing a module-level CFG; body separation must keep sibling methods' SSA state isolated."
     }
   ]
 }
