@@ -18,6 +18,16 @@ pub fn handle_command(
     config_dir: &Path,
     config: &mut Config,
 ) -> NyxResult<()> {
+    // Resolve engine options once for the whole process.  Scan overlays CLI
+    // flags below; other subcommands use the config values verbatim.  The
+    // install is a no-op after the first call, so Scan's overlay must happen
+    // before we reach this point for its own call path — we delay the install
+    // to the Scan arm and gate non-scan commands behind a fallback install of
+    // the bare config values.
+    let install_from_config = |config: &Config| {
+        let _ = crate::utils::analysis_options::install(config.analysis.engine);
+    };
+
     match command {
         Commands::Scan {
             path,
@@ -42,6 +52,22 @@ pub fn handle_command(
             show_instances,
             min_score,
             min_confidence,
+            // Analysis engine toggles
+            constraint_solving,
+            no_constraint_solving,
+            abstract_interp,
+            no_abstract_interp,
+            context_sensitive,
+            no_context_sensitive,
+            symex,
+            no_symex,
+            cross_file_symex,
+            no_cross_file_symex,
+            symex_interproc,
+            no_symex_interproc,
+            smt,
+            no_smt,
+            parse_timeout_ms,
             // Deprecated aliases
             no_index,
             rebuild_index,
@@ -146,6 +172,62 @@ pub fn handle_command(
             config.output.max_low_per_rule = max_low_per_rule;
             config.output.rollup_examples = rollup_examples;
 
+            // ── Analysis engine toggles: resolve CLI → config ───────────
+            // Each pair is a tri-state (flag set ⇒ true, no-flag set ⇒ false,
+            // neither ⇒ inherit config default).
+            let mut engine = config.analysis.engine;
+            if constraint_solving {
+                engine.constraint_solving = true;
+            }
+            if no_constraint_solving {
+                engine.constraint_solving = false;
+            }
+            if abstract_interp {
+                engine.abstract_interpretation = true;
+            }
+            if no_abstract_interp {
+                engine.abstract_interpretation = false;
+            }
+            if context_sensitive {
+                engine.context_sensitive = true;
+            }
+            if no_context_sensitive {
+                engine.context_sensitive = false;
+            }
+            if symex {
+                engine.symex.enabled = true;
+            }
+            if no_symex {
+                engine.symex.enabled = false;
+            }
+            if cross_file_symex {
+                engine.symex.cross_file = true;
+            }
+            if no_cross_file_symex {
+                engine.symex.cross_file = false;
+            }
+            if symex_interproc {
+                engine.symex.interprocedural = true;
+            }
+            if no_symex_interproc {
+                engine.symex.interprocedural = false;
+            }
+            if smt {
+                engine.symex.smt = true;
+            }
+            if no_smt {
+                engine.symex.smt = false;
+            }
+            if let Some(ms) = parse_timeout_ms {
+                engine.parse_timeout_ms = ms;
+            }
+            config.analysis.engine = engine;
+            if !crate::utils::analysis_options::install(engine) {
+                tracing::warn!(
+                    "analysis-engine runtime already installed; CLI engine flags ignored"
+                );
+            }
+
             let effective_format = format.unwrap_or(config.output.default_format);
 
             scan::handle(
@@ -161,6 +243,7 @@ pub fn handle_command(
             )?;
         }
         Commands::Index { action } => {
+            install_from_config(config);
             index::handle(action, database_dir, config)?;
         }
         Commands::List { verbose } => {
@@ -191,6 +274,7 @@ pub fn handle_command(
             host,
             no_browser,
         } => {
+            install_from_config(config);
             #[cfg(feature = "serve")]
             {
                 serve::handle(

@@ -479,6 +479,11 @@ pub struct AnalysisRulesConfig {
     /// Rule IDs that have been disabled via the UI.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled_rules: Vec<String>,
+    /// Engine-pass toggles (constraint solving, abstract interpretation,
+    /// symex pipeline, parse timeout).  Exposed as `[analysis.engine]` in
+    /// TOML; see [`crate::utils::AnalysisOptions`].
+    #[serde(default)]
+    pub engine: crate::utils::AnalysisOptions,
 }
 
 /// Configuration for the local web UI server (`nyx serve`).
@@ -920,6 +925,10 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     }
 
     // --- AnalysisRulesConfig ---
+    // Engine options: wholesale replace.  User's engine block is already
+    // serde-merged with defaults (via #[serde(default)] per field), so any
+    // omitted field retains the release default.
+    default.analysis.engine = user.analysis.engine;
     for (lang, user_lang_cfg) in user.analysis.languages {
         let entry = default.analysis.languages.entry(lang).or_default();
 

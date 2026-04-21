@@ -113,10 +113,11 @@ pub struct SsaTaintState {
     /// persists independently of the SSA value referencing the container.
     pub heap: HeapState,
     /// Path constraint environment (Phase 15). `None` when constraint
-    /// solving is disabled via `NYX_CONSTRAINT=0`.
+    /// solving is disabled (`analysis.engine.constraint_solving = false`).
     pub path_env: Option<constraint::PathEnv>,
-    /// Per-SSA-value abstract domain state (Phase 17). `None` when
-    /// abstract interpretation is disabled via `NYX_ABSTRACT_INTERP=0`.
+    /// Per-SSA-value abstract domain state (Phase 17). `None` when abstract
+    /// interpretation is disabled (`analysis.engine.abstract_interpretation
+    /// = false`).
     pub abstract_state: Option<AbstractState>,
 }
 

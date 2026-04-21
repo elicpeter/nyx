@@ -165,6 +165,46 @@ All fields are optional — omitted fields inherit from the base config.
 
 User-defined profiles with the same name as a built-in will override it.
 
+### `[analysis.engine]`
+
+Release-grade switches for the optional analysis passes.  Each toggle has a
+matching CLI flag (pair of `--foo` / `--no-foo`) that overrides the config
+value for a single run.  These used to be `NYX_*` environment variables
+(`NYX_CONSTRAINT`, `NYX_ABSTRACT_INTERP`, `NYX_SYMEX`, `NYX_CROSS_FILE_SYMEX`,
+`NYX_SYMEX_INTERPROC`, `NYX_CONTEXT_SENSITIVE`, `NYX_PARSE_TIMEOUT_MS`,
+`NYX_SMT`); those env vars are still honored as a last-resort override when
+nyx is used as a library (no CLI entry point), but the config/CLI surface is
+the stable path.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `constraint_solving` | bool | `true` | Path-constraint solving (prunes infeasible paths in taint) |
+| `abstract_interpretation` | bool | `true` | Interval / string / bit abstract domains carried through the SSA worklist |
+| `context_sensitive` | bool | `true` | k=1 context-sensitive callee inlining for intra-file calls |
+| `parse_timeout_ms` | int | `10000` | Per-file tree-sitter parse timeout; `0` disables the cap |
+
+**`[analysis.engine.symex]`** sub-section:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Run the symex pipeline after taint; adds witness strings and symbolic verdicts |
+| `cross_file` | bool | `true` | Persist / consult cross-file SSA bodies so symex can reason about callees defined in other files |
+| `interprocedural` | bool | `true` | Intra-file interprocedural symex (k ≥ 2 via frame stack) |
+| `smt` | bool | `true` | Use the SMT backend when nyx is built with the `smt` feature; ignored otherwise |
+
+CLI flag map (each pair is `--enable / --no-enable`):
+
+| Config field | CLI flags |
+|---|---|
+| `constraint_solving` | `--constraint-solving` / `--no-constraint-solving` |
+| `abstract_interpretation` | `--abstract-interp` / `--no-abstract-interp` |
+| `context_sensitive` | `--context-sensitive` / `--no-context-sensitive` |
+| `parse_timeout_ms` | `--parse-timeout-ms <N>` |
+| `symex.enabled` | `--symex` / `--no-symex` |
+| `symex.cross_file` | `--cross-file-symex` / `--no-cross-file-symex` |
+| `symex.interprocedural` | `--symex-interproc` / `--no-symex-interproc` |
+| `symex.smt` | `--smt` / `--no-smt` |
+
 ### `[analysis.languages.<slug>]`
 
 Per-language custom rules. `<slug>` is one of: `rust`, `javascript`, `typescript`, `python`, `go`, `java`, `c`, `cpp`, `php`, `ruby`.

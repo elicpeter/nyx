@@ -50,10 +50,10 @@ pub use solver::{is_satisfiable, refine_env};
 
 /// Feature gate: check if constraint solving is enabled.
 ///
-/// Enabled by default. Set `NYX_CONSTRAINT=0` or `NYX_CONSTRAINT=false`
-/// to disable.
+/// Controlled by `analysis.engine.constraint_solving` in `nyx.conf` (default
+/// `true`) or the `--constraint-solving / --no-constraint-solving` CLI flag.
+/// The legacy `NYX_CONSTRAINT` env var is consulted only when no runtime has
+/// been installed (library use / legacy tests).
 pub fn is_enabled() -> bool {
-    std::env::var("NYX_CONSTRAINT")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(true)
+    crate::utils::analysis_options::current().constraint_solving
 }

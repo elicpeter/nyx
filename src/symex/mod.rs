@@ -83,13 +83,12 @@ const MAX_CANDIDATES: usize = 50;
 /// Maximum blocks on a path before we skip symex (too expensive).
 const MAX_PATH_BLOCKS: usize = 100;
 
-/// Runtime feature gate for SMT solving. Default ON when compiled with `smt` feature.
-/// Set `NYX_SMT=0` or `NYX_SMT=false` to disable.
+/// Runtime feature gate for SMT solving.  Default ON when compiled with the
+/// `smt` feature; controlled at runtime by
+/// `analysis.engine.symex.smt` in `nyx.conf` (or `--smt / --no-smt`).
 #[cfg(feature = "smt")]
 pub fn smt_enabled() -> bool {
-    std::env::var("NYX_SMT")
-        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
-        .unwrap_or(true)
+    crate::utils::analysis_options::current().symex.smt
 }
 
 /// SMT solving is not available without the `smt` compile-time feature.
@@ -100,21 +99,20 @@ pub fn smt_enabled() -> bool {
 
 /// Feature gate: check if cross-file symbolic body execution is enabled.
 ///
-/// Enabled by default. Set `NYX_CROSS_FILE_SYMEX=0` or `NYX_CROSS_FILE_SYMEX=false` to disable.
-/// When disabled: body extraction, persistence, loading, and resolution are all skipped.
+/// Controlled by `analysis.engine.symex.cross_file` in `nyx.conf` (default
+/// `true`) or the `--cross-file-symex / --no-cross-file-symex` CLI flag.
+/// When disabled: body extraction, persistence, loading, and resolution are
+/// all skipped.
 pub fn cross_file_symex_enabled() -> bool {
-    std::env::var("NYX_CROSS_FILE_SYMEX")
-        .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
-        .unwrap_or(true)
+    crate::utils::analysis_options::current().symex.cross_file
 }
 
 /// Feature gate: check if symbolic execution targeting is enabled.
 ///
-/// Enabled by default. Set `NYX_SYMEX=0` or `NYX_SYMEX=false` to disable.
+/// Controlled by `analysis.engine.symex.enabled` in `nyx.conf` (default
+/// `true`) or the `--symex / --no-symex` CLI flag.
 pub fn is_enabled() -> bool {
-    std::env::var("NYX_SYMEX")
-        .map(|v| v != "0" && v.to_ascii_lowercase() != "false")
-        .unwrap_or(true)
+    crate::utils::analysis_options::current().symex.enabled
 }
 
 /// Run symex analysis on eligible findings, mutating them in place.
@@ -336,19 +334,15 @@ mod tests {
     }
 
     #[test]
-    fn is_enabled_default() {
-        // Remove env var if set, check default
-        unsafe { std::env::remove_var("NYX_SYMEX") };
-        assert!(is_enabled());
-    }
-
-    #[test]
-    fn is_enabled_disabled() {
-        unsafe { std::env::set_var("NYX_SYMEX", "0") };
-        assert!(!is_enabled());
-        unsafe { std::env::set_var("NYX_SYMEX", "false") };
-        assert!(!is_enabled());
-        unsafe { std::env::remove_var("NYX_SYMEX") };
+    fn is_enabled_tracks_runtime_default() {
+        // The process-wide runtime is a `OnceLock`; without any prior install,
+        // [`is_enabled`] reflects `AnalysisOptions::default().symex.enabled`.
+        // Flipping the toggle is covered by `analysis_options` unit tests that
+        // don't cross process boundaries.
+        assert_eq!(
+            is_enabled(),
+            crate::utils::AnalysisOptions::default().symex.enabled
+        );
     }
 
     #[test]

@@ -158,10 +158,10 @@ pub fn analyse_file(
         Some(&ssa_summaries)
     };
 
-    // 2. Context-sensitive inline analysis setup
-    let context_sensitive = std::env::var("NYX_CONTEXT_SENSITIVE")
-        .map(|v| v != "0" && v != "false")
-        .unwrap_or(true);
+    // 2. Context-sensitive inline analysis setup.  Toggle lives at
+    //    `analysis.engine.context_sensitive` in `nyx.conf` (or the
+    //    `--context-sensitive / --no-context-sensitive` CLI flag).
+    let context_sensitive = crate::utils::analysis_options::current().context_sensitive;
     let inline_cache = std::cell::RefCell::new(std::collections::HashMap::new());
     let callee_bodies_ref = if context_sensitive && !callee_bodies.is_empty() {
         Some(&callee_bodies)
@@ -309,17 +309,16 @@ fn analyse_body_with_seed(
     match ssa_result {
         Ok(mut ssa_body) => {
             let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg, Some(lang));
-            if std::env::var("NYX_RTQ_DBG").is_ok() {
-                eprintln!(
-                    "=== SSA BODY ({}) ===",
-                    body.meta.name.as_deref().unwrap_or("<anon>")
+            if tracing::enabled!(tracing::Level::TRACE) {
+                tracing::trace!(
+                    func = body.meta.name.as_deref().unwrap_or("<anon>"),
+                    ssa = %ssa_body,
+                    "SSA body lowered",
                 );
-                eprintln!("{}", ssa_body);
-                eprintln!("=== TYPE FACTS ===");
                 for block in &ssa_body.blocks {
                     for inst in block.phis.iter().chain(block.body.iter()) {
                         if let Some(t) = opt.type_facts.get_type(inst.value) {
-                            eprintln!("  v{} = {:?}", inst.value.0, t);
+                            tracing::trace!(value = inst.value.0, ty = ?t, "type fact");
                         }
                     }
                 }

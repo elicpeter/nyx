@@ -5,7 +5,8 @@
 //! binary-ish, or deliberately crafted to wedge tree-sitter or the CFG
 //! builder.  These tests exercise the user-facing size cap
 //! (`scanner.max_file_size_mb`, default 16 MiB — enforced at the walker),
-//! the per-file parse timeout (`NYX_PARSE_TIMEOUT_MS`, default 10 s), and
+//! the per-file parse timeout (`analysis.engine.parse_timeout_ms`, default
+//! 10 s), and
 //! verify that the scanner survives several representative stress inputs
 //! without panicking, stack-overflowing, or hanging CI.
 //!

@@ -85,6 +85,23 @@ nyx scan [PATH] [OPTIONS]
 
 **Deprecated aliases**: `--high-only` (use `--severity HIGH`), `--include-nonprod` (use `--keep-nonprod-severity`).
 
+### Analysis Engine Toggles
+
+Override the corresponding `[analysis.engine]` values in `nyx.conf` for a single run.  All default **on**; pass the `--no-*` variant to disable.
+
+| Pair | Config field | Effect when disabled |
+|------|---|---|
+| `--constraint-solving` / `--no-constraint-solving` | `constraint_solving` | Skip path-constraint solving; infeasible paths no longer pruned |
+| `--abstract-interp` / `--no-abstract-interp` | `abstract_interpretation` | Skip interval / string / bit abstract domains |
+| `--context-sensitive` / `--no-context-sensitive` | `context_sensitive` | Treat intra-file callees insensitively (summary-only) |
+| `--symex` / `--no-symex` | `symex.enabled` | Skip the symex pipeline; no symbolic verdicts or witnesses |
+| `--cross-file-symex` / `--no-cross-file-symex` | `symex.cross_file` | Skip extracting / consulting cross-file SSA bodies |
+| `--symex-interproc` / `--no-symex-interproc` | `symex.interprocedural` | Cap symex frame stack at the entry function |
+| `--smt` / `--no-smt` | `symex.smt` | Skip the SMT backend (still a no-op without the `smt` feature) |
+| `--parse-timeout-ms <N>` | `parse_timeout_ms` | Per-file tree-sitter parse timeout (ms); `0` disables the cap |
+
+See [configuration.md](configuration.md#analysisengine) for the full schema.
+
 ### Examples
 
 ```bash

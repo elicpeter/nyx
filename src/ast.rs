@@ -31,21 +31,14 @@ thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
 }
 
-/// Per-file tree-sitter parse timeout in milliseconds.  Tree-sitter is
-/// generally fast, but adversarially-crafted inputs (deeply ambiguous
-/// grammar constructs, pathological backtracking) can drive it into very
-/// slow parses.  A 10 s ceiling per file lets a 10 000-file scan survive
-/// even if every file is hostile.  Overridable via the `NYX_PARSE_TIMEOUT_MS`
-/// environment variable (`0` disables the cap).
-pub(crate) const DEFAULT_PARSE_TIMEOUT_MS: u64 = 10_000;
-
-/// Resolve the effective parse-timeout budget in milliseconds.  Honours the
-/// `NYX_PARSE_TIMEOUT_MS` override; returns `0` when the cap is disabled.
+/// Resolve the effective parse-timeout budget in milliseconds.  Tree-sitter
+/// is generally fast, but adversarially-crafted inputs (deeply ambiguous
+/// grammar constructs, pathological backtracking) can drive it into slow
+/// parses; the default 10 s ceiling lets a 10 000-file scan survive even if
+/// every file is hostile.  Configured via `analysis.engine.parse_timeout_ms`
+/// in `nyx.conf` (or `--parse-timeout-ms` on the CLI); `0` disables the cap.
 fn parse_timeout_ms() -> u64 {
-    match std::env::var("NYX_PARSE_TIMEOUT_MS") {
-        Ok(s) => s.parse::<u64>().unwrap_or(DEFAULT_PARSE_TIMEOUT_MS),
-        Err(_) => DEFAULT_PARSE_TIMEOUT_MS,
-    }
+    crate::utils::analysis_options::current().parse_timeout_ms
 }
 
 /// Convenience alias for node indices.

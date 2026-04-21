@@ -191,6 +191,60 @@ pub enum Commands {
         #[arg(long)]
         min_confidence: Option<String>,
 
+        // ── Analysis engine toggles (override [analysis.engine] config) ───
+        /// Enable path-constraint solving (default: on)
+        #[arg(long, overrides_with = "no_constraint_solving")]
+        constraint_solving: bool,
+        /// Disable path-constraint solving
+        #[arg(long, overrides_with = "constraint_solving")]
+        no_constraint_solving: bool,
+
+        /// Enable abstract interpretation (default: on)
+        #[arg(long, overrides_with = "no_abstract_interp")]
+        abstract_interp: bool,
+        /// Disable abstract interpretation
+        #[arg(long, overrides_with = "abstract_interp")]
+        no_abstract_interp: bool,
+
+        /// Enable k=1 context-sensitive callee inlining (default: on)
+        #[arg(long, overrides_with = "no_context_sensitive")]
+        context_sensitive: bool,
+        /// Disable context-sensitive callee inlining
+        #[arg(long, overrides_with = "context_sensitive")]
+        no_context_sensitive: bool,
+
+        /// Enable the symex pipeline (default: on)
+        #[arg(long, overrides_with = "no_symex")]
+        symex: bool,
+        /// Disable the symex pipeline entirely
+        #[arg(long, overrides_with = "symex")]
+        no_symex: bool,
+
+        /// Enable cross-file symbolic body execution (default: on)
+        #[arg(long, overrides_with = "no_cross_file_symex")]
+        cross_file_symex: bool,
+        /// Disable cross-file symbolic body execution
+        #[arg(long, overrides_with = "cross_file_symex")]
+        no_cross_file_symex: bool,
+
+        /// Enable interprocedural symex frame stack (default: on)
+        #[arg(long, overrides_with = "no_symex_interproc")]
+        symex_interproc: bool,
+        /// Disable interprocedural symex
+        #[arg(long, overrides_with = "symex_interproc")]
+        no_symex_interproc: bool,
+
+        /// Enable SMT solver backend when nyx is built with the `smt` feature (default: on)
+        #[arg(long, overrides_with = "no_smt")]
+        smt: bool,
+        /// Disable SMT solver backend
+        #[arg(long, overrides_with = "smt")]
+        no_smt: bool,
+
+        /// Override per-file tree-sitter parse timeout (ms). 0 disables the cap.
+        #[arg(long)]
+        parse_timeout_ms: Option<u64>,
+
         // ── Deprecated aliases (hidden) ─────────────────────────────────
         /// Deprecated: use --index off
         #[arg(long, hide = true)]

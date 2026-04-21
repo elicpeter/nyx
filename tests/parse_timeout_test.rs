@@ -1,5 +1,5 @@
 //! Parse-timeout integration test (isolated in its own binary so the
-//! `NYX_PARSE_TIMEOUT_MS` env var cannot race with other tests).
+//! installed analysis-options runtime cannot race with other tests).
 //!
 //! Tree-sitter parsing is normally fast, but adversarial inputs can drive
 //! it into much slower parses.  The scanner enforces a per-file timeout via
@@ -7,10 +7,13 @@
 //! the timeout to 1 ms and confirming that a moderately-sized file is
 //! *skipped* rather than parsed.
 //!
-//! Running this test alone in its own integration-test binary keeps the
-//! env-var mutation from affecting any other test process.
+//! The timeout is configured via `analysis.engine.parse_timeout_ms` (or
+//! `--parse-timeout-ms` on the CLI); this test drives it by installing a
+//! custom `AnalysisOptions` at process start.
 
 use nyx_scanner::ast::run_rules_on_bytes;
+use nyx_scanner::utils::AnalysisOptions;
+use nyx_scanner::utils::analysis_options;
 use nyx_scanner::utils::config::{AnalysisMode, Config};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -41,17 +44,18 @@ fn build_bulk_source(bytes_target: usize) -> String {
 }
 
 #[test]
-fn parse_timeout_env_var_short_circuits_parse() {
+fn parse_timeout_config_short_circuits_parse() {
     // ~1 MiB of valid JS — plenty of real parser work to observe the
     // timeout.  Still well under MAX_PARSE_BYTES.
     let source = build_bulk_source(1_000_000);
 
-    // SAFETY: integration tests in other binaries are separate processes
-    // and do not observe this env var.  Within *this* binary we only run
-    // one #[test] fn, so there is no in-process race.
-    unsafe {
-        std::env::set_var("NYX_PARSE_TIMEOUT_MS", "1");
-    }
+    // Install a 1 ms timeout via the analysis-options runtime.  This test
+    // runs in its own integration-test binary (separate process), so the
+    // `OnceLock` install cannot collide with other tests.
+    analysis_options::install(AnalysisOptions {
+        parse_timeout_ms: 1,
+        ..AnalysisOptions::default()
+    });
 
     let path = Path::new("slow.js");
     let cfg = hostile_cfg();
@@ -60,11 +64,6 @@ fn parse_timeout_env_var_short_circuits_parse() {
     let diags = run_rules_on_bytes(source.as_bytes(), path, &cfg, None, None)
         .expect("timeout should yield Ok(empty), not error");
     let elapsed = start.elapsed();
-
-    // Reset so any follow-on work in this process sees the default again.
-    unsafe {
-        std::env::remove_var("NYX_PARSE_TIMEOUT_MS");
-    }
 
     assert!(
         diags.is_empty(),

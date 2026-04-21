@@ -97,11 +97,13 @@ const MAX_CACHE_ENTRIES: usize = 64;
 
 /// Check if interprocedural symbolic execution is enabled.
 ///
-/// Enabled by default.  Set `NYX_SYMEX_INTERPROC=0` or `=false` to disable.
+/// Controlled by `analysis.engine.symex.interprocedural` in `nyx.conf`
+/// (default `true`) or the `--symex-interproc / --no-symex-interproc` CLI
+/// flag.
 pub fn interproc_enabled() -> bool {
-    std::env::var("NYX_SYMEX_INTERPROC")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(true)
+    crate::utils::analysis_options::current()
+        .symex
+        .interprocedural
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
