@@ -394,8 +394,15 @@ pub fn classify_condition(text: &str) -> PredicateKind {
 /// - `validate(x, ...)` → target = `"x"`
 /// - `x.validate(...)` → target = `"x"`
 ///
-/// Returns `(kind, None)` when the target cannot be determined (falls back
-/// to existing behavior of marking all condition_vars).
+/// When target extraction fails on a multi-argument call (e.g.,
+/// `validate(expr, limit)` where `expr` is not a plain identifier), the
+/// validator's effect is opaque: we can't tell which argument is being
+/// checked. Returning the original kind with `None` target would cause
+/// upstream code to over-validate (mark every `condition_var` as validated).
+/// Instead, we fall back to `PredicateKind::Unknown` — safer to assume the
+/// validator did nothing than to assume it validated every variable in the
+/// condition. Single-argument calls retain `(kind, None)` so downstream code
+/// can still use the predicate-summary bit tracking.
 pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<String>) {
     let kind = classify_condition(text);
 
@@ -403,6 +410,8 @@ pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<Stri
         PredicateKind::ValidationCall | PredicateKind::SanitizerCall => {
             if let Some(target) = extract_validation_target(text) {
                 (kind, Some(target))
+            } else if count_call_args(text).map(|n| n > 1).unwrap_or(false) {
+                (PredicateKind::Unknown, None)
             } else {
                 (kind, None)
             }
@@ -424,6 +433,41 @@ pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<Stri
         }
         _ => (kind, None),
     }
+}
+
+/// Count positional arguments in a call-shaped condition text.
+///
+/// Returns `None` when the text does not look like a call (no `(`). Returns
+/// `Some(0)` for a call with empty argument list. Respects paren/bracket/brace
+/// nesting so `f(g(a, b), c)` counts as 2 top-level args.
+///
+/// Best-effort — operates on source text, not an AST. Used by
+/// `classify_condition_with_target` to distinguish single-arg vs multi-arg
+/// validator calls when target extraction fails.
+fn count_call_args(text: &str) -> Option<usize> {
+    let trimmed = text.trim();
+    let trimmed = trimmed.strip_prefix('!').unwrap_or(trimmed).trim();
+    let paren_pos = trimmed.find('(')?;
+    let args_part = &trimmed[paren_pos + 1..];
+    let args_inner = args_part
+        .trim_end()
+        .strip_suffix(')')
+        .unwrap_or(args_part)
+        .trim();
+    if args_inner.is_empty() {
+        return Some(0);
+    }
+    let mut count = 1usize;
+    let mut depth: i32 = 0;
+    for ch in args_inner.chars() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => count += 1,
+            _ => {}
+        }
+    }
+    Some(count)
 }
 
 /// Extract the validated variable from a condition text.
@@ -804,6 +848,35 @@ mod tests {
         let (kind, target) = classify_condition_with_target("input.verify(sig)");
         assert_eq!(kind, PredicateKind::ValidationCall);
         assert_eq!(target.as_deref(), Some("input"));
+    }
+
+    #[test]
+    fn target_multi_arg_fallback_opaque_expr_is_unknown() {
+        // `validate(x + 1, y)` — first arg is an expression, not an identifier.
+        // Target extraction fails. Multi-arg call, so fall back to Unknown
+        // rather than letting upstream validate every condition var.
+        let (kind, target) = classify_condition_with_target("validate(x + 1, y)");
+        assert_eq!(kind, PredicateKind::Unknown);
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn target_single_arg_fallback_preserves_kind() {
+        // Single-arg call with unextractable target: keep the original kind so
+        // the predicate-summary bit can still be set. No over-validation risk
+        // because there is only one var in scope.
+        let (kind, target) = classify_condition_with_target("validate(x + 1)");
+        assert_eq!(kind, PredicateKind::ValidationCall);
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn count_call_args_basic() {
+        assert_eq!(super::count_call_args("f(a, b, c)"), Some(3));
+        assert_eq!(super::count_call_args("f(a)"), Some(1));
+        assert_eq!(super::count_call_args("f()"), Some(0));
+        assert_eq!(super::count_call_args("f(g(x, y), z)"), Some(2));
+        assert_eq!(super::count_call_args("not_a_call"), None);
     }
 
     // ── AllowlistCheck classification ─────────────────────────────────

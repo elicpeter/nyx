@@ -3069,7 +3069,15 @@ fn push_node<'a>(
                 |kw| has_keyword_arg(cn, kw, code),
             ) {
                 labels.push(gated_label);
-                if !payload.is_empty() {
+                if payload == crate::labels::ALL_ARGS_PAYLOAD {
+                    // Dynamic-activation sentinel: every positional arg is
+                    // conservatively a payload. Expand using the actual call
+                    // arity so `collect_tainted_sink_values` checks each one.
+                    let arity = extract_arg_uses(cn, code).len();
+                    if arity > 0 {
+                        sink_payload_args = Some((0..arity).collect());
+                    }
+                } else if !payload.is_empty() {
                     sink_payload_args = Some(payload.to_vec());
                 }
             }

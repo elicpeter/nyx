@@ -241,6 +241,42 @@ fn dedup_same_line_different_sinks() {
     );
 }
 
+// ── Phase 2b.2 — multi-arg validator target narrowing ────────────────────
+
+/// Phase 2b.2: `validate(x, 100)` must narrow validation to `x`, so the tainted
+/// `x` flowing to `os.system(x)` on the true branch is correctly silenced.
+/// Regression guard for the existing target-extraction path.
+#[test]
+fn predicate_multi_arg_validator_tainted() {
+    let dir = fixture_path("predicate_multi_arg_validator_tainted");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Phase 2b.2: `validate(limit, x)` validates `limit`, not `x`. Tainted `x`
+/// still flows to `os.system(x)` and the finding must fire. Regression guard
+/// against upstream code marking every `condition_var` as validated when
+/// target extraction narrows to a non-tainted var.
+#[test]
+fn predicate_multi_arg_validator_wrong() {
+    let dir = fixture_path("predicate_multi_arg_validator_wrong");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+// ── Phase 2b.3 — gated-sink dynamic activation conservatism ──────────────
+
+/// Phase 2b.3: `setAttribute(attr, val)` with a dynamic first arg returns the
+/// ALL_ARGS_PAYLOAD sentinel, so sink scanning expands to every positional
+/// arg — a tainted attribute name is itself a vulnerability path. Expects
+/// at least two findings (one per call where either arg is tainted).
+#[test]
+fn gated_sink_dynamic_activation() {
+    let dir = fixture_path("gated_sink_dynamic_activation");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
 // ── SCC SSA summary refinement ────────────────────────────────────────────
 
 #[test]

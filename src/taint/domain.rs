@@ -26,6 +26,22 @@ pub struct TaintOrigin {
 }
 
 /// Compact bitset for up to 64 variables (indexed by SymbolId ordinal).
+///
+/// # Capacity limit
+///
+/// `SmallBitSet` is a fixed-size 64-slot bitset backed by a single `u64`.
+/// Inserting a `SymbolId` with ordinal ≥ 64 is a no-op — the bit is silently
+/// dropped. This is a deliberate precision-over-completeness trade: the
+/// bitset underpins predicate / validation tracking in the SSA taint engine,
+/// and functions with more than 64 distinct predicate-relevant variables are
+/// rare enough that the cost of a spill-out map is not worth the extra
+/// allocations on the common path.
+///
+/// When an out-of-range id is dropped, a `tracing::debug!` event is emitted
+/// under `target = "nyx::predicate_bitset"` so operators can detect the
+/// degraded-precision case. Path-sensitivity for variables beyond id 63
+/// degrades gracefully (no predicate bit recorded) rather than failing
+/// loudly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SmallBitSet(u64);
 
@@ -38,6 +54,12 @@ impl SmallBitSet {
         let idx = id.0;
         if idx < 64 {
             self.0 |= 1u64 << idx;
+        } else {
+            tracing::debug!(
+                target: "nyx::predicate_bitset",
+                id = idx,
+                "SmallBitSet: dropped id >= 64; path-sensitivity degrades for this variable"
+            );
         }
     }
 

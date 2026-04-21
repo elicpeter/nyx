@@ -25,6 +25,17 @@ pub struct LabelRule {
     pub case_sensitive: bool,
 }
 
+/// Sentinel returned by [`classify_gated_sink`] for the dynamic/unknown-activation
+/// branch: the gate fires conservatively and every positional argument must be
+/// considered a potential tainted payload, not just the explicit `payload_args`.
+/// Downstream code (`cfg.rs` node construction) detects this sentinel and
+/// expands it to `(0..arity)` using the actual call arity.
+///
+/// The value `usize::MAX` is used because `args.get(usize::MAX)` is a guaranteed
+/// miss for any real argument list — an accidental direct-lookup would be a no-op
+/// rather than silently aliasing position 0.
+pub const ALL_ARGS_PAYLOAD: &[usize] = &[usize::MAX];
+
 /// Argument-sensitive sink activation.  A call only becomes a sink when the
 /// constant value at `arg_index` matches `dangerous_values` or `dangerous_prefixes`.
 /// Unknown / dynamic arguments use the conservative policy (treat as dangerous).
@@ -882,8 +893,14 @@ pub fn classify_gated_sink(
                     }
                 }
             }
-            if any_dangerous || any_dynamic_present {
+            if any_dangerous {
                 return Some((gate.label, gate.payload_args));
+            }
+            if any_dynamic_present {
+                // Dynamic kwarg value — we can't prove safe. Conservatively
+                // flag every positional arg so the activation pathway isn't
+                // silently narrowed to the gate's declared `payload_args`.
+                return Some((gate.label, ALL_ARGS_PAYLOAD));
             }
             return None; // all listed kwargs absent or safe-literal → suppress
         }
@@ -911,7 +928,13 @@ pub fn classify_gated_sink(
                 }
                 return None; // safe constant → suppress
             }
-            None => return Some((gate.label, gate.payload_args)), // unknown → conservative
+            // Unknown / dynamic activation arg: the gate fires conservatively,
+            // but we can't prove that only the declared `payload_args` carry
+            // risk — a tainted activation arg (e.g. `setAttribute(userAttr, …)`
+            // where `userAttr` is user-controlled) is itself a vulnerability
+            // path. Return ALL_ARGS_PAYLOAD so downstream sink scanning
+            // considers every positional argument.
+            None => return Some((gate.label, ALL_ARGS_PAYLOAD)),
         }
     }
     None
@@ -1322,11 +1345,15 @@ mod tests {
 
     #[test]
     fn gated_sink_dynamic_conservative() {
+        // Dynamic activation (e.g. `setAttribute(attrVar, val)`) returns the
+        // ALL_ARGS_PAYLOAD sentinel so callers expand payload tracking to
+        // every positional arg — the activation arg itself is a vulnerability
+        // path when attacker-controlled.
         let result =
             classify_gated_sink("javascript", "setAttribute", |_| None, no_kw, no_kw_present);
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
+            Some((DataLabel::Sink(Cap::HTML_ESCAPE), ALL_ARGS_PAYLOAD))
         );
     }
 
@@ -1432,10 +1459,12 @@ mod tests {
 
     #[test]
     fn gated_sink_python_popen_no_shell_conservative() {
+        // `Popen(cmd)` uses the single-kwarg / positional gate path: no `shell`
+        // literal available → unknown activation → ALL_ARGS_PAYLOAD sentinel.
         let result = classify_gated_sink("python", "Popen", |_| None, |_| None, no_kw_present);
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))
+            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), ALL_ARGS_PAYLOAD))
         );
     }
 
@@ -1497,7 +1526,8 @@ mod tests {
     }
 
     /// `subprocess.run(cmd, shell=flag)` → shell kwarg present but dynamic →
-    /// conservative activate.
+    /// conservative activate. Multi-kwarg dynamic-present branch also returns
+    /// ALL_ARGS_PAYLOAD so the activation pathway is not narrowed.
     #[test]
     fn gated_sink_subprocess_run_shell_dynamic_conservative() {
         let result = classify_gated_sink(
@@ -1509,7 +1539,7 @@ mod tests {
         );
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))
+            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), ALL_ARGS_PAYLOAD))
         );
     }
 

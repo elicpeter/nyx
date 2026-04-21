@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-20T23:53:33Z",
+  "timestamp": "2026-04-21T22:45:23Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -1359,6 +1359,7 @@
       "outcome_location_level": "TP",
       "matched_rule_ids": [
         "java.deser.readobject",
+        "taint-unsanitised-flow (source 6:9)",
         "taint-unsanitised-flow (source 7:9)"
       ],
       "unexpected_rule_ids": [
@@ -1366,10 +1367,11 @@
       ],
       "all_finding_ids": [
         "java.deser.readobject",
+        "taint-unsanitised-flow (source 6:9)",
         "java.xss.getwriter_print",
         "taint-unsanitised-flow (source 7:9)"
       ],
-      "security_finding_count": 3,
+      "security_finding_count": 4,
       "non_security_finding_count": 0
     },
     {
@@ -1383,16 +1385,18 @@
       "outcome_location_level": "TP",
       "matched_rule_ids": [
         "java.deser.readobject",
+        "taint-unsanitised-flow (source 6:9)",
         "java.cmdi.runtime_exec",
         "taint-unsanitised-flow (source 7:9)"
       ],
       "unexpected_rule_ids": [],
       "all_finding_ids": [
         "java.deser.readobject",
+        "taint-unsanitised-flow (source 6:9)",
         "java.cmdi.runtime_exec",
         "taint-unsanitised-flow (source 7:9)"
       ],
-      "security_finding_count": 3,
+      "security_finding_count": 4,
       "non_security_finding_count": 0
     },
     {
@@ -2854,13 +2858,15 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
-        "py.deser.pickle_loads"
+        "py.deser.pickle_loads",
+        "taint-unsanitised-flow (source 5:5)"
       ],
       "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "py.deser.pickle_loads"
+        "py.deser.pickle_loads",
+        "taint-unsanitised-flow (source 5:5)"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -3426,8 +3432,7 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
-        "taint-unsanitised-flow (source 10:5)",
-        "taint-unsanitised-flow (source 11:5)"
+        "taint-unsanitised-flow (source 10:5)"
       ],
       "unexpected_rule_ids": [
         "cfg-unguarded-sink",
@@ -3437,13 +3442,12 @@
         "cfg-unguarded-sink",
         "rs.quality.unwrap",
         "taint-unsanitised-flow (source 10:5)",
-        "taint-unsanitised-flow (source 11:5)",
         "cfg-unguarded-sink",
         "rs.quality.unwrap",
         "rs.quality.unwrap",
         "rs.quality.unwrap"
       ],
-      "security_finding_count": 4,
+      "security_finding_count": 3,
       "non_security_finding_count": 4
     },
     {
@@ -3980,13 +3984,15 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
-        "rb.cmdi.backtick"
+        "rb.cmdi.backtick",
+        "taint-unsanitised-flow (source 2:3)"
       ],
       "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "rb.cmdi.backtick"
+        "rb.cmdi.backtick",
+        "taint-unsanitised-flow (source 2:3)"
       ],
-      "security_finding_count": 1,
+      "security_finding_count": 2,
       "non_security_finding_count": 0
     },
     {
@@ -4875,13 +4881,12 @@
       "outcome_rule_level": "TP",
       "outcome_location_level": "TP",
       "matched_rule_ids": [
+        "taint-unsanitised-flow (source 14:5)",
         "taint-unsanitised-flow (source 22:13)"
       ],
-      "unexpected_rule_ids": [
-        "cfg-unguarded-sink"
-      ],
+      "unexpected_rule_ids": [],
       "all_finding_ids": [
-        "cfg-unguarded-sink",
+        "taint-unsanitised-flow (source 14:5)",
         "taint-unsanitised-flow (source 22:13)"
       ],
       "security_finding_count": 2,
@@ -5224,31 +5229,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 109,
+      "tp": 111,
       "fp": 48,
-      "fn_": 50,
+      "fn_": 48,
       "tn": 59,
-      "precision": 0.6942675159235668,
-      "recall": 0.6855345911949685,
-      "f1": 0.689873417721519
+      "precision": 0.6981132075471698,
+      "recall": 0.6981132075471698,
+      "f1": 0.6981132075471698
     },
     ">=Low": {
-      "tp": 109,
+      "tp": 111,
       "fp": 50,
-      "fn_": 50,
+      "fn_": 48,
       "tn": 57,
-      "precision": 0.6855345911949685,
-      "recall": 0.6855345911949685,
-      "f1": 0.6855345911949685
+      "precision": 0.6894409937888198,
+      "recall": 0.6981132075471698,
+      "f1": 0.69375
     },
     ">=Medium": {
-      "tp": 109,
+      "tp": 111,
       "fp": 50,
-      "fn_": 50,
+      "fn_": 48,
       "tn": 57,
-      "precision": 0.6855345911949685,
-      "recall": 0.6855345911949685,
-      "f1": 0.6855345911949685
+      "precision": 0.6894409937888198,
+      "recall": 0.6981132075471698,
+      "f1": 0.69375
     }
   }
 }
