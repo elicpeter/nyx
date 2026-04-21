@@ -1,15 +1,15 @@
 {
-  "description": "Echo XSS: c.QueryParam flows to c.String (requires Echo framework detection via go.mod)",
+  "description": "Echo XSS: c.QueryParam flows to c.String (auto-detected via labstack/echo import)",
   "tags": ["taint", "xss", "echo", "framework"],
   "modes": ["full"],
   "expected": [
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [9, 12],
       "evidence_contains": [],
-      "notes": "c.QueryParam('name') flows to c.String() — requires go.mod with labstack/echo for framework detection"
+      "notes": "c.QueryParam('name') flows to c.String(); Echo detected from in-file import path"
     }
   ]
 }
