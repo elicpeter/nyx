@@ -91,6 +91,11 @@ pub static KINDS: Map<&'static str, Kind> = phf_map! {
     "try_statement"         => Kind::Try,
     "catch_clause"          => Kind::Block,
     "lambda_expression"     => Kind::Function,
+    // Namespace bodies and C++ class bodies descend as plain Blocks so the
+    // CFG builder can reach the nested function_definitions/lambdas inside
+    // and extract them as separate bodies.
+    "declaration_list"      => Kind::Block,
+    "field_declaration_list" => Kind::Block,
 
     // data-flow
     "call_expression"       => Kind::CallFn,

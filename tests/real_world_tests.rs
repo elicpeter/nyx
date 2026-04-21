@@ -71,6 +71,14 @@ struct ExpectedFinding {
     /// Human explanation of this expectation.
     #[serde(default)]
     notes: String,
+    /// Optional per-expectation mode filter.  When absent, the expectation
+    /// applies in every mode listed at the fixture level.  When present,
+    /// only the listed modes evaluate this expectation — useful when a
+    /// finding is mode-specific (e.g. a taint flow only resolves in `full`
+    /// mode while the fixture also runs in `ast` mode for AST-pattern
+    /// coverage).
+    #[serde(default)]
+    modes: Option<Vec<String>>,
 }
 
 fn default_must_match() -> bool {
@@ -284,6 +292,7 @@ fn match_expectations(
     diags: &[Diag],
     expectations: &[ExpectedFinding],
     fixture_file: &str,
+    active_mode: &str,
 ) -> MatchResult {
     let mut hard_misses = Vec::new();
     let mut soft_misses = Vec::new();
@@ -292,6 +301,11 @@ fn match_expectations(
     let mut matched = 0;
 
     for exp in expectations {
+        if let Some(ref m) = exp.modes {
+            if !m.iter().any(|s| s.eq_ignore_ascii_case(active_mode)) {
+                continue;
+            }
+        }
         if exp.must_not_match {
             // Forbidden-finding assertion: non-consuming scan for any matching diag.
             // Presence = hard failure (regression guard).
@@ -485,7 +499,8 @@ fn real_world_fixture_suite() {
                 .to_string_lossy()
                 .to_string();
 
-            let result = match_expectations(&diags, &fixture.expectations.expected, &fixture_file);
+            let result =
+                match_expectations(&diags, &fixture.expectations.expected, &fixture_file, mode_str);
 
             total_matched += result.matched;
             total_unexpected += result.unexpected.len();
