@@ -207,6 +207,34 @@ return abstract at summary-path call sites without re-running the callee.
   case. Captured in `memory/project_cf3_suppression_quirks.md` with
   repro, backtrace, and a reintroduction recipe.
 
+#### CF-3 follow-up — JS literal-prefix SSRF suppression fix (2026-04-22)
+
+The JS pipeline quirk above is resolved and
+`tests/fixtures/cross_file_abstract_url_prefix_lock` lands as a third
+green CF-3 fixture. Two surgical changes downstream of CF-3:
+
+- **`src/ssa/copy_prop.rs`** — copy propagation now skips single-use
+  `Assign` instructions whose CFG node carries `string_prefix`. Without
+  the guard, copy-prop + DCE eliminated `url = 'lit' + userInput` in
+  pass 2's optimised SSA, rewriting `fetch(url)`'s arg from the
+  prefix-bearing SSA value to the bare param and erasing the StringFact
+  prefix that `is_call_abstract_safe` reads. Mirrors the existing
+  `is_numeric_length_access` guard which protects the type-fact carrier
+  for the dual-gate suppression path.
+- **`src/taint/ssa_transfer.rs::transfer_abstract`** — added a Call arm
+  symmetric with the existing Assign-with-prefix arm: when a `Call`
+  instruction's CFG node carries `string_prefix` (the variable binding
+  is the call result, e.g. `url = wrapper('lit' + x)`), seed the call
+  result's `StringFact` with the prefix. Lets `axios.get(url)`'s
+  abstract-state lookup consume the prefix lock through cross-file
+  identity-passthrough wrappers like CF-3's `asIs`.
+
+Single-file `'lit' + userInput → fetch / axios.get` and the cross-file
+`asIs(...)` form now both produce zero findings. Rule-level F1 stays at
+0.966 (P=0.940 / R=0.994) — the corpus contains no fixture exercising
+the prefix-locked SSRF path, so the win shows up downstream rather than
+on this corpus.
+
 ### Benchmark delta
 
 | Metric                   | Before CF-3 | After CF-3 |

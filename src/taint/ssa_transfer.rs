@@ -3114,6 +3114,27 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
             );
         }
 
+        // Same prefix-from-CFG override for Call instructions whose result is
+        // the variable binding (e.g. `url = wrapper('lit' + userPath)`).  The
+        // CFG node carries `string_prefix` extracted from the call's first
+        // positional argument; without this arm the Call result's StringFact
+        // is Top and downstream SSRF suppression (`is_call_abstract_safe`
+        // looking at `axios.get(url)`'s own first arg) cannot read the lock.
+        // Mirrors the same passthrough-heuristic that the
+        // `is_call_abstract_safe` node-attached check at the sink site
+        // already relies on.
+        SsaOp::Call { .. } if info.string_prefix.is_some() => {
+            let prefix = info.string_prefix.as_deref().unwrap();
+            abs.set(
+                inst.value,
+                AbstractValue {
+                    interval: IntervalFact::top(),
+                    string: StringFact::from_prefix(prefix),
+                    bits: BitFact::top(),
+                },
+            );
+        }
+
         SsaOp::Assign(uses) if uses.len() == 1 => {
             // Phase 26: single-use Assign with bin_op + literal operand.
             // When a binary expression like `x & 0x07` has one identifier use

@@ -39,6 +39,19 @@ pub fn copy_propagate(body: &mut SsaBody, cfg: &Cfg) -> (usize, HashMap<SsaValue
                     if info.is_numeric_length_access {
                         continue;
                     }
+                    // Skip Assigns whose CFG node carries a `string_prefix`
+                    // (template literals or `"lit" + var` RHS recognised by
+                    // `extract_template_prefix`).  Phase 17's
+                    // `transfer_abstract` consumes that prefix to seed a
+                    // StringFact on the Assign's SSA value, which downstream
+                    // SSRF suppression reads.  Propagating past this Assign
+                    // erases the prefix-bearing SSA value: the Call's args get
+                    // rewritten to the bare upstream variable (no prefix), and
+                    // `is_call_abstract_safe` falls through to a tainted-flow
+                    // emission even on safe fixed-host URLs.
+                    if info.string_prefix.is_some() {
+                        continue;
+                    }
                     replace_map.insert(inst.value, src);
                 }
             }
