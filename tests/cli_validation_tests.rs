@@ -46,16 +46,16 @@ fn scan_with_nonexistent_path_exits_nonzero() {
     let fake = home.path().join("does/not/exist/anywhere");
     let (mut cmd, _) = scan_cmd(home.path(), &fake);
 
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains(fake.to_string_lossy().as_ref()).or(
+    cmd.assert().failure().stderr(
+        predicate::str::contains(fake.to_string_lossy().as_ref()).or(
             // On some platforms the error wraps the path inside an IO error
             // message; accept either direct mention or a canonicalize-shaped
             // error so the assertion isn't brittle to errno text.
             predicate::str::contains("canonicalize")
                 .or(predicate::str::contains("No such file"))
                 .or(predicate::str::contains("not found")),
-        ));
+        ),
+    );
 }
 
 /// Clap enforces `ValueEnum` for `--format`; an unknown value fails at parse
@@ -67,11 +67,13 @@ fn scan_with_unknown_format_exits_nonzero() {
     let (mut cmd, _) = scan_cmd(home.path(), target.path());
     cmd.arg("--format").arg("unknown-format-xyz");
 
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("format").and(predicate::str::contains("unknown-format-xyz").or(
-            predicate::str::contains("possible values").or(predicate::str::contains("invalid value")),
-        )));
+    cmd.assert().failure().stderr(
+        predicate::str::contains("format").and(
+            predicate::str::contains("unknown-format-xyz")
+                .or(predicate::str::contains("possible values")
+                    .or(predicate::str::contains("invalid value"))),
+        ),
+    );
 }
 
 /// Clap enforces `ValueEnum` for `--mode`; an unknown value fails at parse
@@ -85,9 +87,12 @@ fn scan_with_unknown_mode_exits_nonzero() {
 
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("mode").and(
-            predicate::str::contains("bogus-mode-xyz").or(predicate::str::contains("invalid value")),
-        ));
+        .stderr(
+            predicate::str::contains("mode").and(
+                predicate::str::contains("bogus-mode-xyz")
+                    .or(predicate::str::contains("invalid value")),
+            ),
+        );
 }
 
 /// `--severity BOGUS` fails at `SeverityFilter::parse` with a message naming
@@ -125,9 +130,9 @@ fn scan_with_invalid_min_confidence_exits_nonzero() {
     let (mut cmd, _) = scan_cmd(home.path(), target.path());
     cmd.arg("--min-confidence").arg("ultra-extreme");
 
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("min-confidence").or(predicate::str::contains("confidence")));
+    cmd.assert().failure().stderr(
+        predicate::str::contains("min-confidence").or(predicate::str::contains("confidence")),
+    );
 }
 
 /// `--profile nonexistent-profile` fails at `config.apply_profile` which

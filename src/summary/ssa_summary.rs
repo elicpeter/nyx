@@ -16,6 +16,145 @@ pub enum TaintTransform {
     AddBits(Cap),
 }
 
+/// Phase CF-4: maximum [`ReturnPathTransform`] entries retained per parameter.
+///
+/// Most functions have one or two return paths; eight is a generous bound
+/// that still keeps per-summary memory O(1).  Beyond the cap, extraction
+/// joins the overflow into a single Top-predicate entry so the caller-side
+/// application always sees a bounded vector.
+pub const MAX_RETURN_PATHS: usize = 8;
+
+/// Phase CF-4: a single return-path entry in a per-parameter summary.
+///
+/// Per-return-path decomposition preserves callee-internal path splits that
+/// the aggregate [`TaintTransform`] would erase.  Each entry records the
+/// path predicate under which this return is reached, the behavioural
+/// transform on that path, and (optionally) an abstract-domain contribution.
+///
+/// Callers carry their own path-state at the call site and apply only
+/// entries whose predicate is consistent with the caller's validated set;
+/// the remainder are skipped.  Applicable entries are joined to produce
+/// the effective transform at the call site.
+///
+/// When a callee has a single return path, `param_return_paths` stays empty
+/// and the caller falls back to `param_to_return`'s union view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReturnPathTransform {
+    /// Behavioural kind on this path (Identity / StripBits / AddBits).
+    pub transform: TaintTransform,
+    /// Deterministic hash of the path-predicate gate at this return.
+    ///
+    /// `0` is reserved for "no predicate gate" — a return reached under
+    /// no known predicate.  Two return blocks whose path predicates are
+    /// observationally equivalent hash to the same value and are joined.
+    pub path_predicate_hash: u64,
+    /// `PredicateSummary::known_true` bits that must hold on every path
+    /// into this return.  Encoded using [`crate::taint::domain::predicate_kind_bit`]:
+    /// bit 0 = NullCheck, 1 = EmptyCheck, 2 = ErrorCheck.
+    pub known_true: u8,
+    /// `PredicateSummary::known_false` bits at this return (same encoding
+    /// as [`Self::known_true`]).
+    pub known_false: u8,
+    /// Abstract contribution for this return path, when non-Top.
+    ///
+    /// Callers combine this with their own abstract fact on the call
+    /// site's argument using `AbstractValue::meet` to recover bounds that
+    /// survive a specific return.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abstract_contribution: Option<AbstractValue>,
+}
+
+impl ReturnPathTransform {
+    /// Dedup key combining the semantic fields of a path entry.  Two entries
+    /// with the same `(path_predicate_hash, transform, known_true, known_false)`
+    /// describe the same behaviour on paths gated by the same predicate and
+    /// can collapse without losing information.  `abstract_contribution` is
+    /// deliberately ignored — the dedup path joins the two entries'
+    /// abstract facts rather than dropping one.
+    pub fn dedup_key(&self) -> (u64, &TaintTransform, u8, u8) {
+        (
+            self.path_predicate_hash,
+            &self.transform,
+            self.known_true,
+            self.known_false,
+        )
+    }
+}
+
+/// Phase CF-4: merge `incoming` into `existing`, deduping by
+/// [`ReturnPathTransform::dedup_key`] and joining abstract contributions on
+/// collision.  Caps the final vector at [`MAX_RETURN_PATHS`]; overflow is
+/// conservatively joined into a single Top-predicate entry.
+pub fn merge_return_paths(
+    existing: &mut SmallVec<[ReturnPathTransform; 2]>,
+    incoming: &[ReturnPathTransform],
+) {
+    for new_entry in incoming {
+        let key = new_entry.dedup_key();
+        if let Some(slot) = existing.iter_mut().find(|e| e.dedup_key() == key) {
+            slot.abstract_contribution = match (
+                slot.abstract_contribution.take(),
+                &new_entry.abstract_contribution,
+            ) {
+                (Some(a), Some(b)) => Some(a.join(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b.clone()),
+                (None, None) => None,
+            };
+        } else {
+            existing.push(new_entry.clone());
+        }
+    }
+    if existing.len() > MAX_RETURN_PATHS {
+        let mut joined = ReturnPathTransform {
+            transform: TaintTransform::Identity,
+            path_predicate_hash: 0,
+            known_true: 0,
+            known_false: 0,
+            abstract_contribution: None,
+        };
+        let mut strip_bits = Cap::all();
+        let mut add_bits = Cap::empty();
+        let mut saw_add = false;
+        let mut abs: Option<AbstractValue> = None;
+        let mut known_true = u8::MAX;
+        let mut known_false = u8::MAX;
+        for e in existing.iter() {
+            match &e.transform {
+                TaintTransform::Identity => {
+                    // Identity strips nothing; join intersects to empty.
+                    strip_bits = Cap::empty();
+                }
+                TaintTransform::StripBits(bits) => strip_bits &= *bits,
+                TaintTransform::AddBits(bits) => {
+                    add_bits |= *bits;
+                    saw_add = true;
+                }
+            }
+            known_true &= e.known_true;
+            known_false &= e.known_false;
+            abs = match (abs, &e.abstract_contribution) {
+                (None, None) => None,
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b.clone()),
+                (Some(a), Some(b)) => Some(a.join(b)),
+            };
+        }
+        joined.transform = if saw_add {
+            TaintTransform::AddBits(add_bits)
+        } else if strip_bits.is_empty() {
+            TaintTransform::Identity
+        } else {
+            TaintTransform::StripBits(strip_bits)
+        };
+        joined.known_true = known_true;
+        joined.known_false = known_false;
+        joined.abstract_contribution = abs;
+        existing.clear();
+        existing.push(joined);
+    }
+}
+
 /// Precise per-parameter SSA-derived function summary.
 ///
 /// Produced by running SSA taint analysis with each parameter individually
@@ -94,6 +233,43 @@ pub struct SsaFuncSummary {
     /// abstract values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub abstract_transfer: Vec<(usize, AbstractTransfer)>,
+    /// Phase CF-4: per-parameter return-path decomposition.
+    ///
+    /// When non-empty, supplies finer-grained per-path data than
+    /// [`Self::param_to_return`].  Each parameter maps to up to
+    /// [`MAX_RETURN_PATHS`] [`ReturnPathTransform`] entries, one per
+    /// distinct path-predicate gate.  Callers consult their own predicate
+    /// state at the call site and apply only entries whose predicate is
+    /// consistent with the caller's validated set, joining the applicable
+    /// set into the effective call-site transform.
+    ///
+    /// Empty when the callee has a single return path — the aggregate
+    /// [`param_to_return`] is already precise — or when extraction
+    /// could not derive per-return state (e.g. early-exit probes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_return_paths: Vec<(usize, SmallVec<[ReturnPathTransform; 2]>)>,
+}
+
+/// Phase CF-4: union-merge two `param_return_paths` lists keyed by parameter
+/// index.  Each parameter keeps its own deduped [`ReturnPathTransform`] list,
+/// joining abstract contributions on collision and enforcing the
+/// [`MAX_RETURN_PATHS`] cap.  Used by merge paths that combine summaries
+/// across iterations or files (SSA summaries are currently last-writer-wins
+/// in `GlobalSummaries`, but this helper is the entry point future union
+/// paths should call so per-path semantics stay centralised).
+pub fn union_param_return_paths(
+    existing: &mut Vec<(usize, SmallVec<[ReturnPathTransform; 2]>)>,
+    incoming: &[(usize, SmallVec<[ReturnPathTransform; 2]>)],
+) {
+    for (idx, paths) in incoming {
+        if let Some((_, slot)) = existing.iter_mut().find(|(i, _)| *i == *idx) {
+            merge_return_paths(slot, paths);
+        } else {
+            let mut fresh: SmallVec<[ReturnPathTransform; 2]> = SmallVec::new();
+            merge_return_paths(&mut fresh, paths);
+            existing.push((*idx, fresh));
+        }
+    }
 }
 
 impl SsaFuncSummary {

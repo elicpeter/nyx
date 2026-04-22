@@ -1782,7 +1782,9 @@ pub fn scan_with_index_parallel_observer(
                         &path,
                         logs,
                         || match &bytes_opt {
-                            Some(bytes) => run_rules_on_bytes(bytes, &path, cfg, None, Some(scan_root)),
+                            Some(bytes) => {
+                                run_rules_on_bytes(bytes, &path, cfg, None, Some(scan_root))
+                            }
                             None => run_rules_on_file(&path, cfg, None, Some(scan_root)),
                         },
                     )

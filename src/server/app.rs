@@ -4,10 +4,10 @@ use crate::server::routes;
 use crate::server::security::LocalServerSecurity;
 use crate::utils::config::Config;
 use axum::Router;
+use parking_lot::RwLock;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use std::path::PathBuf;
-use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 

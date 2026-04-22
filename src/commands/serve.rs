@@ -6,8 +6,8 @@ use crate::server::security::LocalServerSecurity;
 use crate::utils::config::Config;
 use crate::utils::project::get_project_info;
 use console::style;
-use std::path::Path;
 use parking_lot::RwLock;
+use std::path::Path;
 use std::sync::Arc;
 
 pub fn handle(

@@ -164,18 +164,19 @@ pub const MAX_LITERAL_PREFIX_LEN: usize = 64;
 /// No unbounded expression trees, no nesting.  A callee whose behaviour does
 /// not fit one of these forms falls back to `Top` — we never try to encode
 /// richer algebra in the summary.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum IntervalTransfer {
+    #[default]
     Top,
     Identity,
-    Affine { add: i64, mul: i64 },
-    Clamped { lo: i64, hi: i64 },
-}
-
-impl Default for IntervalTransfer {
-    fn default() -> Self {
-        Self::Top
-    }
+    Affine {
+        add: i64,
+        mul: i64,
+    },
+    Clamped {
+        lo: i64,
+        hi: i64,
+    },
 }
 
 impl IntervalTransfer {
@@ -222,17 +223,12 @@ impl IntervalTransfer {
 /// * [`StringTransfer::Identity`] — return = param.
 /// * [`StringTransfer::LiteralPrefix`] — return has this literal prefix
 ///   regardless of input (callee-intrinsic).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum StringTransfer {
+    #[default]
     Unknown,
     Identity,
     LiteralPrefix(String),
-}
-
-impl Default for StringTransfer {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 impl StringTransfer {

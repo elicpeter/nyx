@@ -15,8 +15,8 @@
 //! harness; unit tests here exercise the primitives in isolation.
 
 use nyx_scanner::abstract_interp::{
-    AbstractTransfer, AbstractValue, BitFact, IntervalFact, IntervalTransfer, MAX_LITERAL_PREFIX_LEN,
-    StringFact, StringTransfer,
+    AbstractTransfer, AbstractValue, BitFact, IntervalFact, IntervalTransfer,
+    MAX_LITERAL_PREFIX_LEN, StringFact, StringTransfer,
 };
 
 // ── Serde round-trip ───────────────────────────────────────────────────

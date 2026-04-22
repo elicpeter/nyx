@@ -27,11 +27,7 @@ static CACHE: LazyLock<RwLock<HashMap<&'static str, QuerySet>>> =
 /// panic in another thread must not brick pattern loading process-wide.
 pub fn for_lang(lang: &'static str, ts_lang: Language) -> std::sync::Arc<Vec<CompiledQuery>> {
     // fast path
-    if let Some(v) = CACHE
-        .read()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(lang)
-    {
+    if let Some(v) = CACHE.read().unwrap_or_else(|p| p.into_inner()).get(lang) {
         return v.clone();
     }
 

@@ -3221,12 +3221,13 @@ fn is_boolean_eq_const_tree(node: Node, lang: &str) -> bool {
             }
             let op = binary_operator_token(node);
             match op.as_deref() {
-                Some("&&") | Some("||") | Some("and") | Some("or") => node
-                    .named_child(0)
-                    .is_some_and(|l| is_boolean_eq_const_tree(l, lang))
-                    && node
-                        .named_child(1)
-                        .is_some_and(|r| is_boolean_eq_const_tree(r, lang)),
+                Some("&&") | Some("||") | Some("and") | Some("or") => {
+                    node.named_child(0)
+                        .is_some_and(|l| is_boolean_eq_const_tree(l, lang))
+                        && node
+                            .named_child(1)
+                            .is_some_and(|r| is_boolean_eq_const_tree(r, lang))
+                }
                 Some("==") | Some("===") | Some("!=") | Some("!==") => {
                     let Some(left) = node.named_child(0) else {
                         return false;
@@ -4063,9 +4064,7 @@ fn push_node<'a>(
     // (shallower, text-override-driven).  Only record `callee_span` when it
     // actually narrows against `ast.span` — storing a redundant copy would
     // just bloat every labeled Call node.
-    let callee_span = inner_callee_span
-        .or(inner_text_span)
-        .filter(|s| *s != span);
+    let callee_span = inner_callee_span.or(inner_text_span).filter(|s| *s != span);
 
     let idx = g.add_node(NodeInfo {
         kind,

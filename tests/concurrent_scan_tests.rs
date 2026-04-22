@@ -92,12 +92,7 @@ fn build_tree(root: &Path) {
 fn canonical_fingerprint(diags: &[Diag]) -> Vec<String> {
     let mut v: Vec<String> = diags
         .iter()
-        .map(|d| {
-            format!(
-                "{}|{}|{}|{}|{:?}",
-                d.path, d.line, d.col, d.id, d.severity
-            )
-        })
+        .map(|d| format!("{}|{}|{}|{}|{:?}", d.path, d.line, d.col, d.id, d.severity))
         .collect();
     v.sort();
     v

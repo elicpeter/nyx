@@ -1691,13 +1691,8 @@ mod tests {
     #[test]
     fn gated_sink_destination_object_fields_surfaced() {
         // `http.request(opts, cb)` — opts is an object with destination fields.
-        let result = classify_gated_sink(
-            "javascript",
-            "http.request",
-            |_| None,
-            no_kw,
-            no_kw_present,
-        );
+        let result =
+            classify_gated_sink("javascript", "http.request", |_| None, no_kw, no_kw_present);
         let m = result.expect("http.request gate should fire");
         assert_eq!(m.label, DataLabel::Sink(Cap::SSRF));
         assert_eq!(m.payload_args, &[0]);

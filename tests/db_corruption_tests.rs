@@ -50,7 +50,12 @@ fn seed_project(root: &Path) {
 
 /// Build a fresh index against a project tempdir and return `(project_name,
 /// db_path, project_root_keep_alive, db_dir_keep_alive)`.
-fn build_indexed_project() -> (String, std::path::PathBuf, tempfile::TempDir, tempfile::TempDir) {
+fn build_indexed_project() -> (
+    String,
+    std::path::PathBuf,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
     let project = tempfile::tempdir().unwrap();
     seed_project(project.path());
 
@@ -169,9 +174,7 @@ fn garbage_header_db_returns_structured_error() {
             // Acceptable: r2d2 may wrap the init failure in a pool error.
         }
         Err(other) => {
-            panic!(
-                "expected NyxError::Sql / Io / Pool on corrupt header, got {other:?}",
-            );
+            panic!("expected NyxError::Sql / Io / Pool on corrupt header, got {other:?}",);
         }
         Ok(_) => panic!(
             "Indexer::init should not succeed against a garbage-header file at {}",

@@ -48,14 +48,15 @@ fn parse_timeout_ms() -> u64 {
 /// in the same process can toggle injection; `std::env::var` is an in-memory
 /// lookup on supported platforms so the overhead is negligible.
 fn maybe_inject_test_panic(path: &Path) {
-    if let Ok(marker) = std::env::var("NYX_TEST_FORCE_PANIC_PATH") {
-        if !marker.is_empty() && path.to_string_lossy().contains(marker.as_str()) {
-            panic!(
-                "NYX_TEST_FORCE_PANIC_PATH injection: {} matches {:?}",
-                path.display(),
-                marker
-            );
-        }
+    if let Ok(marker) = std::env::var("NYX_TEST_FORCE_PANIC_PATH")
+        && !marker.is_empty()
+        && path.to_string_lossy().contains(marker.as_str())
+    {
+        panic!(
+            "NYX_TEST_FORCE_PANIC_PATH injection: {} matches {:?}",
+            path.display(),
+            marker
+        );
     }
 }
 
@@ -140,7 +141,11 @@ fn build_taint_diag(
     let source_byte = finding
         .flow_steps
         .first()
-        .and_then(|s| cfg_graph.node_weight(s.cfg_node).map(|i| i.classification_span().0))
+        .and_then(|s| {
+            cfg_graph
+                .node_weight(s.cfg_node)
+                .map(|i| i.classification_span().0)
+        })
         .or(finding.source_span)
         .or_else(|| source_info.map(|i| i.classification_span().0))
         .unwrap_or(call_site_byte);

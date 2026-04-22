@@ -436,6 +436,7 @@ fn ssa_summary_serde_round_trip_identity() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -463,6 +464,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -487,6 +489,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -518,6 +521,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -551,6 +555,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     gs.insert_ssa(key.clone(), v1.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v1));
@@ -572,6 +577,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     gs.insert_ssa(key.clone(), v2.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v2));
@@ -613,6 +619,7 @@ fn global_summaries_merge_with_ssa_entries() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     let sum_b = SsaFuncSummary {
         param_to_return: vec![],
@@ -630,6 +637,7 @@ fn global_summaries_merge_with_ssa_entries() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
 
     gs1.insert_ssa(key_a.clone(), sum_a.clone());
@@ -671,6 +679,7 @@ fn global_summaries_is_empty_considers_ssa() {
             receiver_to_sink: Cap::empty(),
 
             abstract_transfer: vec![],
+            param_return_paths: vec![],
         },
     );
 
@@ -695,6 +704,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -734,6 +744,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -782,6 +793,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
         receiver_to_sink: Cap::empty(),
 
         abstract_transfer: vec![],
+        param_return_paths: vec![],
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -1291,6 +1303,7 @@ fn global_summaries_resolve_body_requires_body_present() {
             receiver_to_sink: Cap::empty(),
 
             abstract_transfer: vec![],
+            param_return_paths: vec![],
         },
     );
     // Don't insert body
@@ -3296,4 +3309,183 @@ fn merge_unions_sink_sites_with_dedup() {
     gs.insert(key.clone(), left);
     let merged = gs.get(&key).unwrap();
     assert_eq!(merged.param_to_sink[0].1.len(), 2);
+}
+
+// ── Phase CF-4: per-return-path decomposition ───────────────────────────
+
+use super::ssa_summary::{
+    MAX_RETURN_PATHS, ReturnPathTransform, merge_return_paths, union_param_return_paths,
+};
+
+fn rpt(transform: TaintTransform, hash: u64, kt: u8, kf: u8) -> ReturnPathTransform {
+    ReturnPathTransform {
+        transform,
+        path_predicate_hash: hash,
+        known_true: kt,
+        known_false: kf,
+        abstract_contribution: None,
+    }
+}
+
+#[test]
+fn cf4_return_path_transform_serde_round_trip() {
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        param_to_sink: vec![],
+        source_caps: Cap::empty(),
+        param_to_sink_param: vec![],
+        param_container_to_return: vec![],
+        param_to_container_store: vec![],
+        return_type: None,
+        return_abstract: None,
+        source_to_callback: vec![],
+        receiver_to_return: None,
+        receiver_to_sink: Cap::empty(),
+        abstract_transfer: vec![],
+        param_return_paths: vec![(
+            0,
+            smallvec![
+                rpt(TaintTransform::Identity, 0x1234, 0b001, 0),
+                rpt(
+                    TaintTransform::StripBits(Cap::HTML_ESCAPE),
+                    0x5678,
+                    0,
+                    0b010
+                ),
+            ],
+        )],
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+    // Missing-field backwards compat: older JSON without `param_return_paths`
+    // deserialises cleanly with an empty vector.
+    let legacy = r#"{"param_to_return":[],"source_caps":0}"#;
+    let legacy_back: SsaFuncSummary = serde_json::from_str(legacy).unwrap();
+    assert!(legacy_back.param_return_paths.is_empty());
+}
+
+#[test]
+fn cf4_merge_return_paths_dedup_by_key() {
+    let mut existing: SmallVec<[ReturnPathTransform; 2]> = SmallVec::new();
+    let incoming = [
+        rpt(TaintTransform::Identity, 1, 0, 0),
+        rpt(TaintTransform::StripBits(Cap::HTML_ESCAPE), 2, 0, 0),
+        rpt(TaintTransform::Identity, 1, 0, 0), // dup of first
+    ];
+    merge_return_paths(&mut existing, &incoming);
+    assert_eq!(existing.len(), 2, "duplicate path hash+transform collapsed");
+    assert!(
+        existing
+            .iter()
+            .any(|e| matches!(e.transform, TaintTransform::Identity) && e.path_predicate_hash == 1)
+    );
+    assert!(existing.iter().any(
+        |e| matches!(&e.transform, TaintTransform::StripBits(b) if *b == Cap::HTML_ESCAPE)
+            && e.path_predicate_hash == 2
+    ));
+}
+
+#[test]
+fn cf4_merge_return_paths_caps_at_max() {
+    let mut existing: SmallVec<[ReturnPathTransform; 2]> = SmallVec::new();
+    let many: Vec<ReturnPathTransform> = (0..(MAX_RETURN_PATHS as u64 + 3))
+        .map(|i| rpt(TaintTransform::StripBits(Cap::HTML_ESCAPE), i + 10, 0, 0))
+        .collect();
+    merge_return_paths(&mut existing, &many);
+    assert_eq!(
+        existing.len(),
+        1,
+        "overflow collapses to a single Top-predicate entry"
+    );
+    // Joined entry has no predicate gate (hash=0) and conservatively takes
+    // the intersection of all strip bits — which here is HTML_ESCAPE.
+    let joined = &existing[0];
+    assert_eq!(joined.path_predicate_hash, 0);
+    assert!(matches!(
+        &joined.transform,
+        TaintTransform::StripBits(b) if *b == Cap::HTML_ESCAPE
+    ));
+}
+
+#[test]
+fn cf4_merge_return_paths_overflow_with_mixed_kinds() {
+    let mut existing: SmallVec<[ReturnPathTransform; 2]> = SmallVec::new();
+    let mut many: Vec<ReturnPathTransform> = (0..(MAX_RETURN_PATHS as u64 + 1))
+        .map(|i| rpt(TaintTransform::StripBits(Cap::HTML_ESCAPE), i + 10, 0, 0))
+        .collect();
+    // One identity path forces the join to degrade to Identity (nothing
+    // stripped on every path).
+    many.push(rpt(TaintTransform::Identity, 99, 0, 0));
+    merge_return_paths(&mut existing, &many);
+    assert_eq!(existing.len(), 1);
+    assert!(matches!(existing[0].transform, TaintTransform::Identity));
+}
+
+#[test]
+fn cf4_merge_return_paths_joins_abstract_contribution_on_collision() {
+    use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, StringFact};
+
+    let av_a = AbstractValue {
+        interval: IntervalFact::exact(0),
+        string: StringFact::top(),
+        bits: BitFact::top(),
+    };
+    let av_b = AbstractValue {
+        interval: IntervalFact::exact(10),
+        string: StringFact::top(),
+        bits: BitFact::top(),
+    };
+
+    let mut first = rpt(TaintTransform::Identity, 42, 0, 0);
+    first.abstract_contribution = Some(av_a.clone());
+    let mut second = rpt(TaintTransform::Identity, 42, 0, 0);
+    second.abstract_contribution = Some(av_b.clone());
+
+    let mut existing: SmallVec<[ReturnPathTransform; 2]> = SmallVec::new();
+    merge_return_paths(&mut existing, &[first]);
+    merge_return_paths(&mut existing, &[second]);
+    assert_eq!(existing.len(), 1, "same key, merged");
+    // The abstract_contribution is the join of the two inputs.
+    let joined = existing[0].abstract_contribution.as_ref().unwrap();
+    let expected = av_a.join(&av_b);
+    assert_eq!(joined, &expected);
+}
+
+#[test]
+fn cf4_union_param_return_paths_by_index() {
+    let mut existing: Vec<(usize, SmallVec<[ReturnPathTransform; 2]>)> =
+        vec![(0, smallvec![rpt(TaintTransform::Identity, 1, 0, 0)])];
+    let incoming: Vec<(usize, SmallVec<[ReturnPathTransform; 2]>)> = vec![
+        (
+            0,
+            smallvec![rpt(TaintTransform::StripBits(Cap::HTML_ESCAPE), 2, 0, 0)],
+        ),
+        (1, smallvec![rpt(TaintTransform::Identity, 3, 0, 0)]),
+    ];
+    union_param_return_paths(&mut existing, &incoming);
+    assert_eq!(existing.len(), 2);
+    let (_, p0) = existing.iter().find(|(i, _)| *i == 0).unwrap();
+    assert_eq!(p0.len(), 2, "per-param merge preserves both predicates");
+    let (_, p1) = existing.iter().find(|(i, _)| *i == 1).unwrap();
+    assert_eq!(p1.len(), 1);
+}
+
+#[test]
+fn cf4_ssa_summary_fits_arity_rejects_out_of_range_path_idx() {
+    // A path whose param index exceeds the key's arity is incompatible.
+    let mut bad = SsaFuncSummary::default();
+    bad.param_return_paths = vec![(5, smallvec![rpt(TaintTransform::Identity, 1, 0, 0)])];
+    let key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "test.rs".into(),
+        name: "helper".into(),
+        arity: Some(2), // too small for idx 5
+        ..Default::default()
+    };
+    let mut gs = GlobalSummaries::new();
+    gs.insert_ssa(key.clone(), bad);
+    // Reconciliation synthesises a disambig to keep the bad entry under a
+    // different key; the original key stays empty.
+    assert!(gs.get_ssa(&key).is_none());
 }

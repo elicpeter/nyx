@@ -226,8 +226,12 @@ fn dedup_same_line_different_sinks() {
         taint_on_target_line.len(),
         taint_on_target_line
             .iter()
-            .map(|d| format!("{}:{} [caps={}]", d.path, d.line,
-                d.evidence.as_ref().map(|e| e.sink_caps).unwrap_or(0)))
+            .map(|d| format!(
+                "{}:{} [caps={}]",
+                d.path,
+                d.line,
+                d.evidence.as_ref().map(|e| e.sink_caps).unwrap_or(0)
+            ))
             .collect::<Vec<_>>()
     );
     let caps: HashSet<u16> = taint_on_target_line

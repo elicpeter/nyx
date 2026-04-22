@@ -18,7 +18,7 @@ document.
 | CF-1  | Cross-file SSA body availability (infrastructure)   | —           | 1 session         | Landed 2026-04-21            |
 | CF-2  | Cross-file k=1 context-sensitive inline taint       | CF-1        | 1 session         | Landed 2026-04-22            |
 | CF-3  | Abstract-domain transfer channels in summaries      | —           | 1 session         | Landed 2026-04-22            |
-| CF-4  | Per-return-path summary decomposition               | —           | 1 session         | Not started                  |
+| CF-4  | Per-return-path summary decomposition               | —           | 1 session         | Landed 2026-04-22            |
 | CF-5  | Cross-file SCC joint fixed-point                    | CF-1, CF-2  | 1 session         | Not started                  |
 | CF-6  | Parameter-granularity points-to summaries           | CF-4        | 1 session         | Not started                  |
 | CF-7  | Demand-driven backwards analysis from sinks         | CF-1..CF-4  | 1 full session    | Not started                  |
@@ -465,7 +465,18 @@ cargo bench --bench scan_bench -- --save-baseline post-phase-cf-3
 
 ## Phase CF-4 — Per-return-path summary decomposition
 
-**Status:** Not started
+**Status:** Landed 2026-04-22 on `release/0.5.0`.  Additive shape:
+`SsaFuncSummary` gains `param_return_paths: Vec<(usize, SmallVec<[ReturnPathTransform; 2]>)>`
+alongside the existing aggregate `param_to_return`.  Pass 1 emits one
+`ReturnPathTransform` per distinct return-block predicate hash (with a
+cap of `MAX_RETURN_PATHS = 8` and deterministic join beyond the cap).
+Pass 2 summary application uses `effective_param_sanitizer` to filter
+entries by caller-side `known_true` / `known_false` envelope and
+intersects strip-bits across compatible paths.  Coverage:
+7 new unit tests (`cf4_*` in `src/summary/tests.rs`) plus 3 new
+cross-file fixtures (`cross_file_phi_validated_branch` /
+`_partial_sanitiser` / `_both_branches_safe`) wired through
+`tests/cross_file_phi_tests.rs`.
 **Estimated effort:** 1 session
 **Depends on:** Nothing (independent of CF-1 / CF-2 / CF-3)
 

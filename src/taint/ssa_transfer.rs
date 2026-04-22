@@ -2023,19 +2023,18 @@ fn extract_inline_return_taint(
         out
     };
 
-    let push_remapped =
-        |target_origins: &mut SmallVec<[TaintOrigin; 2]>, orig: &TaintOrigin| {
-            let new_orig = remap_origin(orig);
-            if target_origins.len() < MAX_ORIGINS
-                && !target_origins.iter().any(|o| {
-                    o.node == new_orig.node
-                        && o.source_span == new_orig.source_span
-                        && o.source_kind == new_orig.source_kind
-                })
-            {
-                target_origins.push(new_orig);
-            }
-        };
+    let push_remapped = |target_origins: &mut SmallVec<[TaintOrigin; 2]>, orig: &TaintOrigin| {
+        let new_orig = remap_origin(orig);
+        if target_origins.len() < MAX_ORIGINS
+            && !target_origins.iter().any(|o| {
+                o.node == new_orig.node
+                    && o.source_span == new_orig.source_span
+                    && o.source_kind == new_orig.source_kind
+            })
+        {
+            target_origins.push(new_orig);
+        }
+    };
 
     for (bid, block) in ssa.blocks.iter().enumerate() {
         let ret_val = match &block.terminator {
@@ -2423,6 +2422,25 @@ fn transfer_inst(
                     }
                 }
 
+                // Phase CF-4: per-parameter predicate-consistent transforms.
+                //
+                // When the summary carries `param_return_paths`, apply a
+                // per-parameter effective sanitizer narrowed by the caller's
+                // current predicate state.  This recovers callee-internal
+                // path splits that the coarse `resolved.sanitizer_caps`
+                // union would erase (`if validated { return sanitised }
+                // else { return raw }` can be resolved to "strip all
+                // sanitised bits" when the caller validated the input).
+                //
+                // Falls back to the aggregate path when:
+                //   * `param_return_paths` is empty (single-path callee or
+                //     non-SSA resolution);
+                //   * the parameter has no entry (no per-path decomposition
+                //     was recorded for this param);
+                //   * no paths are predicate-compatible (conservative: keep
+                //     the aggregate sanitizer bits).
+                let mut aggregate_sanitizer_applied = false;
+
                 // Propagation: ALWAYS apply
                 if resolved.propagates_taint {
                     // Only use positional filtering when original arg_uses is populated
@@ -2431,20 +2449,52 @@ fn transfer_inst(
                     } else {
                         &resolved.propagating_params
                     };
-                    let (prop_caps, prop_origins) =
-                        collect_args_taint(args, receiver, state, effective_params);
-                    return_bits |= prop_caps;
-                    for orig in &prop_origins {
-                        if return_origins.len() < MAX_ORIGINS
-                            && !return_origins.iter().any(|o| o.node == orig.node)
-                        {
-                            return_origins.push(*orig);
+
+                    if !resolved.param_return_paths.is_empty() && !effective_params.is_empty() {
+                        // Per-parameter application: each propagating param
+                        // contributes taint narrowed by its own per-path
+                        // sanitizer.  Origins are still aggregated across
+                        // params — they name source anchors, not transforms.
+                        let mut any_origin_added = false;
+                        for &param_idx in effective_params {
+                            let arg_caps_origins =
+                                collect_args_taint(args, receiver, state, &[param_idx]);
+                            let arg_caps = arg_caps_origins.0;
+                            let arg_origins = arg_caps_origins.1;
+                            let param_sanitizer =
+                                effective_param_sanitizer(&resolved, param_idx, state);
+                            return_bits |= arg_caps & !param_sanitizer;
+                            for orig in &arg_origins {
+                                if return_origins.len() < MAX_ORIGINS
+                                    && !return_origins.iter().any(|o| o.node == orig.node)
+                                {
+                                    return_origins.push(*orig);
+                                    any_origin_added = true;
+                                }
+                            }
+                        }
+                        aggregate_sanitizer_applied = true;
+                        // Sentinel reference to silence unused on cold paths.
+                        let _ = any_origin_added;
+                    } else {
+                        let (prop_caps, prop_origins) =
+                            collect_args_taint(args, receiver, state, effective_params);
+                        return_bits |= prop_caps;
+                        for orig in &prop_origins {
+                            if return_origins.len() < MAX_ORIGINS
+                                && !return_origins.iter().any(|o| o.node == orig.node)
+                            {
+                                return_origins.push(*orig);
+                            }
                         }
                     }
                 }
 
-                // Summary sanitizer: ALWAYS apply
-                return_bits &= !resolved.sanitizer_caps;
+                // Summary sanitizer: apply the aggregate only when per-param
+                // path narrowing above did not already strip per-argument.
+                if !aggregate_sanitizer_applied {
+                    return_bits &= !resolved.sanitizer_caps;
+                }
             }
 
             // Type-qualified receiver resolution: when normal callee resolution
@@ -5886,6 +5936,20 @@ struct ResolvedSummary {
     /// call site to synthesise an abstract return value from the
     /// caller's knowledge of each argument.
     abstract_transfer: Vec<(usize, crate::abstract_interp::AbstractTransfer)>,
+    /// Phase CF-4: per-parameter return-path decomposition.
+    ///
+    /// Populated only when the callee was resolved via an SSA summary
+    /// and the summary carries ≥2 distinct return-path predicate gates.
+    /// When present, summary application at the call site consults the
+    /// caller's [`SsaTaintState::predicates`] and applies only entries
+    /// whose predicate gate is consistent with the caller's validated
+    /// set — recovering callee-internal path splits that the aggregate
+    /// [`Self::sanitizer_caps`] / [`Self::propagating_params`] view
+    /// otherwise erases.  Empty for non-SSA resolution paths.
+    param_return_paths: Vec<(
+        usize,
+        smallvec::SmallVec<[crate::summary::ssa_summary::ReturnPathTransform; 2]>,
+    )>,
 }
 
 fn resolve_callee(
@@ -6028,6 +6092,7 @@ fn resolve_callee_full(
                     receiver_to_sink: Cap::empty(),
 
                     abstract_transfer: vec![],
+                    param_return_paths: vec![],
                 });
             }
             // Try label classification for the bound function (by leaf name)
@@ -6066,6 +6131,7 @@ fn resolve_callee_full(
                     receiver_to_sink: Cap::empty(),
 
                     abstract_transfer: vec![],
+                    param_return_paths: vec![],
                 });
             }
         }
@@ -6143,6 +6209,7 @@ fn resolve_callee_full(
                 receiver_to_sink: Cap::empty(),
 
                 abstract_transfer: vec![],
+                param_return_paths: vec![],
             });
         }
     } else {
@@ -6191,6 +6258,7 @@ fn resolve_callee_full(
                         receiver_to_sink: Cap::empty(),
 
                         abstract_transfer: vec![],
+                        param_return_paths: vec![],
                     });
                 }
             }
@@ -6231,11 +6299,105 @@ fn resolve_callee_full(
                 receiver_to_sink: Cap::empty(),
 
                 abstract_transfer: vec![],
+                param_return_paths: vec![],
             });
         }
     }
 
     None
+}
+
+/// Phase CF-4: compute the effective sanitizer bits that apply at the call
+/// site for a specific parameter, narrowed by the caller's predicate state.
+///
+/// When the resolved summary carries `param_return_paths` for `param_idx`:
+/// filter the entries by predicate consistency with the caller's current
+/// `SsaTaintState` (`validated_must` + `predicates`).  Compatible entries
+/// are joined with the **intersection-of-strip-bits** rule: the caller does
+/// not know which return path the callee took, so only bits stripped on
+/// EVERY compatible path can be considered cleared.
+///
+/// Falls back to `resolved.sanitizer_caps` (the aggregate) when:
+///   * the summary has no per-path data for this parameter;
+///   * every path is predicate-compatible (the narrowing adds no information);
+///   * no path is predicate-compatible (conservative: keep aggregate).
+fn effective_param_sanitizer(
+    resolved: &ResolvedSummary,
+    param_idx: usize,
+    state: &SsaTaintState,
+) -> Cap {
+    use crate::summary::ssa_summary::TaintTransform;
+
+    let paths = match resolved
+        .param_return_paths
+        .iter()
+        .find(|(i, _)| *i == param_idx)
+    {
+        Some((_, p)) => p,
+        None => return resolved.sanitizer_caps,
+    };
+
+    // Caller-side predicate envelope: union of known_true / known_false bits
+    // observed across the caller's tracked variables.  A path is
+    // compatible if its required bits (known_true / known_false) do not
+    // contradict this envelope.
+    let mut caller_kt: u8 = 0;
+    let mut caller_kf: u8 = 0;
+    for (_, pred) in &state.predicates {
+        caller_kt |= pred.known_true;
+        caller_kf |= pred.known_false;
+    }
+
+    let mut compatible: smallvec::SmallVec<[&_; 2]> = smallvec::SmallVec::new();
+    for path in paths {
+        // Contradiction tests:
+        //   * path demands bit B true while caller has evidence B is false
+        //   * path demands bit B false while caller has evidence B is true
+        // In either case the caller cannot possibly be on this return path.
+        if path.known_true & caller_kf != 0 {
+            continue;
+        }
+        if path.known_false & caller_kt != 0 {
+            continue;
+        }
+        compatible.push(path);
+    }
+
+    if compatible.is_empty() {
+        // No path applies — the caller's predicate state contradicts every
+        // recorded return.  Fall back to the aggregate rather than
+        // synthesise a sanitiser from zero data.
+        return resolved.sanitizer_caps;
+    }
+
+    // Intersection of strip-bits across compatible paths.  Identity
+    // contributes the empty set (nothing stripped); AddBits contributes
+    // nothing to the sanitiser either.
+    let mut common = Cap::all();
+    let mut saw_any = false;
+    for path in &compatible {
+        match &path.transform {
+            TaintTransform::StripBits(bits) => {
+                common &= *bits;
+                saw_any = true;
+            }
+            TaintTransform::Identity => {
+                common = Cap::empty();
+                saw_any = true;
+            }
+            TaintTransform::AddBits(_) => {
+                // AddBits doesn't contribute to sanitation; the intersection
+                // is still taken over zero strip contribution.
+                common = Cap::empty();
+                saw_any = true;
+            }
+        }
+    }
+    if !saw_any {
+        resolved.sanitizer_caps
+    } else {
+        common
+    }
 }
 
 /// Convert an `SsaFuncSummary` to the existing `ResolvedSummary` format.
@@ -6284,6 +6446,7 @@ fn convert_ssa_to_resolved(
         receiver_to_return: ssa_sum.receiver_to_return.clone(),
         receiver_to_sink: ssa_sum.receiver_to_sink,
         abstract_transfer: ssa_sum.abstract_transfer.clone(),
+        param_return_paths: ssa_sum.param_return_paths.clone(),
     }
 }
 
@@ -6680,14 +6843,42 @@ pub fn extract_ssa_func_summary(
     let all_param_values: std::collections::HashSet<SsaValue> =
         param_info.iter().map(|(_, _, v)| *v).collect();
 
+    // Phase CF-4: per-return-block observation captured alongside the
+    // aggregate return caps.  Each entry records one return block's exit
+    // state — caps contributed on that path, path-predicate hash,
+    // known_true/false bits, and the return SSA value's abstract fact —
+    // so the per-param loop can emit one [`ReturnPathTransform`] per
+    // distinct predicate gate.
+    struct ReturnBlockObs {
+        /// Caps at the return SSA value (or joined live values for
+        /// implicit returns) on this block's exit.
+        derived_caps: Cap,
+        /// Caps collected from parameter values reaching this return
+        /// (passthrough fallback).
+        param_caps: Cap,
+        /// Deterministic hash of the predicate gate at this return.
+        /// `0` means "no predicate gate" — an unguarded return.
+        predicate_hash: u64,
+        /// `PredicateSummary::known_true` bits intersected across all
+        /// tracked variables at this return.  Encoded via
+        /// [`predicate_kind_bit`].
+        known_true: u8,
+        /// `PredicateSummary::known_false` bits at this return.
+        known_false: u8,
+        /// Abstract fact on the return SSA value at this return (None
+        /// when Top or abstract interp disabled).
+        abstract_value: Option<crate::abstract_interp::AbstractValue>,
+    }
+
     // Helper: run a taint probe with a given global_seed and return
-    // (surviving_return_caps, sink_events, return_abstract).
-    // The return_abstract is the joined abstract value of the return SSA value
-    // across all return blocks (None if Top or abstract interp disabled).
+    // the aggregate return caps, sink events, joined return abstract,
+    // and the per-return-block observation list used by CF-4 to derive
+    // per-return-path transforms.
     let run_probe = |seed: HashMap<BindingKey, VarTaint>| -> (
         Cap,
         Vec<SsaTaintEvent>,
         Option<crate::abstract_interp::AbstractValue>,
+        Vec<ReturnBlockObs>,
     ) {
         let seed_ref = if seed.is_empty() { None } else { Some(&seed) };
         let transfer = SsaTaintTransfer {
@@ -6723,10 +6914,12 @@ pub fn extract_ssa_func_summary(
         // Separate param values from derived values: derived values give
         // more precise transforms (they reflect function-internal sanitization).
         // If only param values reach return → pure passthrough (Identity).
-        let mut derived_caps = Cap::empty();
-        let mut param_caps = Cap::empty();
+        let mut total_derived_caps = Cap::empty();
+        let mut total_param_caps = Cap::empty();
         // Extract abstract value of the return SSA value.
         let mut return_abstract: Option<crate::abstract_interp::AbstractValue> = None;
+        // Phase CF-4: per-return-block observations for per-path transforms.
+        let mut per_return: Vec<ReturnBlockObs> = Vec::with_capacity(return_blocks.len());
         for &bid in &return_blocks {
             if let Some(entry) = &block_states[bid] {
                 let empty_induction = HashSet::new();
@@ -6745,19 +6938,19 @@ pub fn extract_ssa_func_summary(
                     _ => None,
                 };
 
+                let mut block_derived_caps = Cap::empty();
+                let mut block_param_caps = Cap::empty();
+
                 if let Some(rv) = ret_val {
                     // Explicit return value: use only its taint for derived_caps.
                     // If rv has no taint entry, this block contributes no derived caps.
-                    let _rv_tainted = if let Some(taint) = exit.get(rv) {
+                    if let Some(taint) = exit.get(rv) {
                         if all_param_values.contains(&rv) {
-                            param_caps |= taint.caps;
+                            block_param_caps |= taint.caps;
                         } else {
-                            derived_caps |= taint.caps;
+                            block_derived_caps |= taint.caps;
                         }
-                        true
-                    } else {
-                        false
-                    };
+                    }
                     // When rv is not a param value, also collect param taint as a
                     // fallback. The SSA terminator's rv may point to the last body
                     // instruction (e.g. push/append result) rather than the actual
@@ -6774,7 +6967,7 @@ pub fn extract_ssa_func_summary(
                     if !all_param_values.contains(&rv) && !rv_is_const {
                         for (val, taint) in &exit.values {
                             if all_param_values.contains(val) {
-                                param_caps |= taint.caps;
+                                block_param_caps |= taint.caps;
                             }
                         }
                     }
@@ -6782,15 +6975,19 @@ pub fn extract_ssa_func_summary(
                     // Return(None): implicit return — fall back to all live values.
                     for (val, taint) in &exit.values {
                         if all_param_values.contains(val) {
-                            param_caps |= taint.caps;
+                            block_param_caps |= taint.caps;
                         } else {
-                            derived_caps |= taint.caps;
+                            block_derived_caps |= taint.caps;
                         }
                     }
                 }
 
+                total_derived_caps |= block_derived_caps;
+                total_param_caps |= block_param_caps;
+
                 // Abstract return: use terminator's return value when available,
                 // fall back to last instruction heuristic for Return(None).
+                let mut block_abs: Option<crate::abstract_interp::AbstractValue> = None;
                 if let Some(ref abs) = exit.abstract_state {
                     let abs_rv = ret_val.or_else(|| {
                         ssa.blocks[bid]
@@ -6802,6 +6999,7 @@ pub fn extract_ssa_func_summary(
                     if let Some(rv) = abs_rv {
                         let av = abs.get(rv);
                         if !av.is_top() {
+                            block_abs = Some(av.clone());
                             return_abstract = Some(match return_abstract {
                                 None => av,
                                 Some(prev) => prev.join(&av),
@@ -6809,32 +7007,54 @@ pub fn extract_ssa_func_summary(
                         }
                     }
                 }
+
+                // Phase CF-4: derive a predicate hash + known-true/false
+                // intersection across tracked variables at this return.
+                // The hash is stable across runs for a given predicate
+                // shape so call sites can compare paths deterministically.
+                let (predicate_hash, known_true, known_false) = summarise_return_predicates(&exit);
+                per_return.push(ReturnBlockObs {
+                    derived_caps: block_derived_caps,
+                    param_caps: block_param_caps,
+                    predicate_hash,
+                    known_true,
+                    known_false,
+                    abstract_value: block_abs,
+                });
             }
         }
 
         // Prefer derived caps; fall back to param caps for passthrough functions
-        let return_caps = if !derived_caps.is_empty() {
-            derived_caps
+        let return_caps = if !total_derived_caps.is_empty() {
+            total_derived_caps
         } else {
-            param_caps
+            total_param_caps
         };
 
         // Drop return_abstract if it joined to Top
         let return_abstract = return_abstract.filter(|v| !v.is_top());
 
-        (return_caps, events, return_abstract)
+        (return_caps, events, return_abstract, per_return)
     };
 
     // Probe with no params tainted → detect source_caps + return abstract.
     // Abstract values don't depend on taint seeding, so the baseline probe
     // captures the function's intrinsic abstract return value.
-    let (baseline_return_caps, _baseline_events, return_abstract) = run_probe(HashMap::new());
+    let (baseline_return_caps, _baseline_events, return_abstract, _baseline_obs) =
+        run_probe(HashMap::new());
     let source_caps = baseline_return_caps;
 
     // Probe each param
     let mut param_to_return = Vec::new();
     let mut param_to_sink: Vec<(usize, SmallVec<[SinkSite; 1]>)> = Vec::new();
     let mut param_to_sink_param = Vec::new();
+    // Phase CF-4: per-param return-path decomposition.  Populated only
+    // when the param has ≥2 distinct return-block predicate hashes —
+    // a single-return-path callee is already precise via `param_to_return`.
+    let mut param_return_paths: Vec<(
+        usize,
+        SmallVec<[crate::summary::ssa_summary::ReturnPathTransform; 2]>,
+    )> = Vec::new();
 
     for &(idx, ref var_name, _ssa_val) in &param_info {
         let mut seed = HashMap::new();
@@ -6852,7 +7072,7 @@ pub fn extract_ssa_func_summary(
             },
         );
 
-        let (return_caps, events, _) = run_probe(seed);
+        let (return_caps, events, _, per_return_obs) = run_probe(seed);
 
         // Subtract baseline source_caps — we only want param-contributed caps
         let param_return_caps = return_caps & !source_caps;
@@ -6867,6 +7087,59 @@ pub fn extract_ssa_func_summary(
             param_to_return.push((idx, transform));
         }
 
+        // Phase CF-4: derive per-return-path decomposition.  For each
+        // observed return block, derive a `ReturnPathTransform` mirroring
+        // the aggregate logic (prefer derived caps, fall back to param
+        // caps, strip baseline source caps).  Only emit when ≥2 distinct
+        // predicate hashes are present — a single-hash summary adds no
+        // signal over the aggregate `param_to_return`.
+        if per_return_obs.len() >= 2 {
+            let mut per_path: SmallVec<[crate::summary::ssa_summary::ReturnPathTransform; 2]> =
+                SmallVec::new();
+            for obs in &per_return_obs {
+                let block_return_caps = if !obs.derived_caps.is_empty() {
+                    obs.derived_caps
+                } else {
+                    obs.param_caps
+                };
+                let block_contributed = block_return_caps & !source_caps;
+                let transform_kind = if block_contributed.is_empty() {
+                    // No caps on this path — param does not reach return
+                    // under this predicate.  A `StripBits(all)` records
+                    // "all bits cleared" so downstream join preserves the
+                    // disparity with other paths.
+                    TaintTransform::StripBits(Cap::all())
+                } else {
+                    let stripped = Cap::all() & !block_contributed;
+                    if stripped.is_empty() {
+                        TaintTransform::Identity
+                    } else {
+                        TaintTransform::StripBits(stripped)
+                    }
+                };
+                crate::summary::ssa_summary::merge_return_paths(
+                    &mut per_path,
+                    &[crate::summary::ssa_summary::ReturnPathTransform {
+                        transform: transform_kind,
+                        path_predicate_hash: obs.predicate_hash,
+                        known_true: obs.known_true,
+                        known_false: obs.known_false,
+                        abstract_contribution: obs.abstract_value.clone(),
+                    }],
+                );
+            }
+            // Only record when ≥2 distinct predicate gates survived
+            // the dedup (a single-entry vector is no finer than the
+            // aggregate `param_to_return` and wastes bytes on disk).
+            let distinct_hashes = per_path
+                .iter()
+                .map(|e| e.path_predicate_hash)
+                .collect::<std::collections::HashSet<_>>();
+            if distinct_hashes.len() >= 2 {
+                param_return_paths.push((idx, per_path));
+            }
+        }
+
         // Collect sink caps + primary-location sites from events + per-arg-position detail
         let mut param_sites: SmallVec<[SinkSite; 1]> = SmallVec::new();
         for event in &events {
@@ -6877,10 +7150,9 @@ pub fn extract_ssa_func_summary(
                 continue;
             }
             let site = match locator {
-                Some(loc) => loc.site_for_span(
-                    cfg[event.sink_node].classification_span(),
-                    event.sink_caps,
-                ),
+                Some(loc) => {
+                    loc.site_for_span(cfg[event.sink_node].classification_span(), event.sink_caps)
+                }
                 None => SinkSite::cap_only(event.sink_caps),
             };
             let key = site.dedup_key();
@@ -6953,8 +7225,7 @@ pub fn extract_ssa_func_summary(
     //      `Clamped` / `LiteralPrefix` so the caller sees the bound even
     //      when it has no abstract info on its own argument.
     //   3. Top: default; the entry is omitted (empty transfer is meaningless).
-    let abstract_transfer =
-        derive_abstract_transfer(ssa, &param_info, return_abstract.as_ref());
+    let abstract_transfer = derive_abstract_transfer(ssa, &param_info, return_abstract.as_ref());
 
     SsaFuncSummary {
         param_to_return,
@@ -6969,7 +7240,59 @@ pub fn extract_ssa_func_summary(
         receiver_to_return: None,
         receiver_to_sink: Cap::empty(),
         abstract_transfer,
+        param_return_paths,
     }
+}
+
+/// Phase CF-4: derive a deterministic predicate-hash + known-true/false
+/// intersection for a return-block exit state.
+///
+/// The hash combines the sorted `(SymbolId, known_true, known_false)` tuples
+/// from the state's `predicates` list with the validated_must bitmask.  Two
+/// return blocks whose predicate gates are observationally identical produce
+/// the same hash; the intersection of known_true/false gives the bits that
+/// hold on every path into each return block.
+///
+/// Returns `(0, 0, 0)` for a Top state (no predicates tracked).
+fn summarise_return_predicates(state: &SsaTaintState) -> (u64, u8, u8) {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    if state.predicates.is_empty() && state.validated_must.is_empty() {
+        return (0, 0, 0);
+    }
+
+    let mut h = DefaultHasher::new();
+    // Validated-must contributes deterministically via bits().
+    state.validated_must.bits().hash(&mut h);
+    // Sort by SymbolId (predicates list is already sorted by SsaTaintState
+    // invariants, but hash-input stability matters here).
+    let mut sorted: smallvec::SmallVec<[(u32, u8, u8); 4]> = state
+        .predicates
+        .iter()
+        .map(|(id, s)| (id.0, s.known_true, s.known_false))
+        .collect();
+    sorted.sort_by_key(|(id, _, _)| *id);
+    for (id, kt, kf) in &sorted {
+        id.hash(&mut h);
+        kt.hash(&mut h);
+        kf.hash(&mut h);
+    }
+    let hash = h.finish();
+    // Intersect known_true / known_false across all tracked variables:
+    // the bits that hold for EVERY predicate-tracked var at this return.
+    let known_true = sorted
+        .iter()
+        .map(|(_, kt, _)| *kt)
+        .fold(u8::MAX, |a, b| a & b);
+    let known_false = sorted
+        .iter()
+        .map(|(_, _, kf)| *kf)
+        .fold(u8::MAX, |a, b| a & b);
+    // Use `1` for the "no predicates but validated_must non-empty" case to
+    // avoid colliding with the unguarded sentinel (0).
+    let hash = if hash == 0 { 1 } else { hash };
+    (hash, known_true, known_false)
 }
 
 /// Phase CF-3: Derive per-parameter [`AbstractTransfer`] entries for a

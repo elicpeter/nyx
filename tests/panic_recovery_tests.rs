@@ -104,9 +104,10 @@ fn scan_surfaces_injected_panic_from_worker() {
     let root_buf = root.to_path_buf();
     let cfg = hostile_cfg();
 
-    let outcome = with_panic_injection(PANIC_MARKER, AssertUnwindSafe(|| {
-        scan_no_index(&root_buf, &cfg)
-    }));
+    let outcome = with_panic_injection(
+        PANIC_MARKER,
+        AssertUnwindSafe(|| scan_no_index(&root_buf, &cfg)),
+    );
 
     // Current behaviour (pre-`enable_panic_recovery`): the scan panics
     // out of rayon.  If a future phase adds panic containment, the scan
@@ -147,11 +148,7 @@ fn clean_scan_without_injection_does_not_panic() {
           function run(cmd){ cp.exec(cmd); }\n",
     )
     .unwrap();
-    std::fs::write(
-        root.join(format!("{PANIC_MARKER}.js")),
-        b"var safe = 1;\n",
-    )
-    .unwrap();
+    std::fs::write(root.join(format!("{PANIC_MARKER}.js")), b"var safe = 1;\n").unwrap();
 
     // Ensure the marker is not armed for this test even if a prior test
     // leaked state (belt-and-suspenders — `with_panic_injection` already
@@ -168,7 +165,9 @@ fn clean_scan_without_injection_does_not_panic() {
     // finding should surface, proving the scan actually analysed files
     // rather than silently short-circuiting.
     assert!(
-        diags.iter().any(|d| Path::new(&d.path).ends_with("normal.js")),
+        diags
+            .iter()
+            .any(|d| Path::new(&d.path).ends_with("normal.js")),
         "expected a finding from normal.js, got {diags:?}",
     );
 }
@@ -184,7 +183,10 @@ fn empty_injection_marker_is_ignored() {
     std::fs::write(root.join("normal.js"), b"var x = 1;\n").unwrap();
 
     let root_buf = root.to_path_buf();
-    let outcome = with_panic_injection("", AssertUnwindSafe(|| scan_no_index(&root_buf, &hostile_cfg())));
+    let outcome = with_panic_injection(
+        "",
+        AssertUnwindSafe(|| scan_no_index(&root_buf, &hostile_cfg())),
+    );
 
     match outcome {
         Ok(Ok(_diags)) => {}
@@ -221,15 +223,16 @@ fn recovery_mode_skips_poisoned_file_and_continues() {
     let root_buf = root.to_path_buf();
     let cfg = recovery_cfg();
 
-    let outcome = with_panic_injection(PANIC_MARKER, AssertUnwindSafe(|| {
-        scan_no_index(&root_buf, &cfg)
-    }));
+    let outcome = with_panic_injection(
+        PANIC_MARKER,
+        AssertUnwindSafe(|| scan_no_index(&root_buf, &cfg)),
+    );
 
     let diags = match outcome {
         Ok(Ok(d)) => d,
-        Ok(Err(e)) => panic!(
-            "recovery-mode scan returned error instead of skipping poisoned file: {e}"
-        ),
+        Ok(Err(e)) => {
+            panic!("recovery-mode scan returned error instead of skipping poisoned file: {e}")
+        }
         Err(panic) => panic!(
             "recovery-mode scan propagated a panic that should have been contained: {panic:?}"
         ),

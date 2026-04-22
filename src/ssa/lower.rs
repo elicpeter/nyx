@@ -1883,9 +1883,9 @@ mod tests {
             .blocks
             .iter()
             .find(|b| {
-                b.phis.iter().any(|p| {
-                    p.var_name.as_deref() == Some("x") && matches!(p.op, SsaOp::Phi(_))
-                })
+                b.phis
+                    .iter()
+                    .any(|p| p.var_name.as_deref() == Some("x") && matches!(p.op, SsaOp::Phi(_)))
             })
             .expect("expected a phi for `x` at the catch/normal join");
         assert_eq!(

@@ -104,7 +104,8 @@ port = 0\n\
     match result {
         Err(NyxError::ConfigValidation(errs)) => {
             assert!(
-                errs.iter().any(|e| e.section == "server" && e.field == "port"),
+                errs.iter()
+                    .any(|e| e.section == "server" && e.field == "port"),
                 "validation should flag server.port: {errs:?}",
             );
         }

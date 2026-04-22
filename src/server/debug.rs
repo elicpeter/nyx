@@ -1263,6 +1263,7 @@ function consume() {
                 receiver_to_sink: Cap::empty(),
 
                 abstract_transfer: vec![],
+                param_return_paths: vec![],
             },
         );
 
