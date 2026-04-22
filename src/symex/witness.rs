@@ -576,6 +576,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
         assert_eq!(sink_cap(&finding, &cfg), Cap::SQL_QUERY);
     }
@@ -607,6 +610,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
         let cap = sink_cap(&finding, &cfg);
         assert!(cap.contains(Cap::SQL_QUERY));
@@ -795,6 +801,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -833,6 +842,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         assert!(extract_witness(&state, &finding, &ssa, &cfg).is_none());
@@ -892,6 +904,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -948,6 +963,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);

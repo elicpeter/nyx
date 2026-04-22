@@ -167,6 +167,36 @@ pub struct Finding {
     /// [`crate::engine_notes::EngineNote`].  Empty for the typical
     /// under-budget finding.
     pub engine_notes: SmallVec<[EngineNote; 2]>,
+    /// Stable hash of the intermediate-variable sequence between `source`
+    /// and `sink`.  Used to keep distinct paths through different
+    /// variables as separate findings during deduplication — two
+    /// `(body_id, sink, source)` siblings with different `path_hash`
+    /// values represent flows along different data paths and are
+    /// preserved as alternatives rather than collapsed.
+    ///
+    /// Derived from the `cfg_node` indices in `flow_steps` at the time
+    /// the finding is emitted; stable for a given scan but not
+    /// necessarily stable across AST/CFG changes.
+    pub path_hash: u64,
+    /// Stable identifier for this finding, derived from
+    /// `(body_id, source.index, sink.index, path_hash, path_validated)`.
+    /// Populated after `body_id` is set so the ID is consistent across
+    /// the lifetime of the finding and can be used to cross-reference
+    /// alternative paths via [`Self::alternative_finding_ids`].  Empty
+    /// string before the post-analysis linking pass runs.
+    pub finding_id: String,
+    /// Stable identifiers of sibling findings that share
+    /// `(body_id, sink, source)` but differ in `path_validated` or
+    /// `path_hash`.  Populated by the dedup pass in
+    /// [`analyse_file`] after all findings are collected.
+    ///
+    /// The canonical case is a guarded/unguarded pair: if an `exec(x)`
+    /// call is reachable from the same source `x` through both a
+    /// whitelisted branch and an unguarded branch, both findings
+    /// survive dedup and each lists the other here so downstream
+    /// formatters can present them as "this flow … and N alternative
+    /// path(s)" rather than silently dropping one.
+    pub alternative_finding_ids: SmallVec<[String; 2]>,
 }
 
 impl Finding {
@@ -299,18 +329,106 @@ pub fn analyse_file(
         cross_file_bodies_ref,
     );
 
-    // 4. Deduplicate findings by (body_id, sink, source), prefer path_validated=true
+    // 4. Deduplicate findings using a richer key that preserves distinct
+    //    flows.
+    //
+    //    The historical dedup at this point was:
+    //
+    //        sort_by_key(|f| (body_id, sink.index(), source.index(), !path_validated));
+    //        dedup_by_key(|f| (body_id, sink, source));
+    //
+    //    which silently collapsed an *unguarded* flow reaching the same
+    //    `(sink, source)` as a guarded flow — the `!path_validated` sort
+    //    ordered `path_validated == true` first, so the exploitable
+    //    branch was the one that got dropped.  See Phase 7 of
+    //    `PRE_RELEASE_PLAN.md`.
+    //
+    //    New behaviour: the dedup key is
+    //        (body_id, sink, source, path_validated, path_hash).
+    //    Findings that differ on `path_validated` *or* on `path_hash`
+    //    (i.e. traverse different intermediate variables) are kept as
+    //    distinct findings.  `link_alternative_paths` then populates
+    //    `alternative_finding_ids` on each finding so downstream
+    //    formatters can render "… and N alternative path(s)".
     all_findings.sort_by_key(|f| {
         (
             f.body_id.0,
             f.sink.index(),
             f.source.index(),
             !f.path_validated,
+            f.path_hash,
         )
     });
-    all_findings.dedup_by_key(|f| (f.body_id, f.sink, f.source));
+    all_findings.dedup_by_key(|f| (f.body_id, f.sink, f.source, f.path_validated, f.path_hash));
+
+    // 5. Assign stable finding IDs now that `body_id` has been set and
+    //    the dedup has picked the final set of distinct flows.  The ID
+    //    is used to cross-reference siblings via
+    //    `Finding.alternative_finding_ids`.
+    for f in &mut all_findings {
+        f.finding_id = make_finding_id(f);
+    }
+
+    // 6. Link alternative paths: for every group of findings that share
+    //    `(body_id, sink, source)`, publish each finding's ID into the
+    //    other findings' `alternative_finding_ids` list.
+    link_alternative_paths(&mut all_findings);
 
     all_findings
+}
+
+/// Build the stable identifier for a [`Finding`].
+///
+/// Format: `taint-<body_id>-<source_idx>-<sink_idx>-<path_hash_hex>-<v|u>`.
+/// The `v`/`u` suffix disambiguates validated (`v`) from unvalidated
+/// (`u`) flows that share `(body, sink, source, path_hash)`.  The hex
+/// hash disambiguates distinct intermediate paths.  Both components are
+/// independent of caller-side formatters so the ID survives
+/// serialization to JSON/SARIF unchanged.
+fn make_finding_id(f: &Finding) -> String {
+    format!(
+        "taint-{}-{}-{}-{:016x}-{}",
+        f.body_id.0,
+        f.source.index(),
+        f.sink.index(),
+        f.path_hash,
+        if f.path_validated { 'v' } else { 'u' },
+    )
+}
+
+/// Cross-link findings that share `(body_id, sink, source)` but differ
+/// on `path_validated` or `path_hash`.  After this call each such
+/// finding's `alternative_finding_ids` lists every sibling's
+/// [`Finding::finding_id`] — so a guarded flow links to the unguarded
+/// sibling and vice versa.  Isolated findings (no sibling) get an
+/// empty list.
+fn link_alternative_paths(findings: &mut [Finding]) {
+    // Group indices by (body_id, sink, source).  A simple O(n log n)
+    // sort would clobber the caller-visible order; use a hashmap instead.
+    let mut groups: HashMap<(BodyId, NodeIndex, NodeIndex), Vec<usize>> = HashMap::new();
+    for (idx, f) in findings.iter().enumerate() {
+        groups
+            .entry((f.body_id, f.sink, f.source))
+            .or_default()
+            .push(idx);
+    }
+    for (_, members) in groups {
+        if members.len() < 2 {
+            continue;
+        }
+        // Collect IDs once, then distribute to every member *except self*.
+        let ids: Vec<String> = members
+            .iter()
+            .map(|&i| findings[i].finding_id.clone())
+            .collect();
+        for &member_idx in &members {
+            let own_id = findings[member_idx].finding_id.clone();
+            findings[member_idx].alternative_finding_ids.clear();
+            findings[member_idx]
+                .alternative_finding_ids
+                .extend(ids.iter().filter(|id| **id != own_id).cloned());
+        }
+    }
 }
 
 /// Compute containment-topological order: parent bodies before children.

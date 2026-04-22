@@ -1053,6 +1053,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
         annotate_finding(&mut f, FindingVerdict::Confirmed);
         let sv = f.symbolic.as_ref().expect("symbolic verdict created");
@@ -1087,6 +1090,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
         annotate_finding(&mut f, FindingVerdict::Inconclusive);
         assert!(f.symbolic.is_none());

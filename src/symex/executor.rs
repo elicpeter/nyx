@@ -1110,6 +1110,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         }
     }
 
@@ -1488,6 +1491,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let ctx = super::SymexContext {
@@ -1627,6 +1633,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let ctx = super::SymexContext {
@@ -1896,6 +1905,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let cfg_graph = crate::cfg::Cfg::new();

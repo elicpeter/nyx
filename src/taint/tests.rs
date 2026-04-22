@@ -5397,3 +5397,166 @@ function helper(x) {
     let body_count = bodies.iter().filter(|(k, _)| k.name == "helper").count();
     assert_eq!(body_count, 2, "callee-body cache must also keep both defs");
 }
+
+// ── Phase 7: alternative-path dedup and linking ─────────────────────────
+
+/// Build a bare Finding suitable for feeding into `link_alternative_paths`.
+/// Only the fields consulted by that pass are populated; the rest use the
+/// cheapest default so the test stays focused on the dedup contract.
+fn make_finding_for_link_test(
+    body_id: u32,
+    source_idx: usize,
+    sink_idx: usize,
+    path_hash: u64,
+    path_validated: bool,
+) -> Finding {
+    Finding {
+        body_id: crate::cfg::BodyId(body_id),
+        sink: petgraph::graph::NodeIndex::new(sink_idx),
+        source: petgraph::graph::NodeIndex::new(source_idx),
+        path: Vec::new(),
+        source_kind: crate::labels::SourceKind::EnvironmentConfig,
+        path_validated,
+        guard_kind: None,
+        hop_count: 0,
+        cap_specificity: 0,
+        uses_summary: false,
+        flow_steps: Vec::new(),
+        symbolic: None,
+        source_span: None,
+        primary_location: None,
+        engine_notes: smallvec::SmallVec::new(),
+        path_hash,
+        finding_id: String::new(),
+        alternative_finding_ids: smallvec::SmallVec::new(),
+    }
+}
+
+/// `make_finding_id` must produce stable, distinct IDs for findings
+/// that differ on any dedup-key axis, and carry the `v`/`u`
+/// validation-status suffix so a human can tell siblings apart.
+#[test]
+fn finding_id_encodes_validation_and_path_hash() {
+    let v = make_finding_for_link_test(1, 3, 7, 0xabcd_1234_0000_0001, true);
+    let mut v = v;
+    v.finding_id = super::make_finding_id(&v);
+    assert!(
+        v.finding_id.ends_with("-v"),
+        "validated ID must end -v: {}",
+        v.finding_id
+    );
+    assert!(
+        v.finding_id.contains("abcd12340000"),
+        "hash component missing: {}",
+        v.finding_id
+    );
+
+    let mut u = make_finding_for_link_test(1, 3, 7, 0xabcd_1234_0000_0001, false);
+    u.finding_id = super::make_finding_id(&u);
+    assert!(
+        u.finding_id.ends_with("-u"),
+        "unvalidated ID must end -u: {}",
+        u.finding_id
+    );
+    assert_ne!(
+        v.finding_id, u.finding_id,
+        "validation status must disambiguate IDs"
+    );
+
+    // Differing path_hash produces a different ID even with the same
+    // (body, source, sink, validated) — the whole point of the path
+    // component in the dedup key.
+    let mut u2 = make_finding_for_link_test(1, 3, 7, 0xdead_beef_0000_0002, false);
+    u2.finding_id = super::make_finding_id(&u2);
+    assert_ne!(
+        u.finding_id, u2.finding_id,
+        "path_hash must disambiguate IDs"
+    );
+}
+
+/// `link_alternative_paths` must cross-link findings that share
+/// `(body_id, sink, source)` — so a validated flow and an unvalidated
+/// flow on the same source/sink pair each list the other's ID.
+#[test]
+fn link_alternative_paths_cross_references_same_body_sink_source() {
+    let mut findings = vec![
+        make_finding_for_link_test(1, 3, 7, 0x1111, true),
+        make_finding_for_link_test(1, 3, 7, 0x2222, false),
+    ];
+    for f in &mut findings {
+        f.finding_id = super::make_finding_id(f);
+    }
+
+    let v_id = findings[0].finding_id.clone();
+    let u_id = findings[1].finding_id.clone();
+    super::link_alternative_paths(&mut findings);
+
+    assert_eq!(
+        findings[0].alternative_finding_ids.as_slice(),
+        std::slice::from_ref(&u_id),
+        "validated finding must reference the unvalidated sibling",
+    );
+    assert_eq!(
+        findings[1].alternative_finding_ids.as_slice(),
+        std::slice::from_ref(&v_id),
+        "unvalidated finding must reference the validated sibling",
+    );
+}
+
+/// Findings that differ on `(body_id, sink, source)` are independent
+/// vulnerabilities — they must **not** end up cross-linked as
+/// alternatives, otherwise the "alternative path" framing becomes
+/// noise.
+#[test]
+fn link_alternative_paths_does_not_link_distinct_sink_source() {
+    let mut findings = vec![
+        make_finding_for_link_test(1, 3, 7, 0x1111, false),
+        // Different sink — independent finding, not an alternative.
+        make_finding_for_link_test(1, 3, 8, 0x1111, false),
+        // Different source — also independent.
+        make_finding_for_link_test(1, 4, 7, 0x1111, false),
+        // Different body — also independent.
+        make_finding_for_link_test(2, 3, 7, 0x1111, false),
+    ];
+    for f in &mut findings {
+        f.finding_id = super::make_finding_id(f);
+    }
+    super::link_alternative_paths(&mut findings);
+    for (i, f) in findings.iter().enumerate() {
+        assert!(
+            f.alternative_finding_ids.is_empty(),
+            "finding {i} should have no alternatives; got {:?}",
+            f.alternative_finding_ids,
+        );
+    }
+}
+
+/// When the same `(body, sink, source)` has three sibling findings
+/// (e.g. validated, unvalidated-path-A, unvalidated-path-B), each
+/// finding must list the other two — the group is symmetric and
+/// complete rather than a chain.
+#[test]
+fn link_alternative_paths_three_way_group() {
+    let mut findings = vec![
+        make_finding_for_link_test(1, 3, 7, 0x1111, true),
+        make_finding_for_link_test(1, 3, 7, 0x2222, false),
+        make_finding_for_link_test(1, 3, 7, 0x3333, false),
+    ];
+    for f in &mut findings {
+        f.finding_id = super::make_finding_id(f);
+    }
+    let ids: Vec<String> = findings.iter().map(|f| f.finding_id.clone()).collect();
+    super::link_alternative_paths(&mut findings);
+    for (i, f) in findings.iter().enumerate() {
+        let expected: std::collections::HashSet<&String> = ids
+            .iter()
+            .enumerate()
+            .filter_map(|(j, id)| if i == j { None } else { Some(id) })
+            .collect();
+        let got: std::collections::HashSet<&String> = f.alternative_finding_ids.iter().collect();
+        assert_eq!(
+            got, expected,
+            "finding {i} must list every other sibling ID",
+        );
+    }
+}

@@ -406,6 +406,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let blocks = extract_path_blocks(&finding, &ssa);
@@ -473,6 +476,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let ctx = SymexContext {
@@ -528,6 +534,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let ssa = SsaBody {
@@ -582,6 +591,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
 
         let ssa = SsaBody {

@@ -275,13 +275,31 @@ fn render_diag(d: &Diag, width: usize) -> String {
     } else {
         String::new()
     };
+    // Alternative-path annotation (Phase 7).  When the Phase 7 dedup
+    // preserves sibling findings for the same `(body, sink, source)`
+    // that differ on validation status or traversed variables, mark
+    // the primary finding with a suffix naming the sibling count.
+    let alt_count = d.alternative_finding_ids.len();
+    let alt_suffix = if alt_count > 0 {
+        format!(
+            "  {}",
+            style(format!(
+                "(+{alt_count} alternative path{})",
+                if alt_count == 1 { "" } else { "s" }
+            ))
+            .yellow()
+        )
+    } else {
+        String::new()
+    };
     out.push_str(&format!(
-        "  {}  {} {}{}{}\n",
+        "  {}  {} {}{}{}{}\n",
         style(&loc).dim(),
         sev,
         style(&d.id).dim(),
         meta_suffix,
         engine_notes_suffix,
+        alt_suffix,
     ));
 
     // ── Rollup body ─────────────────────────────────────────────────────
@@ -731,6 +749,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             },
             Diag {
                 path: "src/b.rs".into(),
@@ -750,6 +770,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             },
         ];
         let output = render_console(&diags, "test-project", None);
@@ -783,6 +805,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         }];
         let output = render_console(&diags, "proj", None);
         let stripped = strip_ansi(&output);
@@ -816,6 +840,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             },
             Diag {
                 path: "src/a.rs".into(),
@@ -835,6 +861,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             },
         ];
         let output = render_console(&diags, "proj", None);
@@ -866,6 +894,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -894,6 +924,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -926,6 +958,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -1017,6 +1051,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let output = render_diag(&d, 120);
         let stripped = strip_ansi(&output);
@@ -1061,6 +1097,8 @@ mod tests {
                 suppressed: false,
                 suppression: None,
                 rollup: None,
+                finding_id: String::new(),
+                alternative_finding_ids: Vec::new(),
             };
             let output = render_diag(&d, 100);
             let stripped = strip_ansi(&output);
@@ -1091,6 +1129,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let output = render_diag(&d, 100);
         let stripped = strip_ansi(&output);
@@ -1125,6 +1165,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let output = render_diag(&d, 100);
         let stripped = strip_ansi(&output);
@@ -1155,6 +1197,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(
@@ -1199,6 +1243,8 @@ mod tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         }
     }
 

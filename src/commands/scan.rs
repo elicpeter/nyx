@@ -158,6 +158,18 @@ pub struct Diag {
     /// Rollup data when multiple occurrences are grouped into one finding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollup: Option<RollupData>,
+    /// Stable identifier for this finding.  Populated for taint findings
+    /// so that sibling alternative paths can reference this finding by
+    /// ID (see [`Self::alternative_finding_ids`]).  Empty string for
+    /// non-taint findings (CFG structural, state-machine, etc.).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub finding_id: String,
+    /// Stable IDs of sibling findings that share `(body, sink, source)`
+    /// but represent distinct flows (different validation status or
+    /// different intermediate variables).  Empty when the finding has
+    /// no alternative paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternative_finding_ids: Vec<String>,
 }
 
 /// Rollup data for grouped findings (e.g. 38 occurrences of `rs.quality.unwrap`).
@@ -2274,6 +2286,8 @@ fn rollup_findings(
                 count: total,
                 occurrences: examples,
             }),
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
 
         rollups.push(rollup_diag);
@@ -2454,6 +2468,8 @@ mod dedup_taint_flow_tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         }
     }
 
@@ -2619,6 +2635,8 @@ mod scc_tagging_tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         }
     }
 
@@ -2866,6 +2884,8 @@ fn severity_filter_applied_at_output_stage() {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         },
         Diag {
             path: "src/main.rs".into(),
@@ -2885,6 +2905,8 @@ fn severity_filter_applied_at_output_stage() {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         },
     ];
 
@@ -2933,6 +2955,8 @@ mod prioritize_tests {
             suppressed: false,
             suppression: None,
             rollup: None,
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         }
     }
 
@@ -3364,6 +3388,8 @@ mod prioritize_tests {
                 count: 38,
                 occurrences: vec![Location { line: 10, col: 1 }, Location { line: 20, col: 5 }],
             }),
+            finding_id: String::new(),
+            alternative_finding_ids: Vec::new(),
         };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("\"rollup\""));

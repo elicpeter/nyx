@@ -67,11 +67,19 @@ fn two_call_sites_get_distinct_source_attributions() {
 
     let exec_finding = taint
         .iter()
-        .find(|d| sink_snippet_of(d).unwrap_or_default().contains("child_process.exec"))
+        .find(|d| {
+            sink_snippet_of(d)
+                .unwrap_or_default()
+                .contains("child_process.exec")
+        })
         .expect("missing child_process.exec finding for call site 1");
     let write_finding = taint
         .iter()
-        .find(|d| sink_snippet_of(d).unwrap_or_default().contains("fs.writeFileSync"))
+        .find(|d| {
+            sink_snippet_of(d)
+                .unwrap_or_default()
+                .contains("fs.writeFileSync")
+        })
         .expect("missing fs.writeFileSync finding for call site 2");
 
     let exec_src = source_line_of(exec_finding).expect("exec finding missing source line");

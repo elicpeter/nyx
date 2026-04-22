@@ -80,6 +80,8 @@ fn parse_timeout_diag(path: &Path, timeout_ms: u64) -> Diag {
         suppressed: false,
         suppression: None,
         rollup: None,
+        finding_id: String::new(),
+        alternative_finding_ids: Vec::new(),
     }
 }
 
@@ -446,6 +448,8 @@ fn build_taint_diag(
         suppressed: false,
         suppression: None,
         rollup: None,
+        finding_id: finding.finding_id.clone(),
+        alternative_finding_ids: finding.alternative_finding_ids.to_vec(),
     };
 
     // Post-fill explanation and confidence limiters
@@ -749,6 +753,8 @@ impl<'a> ParsedSource<'a> {
                         suppressed: false,
                         suppression: None,
                         rollup: None,
+                        finding_id: String::new(),
+                        alternative_finding_ids: Vec::new(),
                     });
                 }
             }
@@ -1071,6 +1077,8 @@ impl<'a> ParsedFile<'a> {
                     suppressed: false,
                     suppression: None,
                     rollup: None,
+                    finding_id: String::new(),
+                    alternative_finding_ids: Vec::new(),
                 });
             }
         } // end for body in bodies (CFG structural analyses)
@@ -1132,6 +1140,8 @@ impl<'a> ParsedFile<'a> {
                         suppressed: false,
                         suppression: None,
                         rollup: None,
+                        finding_id: String::new(),
+                        alternative_finding_ids: Vec::new(),
                     });
                 }
 

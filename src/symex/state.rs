@@ -340,6 +340,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -374,6 +377,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -405,6 +411,9 @@ mod tests {
             source_span: None,
             primary_location: None,
             engine_notes: smallvec::SmallVec::new(),
+            path_hash: 0,
+            finding_id: String::new(),
+            alternative_finding_ids: smallvec::SmallVec::new(),
         };
         let ssa = SsaBody {
             blocks: vec![],

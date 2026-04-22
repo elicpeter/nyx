@@ -614,6 +614,8 @@ pub mod index {
                     suppressed: false,
                     suppression: None,
                     rollup: None,
+                    finding_id: String::new(),
+                    alternative_finding_ids: Vec::new(),
                 })
             })?;
 

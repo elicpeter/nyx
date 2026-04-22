@@ -2359,23 +2359,22 @@ fn extract_inline_return_taint(
     let mut param_params: u64 = 0;
     let mut param_receiver: bool = false;
 
-    let classify_and_push =
-        |orig: &TaintOrigin,
-         internal: &mut SmallVec<[TaintOrigin; 2]>,
-         provenance: &mut u64,
-         receiver_prov: &mut bool| {
-            match param_node_map.get(&orig.node) {
-                Some(bits) => {
-                    *provenance |= bits.params;
-                    if bits.receiver {
-                        *receiver_prov = true;
-                    }
-                }
-                None => {
-                    push_internal(internal, orig);
+    let classify_and_push = |orig: &TaintOrigin,
+                             internal: &mut SmallVec<[TaintOrigin; 2]>,
+                             provenance: &mut u64,
+                             receiver_prov: &mut bool| {
+        match param_node_map.get(&orig.node) {
+            Some(bits) => {
+                *provenance |= bits.params;
+                if bits.receiver {
+                    *receiver_prov = true;
                 }
             }
-        };
+            None => {
+                push_internal(internal, orig);
+            }
+        }
+    };
 
     for (bid, block) in ssa.blocks.iter().enumerate() {
         let ret_val = match &block.terminator {
@@ -2450,7 +2449,12 @@ fn extract_inline_return_taint(
 
     // Prefer derived caps; fall back to param-return caps for passthrough functions.
     let (final_caps, final_internal, final_params, final_receiver) = if !derived_caps.is_empty() {
-        (derived_caps, derived_internal, derived_params, derived_receiver)
+        (
+            derived_caps,
+            derived_internal,
+            derived_params,
+            derived_receiver,
+        )
     } else {
         (param_caps, param_internal, param_params, param_receiver)
     };
@@ -2502,22 +2506,21 @@ fn apply_cached_shape(
     let mut origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
     let mut dropped: u32 = 0;
 
-    let push = |origins: &mut SmallVec<[TaintOrigin; 2]>,
-                dropped: &mut u32,
-                new_orig: TaintOrigin| {
-        if origins.iter().any(|o| {
-            o.node == new_orig.node
-                && o.source_span == new_orig.source_span
-                && o.source_kind == new_orig.source_kind
-        }) {
-            return;
-        }
-        if origins.len() < cap {
-            origins.push(new_orig);
-        } else {
-            *dropped += 1;
-        }
-    };
+    let push =
+        |origins: &mut SmallVec<[TaintOrigin; 2]>, dropped: &mut u32, new_orig: TaintOrigin| {
+            if origins.iter().any(|o| {
+                o.node == new_orig.node
+                    && o.source_span == new_orig.source_span
+                    && o.source_kind == new_orig.source_kind
+            }) {
+                return;
+            }
+            if origins.len() < cap {
+                origins.push(new_orig);
+            } else {
+                *dropped += 1;
+            }
+        };
 
     // 1. Callee-internal origins: rewrite `node` to the current call site.
     for orig in &ret.internal_origins {
@@ -7372,6 +7375,7 @@ pub fn ssa_events_to_findings(
                 )) {
                     let hop_count = block_distance(ssa, origin.node, event.sink_node);
                     let flow_steps = reconstruct_flow_path(*val, origin, event.sink_node, ssa, cfg);
+                    let path_hash = compute_path_hash(&flow_steps);
                     findings.push(crate::taint::Finding {
                         body_id: crate::cfg::BodyId(0), // set by caller
                         sink: event.sink_node,
@@ -7388,6 +7392,9 @@ pub fn ssa_events_to_findings(
                         source_span: origin.source_span.map(|(start, _)| start),
                         primary_location: primary_location.clone(),
                         engine_notes: smallvec::SmallVec::new(),
+                        path_hash,
+                        finding_id: String::new(),
+                        alternative_finding_ids: smallvec::SmallVec::new(),
                     });
                 }
             }
@@ -7395,6 +7402,39 @@ pub fn ssa_events_to_findings(
     }
 
     findings
+}
+
+/// Compute a stable hash over the sequence of intermediate CFG nodes
+/// that a tainted value traversed from source to sink.  Used as part of
+/// the dedup key so two flows that share `(body_id, sink, source)` but
+/// cross different intermediate variables are preserved as distinct
+/// findings rather than collapsed to one.
+///
+/// Hashes the `(cfg_node.index(), op_kind-tag, var_name)` tuple per
+/// step.  `op_kind` is captured as a small integer tag so changes in
+/// enum encoding do not silently alter the hash; `var_name` is included
+/// because two flows may touch the same cfg_node via different phi
+/// operands (same node, different variable).
+fn compute_path_hash(steps: &[crate::taint::FlowStepRaw]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    for step in steps {
+        step.cfg_node.index().hash(&mut hasher);
+        // Encode FlowStepKind as a stable small integer.  Using the
+        // discriminant directly would tie us to enum ordering; an
+        // explicit tag is more resilient to reordering.
+        let kind_tag: u8 = match step.op_kind {
+            crate::evidence::FlowStepKind::Source => 0,
+            crate::evidence::FlowStepKind::Assignment => 1,
+            crate::evidence::FlowStepKind::Call => 2,
+            crate::evidence::FlowStepKind::Phi => 3,
+            crate::evidence::FlowStepKind::Sink => 4,
+        };
+        kind_tag.hash(&mut hasher);
+        step.var_name.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 // ── SSA Function Summary Extraction ──────────────────────────────────────
