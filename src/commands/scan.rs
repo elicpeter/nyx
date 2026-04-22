@@ -1182,9 +1182,20 @@ pub(crate) fn scan_filesystem_with_observer(
     if let Some(p) = progress {
         p.record_pass1_ms(pass1_start.elapsed().as_millis() as u64);
     }
+    // Phase CF-1: observability — record how many cross-file SSA bodies
+    // wound up in GlobalSummaries so CF-2 can distinguish "no bodies
+    // available" from "bodies available but inline didn't fire."
+    tracing::debug!(
+        cross_file_bodies = global_summaries.bodies_len(),
+        "pass 1: cross-file SSA bodies available for taint (CF-1 plumbing)"
+    );
     if let Some(l) = logs {
         l.info(
-            format!("Pass 1 complete in {}ms", pass1_start.elapsed().as_millis()),
+            format!(
+                "Pass 1 complete in {}ms ({} cross-file SSA bodies)",
+                pass1_start.elapsed().as_millis(),
+                global_summaries.bodies_len()
+            ),
             None,
         );
     }
@@ -1701,6 +1712,13 @@ pub fn scan_with_index_parallel_observer(
             0
         };
 
+        // Phase CF-1: same observability as the non-indexed scan path so
+        // CF-2 sees a uniform "cross-file bodies available" signal
+        // regardless of which scan path populated GlobalSummaries.
+        tracing::debug!(
+            cross_file_bodies = body_count,
+            "indexed scan: cross-file SSA bodies available for taint (CF-1 plumbing)"
+        );
         if let Some(l) = logs {
             l.info(
                 format!(

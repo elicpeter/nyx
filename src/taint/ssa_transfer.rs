@@ -617,6 +617,14 @@ pub struct SsaTaintTransfer<'a> {
     /// baseline-subtraction semantics; the findings pipeline flips this on
     /// to detect handler-style flows that have no registered caller.
     pub auto_seed_handler_params: bool,
+    /// Phase CF-1: Cross-file callee bodies sourced from
+    /// [`GlobalSummaries::bodies_iter`].  Populated in pass 2 so that a
+    /// follow-up phase (CF-2) can enable context-sensitive inline
+    /// re-analysis across file boundaries the same way `callee_bodies`
+    /// enables it intra-file.  This field is plumbing only in CF-1 — no
+    /// code path reads it yet.  `None` preserves pre-CF-1 behaviour for
+    /// unit tests and non-cross-file construction sites.
+    pub cross_file_bodies: Option<&'a HashMap<FuncKey, CalleeSsaBody>>,
 }
 
 /// Per-predecessor state tracking for path-sensitive phi evaluation.
@@ -1710,6 +1718,7 @@ fn inline_analyse_callee(
         module_aliases: None, // callee body has its own const_values; module aliases not propagated
         static_map: None, // static-map seeding is caller-body local, not propagated to inlined callees
         auto_seed_handler_params: transfer.auto_seed_handler_params,
+        cross_file_bodies: transfer.cross_file_bodies,
     };
 
     // Use the callee's own body graph for inline analysis (per-body CFGs
@@ -6232,6 +6241,7 @@ pub fn extract_ssa_func_summary(
             module_aliases,
             static_map: None,
             auto_seed_handler_params: false,
+            cross_file_bodies: None,
         };
 
         let (events, block_states) = run_ssa_taint_full(ssa, cfg, &transfer);
@@ -6441,6 +6451,7 @@ pub fn extract_ssa_func_summary(
             module_aliases: None,
             static_map: None,
             auto_seed_handler_params: false,
+            cross_file_bodies: None,
         };
         detect_source_to_callback_from_states(
             ssa,
@@ -7514,6 +7525,7 @@ mod goto_succ_propagation_tests {
             module_aliases: None,
             static_map: None,
             auto_seed_handler_params: false,
+            cross_file_bodies: None,
         };
 
         // A non-bottom exit state — the test only cares that *every* succ
@@ -7594,6 +7606,7 @@ mod goto_succ_propagation_tests {
             module_aliases: None,
             static_map: None,
             auto_seed_handler_params: false,
+            cross_file_bodies: None,
         };
         let exit_state = SsaTaintState::initial();
 

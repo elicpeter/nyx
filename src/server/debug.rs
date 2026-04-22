@@ -979,6 +979,7 @@ pub fn analyse_function_taint(
         },
         static_map: None,
         auto_seed_handler_params: matches!(lang, Lang::JavaScript | Lang::TypeScript),
+        cross_file_bodies: global_summaries.and_then(|gs| gs.bodies_by_key()),
     };
 
     crate::taint::ssa_transfer::run_ssa_taint_full_with_exits(ssa, cfg, &transfer)

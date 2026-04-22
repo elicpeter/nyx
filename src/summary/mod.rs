@@ -888,6 +888,31 @@ impl GlobalSummaries {
         self.bodies_by_key.get(key)
     }
 
+    /// Phase CF-1: Direct access to the cross-file body map.
+    ///
+    /// Returns `None` when no cross-file bodies were loaded (empty map).
+    /// The taint engine uses this to thread bodies through
+    /// [`crate::taint::ssa_transfer::SsaTaintTransfer::cross_file_bodies`]
+    /// — CF-1 is pure plumbing (the field is not consumed yet); CF-2 wires
+    /// it into `resolve_callee` for context-sensitive cross-file inline
+    /// analysis.
+    pub fn bodies_by_key(
+        &self,
+    ) -> Option<&HashMap<FuncKey, crate::taint::ssa_transfer::CalleeSsaBody>> {
+        if self.bodies_by_key.is_empty() {
+            None
+        } else {
+            Some(&self.bodies_by_key)
+        }
+    }
+
+    /// Phase CF-1: Count of cross-file bodies currently loaded.  Exposed
+    /// for `tracing::debug!` observability — lets CF-2 distinguish "no
+    /// bodies available" from "bodies available but inline didn't fire".
+    pub fn bodies_len(&self) -> usize {
+        self.bodies_by_key.len()
+    }
+
     /// Resolve a bare callee name to a cross-file body.
     ///
     /// Uses `resolve_callee_key()` for strict deterministic resolution,

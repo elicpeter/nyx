@@ -185,6 +185,18 @@ pub fn analyse_file(
     } else {
         Some(&file_cfg.import_bindings)
     };
+    // Phase CF-1: Cross-file bodies come from GlobalSummaries. Threaded
+    // through the transfer for future consumption by CF-2 — no reader in
+    // CF-1, so pre-CF-1 behaviour is preserved byte-for-byte.
+    let cross_file_bodies_ref = global_summaries.and_then(|gs| gs.bodies_by_key());
+    if let Some(map) = cross_file_bodies_ref {
+        tracing::debug!(
+            cross_file_bodies = map.len(),
+            file = %caller_namespace,
+            "taint: cross-file bodies available for pass 2 (CF-1 plumbing)"
+        );
+    }
+
     let mut all_findings = analyse_multi_body(
         file_cfg,
         caller_lang,
@@ -198,6 +210,7 @@ pub fn analyse_file(
         inline_cache_ref,
         max_iterations,
         import_bindings_ref,
+        cross_file_bodies_ref,
     );
 
     // 4. Deduplicate findings by (body_id, sink, source), prefer path_validated=true
@@ -257,6 +270,7 @@ fn analyse_body_with_seed(
     inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
     seed: Option<&HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>,
     import_bindings: Option<&crate::cfg::ImportBindings>,
+    cross_file_bodies: Option<&std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>>,
 ) -> (
     Vec<Finding>,
     Option<HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>>,
@@ -365,6 +379,7 @@ fn analyse_body_with_seed(
                 auto_seed_handler_params: matches!(lang, Lang::JavaScript | Lang::TypeScript)
                     || (lang == Lang::Java
                         && body.meta.kind == crate::cfg::BodyKind::AnonymousFunction),
+                cross_file_bodies,
             };
             let (events, block_states) =
                 ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);
@@ -419,6 +434,7 @@ fn analyse_multi_body(
     inline_cache: Option<&std::cell::RefCell<ssa_transfer::InlineCache>>,
     max_iterations: usize,
     import_bindings: Option<&crate::cfg::ImportBindings>,
+    cross_file_bodies: Option<&std::collections::HashMap<FuncKey, ssa_transfer::CalleeSsaBody>>,
 ) -> Vec<Finding> {
     let order = containment_order(&file_cfg.bodies);
     let mut all_findings: Vec<Finding> = Vec::new();
@@ -451,6 +467,7 @@ fn analyse_multi_body(
             inline_cache,
             parent_seed,
             import_bindings,
+            cross_file_bodies,
         );
         tracing::debug!(
             body_id = body.meta.id.0,
@@ -547,6 +564,7 @@ fn analyse_multi_body(
                     inline_cache,
                     parent_seed,
                     import_bindings,
+                    cross_file_bodies,
                 );
                 all_findings.extend(findings);
                 if let Some(es) = exit_state {
@@ -885,11 +903,22 @@ pub(crate) fn extract_ssa_artifacts_from_file_cfg(
             // Populate node metadata against the per-body graph whose NodeIndex
             // space the SSA was produced on — otherwise cross-file replay can't
             // find the original CFG nodes.
-            let Some(body_cfg) = file_cfg
-                .bodies
-                .iter()
-                .find(|b| b.meta.func_key.as_ref().is_some_and(|k| *k == key))
-            else {
+            //
+            // `key.namespace` was already normalised against `scan_root` in
+            // `lower_all_functions_from_bodies`; `body.meta.func_key.namespace`
+            // still carries the raw `build_cfg` file path.  Compare on
+            // structural identity (everything *but* namespace) so the two
+            // agree even when the namespace representations differ.
+            let Some(body_cfg) = file_cfg.bodies.iter().find(|b| {
+                b.meta.func_key.as_ref().is_some_and(|k| {
+                    k.lang == key.lang
+                        && k.container == key.container
+                        && k.name == key.name
+                        && k.arity == key.arity
+                        && k.disambig == key.disambig
+                        && k.kind == key.kind
+                })
+            }) else {
                 continue;
             };
             if !ssa_transfer::populate_node_meta(&mut body, &body_cfg.graph) {
