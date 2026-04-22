@@ -1782,7 +1782,7 @@ fn extract_destination_field_idents(
                 let mut idents: Vec<String> = Vec::new();
                 let mut paths: Vec<String> = Vec::new();
                 collect_idents_with_paths(val_node, code, &mut idents, &mut paths);
-                for name in paths.into_iter().chain(idents.into_iter()) {
+                for name in paths.into_iter().chain(idents) {
                     if !out.contains(&name) {
                         out.push(name);
                     }
