@@ -466,6 +466,56 @@ pub(crate) struct InlineResult {
 /// in the `ArgTaintSig` component of the key.
 pub(crate) type InlineCache = HashMap<(FuncKey, ArgTaintSig), InlineResult>;
 
+/// Phase CF-5: drop every entry from an inline cache, marking the start
+/// of a new convergence epoch.
+///
+/// Cross-file SCC fixed-point iteration runs pass 2 repeatedly until the
+/// merged summaries stop changing.  Between iterations the callee-summary
+/// inputs to inline analysis may have changed, so results cached under a
+/// stale snapshot must not leak into the next iteration — otherwise the
+/// engine could converge to a non-fixed-point (reporting a taint result
+/// that would not reproduce on a fresh run of the same file order).
+///
+/// The per-file inline cache is already reconstructed fresh at the top of
+/// each [`crate::taint::analyse_file`] call, so in the current code this
+/// call is effectively a no-op plumbing hook.  Keeping the method (instead
+/// of relying on ambient re-construction) makes the lifecycle explicit for
+/// any future refactor that moves the cache up into the SCC orchestrator.
+#[allow(dead_code)] // CF-5 semantic hook; used by tests and future shared-cache refactor
+pub(crate) fn inline_cache_clear_epoch(cache: &mut InlineCache) {
+    cache.clear();
+}
+
+/// Phase CF-5: set-equal fingerprint of an inline cache, used by the SCC
+/// orchestrator to detect when cross-file inline analysis has reached a
+/// fixed point alongside summary convergence.
+///
+/// Returns a `HashMap` mapping each `(FuncKey, ArgTaintSig)` cache key to
+/// the return-value capability bits of its inline result.  `HashMap`
+/// equality is set-equal (unordered), so two caches with the same entries
+/// compare equal regardless of insertion order.
+///
+/// Origins are intentionally omitted — they are non-deterministic across
+/// callers with identical caps (see the module-level note on origin
+/// attribution) and would cause the fingerprint to oscillate without
+/// reflecting a real precision change.
+#[allow(dead_code)] // CF-5 observability hook; used by tests and future shared-cache refactor
+pub(crate) fn inline_cache_fingerprint(
+    cache: &InlineCache,
+) -> HashMap<(FuncKey, ArgTaintSig), u16> {
+    cache
+        .iter()
+        .map(|(k, v)| {
+            let caps_bits = v
+                .return_taint
+                .as_ref()
+                .map(|vt| vt.caps.bits())
+                .unwrap_or(0);
+            (k.clone(), caps_bits)
+        })
+        .collect()
+}
+
 /// CFG node metadata embedded in cross-file callee bodies.
 ///
 /// ## Phase CF-3 (Option A) — why a full [`NodeInfo`] lives here
@@ -7897,6 +7947,96 @@ mod cross_file_tests {
         assert!(body.body_graph.is_none());
         assert!(!rebuild_body_graph(&mut body));
         assert!(body.body_graph.is_none());
+    }
+}
+
+#[cfg(test)]
+mod inline_cache_epoch_tests {
+    //! Phase CF-5 hooks for cross-file SCC joint fixed-point iteration.
+    //!
+    //! These do not exercise the full inline pipeline — they lock down the
+    //! semantic contract of [`inline_cache_clear_epoch`] and
+    //! [`inline_cache_fingerprint`] so the SCC orchestrator can rely on:
+    //!
+    //! * `clear_epoch` drops every entry, leaving the cache empty.
+    //! * `fingerprint` is deterministic across equivalent caches (same
+    //!   keys → same bytes).  Two caches with identical entries produce
+    //!   identical fingerprints regardless of insertion order.
+    //! * `fingerprint` changes when return caps change — the signal the
+    //!   orchestrator will use to detect inline-cache convergence.
+
+    use super::*;
+    use crate::labels::Cap;
+    use crate::symbol::FuncKey;
+    use crate::taint::domain::VarTaint;
+    use smallvec::SmallVec;
+
+    fn key(name: &str) -> FuncKey {
+        FuncKey {
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+
+    fn sig() -> ArgTaintSig {
+        ArgTaintSig(SmallVec::new())
+    }
+
+    fn result(caps_bits: u16) -> InlineResult {
+        InlineResult {
+            return_taint: Some(VarTaint {
+                caps: Cap::from_bits_retain(caps_bits),
+                origins: SmallVec::new(),
+                uses_summary: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn clear_epoch_drops_all_entries() {
+        let mut c: InlineCache = HashMap::new();
+        c.insert((key("a"), sig()), result(1));
+        c.insert((key("b"), sig()), result(2));
+        assert_eq!(c.len(), 2);
+
+        inline_cache_clear_epoch(&mut c);
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn fingerprint_is_order_independent() {
+        let mut a: InlineCache = HashMap::new();
+        a.insert((key("alpha"), sig()), result(3));
+        a.insert((key("beta"), sig()), result(5));
+
+        let mut b: InlineCache = HashMap::new();
+        b.insert((key("beta"), sig()), result(5));
+        b.insert((key("alpha"), sig()), result(3));
+
+        assert_eq!(inline_cache_fingerprint(&a), inline_cache_fingerprint(&b));
+    }
+
+    #[test]
+    fn fingerprint_changes_when_return_caps_change() {
+        let mut c: InlineCache = HashMap::new();
+        c.insert((key("f"), sig()), result(0));
+        let before = inline_cache_fingerprint(&c);
+
+        c.insert((key("f"), sig()), result(1));
+        let after = inline_cache_fingerprint(&c);
+
+        assert_ne!(before, after, "cap refinement must change fingerprint");
+    }
+
+    #[test]
+    fn fingerprint_tracks_missing_return_taint_as_zero() {
+        // A cached miss (no return taint) fingerprints as zero caps so
+        // two converged iterations both producing "no return taint" are
+        // recognised as equal.
+        let mut c: InlineCache = HashMap::new();
+        c.insert((key("f"), sig()), InlineResult { return_taint: None });
+        let fp = inline_cache_fingerprint(&c);
+        assert_eq!(*fp.get(&(key("f"), sig())).unwrap(), 0);
     }
 }
 

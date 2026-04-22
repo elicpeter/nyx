@@ -532,6 +532,17 @@ fn log_unresolved_callees(call_graph: &CallGraph) {
 /// findings whose analysis was truncated at the safety cap.
 pub const SCC_UNCONVERGED_NOTE_PREFIX: &str = "scc_unconverged:";
 
+/// Phase CF-5: finer-grained note prefix used when the unconverged SCC
+/// spans more than one file.  This signals to reviewers that the
+/// precision cost is specifically the cross-file summary/inline
+/// convergence cliff and not a pathological intra-file recursion.
+///
+/// `SCC_UNCONVERGED_NOTE_PREFIX` is a strict prefix of this constant so
+/// existing consumers that match the base prefix continue to see these
+/// findings.  Tests and UIs that want to distinguish cross-file cases
+/// can match on this tighter string.
+pub const SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX: &str = "scc_unconverged:cross-file ";
+
 /// Attach a low-confidence tag and a diagnostic note to every finding
 /// produced by an SCC batch that did not converge within the safety cap.
 ///
@@ -544,7 +555,11 @@ pub const SCC_UNCONVERGED_NOTE_PREFIX: &str = "scc_unconverged:";
 /// an individual finding (e.g. high-confidence AST match). Capping
 /// preserves that attribution while still surfacing the degradation at
 /// the batch level.
-fn tag_unconverged_findings(diags: &mut [Diag], iterations: usize, cap: usize) {
+///
+/// Phase CF-5: `cross_file = true` switches the note to the cross-file
+/// variant so downstream consumers can distinguish the two reasons an
+/// SCC might hit the cap.
+fn tag_unconverged_findings(diags: &mut [Diag], iterations: usize, cap: usize, cross_file: bool) {
     use crate::evidence::{Confidence, Evidence};
 
     for d in diags.iter_mut() {
@@ -552,10 +567,17 @@ fn tag_unconverged_findings(diags: &mut [Diag], iterations: usize, cap: usize) {
             Some(c) if c < Confidence::Low => Some(c), // already-lower preserved
             _ => Some(Confidence::Low),
         };
-        let note = format!(
-            "{SCC_UNCONVERGED_NOTE_PREFIX}SCC did not converge within {iterations} \
-             iterations (cap {cap}); results may be imprecise"
-        );
+        let note = if cross_file {
+            format!(
+                "{SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX}SCC did not converge within \
+                 {iterations} iterations (cap {cap}); cross-file taint may be imprecise"
+            )
+        } else {
+            format!(
+                "{SCC_UNCONVERGED_NOTE_PREFIX}SCC did not converge within {iterations} \
+                 iterations (cap {cap}); results may be imprecise"
+            )
+        };
         match d.evidence.as_mut() {
             Some(ev) => {
                 if !ev.notes.iter().any(|n| n == &note) {
@@ -666,7 +688,25 @@ fn run_topo_batches(
         if batch.has_mutual_recursion {
             // SCC fixed-point: iterate until summaries converge (snapshot
             // equality) or we hit the safety cap.
+            //
+            // Phase CF-5: `batch.cross_file` distinguishes SCCs whose
+            // recursion spans multiple files.  These require joint
+            // summary + inline-cache convergence.  Today the per-file
+            // inline cache is reconstructed fresh in `analyse_file` so
+            // summary convergence implicitly implies inline convergence
+            // (monotone summaries ⇒ deterministic inline results).  The
+            // `cross_file` flag is threaded through so that cap-hit
+            // diagnostics can report the more specific cause.
             let scc_cap = effective_scc_cap();
+            let cross_file_scc = batch.cross_file;
+            if cross_file_scc {
+                tracing::debug!(
+                    batch = batch_idx,
+                    files = batch.files.len(),
+                    "cross-file SCC fixed-point: iterating with joint \
+                     summary + inline convergence"
+                );
+            }
             let mut iteration_diags = Vec::new();
             let mut converged = false;
             let mut iters_used: usize = 0;
@@ -800,6 +840,7 @@ fn run_topo_batches(
                     files = batch.files.len(),
                     iterations = iters_used,
                     cap = scc_cap,
+                    cross_file = cross_file_scc,
                     "SCC batch did not converge within safety cap — results \
                      may be imprecise. This usually indicates a very large \
                      mutually-recursive region or a non-monotone summary \
@@ -808,8 +849,8 @@ fn run_topo_batches(
                 if let Some(l) = logs {
                     l.warn(
                         format!(
-                            "SCC batch {batch_idx} ({} files) did not converge \
-                             within {scc_cap} iterations",
+                            "SCC batch {batch_idx} ({} files, cross_file={cross_file_scc}) \
+                             did not converge within {scc_cap} iterations",
                             batch.files.len()
                         ),
                         None,
@@ -821,8 +862,9 @@ fn run_topo_batches(
                 // the results are potentially imprecise. Cap confidence at
                 // Low (overriding any higher pre-set) and append a note to
                 // the evidence so downstream UIs / reviewers can surface
-                // the degradation.
-                tag_unconverged_findings(&mut iteration_diags, iters_used, scc_cap);
+                // the degradation.  Phase CF-5: cross-file SCCs get a
+                // tighter note prefix so the precision cause is explicit.
+                tag_unconverged_findings(&mut iteration_diags, iters_used, scc_cap, cross_file_scc);
             }
             // Count progress for these files once.
             pb.inc(batch.files.len() as u64);
@@ -2577,7 +2619,7 @@ mod scc_tagging_tests {
     #[test]
     fn tag_unconverged_caps_confidence_and_appends_note() {
         let mut diags = vec![make_diag(Some(Confidence::High)), make_diag(None)];
-        tag_unconverged_findings(&mut diags, 64, 64);
+        tag_unconverged_findings(&mut diags, 64, 64, false);
 
         assert_eq!(diags[0].confidence, Some(Confidence::Low));
         assert_eq!(diags[1].confidence, Some(Confidence::Low));
@@ -2598,7 +2640,7 @@ mod scc_tagging_tests {
         // Nothing is strictly below Low today, but the cap-at-Low logic
         // should still produce Low as the floor when confidence is Low.
         let mut diags = vec![make_diag(Some(Confidence::Low))];
-        tag_unconverged_findings(&mut diags, 10, 64);
+        tag_unconverged_findings(&mut diags, 10, 64, false);
         assert_eq!(diags[0].confidence, Some(Confidence::Low));
     }
 
@@ -2607,7 +2649,7 @@ mod scc_tagging_tests {
         let mut d = make_diag(None);
         d.evidence = None;
         let mut diags = vec![d];
-        tag_unconverged_findings(&mut diags, 7, 64);
+        tag_unconverged_findings(&mut diags, 7, 64, false);
 
         let ev = diags[0].evidence.as_ref().expect("evidence created");
         assert!(
@@ -2620,14 +2662,52 @@ mod scc_tagging_tests {
     #[test]
     fn tag_unconverged_does_not_duplicate_notes_on_rerun() {
         let mut diags = vec![make_diag(None)];
-        tag_unconverged_findings(&mut diags, 64, 64);
-        tag_unconverged_findings(&mut diags, 64, 64);
+        tag_unconverged_findings(&mut diags, 64, 64, false);
+        tag_unconverged_findings(&mut diags, 64, 64, false);
         let notes = &diags[0].evidence.as_ref().unwrap().notes;
         let count = notes
             .iter()
             .filter(|n| n.starts_with(SCC_UNCONVERGED_NOTE_PREFIX))
             .count();
         assert_eq!(count, 1, "should not duplicate scc_unconverged note");
+    }
+
+    #[test]
+    fn tag_unconverged_cross_file_variant_uses_tighter_prefix() {
+        // Phase CF-5: cross-file SCC cap-hit should emit a cross-file
+        // note variant while remaining a strict superset of the base
+        // prefix so existing consumers still match.
+        let mut diags = vec![make_diag(None)];
+        tag_unconverged_findings(&mut diags, 64, 64, true);
+
+        let ev = diags[0].evidence.as_ref().expect("evidence populated");
+        // The cross-file note must also start with the base prefix so
+        // callers filtering on `SCC_UNCONVERGED_NOTE_PREFIX` still see it.
+        assert!(SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX.starts_with(SCC_UNCONVERGED_NOTE_PREFIX));
+        assert!(
+            ev.notes
+                .iter()
+                .any(|n| n.starts_with(SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX)),
+            "expected cross-file scc_unconverged note, got {:?}",
+            ev.notes
+        );
+    }
+
+    #[test]
+    fn tag_unconverged_non_cross_file_does_not_use_cross_file_prefix() {
+        // Sanity check: the non-cross-file variant must not emit the
+        // cross-file note. Prevents accidental tag unification.
+        let mut diags = vec![make_diag(None)];
+        tag_unconverged_findings(&mut diags, 64, 64, false);
+
+        let ev = diags[0].evidence.as_ref().expect("evidence populated");
+        assert!(
+            !ev.notes
+                .iter()
+                .any(|n| n.starts_with(SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX)),
+            "intra-file SCC should not carry cross-file note, got {:?}",
+            ev.notes
+        );
     }
 }
 

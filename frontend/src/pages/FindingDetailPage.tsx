@@ -321,7 +321,11 @@ function ConfidenceSection({ finding }: { finding: FindingView }) {
 // ── Structured Explanation ──────────────────────────────────────────────────
 
 function describeSpan(span: SpanEvidence): string {
-  const name = span.snippet?.trim() || span.kind || span.path.split('/').pop() || span.path;
+  const name =
+    span.snippet?.trim() ||
+    span.kind ||
+    span.path.split('/').pop() ||
+    span.path;
   return `${name} (line ${span.line})`;
 }
 
@@ -337,14 +341,20 @@ function StructuredExplanation({
   if (evidence.source) {
     rows.push({
       label: 'From',
-      value: <code className="struct-expl-code">{describeSpan(evidence.source)}</code>,
+      value: (
+        <code className="struct-expl-code">
+          {describeSpan(evidence.source)}
+        </code>
+      ),
     });
   }
 
   if (evidence.sink) {
     rows.push({
       label: 'Into',
-      value: <code className="struct-expl-code">{describeSpan(evidence.sink)}</code>,
+      value: (
+        <code className="struct-expl-code">{describeSpan(evidence.sink)}</code>
+      ),
     });
   }
 
@@ -442,9 +452,7 @@ function FlowTimeline({ steps }: { steps: FlowStep[] }) {
     if (lastSinkIdx != null) picked.add(lastSinkIdx);
     picked.add(0);
     picked.add(steps.length - 1);
-    return [...picked]
-      .sort((a, b) => a - b)
-      .map((i) => steps[i]);
+    return [...picked].sort((a, b) => a - b).map((i) => steps[i]);
   })();
 
   return (
@@ -585,16 +593,25 @@ function sinkCapKey(finding: FindingView): string | null {
   const snippet = (finding.evidence?.sink?.snippet || '').toLowerCase();
   const rule = finding.rule_id.toLowerCase();
 
-  if (/innerhtml|outerhtml|document\.write|dangerouslysetinnerhtml/.test(snippet))
+  if (
+    /innerhtml|outerhtml|document\.write|dangerouslysetinnerhtml/.test(snippet)
+  )
     return 'xss';
   if (/\beval\b|new function|settimeout\s*\(\s*["'`]/.test(snippet))
     return 'code-exec';
-  if (/\bexec\b|\bspawn\b|\bsystem\b|\bpopen\b|shell_exec|subprocess/.test(snippet))
+  if (
+    /\bexec\b|\bspawn\b|\bsystem\b|\bpopen\b|shell_exec|subprocess/.test(
+      snippet,
+    )
+  )
     return 'cmd-inject';
-  if (/query|execute|raw|prepare.*%|select\s|insert\s|update\s|delete\s/i.test(snippet))
+  if (
+    /query|execute|raw|prepare.*%|select\s|insert\s|update\s|delete\s/i.test(
+      snippet,
+    )
+  )
     return 'sql';
-  if (/readfile|fs\.|open\s*\(|path\.join/.test(snippet))
-    return 'path';
+  if (/readfile|fs\.|open\s*\(|path\.join/.test(snippet)) return 'path';
   if (/\bfetch\b|\baxios\b|http\.|request\.|urlopen|curl/.test(snippet))
     return 'ssrf';
 
@@ -867,7 +884,9 @@ export function FindingDetailPage() {
     <div className="detail-panel finding-detail">
       <div className="detail-title-row">
         <h2 className="finding-heading">
-          <span className={`severity-pill severity-pill-${f.severity.toLowerCase()}`}>
+          <span
+            className={`severity-pill severity-pill-${f.severity.toLowerCase()}`}
+          >
             {f.severity}
           </span>
           <span className="finding-rule-id">{f.rule_id}</span>
@@ -923,7 +942,9 @@ export function FindingDetailPage() {
               )}
             </>
           ) : (
-            evidence && <StructuredExplanation finding={f} evidence={evidence} />
+            evidence && (
+              <StructuredExplanation finding={f} evidence={evidence} />
+            )
           )}
         </CollapsibleSection>
       )}

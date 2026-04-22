@@ -63,10 +63,7 @@ export function Dropdown({
         {trigger({ open })}
       </div>
       {open && (
-        <div
-          className={`dropdown-menu dropdown-menu--${align}`}
-          role="menu"
-        >
+        <div className={`dropdown-menu dropdown-menu--${align}`} role="menu">
           {children({ close })}
         </div>
       )}

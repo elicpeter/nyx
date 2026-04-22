@@ -19,7 +19,7 @@ document.
 | CF-2  | Cross-file k=1 context-sensitive inline taint       | CF-1        | 1 session         | Landed 2026-04-22            |
 | CF-3  | Abstract-domain transfer channels in summaries      | —           | 1 session         | Landed 2026-04-22            |
 | CF-4  | Per-return-path summary decomposition               | —           | 1 session         | Landed 2026-04-22            |
-| CF-5  | Cross-file SCC joint fixed-point                    | CF-1, CF-2  | 1 session         | Not started                  |
+| CF-5  | Cross-file SCC joint fixed-point                    | CF-1, CF-2  | 1 session         | Landed 2026-04-22            |
 | CF-6  | Parameter-granularity points-to summaries           | CF-4        | 1 session         | Not started                  |
 | CF-7  | Demand-driven backwards analysis from sinks         | CF-1..CF-4  | 1 full session    | Not started                  |
 
@@ -586,7 +586,18 @@ cargo bench --bench scan_bench -- --save-baseline post-phase-cf-4
 
 ## Phase CF-5 — Cross-file SCC joint fixed-point
 
-**Status:** Not started
+**Status:** Landed 2026-04-22 on `release/0.5.0`.  Additive shape:
+`callgraph::scc_spans_files` helper plus `FileBatch.cross_file: bool`
+(tighter than `has_mutual_recursion`); inline-cache lifecycle hooks
+`inline_cache_clear_epoch` / `inline_cache_fingerprint` in
+`taint::ssa_transfer`; cross-file-specific cap-hit note prefix
+`SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX` (strict superset of the
+existing prefix).  Coverage: 3 cross-file SCC fixtures
+(`cross_file_scc_mutual_recursion/_three_way_cycle/_recursive_with_sanitiser`)
+wired through `tests/scc_cross_file_tests.rs`, plus callgraph unit
+tests for the new flag, inline-cache unit tests for the lifecycle
+hooks, and tag-variant unit tests for the new note prefix.  Benchmark
+neutral (F1 unchanged at 0.966) — see `tests/benchmark/RESULTS.md`.
 **Estimated effort:** 1 session
 **Depends on:** CF-1, CF-2
 

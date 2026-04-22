@@ -1728,17 +1728,20 @@ tr.selected td {
 .severity-pill-high {
   background: var(--sev-high-bg);
   color: var(--sev-high);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sev-high) 25%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--sev-high) 25%, transparent);
 }
 .severity-pill-medium {
   background: var(--sev-medium-bg);
   color: var(--sev-medium);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sev-medium) 25%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--sev-medium) 25%, transparent);
 }
 .severity-pill-low {
   background: var(--sev-low-bg);
   color: var(--sev-low);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sev-low) 25%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--sev-low) 25%, transparent);
 }
 .finding-meta {
   margin-bottom: var(--space-5);

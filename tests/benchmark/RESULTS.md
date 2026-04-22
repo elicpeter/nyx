@@ -1,6 +1,6 @@
 # Nyx Benchmark Results
 
-Current baseline (as of Phase CF-3, 2026-04-22):
+Current baseline (as of Phase CF-5, 2026-04-22):
 
 | Metric                | File-level | Rule-level | CI floor |
 |-----------------------|------------|------------|----------|
@@ -11,6 +11,98 @@ Current baseline (as of Phase CF-3, 2026-04-22):
 Corpus: 256 cases (159 vulnerable, 97 safe) across 10 languages. Scanner 0.5.0, full analysis mode.
 
 Machine-readable per-run data lives in `tests/benchmark/results/` (`latest.json` plus dated snapshots). This file is a narrative changelog — only the two most recent phases are kept in full detail; earlier phases are condensed into the history table at the end.
+
+---
+
+## Phase CF-5 — Cross-file SCC joint fixed-point (2026-04-22)
+
+### Motivation
+
+The pass-2 orchestrator already iterates mutually-recursive SCCs to
+convergence on merged summaries (`MAX_SCC_FIXPOINT_ITERS`-bounded with a
+`SCC_FIXPOINT_SAFETY_CAP = 64` guard).  Post-CF-1/CF-2, those iterations
+run cross-file inline re-analysis under the *current* merged summaries on
+each iteration, so the summary-equality convergence predicate implicitly
+covers inline convergence for monotone summaries.  What was missing was
+an explicit signal distinguishing *cross-file* SCCs (where the recursion
+crosses file boundaries and the inline+summary interaction is what drives
+precision) from *intra-file* SCCs (where the iteration is purely about
+summary fixpoint).  Without that signal, cap-hit diagnostics conflated
+the two root causes and the orchestrator could not target cross-file
+SCCs for specialised handling.
+
+### Changes
+
+1. **`scc_spans_files()` helper + `FileBatch.cross_file` flag**
+   (`src/callgraph.rs`): an SCC is flagged cross-file when its nodes
+   belong to more than one namespace.  `scc_file_batches_with_metadata`
+   unions the flag across all SCCs contributing to each topo batch.
+   `cross_file ⊆ has_mutual_recursion` by construction (a non-recursive
+   cross-file chain resolves topologically and is not batched).
+2. **Inline cache lifecycle hooks** (`src/taint/ssa_transfer.rs`): new
+   `inline_cache_clear_epoch()` and `inline_cache_fingerprint()` helpers
+   give the SCC orchestrator a concrete contract for per-iteration cache
+   semantics.  The per-file cache is already reconstructed fresh inside
+   `analyse_file`, so today these are no-op plumbing — kept explicit so
+   any future shared-cache refactor has a pre-agreed API.
+3. **Cross-file-specific cap-hit tag** (`src/commands/scan.rs`):
+   `SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX` is a strict superset of
+   `SCC_UNCONVERGED_NOTE_PREFIX`; callers filtering on the base prefix
+   still match, while consumers that want the narrower cross-file case
+   can match on the longer constant.  `tag_unconverged_findings()`
+   takes a `cross_file: bool` switch and `run_topo_batches()` threads
+   the batch flag through.
+4. **Observability**: cross-file SCCs emit a dedicated `debug!` log at
+   iteration start; cap-hit warnings carry the `cross_file = {bool}`
+   field so operators can root-cause imprecision quickly.
+
+### Fixtures and tests
+
+- `tests/fixtures/cross_file_scc_mutual_recursion/` (Python, 2-file
+  mutual recursion with CMDI sink): transitive taint must reach the
+  caller across the cycle.
+- `tests/fixtures/cross_file_scc_three_way_cycle/` (Python, 3-file
+  cycle): pinned iteration envelope proves the SCC fix-point loop does
+  the work, not topo order.
+- `tests/fixtures/cross_file_scc_recursive_with_sanitiser/` (Python,
+  2-file sanitised cycle): joint convergence carries the `shlex.quote`
+  sanitizer across the cycle and suppresses the caller's CMDI.
+- `tests/scc_cross_file_tests.rs`: wires the three fixtures into the
+  integration harness.
+- Callgraph unit tests: `scc_file_batches_with_metadata_marks_cross_file`,
+  `scc_file_batches_with_metadata_intra_file_scc_not_cross_file`,
+  `scc_spans_files_single_node`.
+- Inline-cache lifecycle unit tests
+  (`inline_cache_epoch_tests` in `src/taint/ssa_transfer.rs`):
+  `clear_epoch_drops_all_entries`,
+  `fingerprint_is_order_independent`,
+  `fingerprint_changes_when_return_caps_change`,
+  `fingerprint_tracks_missing_return_taint_as_zero`.
+- Tag-variant unit tests (`scc_tagging_tests` in `src/commands/scan.rs`):
+  cross-file and non-cross-file variants emit the expected prefixes.
+
+### Benchmark delta
+
+Byte-for-byte neutral vs CF-3 (P/R/F1 unchanged at 0.940 / 0.994 /
+0.966).  The corpus exercises cross-file SCCs that already converge
+cleanly under the existing summary-snapshot loop, so CF-5's value is
+diagnostic clarity (tighter cap-hit tag, `cross_file` metric) and an
+API surface the future joint-cache refactor can hook into — not a
+precision shift on today's fixtures.
+
+### Known limitations
+
+- `inline_cache_clear_epoch` is a semantic hook, not a shared-cache
+  lifecycle: the per-file cache is already ambient-cleared at each
+  iteration via `analyse_file` reconstruction.  A true cross-file
+  shared cache would be a more involved refactor (rayon-safe shared
+  `RefCell<InlineCache>` across SCC files, epoch-tag invalidation on
+  cache miss/hit).
+- Benchmark-visible precision win will require corpus fixtures that
+  specifically exercise cross-file SCCs with precision-degrading
+  summary approximation; the current corpus's cross-file cycles all
+  converge in 0–5 iterations and land on the same answer at both the
+  summary and inline path.
 
 ---
 

@@ -400,10 +400,45 @@ pub fn analyse(cg: &CallGraph) -> CallGraphAnalysis {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A batch of files at a single topological position, annotated with whether
-/// any contributing SCC contains mutual recursion (len > 1).
+/// any contributing SCC contains mutual recursion (len > 1) and whether any
+/// such SCC has nodes in more than one file (`cross_file`).
+///
+/// `has_mutual_recursion` triggers the SCC fixed-point loop in
+/// [`crate::commands::scan::run_topo_batches`].  `cross_file` is a tighter
+/// signal used by Phase CF-5 joint fixed-point convergence: it implies the
+/// recursion involves at least one cross-file call edge, so the inline
+/// cache and per-iteration findings need joint convergence — not just
+/// summary convergence.
 pub struct FileBatch<'a> {
     pub files: Vec<&'a PathBuf>,
     pub has_mutual_recursion: bool,
+    /// True when at least one SCC contributing to this batch has nodes
+    /// in more than one distinct file (namespace).  When `true`, the
+    /// SCC iteration loop should consult the cross-file inline cache
+    /// fingerprint as part of its convergence check (Phase CF-5).
+    ///
+    /// `cross_file` ⊆ `has_mutual_recursion`: a cross-file SCC must be
+    /// recursive (else it would topo-sort linearly across files and not
+    /// be batched together).
+    pub cross_file: bool,
+}
+
+/// Returns `true` when the given SCC has nodes belonging to more than one
+/// distinct namespace (file).  Used to flag cross-file SCCs that need the
+/// Phase CF-5 joint fixed-point treatment.
+///
+/// Single-node SCCs always return `false`.  Multi-node SCCs whose nodes
+/// all belong to the same namespace return `false`.
+pub fn scc_spans_files(cg: &CallGraph, scc: &[NodeIndex]) -> bool {
+    if scc.len() < 2 {
+        return false;
+    }
+    let mut iter = scc.iter();
+    let first_ns = iter.next().map(|n| cg.graph[*n].namespace.as_str());
+    let Some(first_ns) = first_ns else {
+        return false;
+    };
+    iter.any(|n| cg.graph[*n].namespace.as_str() != first_ns)
 }
 
 /// Like [`scc_file_batches`] but annotates each batch with whether any
@@ -426,38 +461,43 @@ pub fn scc_file_batches_with_metadata<'a>(
         rel_to_path.insert(rel, p);
     }
 
-    // 2. Build file relative-path → (min topo index, has_mutual_recursion).
-    let mut file_topo: HashMap<&str, (usize, bool)> = HashMap::new();
+    // 2. Build file relative-path → (min topo index, has_mutual_recursion, cross_file).
+    //    `cross_file` is set whenever the file participates in an SCC whose
+    //    nodes span more than one namespace — the Phase CF-5 signal.
+    let mut file_topo: HashMap<&str, (usize, bool, bool)> = HashMap::new();
     for (topo_pos, &scc_idx) in analysis.topo_scc_callee_first.iter().enumerate() {
         let scc_recursive = analysis.sccs[scc_idx].len() > 1;
+        let scc_cross_file = scc_spans_files(cg, &analysis.sccs[scc_idx]);
         for &node in &analysis.sccs[scc_idx] {
             let ns = &cg.graph[node].namespace;
             file_topo
                 .entry(ns.as_str())
-                .and_modify(|(min_pos, recursive)| {
+                .and_modify(|(min_pos, recursive, cross_file)| {
                     if topo_pos < *min_pos {
                         *min_pos = topo_pos;
                     }
                     *recursive |= scc_recursive;
+                    *cross_file |= scc_cross_file;
                 })
-                .or_insert((topo_pos, scc_recursive));
+                .or_insert((topo_pos, scc_recursive, scc_cross_file));
         }
     }
 
     // 3. Group files by min topo index, preserving order via BTreeMap.
-    //    Track mutual-recursion flag per group.
-    let mut topo_groups: BTreeMap<usize, (Vec<&'a PathBuf>, bool)> = BTreeMap::new();
+    //    Track mutual-recursion and cross-file flags per group.
+    let mut topo_groups: BTreeMap<usize, (Vec<&'a PathBuf>, bool, bool)> = BTreeMap::new();
     let mut orphans: Vec<&'a PathBuf> = Vec::new();
 
     for p in all_files {
         let abs = p.to_string_lossy();
         let rel = crate::symbol::normalize_namespace(&abs, Some(&root_str));
-        if let Some(&(topo_pos, recursive)) = file_topo.get(rel.as_str()) {
+        if let Some(&(topo_pos, recursive, cross_file)) = file_topo.get(rel.as_str()) {
             let entry = topo_groups
                 .entry(topo_pos)
-                .or_insert_with(|| (Vec::new(), false));
+                .or_insert_with(|| (Vec::new(), false, false));
             entry.0.push(p);
             entry.1 |= recursive;
+            entry.2 |= cross_file;
         } else {
             orphans.push(p);
         }
@@ -465,9 +505,10 @@ pub fn scc_file_batches_with_metadata<'a>(
 
     let batches: Vec<FileBatch<'a>> = topo_groups
         .into_values()
-        .map(|(files, has_mutual_recursion)| FileBatch {
+        .map(|(files, has_mutual_recursion, cross_file)| FileBatch {
             files,
             has_mutual_recursion,
+            cross_file,
         })
         .collect();
     (batches, orphans)
@@ -1104,6 +1145,59 @@ mod tests {
             "batch with mutual recursion should be marked"
         );
         assert_eq!(batches[0].files.len(), 2);
+    }
+
+    #[test]
+    fn scc_file_batches_with_metadata_marks_cross_file() {
+        // Two mutually-recursive functions in different files → cross_file = true
+        let root = Path::new("/proj");
+        let a = make_summary("ping", "/proj/a.rs", "rust", 0, vec!["pong"]);
+        let b = make_summary("pong", "/proj/b.rs", "rust", 0, vec!["ping"]);
+
+        let files: Vec<PathBuf> = vec![PathBuf::from("/proj/a.rs"), PathBuf::from("/proj/b.rs")];
+
+        let (batches, _orphans) = build_metadata_batches(vec![a, b], &files, root);
+        assert_eq!(
+            batches.len(),
+            1,
+            "cross-file mutual recursion → single batch"
+        );
+        assert!(batches[0].has_mutual_recursion);
+        assert!(
+            batches[0].cross_file,
+            "batch whose SCC spans two namespaces should be marked cross_file"
+        );
+    }
+
+    #[test]
+    fn scc_file_batches_with_metadata_intra_file_scc_not_cross_file() {
+        // Two mutually-recursive functions in the SAME file → not cross_file
+        let root = Path::new("/proj");
+        let a = make_summary("ping", "/proj/a.rs", "rust", 0, vec!["pong"]);
+        let b = make_summary("pong", "/proj/a.rs", "rust", 0, vec!["ping"]);
+
+        let files: Vec<PathBuf> = vec![PathBuf::from("/proj/a.rs")];
+
+        let (batches, _orphans) = build_metadata_batches(vec![a, b], &files, root);
+        assert_eq!(batches.len(), 1);
+        assert!(batches[0].has_mutual_recursion);
+        assert!(
+            !batches[0].cross_file,
+            "single-file SCC must not be flagged as cross_file"
+        );
+    }
+
+    #[test]
+    fn scc_spans_files_single_node() {
+        // Singleton SCC is never cross-file.
+        let root = Path::new("/proj");
+        let a = make_summary("f", "/proj/a.rs", "rust", 0, vec![]);
+        let gs = merge_summaries(vec![a], Some(&root.to_string_lossy()));
+        let cg = build_call_graph(&gs, &[]);
+        let analysis = analyse(&cg);
+        for scc in &analysis.sccs {
+            assert!(!scc_spans_files(&cg, scc));
+        }
     }
 
     #[test]
