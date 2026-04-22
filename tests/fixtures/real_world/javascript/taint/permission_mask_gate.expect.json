@@ -1,6 +1,6 @@
 {
   "description": "req.query.flags & 0x07 produces a bounded integer [0, 7]. Type facts infer Int from bitwise BinOp, abstract domain proves bounded interval, dual-gate suppresses the SQL injection taint finding.",
-  "tags": ["taint", "sqli", "bitwise", "abstract-interp", "phase-26"],
+  "tags": ["taint", "sqli", "bitwise", "abstract-interp"],
   "modes": ["full"],
   "expected": []
 }

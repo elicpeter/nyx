@@ -1,4 +1,4 @@
-//! Phase CF-6: parameter-granularity points-to analysis.
+//! Parameter-granularity points-to analysis.
 //!
 //! Produces a [`PointsToSummary`] for a function body by walking the SSA
 //! once and recording two classes of aliasing:
@@ -40,7 +40,7 @@ use super::ir::{SsaBody, SsaOp, SsaValue, Terminator};
 ///
 /// Local to this module — the taint engine has its own `build_inst_map`
 /// that also carries receiver info we do not need, and duplicating it
-/// keeps the CF-6 analysis independent of that private helper's shape.
+/// keeps this analysis independent of that private helper's shape.
 fn build_op_map(ssa: &SsaBody) -> HashMap<SsaValue, SsaOp> {
     let mut map = HashMap::with_capacity(ssa.num_values());
     for block in &ssa.blocks {
@@ -167,7 +167,7 @@ fn is_receiver_name_local(name: &str) -> bool {
 ///
 /// `param_info` carries one `(param_index, param_name, param_ssa_value)`
 /// tuple per formal parameter that was emitted as [`SsaOp::Param`] in the
-/// lowered body.  The receiver is intentionally excluded — CF-6's table
+/// lowered body.  The receiver is intentionally excluded — this table
 /// captures positional parameters only.
 ///
 /// `formal_param_names`, when supplied, is the authoritative list of

@@ -17,9 +17,9 @@ helps, how to disable it, and what it does not cover.
 
 **What it does.** Propagates interval and string abstract domains through the
 SSA worklist alongside taint. Integer values carry `[lo, hi]` bounds;
-string values carry a prefix and suffix (plus, under Phase 22, a bit domain
-for known-zero / known-one bits). Values are joined at merge points and
-widened at loop heads so the worklist always terminates.
+string values carry a prefix and suffix (plus a bit domain for known-zero /
+known-one bits). Values are joined at merge points and widened at loop
+heads so the worklist always terminates.
 
 **Why it helps.** Lets Nyx suppress some findings that are obviously safe
 given the abstract value — a proven-bounded integer does not flow into a
@@ -112,10 +112,65 @@ Two nested switches refine the scope without disabling symex entirely:
 
 **Limitations.** Expression trees are bounded at `MAX_EXPR_DEPTH=32` —
 deeper expressions degrade to `Unknown` rather than growing unboundedly.
-Sanitizer detection is informational: Phase 22 string-replace sanitizer
-patterns are reported as witness metadata, not used to clear taint.
+Sanitizer detection is informational: string-replace sanitizer patterns
+are reported as witness metadata, not used to clear taint.
 
 **Source**: [`src/symex/`](../src/symex/).
+
+---
+
+## Demand-driven analysis
+
+**What it does.** After the forward pass-2 taint analysis finishes, runs a
+*backwards* walk from each sink's tainted SSA operands.  The walk follows
+reverse SSA-edge transfer (phi fan-out, `Assign` operand-fanout, `Call`
+body-expansion or arg-fanout) until it reaches a taint source, proves
+the flow infeasible via an accumulated path predicate, or exhausts its
+budget.  Each forward finding is then annotated with the aggregate verdict:
+
+- `backwards-confirmed` — a matching source was reached.  Finding picks
+  up a small confidence boost and the note appears in
+  `evidence.symbolic.cutoff_notes`.
+- `backwards-infeasible` — every walk proved the flow unreachable.
+  Finding is capped to Low confidence and a user-readable limiter is
+  attached.
+- `backwards-budget-exhausted` — the walk hit `BACKWARDS_VALUE_BUDGET`
+  without a verdict.  Recorded as a limiter so operators can see when
+  the pass could not keep up.
+- Inconclusive outcomes are a no-op: the forward finding is untouched.
+
+Because the backwards walk can consult `GlobalSummaries.bodies_by_key`
+(populated by the cross-file callee body persistence layer) it closes
+across file boundaries; when a callee body is not loadable the walk
+falls back to fanning out over the call's arguments so local reach-back
+is still possible.
+
+**Why it helps.** Inverts the analysis direction so budget follows
+questions the scanner actually cares about — "does any source reach
+*this* sink?" — instead of proving every potential source-to-sink
+path.  Corroborated findings are a stronger signal than forward-only
+ones, and proven-infeasible flows provide a principled way to lower
+confidence on forward false positives without silently dropping them.
+
+**How to turn it on.** Defaults off so the benchmark floor is preserved
+while the pass stabilises.
+
+| Surface | Value |
+|---|---|
+| Config | `backwards_analysis = true` under `[analysis.engine]` |
+| CLI flag | `--backwards-analysis` / `--no-backwards-analysis` |
+| Env var (legacy) | `NYX_BACKWARDS=1` |
+
+**Limitations (first cut).** Reverse call-graph expansion past a
+`ReachedParam` is deferred — the walk terminates at function parameters
+rather than crossing back into callers.  Path-constraint pruning is
+conservative: only the accumulated `PredicateSummary` bits are consulted,
+not the full symbolic predicate stack.  Depth-bounded at k=2 for
+cross-function body expansion.  See `DEFAULT_BACKWARDS_DEPTH`,
+`BACKWARDS_VALUE_BUDGET`, and `MAX_BACKWARDS_CALLEE_BLOCKS` in
+`src/taint/backwards.rs` for the exact bounds.
+
+**Source**: [`src/taint/backwards.rs`](../src/taint/backwards.rs).
 
 ---
 

@@ -1,4 +1,4 @@
-//! Phase 17: Abstract interpretation framework.
+//! Abstract interpretation framework.
 //!
 //! Provides a product abstract domain ([`AbstractValue`]) composing independent
 //! subdomains:
@@ -137,7 +137,7 @@ impl AbstractDomain for AbstractValue {
     }
 }
 
-// ── AbstractTransfer (Phase CF-3) ───────────────────────────────────────
+// ── AbstractTransfer ────────────────────────────────────────────────────
 
 /// Maximum length of a literal prefix tracked by [`StringTransfer::LiteralPrefix`].
 ///
@@ -298,7 +298,7 @@ impl StringTransfer {
 ///
 /// Composition rule: `apply(input) = (interval.apply, string.apply,
 /// bits=top)`.  The bit domain is always Top — we do not track cross-file
-/// bit transfers in CF-3.
+/// bit transfers.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct AbstractTransfer {
     #[serde(default, skip_serializing_if = "is_interval_top")]

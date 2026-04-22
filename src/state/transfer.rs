@@ -746,7 +746,7 @@ mod tests {
         assert!(!is_guard_like("open_file"));
     }
 
-    // ── Phase 13: callee_matches for new resource patterns ─────────────
+    // ── callee_matches for resource patterns ───────────────────────────
 
     #[test]
     fn callee_matches_js_end_release() {
@@ -886,7 +886,7 @@ mod tests {
         ));
     }
 
-    // ── Phase 13: condition_contains_auth_token for new auth patterns ──
+    // ── condition_contains_auth_token for auth patterns ────────────────
 
     #[test]
     fn auth_token_jwt_verify() {

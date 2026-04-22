@@ -5,8 +5,7 @@
     "xss",
     "symex",
     "string-ops",
-    "replace",
-    "phase-22"
+    "replace"
   ],
   "modes": [
     "full"

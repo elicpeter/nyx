@@ -67,6 +67,8 @@ pub fn handle_command(
             no_symex_interproc,
             smt,
             no_smt,
+            backwards_analysis,
+            no_backwards_analysis,
             parse_timeout_ms,
             // Deprecated aliases
             no_index,
@@ -217,6 +219,12 @@ pub fn handle_command(
             }
             if no_smt {
                 engine.symex.smt = false;
+            }
+            if backwards_analysis {
+                engine.backwards_analysis = true;
+            }
+            if no_backwards_analysis {
+                engine.backwards_analysis = false;
             }
             if let Some(ms) = parse_timeout_ms {
                 engine.parse_timeout_ms = ms;

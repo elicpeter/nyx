@@ -204,7 +204,7 @@ fn cross_file_mixed_cap_sink() {
 }
 
 /// Two different sinks on the same line (SQL + SHELL) must produce two
-/// distinct taint findings. Regression guard for the Phase 2a dedup fix:
+/// distinct taint findings. Regression guard for the dedup fix where
 /// the grouping key includes sink capability bits, so `sink_sql(x);
 /// sink_shell(x);` no longer collapses into a single finding.
 #[test]
@@ -245,9 +245,9 @@ fn dedup_same_line_different_sinks() {
     );
 }
 
-// ── Phase 2b.2 — multi-arg validator target narrowing ────────────────────
+// ── Multi-arg validator target narrowing ────────────────────────────────
 
-/// Phase 2b.2: `validate(x, 100)` must narrow validation to `x`, so the tainted
+/// `validate(x, 100)` must narrow validation to `x`, so the tainted
 /// `x` flowing to `os.system(x)` on the true branch is correctly silenced.
 /// Regression guard for the existing target-extraction path.
 #[test]
@@ -257,7 +257,7 @@ fn predicate_multi_arg_validator_tainted() {
     validate_expectations(&diags, &dir);
 }
 
-/// Phase 2b.2: `validate(limit, x)` validates `limit`, not `x`. Tainted `x`
+/// `validate(limit, x)` validates `limit`, not `x`. Tainted `x`
 /// still flows to `os.system(x)` and the finding must fire. Regression guard
 /// against upstream code marking every `condition_var` as validated when
 /// target extraction narrows to a non-tainted var.
@@ -268,9 +268,9 @@ fn predicate_multi_arg_validator_wrong() {
     validate_expectations(&diags, &dir);
 }
 
-// ── Phase 2b.3 — gated-sink dynamic activation conservatism ──────────────
+// ── Gated-sink dynamic activation conservatism ────────────────────────────
 
-/// Phase 2b.3: `setAttribute(attr, val)` with a dynamic first arg returns the
+/// `setAttribute(attr, val)` with a dynamic first arg returns the
 /// ALL_ARGS_PAYLOAD sentinel, so sink scanning expands to every positional
 /// arg — a tainted attribute name is itself a vulnerability path. Expects
 /// at least two findings (one per call where either arg is tainted).
@@ -727,7 +727,7 @@ fn python_subprocess_shell_default_safe() {
     validate_expectations(&diags, &dir);
 }
 
-// ── FP guard fixtures (Phase 4b.2) ────────────────────────────────────────
+// ── FP guard fixtures ─────────────────────────────────────────────────────
 //
 // Each fixture below is a small source file exercising a pattern where
 // the analyser must NOT emit a taint-unsanitised-flow (with the single

@@ -13,7 +13,7 @@ The classifications here are grounded in three concrete signals:
    corpus in [`tests/benchmark/RESULTS.md`](../tests/benchmark/RESULTS.md),
    last measured 2026-04-20 with scanner version 0.5.0.
 3. **Known weak spots** — FPs and FNs the maintainers have deliberately left
-   in the benchmark rather than suppressed, documented per-phase in
+   in the benchmark rather than suppressed, documented release-by-release in
    `RESULTS.md`.
 
 All parser integrations use tree-sitter and are stable; parsing is not a
@@ -65,7 +65,7 @@ confidence, and modeled idioms.
   than modeled as a first-class taint operator; dynamic property access
   (`obj[user]`) is conservatively treated.
 
-#### TypeScript — 100% P / 100% R / 100% F1 *(35-case corpus, most recent phase)*
+#### TypeScript — 100% P / 100% R / 100% F1 *(35-case corpus, most recent measurement)*
 
 - **Rule depth**: Shares the JS ruleset (3 sources, 10 sanitizers, 24 sinks)
   plus TS-specific grammar handling.
@@ -98,10 +98,9 @@ confidence, and modeled idioms.
   sinks.
 - **Known gaps**: no gated sinks. Variable-receiver method calls
   (`client.send(...)` vs `HttpClient.send(...)`) rely on type-qualified
-  resolution from Phase 10 receiver-type inference; flows where the receiver
-  type cannot be inferred are missed (`java-ssrf-002` persists as FN in
-  earlier phases; closed via Phase 10 type facts but fragile on unusual
-  builder chains).
+  resolution from receiver-type inference; flows where the receiver type
+  cannot be inferred are missed (`java-ssrf-002` historically persisted as
+  FN; closed via type facts but fragile on unusual builder chains).
 
 #### Ruby — 100% P / 92.3% R / 96.0% F1 *(24-case corpus)*
 

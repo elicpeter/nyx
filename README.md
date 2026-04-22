@@ -374,7 +374,7 @@ Measured on our 262-case benchmark corpus (155 vulnerable, 107 safe) at
 TypeScript) covering 14 vulnerability classes. These numbers are specific to
 that corpus and are not a general-purpose accuracy claim — real-world results
 depend on the language mix, rule coverage for your stack, and the
-vulnerability classes that matter to you. Full per-phase results live in
+vulnerability classes that matter to you. Full historical results live in
 [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
 
 Current rule-level baseline on the 262-case corpus:
@@ -403,7 +403,7 @@ Recall is strong across all classes. Precision is limited by false positives on 
 
 ## Roadmap
 
-### Phase 1: Deep Static Engine (Complete)
+### Deep Static Engine (Complete)
 
 | Feature | Status | Description |
 |---|--------|---|
@@ -417,14 +417,14 @@ Recall is strong across all classes. Precision is limited by false positives on 
 | Pattern-level confidence | Done | Explicit High/Medium/Low confidence on every AST pattern. Confidence flows into output alongside severity and rank score. |
 | AST pattern overhaul | Done | 30+ new patterns across all languages, 11 broken query fixes, namespaced IDs, severity recalibration. |
 
-### Phase 2: Dynamic Capability (Planned)
+### Dynamic Capability (Planned)
 
 | Feature | Description |
 |---|---|
 | Controlled dynamic execution | Local sandbox: identify entry points, spin up test harnesses, inject payloads, detect runtime crashes and command execution. Deterministic automated exploit validation: static finds `exec(user_input)`, dynamic confirms it with `; id`. |
 | Fuzzing integration | libFuzzer (C/C++), cargo-fuzz (Rust), go-fuzz, HTTP fuzzing harness. Static engine identifies interesting functions, fuzzer targets only those. |
 
-### Phase 3: Reasoning Layer (Planned)
+### Reasoning Layer (Planned)
 
 | Feature | Description |
 |---|---|

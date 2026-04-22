@@ -110,7 +110,7 @@ fn scan_surfaces_injected_panic_from_worker() {
     );
 
     // Current behaviour (pre-`enable_panic_recovery`): the scan panics
-    // out of rayon.  If a future phase adds panic containment, the scan
+    // out of rayon.  If a future change adds panic containment, the scan
     // would instead return Ok with a warning — that counts as surfacing
     // the failure and is also acceptable here.  The thing we refuse to
     // accept silently is a successful scan that claims the poisoned file

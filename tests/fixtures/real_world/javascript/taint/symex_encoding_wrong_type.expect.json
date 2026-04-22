@@ -4,8 +4,7 @@
     "taint",
     "sqli",
     "symex",
-    "encoding",
-    "phase-28"
+    "encoding"
   ],
   "modes": [
     "full"

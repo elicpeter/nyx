@@ -532,7 +532,7 @@ fn log_unresolved_callees(call_graph: &CallGraph) {
 /// findings whose analysis was truncated at the safety cap.
 pub const SCC_UNCONVERGED_NOTE_PREFIX: &str = "scc_unconverged:";
 
-/// Phase CF-5: finer-grained note prefix used when the unconverged SCC
+/// Finer-grained note prefix used when the unconverged SCC
 /// spans more than one file.  This signals to reviewers that the
 /// precision cost is specifically the cross-file summary/inline
 /// convergence cliff and not a pathological intra-file recursion.
@@ -556,7 +556,7 @@ pub const SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX: &str = "scc_unconverged:cross-
 /// preserves that attribution while still surfacing the degradation at
 /// the batch level.
 ///
-/// Phase CF-5: `cross_file = true` switches the note to the cross-file
+/// `cross_file = true` switches the note to the cross-file
 /// variant so downstream consumers can distinguish the two reasons an
 /// SCC might hit the cap.
 fn tag_unconverged_findings(diags: &mut [Diag], iterations: usize, cap: usize, cross_file: bool) {
@@ -689,8 +689,8 @@ fn run_topo_batches(
             // SCC fixed-point: iterate until summaries converge (snapshot
             // equality) or we hit the safety cap.
             //
-            // Phase CF-5: `batch.cross_file` distinguishes SCCs whose
-            // recursion spans multiple files.  These require joint
+            // `batch.cross_file` distinguishes SCCs whose recursion
+            // spans multiple files.  These require joint
             // summary + inline-cache convergence.  Today the per-file
             // inline cache is reconstructed fresh in `analyse_file` so
             // summary convergence implicitly implies inline convergence
@@ -862,7 +862,7 @@ fn run_topo_batches(
                 // the results are potentially imprecise. Cap confidence at
                 // Low (overriding any higher pre-set) and append a note to
                 // the evidence so downstream UIs / reviewers can surface
-                // the degradation.  Phase CF-5: cross-file SCCs get a
+                // the degradation.  Cross-file SCCs get a
                 // tighter note prefix so the precision cause is explicit.
                 tag_unconverged_findings(&mut iteration_diags, iters_used, scc_cap, cross_file_scc);
             }
@@ -1176,7 +1176,7 @@ pub(crate) fn scan_filesystem_with_observer(
                                 }
                             }
 
-                            // Phase 30: Insert eligible callee bodies
+                            // Insert eligible callee bodies
                             for (key, body) in r.ssa_bodies {
                                 local_gs.insert_body(key, body);
                             }
@@ -1224,12 +1224,12 @@ pub(crate) fn scan_filesystem_with_observer(
     if let Some(p) = progress {
         p.record_pass1_ms(pass1_start.elapsed().as_millis() as u64);
     }
-    // Phase CF-1: observability — record how many cross-file SSA bodies
-    // wound up in GlobalSummaries so CF-2 can distinguish "no bodies
-    // available" from "bodies available but inline didn't fire."
+    // Observability: record how many cross-file SSA bodies wound up in
+    // GlobalSummaries so we can distinguish "no bodies available" from
+    // "bodies available but inline didn't fire."
     tracing::debug!(
         cross_file_bodies = global_summaries.bodies_len(),
-        "pass 1: cross-file SSA bodies available for taint (CF-1 plumbing)"
+        "pass 1: cross-file SSA bodies available for taint"
     );
     if let Some(l) = logs {
         l.info(
@@ -1590,7 +1590,7 @@ pub fn scan_with_index_parallel_observer(
                                         );
                                     }
                                 }
-                                // Phase 30: Persist SSA callee bodies
+                                // Persist SSA callee bodies
                                 if !ssa_bodies.is_empty() {
                                     let body_rows: Vec<_> = ssa_bodies
                                         .into_iter()
@@ -1704,7 +1704,7 @@ pub fn scan_with_index_parallel_observer(
             }
         }
 
-        // Phase 30: Load cross-file callee bodies from DB
+        // Load cross-file callee bodies from DB
         let body_count = if crate::symex::cross_file_symex_enabled() {
             match idx.load_all_ssa_bodies() {
                 Ok(body_rows) => {
@@ -1754,12 +1754,12 @@ pub fn scan_with_index_parallel_observer(
             0
         };
 
-        // Phase CF-1: same observability as the non-indexed scan path so
-        // CF-2 sees a uniform "cross-file bodies available" signal
-        // regardless of which scan path populated GlobalSummaries.
+        // Same observability as the non-indexed scan path so callers
+        // see a uniform "cross-file bodies available" signal regardless
+        // of which scan path populated GlobalSummaries.
         tracing::debug!(
             cross_file_bodies = body_count,
-            "indexed scan: cross-file SSA bodies available for taint (CF-1 plumbing)"
+            "indexed scan: cross-file SSA bodies available for taint"
         );
         if let Some(l) = logs {
             l.info(
@@ -2532,7 +2532,7 @@ mod dedup_taint_flow_tests {
         // Two findings at line 10, same column, same severity — but with
         // different resolved sink capability bits (SQL vs SHELL). They must
         // NOT collapse: different sink kinds are materially different
-        // vulnerabilities. Phase 2a regression guard.
+        // vulnerabilities. Regression guard.
         let mut diags = vec![
             make_taint("a.rs", 10, 5, 3, 1),
             make_taint("a.rs", 10, 5, 3, 1),
@@ -2674,8 +2674,8 @@ mod scc_tagging_tests {
 
     #[test]
     fn tag_unconverged_cross_file_variant_uses_tighter_prefix() {
-        // Phase CF-5: cross-file SCC cap-hit should emit a cross-file
-        // note variant while remaining a strict superset of the base
+        // Cross-file SCC cap-hit should emit a cross-file note
+        // variant while remaining a strict superset of the base
         // prefix so existing consumers still match.
         let mut diags = vec![make_diag(None)];
         tag_unconverged_findings(&mut diags, 64, 64, true);

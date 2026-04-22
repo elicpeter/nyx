@@ -1,4 +1,4 @@
-//! Phase CF-3 unit tests: per-parameter [`AbstractTransfer`] channels.
+//! Per-parameter [`AbstractTransfer`] channel unit tests.
 //!
 //! Covers three correctness surfaces:
 //!   * Serde round-trip for every transfer form (so DB-persisted summaries
@@ -104,10 +104,10 @@ fn serde_round_trip_combined() {
 
 #[test]
 fn deserialize_legacy_json_missing_fields() {
-    // An SSA summary persisted before CF-3 landed carries no
-    // `abstract_transfer` entries; the parent's serde(default) handles
-    // that.  The transfer record itself must also tolerate both fields
-    // missing (reducing to Top/Unknown).
+    // An older SSA summary may carry no `abstract_transfer` entries;
+    // the parent's serde(default) handles that.  The transfer record
+    // itself must also tolerate both fields missing (reducing to
+    // Top/Unknown).
     let back: AbstractTransfer = serde_json::from_str("{}").unwrap();
     assert!(back.is_top());
 }

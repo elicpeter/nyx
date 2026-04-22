@@ -1,5 +1,5 @@
-//! Phase CF-4 integration tests: per-return-path decomposition survives
-//! cross-file summary serialisation and application.
+//! Per-return-path decomposition integration tests: the decomposition
+//! survives cross-file summary serialisation and application.
 //!
 //! Three fixtures cover distinct structural shapes of the per-return-path
 //! transform:

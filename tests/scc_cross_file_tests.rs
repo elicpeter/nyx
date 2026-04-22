@@ -1,9 +1,9 @@
-//! Phase CF-5 regression tests: cross-file SCC joint fixed-point.
+//! Cross-file SCC joint fixed-point regression tests.
 //!
 //! These fixtures exercise SCCs whose mutual recursion *spans multiple
-//! files*.  The Phase CF-5 plan added a tighter `cross_file: bool` signal
-//! on `FileBatch` and a matching cross-file unconverged-note prefix; the
-//! pass-2 orchestrator already iterates cross-file SCCs jointly via the
+//! files*.  A tighter `cross_file: bool` signal on `FileBatch` and a
+//! matching cross-file unconverged-note prefix cover this path; the
+//! pass-2 orchestrator iterates cross-file SCCs jointly via the
 //! existing summary-snapshot convergence loop (which is monotone and
 //! captures the transitive inline results produced per iteration).
 //!

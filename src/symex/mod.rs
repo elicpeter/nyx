@@ -6,8 +6,8 @@
 //! path to determine feasibility. Results are stored as `SymbolicVerdict` on
 //! the finding, which flows through to Evidence and confidence scoring.
 //!
-//! Phase 18a adds symbolic expression trees (`SymbolicValue`) that preserve
-//! computation structure through the path walk, enabling richer witness strings.
+//! Symbolic expression trees (`SymbolicValue`) preserve computation structure
+//! through the path walk, enabling richer witness strings.
 
 #![allow(
     clippy::collapsible_if,
@@ -59,10 +59,10 @@ pub struct SymexContext<'a> {
     pub lang: Lang,
     pub namespace: &'a str,
     /// Points-to analysis results for object identity resolution in the
-    /// field-sensitive symbolic heap (Phase 21).
+    /// field-sensitive symbolic heap.
     pub points_to: Option<&'a PointsToResult>,
     /// Pre-lowered intra-file function bodies for interprocedural symbolic
-    /// execution (Phase 24A). Keyed by canonical `FuncKey`.
+    /// execution. Keyed by canonical `FuncKey`.
     pub callee_bodies: Option<
         &'a std::collections::HashMap<
             crate::symbol::FuncKey,
@@ -70,9 +70,9 @@ pub struct SymexContext<'a> {
         >,
     >,
     /// SCC membership: maps normalized function name → SCC index.
-    /// Used by interprocedural symex for mutual recursion detection (Phase 24B).
+    /// Used by interprocedural symex for mutual recursion detection.
     pub scc_membership: Option<&'a HashMap<String, usize>>,
-    /// Phase 30: Cross-file callee bodies for interprocedural symbolic execution.
+    /// Cross-file callee bodies for interprocedural symbolic execution.
     /// Provides body resolution via `GlobalSummaries.resolve_callee_body()`.
     pub cross_file_bodies: Option<&'a GlobalSummaries>,
 }
@@ -155,10 +155,10 @@ pub(super) fn extract_path_blocks(finding: &Finding, ssa: &SsaBody) -> Vec<Block
 
 /// Run constraint and symbolic analysis on a single finding's taint path.
 ///
-/// Phase 18b: Delegates to the multi-path exploration engine which walks
-/// the CFG from source to sink, forking at branch points where both
-/// successors lie on some source-to-sink path. Produces an aggregate
-/// verdict across all explored paths.
+/// Delegates to the multi-path exploration engine which walks the CFG from
+/// source to sink, forking at branch points where both successors lie on
+/// some source-to-sink path. Produces an aggregate verdict across all
+/// explored paths.
 fn analyse_finding_path(finding: &Finding, ctx: &SymexContext) -> SymbolicVerdict {
     let path_blocks = extract_path_blocks(finding, ctx.ssa);
 

@@ -2003,7 +2003,7 @@ function run() {
 fn type_facts_suppress_int_typed_shell_arg() {
     // rs-safe-011 fixture: a u16-typed port (parsed from env) flows into
     // Command::new("listener").arg(port.to_string()).  The taint engine
-    // already suppresses the flow via Phase 10 typing; the structural
+    // already suppresses the flow via type-aware analysis; the structural
     // cfg-unguarded-sink must also honour the type fact and stay silent.
     let src = br#"
         use std::env;

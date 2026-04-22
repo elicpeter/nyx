@@ -930,7 +930,7 @@ pub mod index {
 
         /// Atomically replace all SSA callee bodies for a single file.
         ///
-        /// Phase 30: persists cross-file callee bodies for interprocedural symex.
+        /// Persists cross-file callee bodies for interprocedural symex.
         /// Bodies are serialized as JSON TEXT, matching the ssa_function_summaries pattern.
         /// Input tuple: `(name, arity, lang, namespace, container, disambig, kind, body)`.
         pub fn replace_ssa_bodies_for_file(
@@ -1061,7 +1061,7 @@ pub mod index {
                                 })
                                 .ok()
                                 .map(|mut b| {
-                                    // Phase CF-3: rehydrate a proxy Cfg from node_meta so
+                                    // Rehydrate a proxy Cfg from node_meta so
                                     // the taint engine's cross-file inline path can index
                                     // `cfg[inst.cfg_node]` uniformly.  No-op for intra-file
                                     // bodies that carry node_meta empty.
@@ -1087,7 +1087,7 @@ pub mod index {
                 for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
                     match serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json) {
                         Ok(mut b) => {
-                            // Phase CF-3: see note in parallel branch above.
+                            // See note in parallel branch above.
                             crate::taint::ssa_transfer::rebuild_body_graph(&mut b);
                             out.push((
                                 fp.clone(),
@@ -2125,7 +2125,7 @@ fn clear_drops_ssa_summaries_table() {
     assert_eq!(idx.load_all_ssa_summaries().unwrap().len(), 0);
 }
 
-// ── Phase 30: CalleeSsaBody persistence tests ────────────────────────────
+// ── CalleeSsaBody persistence tests ──────────────────────────────────────
 
 /// Helper: build a minimal CalleeSsaBody for DB tests.
 #[allow(dead_code)] // used by tests below

@@ -1,4 +1,4 @@
-//! Phase 15: Path constraint solving for infeasible path pruning.
+//! Path constraint solving for infeasible path pruning.
 //!
 //! This module implements a per-value abstract domain ([`ValueFact`]) with
 //! canonical lattice operations (meet/join/widen), SSA-aware condition

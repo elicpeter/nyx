@@ -239,18 +239,18 @@ pub fn class_name_to_type_kind(name: &str) -> Option<TypeKind> {
         "HttpClient" | "CloseableHttpClient" | "OkHttpClient" | "WebClient"
         | "RestTemplate" => Some(TypeKind::HttpClient),
         "HttpServletResponse" | "HttpResponse" | "ServletResponse"
-        // Phase 16: Spring HTTP response
+        // Spring HTTP response
         | "ResponseEntity" => {
             Some(TypeKind::HttpResponse)
         }
         "Connection" | "DataSource" | "MongoClient"
-        // Phase 16: JDBC statement types (execute SQL, same suppression semantics)
+        // JDBC statement types (execute SQL, same suppression semantics)
         | "Statement" | "PreparedStatement" => Some(TypeKind::DatabaseConnection),
         "File" | "Path"
-        // Phase 16: Java I/O supertypes (enables hierarchy fallback for subtypes)
+        // Java I/O supertypes (enables hierarchy fallback for subtypes)
         | "InputStream" | "OutputStream" | "Reader" | "Writer" | "PrintWriter"
         | "BufferedInputStream" | "BufferedOutputStream" => Some(TypeKind::FileHandle),
-        // Phase 16: Python qualified type names.
+        // Python qualified type names.
         // Only covers raw lowered names from isinstance(). The lowering in lower.rs
         // extracts the literal type text: isinstance(x, requests.Session) produces
         // type_name = "requests.Session". Does NOT handle import aliasing
@@ -317,14 +317,14 @@ mod tests {
     fn parse_file_input_stream_via_hierarchy() {
         // FileInputStream: not in tier 1 or tier 2 directly.
         // Tier 3 hierarchy: FileInputStream → supertypes ["InputStream"].
-        // "InputStream" IS in tier 2 (Phase 16) → FileHandle.
+        // "InputStream" IS in tier 2 → FileHandle.
         assert_eq!(
             parse_type_name("FileInputStream"),
             Some(TypeKind::FileHandle)
         );
     }
 
-    // ── Phase 16: Java I/O and JDBC types ───────────────────────────────
+    // ── Java I/O and JDBC types ─────────────────────────────────────────
 
     #[test]
     fn parse_java_statement_to_db() {
@@ -355,7 +355,7 @@ mod tests {
         );
     }
 
-    // ── Phase 16: Python qualified type names ───────────────────────────
+    // ── Python qualified type names ─────────────────────────────────────
 
     #[test]
     fn parse_python_qualified_http_client() {

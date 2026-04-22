@@ -17,7 +17,7 @@ pub enum TaintTransform {
     AddBits(Cap),
 }
 
-/// Phase CF-4: maximum [`ReturnPathTransform`] entries retained per parameter.
+/// Maximum [`ReturnPathTransform`] entries retained per parameter.
 ///
 /// Most functions have one or two return paths; eight is a generous bound
 /// that still keeps per-summary memory O(1).  Beyond the cap, extraction
@@ -25,7 +25,7 @@ pub enum TaintTransform {
 /// application always sees a bounded vector.
 pub const MAX_RETURN_PATHS: usize = 8;
 
-/// Phase CF-4: a single return-path entry in a per-parameter summary.
+/// A single return-path entry in a per-parameter summary.
 ///
 /// Per-return-path decomposition preserves callee-internal path splits that
 /// the aggregate [`TaintTransform`] would erase.  Each entry records the
@@ -82,7 +82,7 @@ impl ReturnPathTransform {
     }
 }
 
-/// Phase CF-4: merge `incoming` into `existing`, deduping by
+/// Merge `incoming` into `existing`, deduping by
 /// [`ReturnPathTransform::dedup_key`] and joining abstract contributions on
 /// collision.  Caps the final vector at [`MAX_RETURN_PATHS`]; overflow is
 /// conservatively joined into a single Top-predicate entry.
@@ -170,8 +170,8 @@ pub struct SsaFuncSummary {
     /// Per-parameter flows to internal sinks: each entry binds a parameter
     /// index to one or more [`SinkSite`]s inside this function's body.
     ///
-    /// Phase 1 of primary sink-location attribution: carrying the callee's
-    /// sink source-location through the summary lets cross-file findings
+    /// Carrying the callee's sink source-location through the summary
+    /// enables primary sink-location attribution: cross-file findings
     /// attribute the finding to the actual dangerous instruction rather
     /// than to the call site.  Each `SinkSite` records the bits (`cap`) it
     /// contributes, so consumers deriving a coarse `Cap` union across all
@@ -198,7 +198,7 @@ pub struct SsaFuncSummary {
     /// calls or type annotations. Enables cross-file type-qualified resolution.
     #[serde(default)]
     pub return_type: Option<TypeKind>,
-    /// Abstract domain fact for the return value (Phase 17 hardening).
+    /// Abstract domain fact for the return value.
     /// When present, callers can use this to seed the return SSA value's
     /// abstract state for cross-procedural interval/string analysis.
     #[serde(default)]
@@ -217,7 +217,7 @@ pub struct SsaFuncSummary {
     /// Empty when the receiver is not used as a sink payload inside the body.
     #[serde(default)]
     pub receiver_to_sink: Cap,
-    /// Phase CF-3: per-parameter abstract-domain transfer channels.
+    /// Per-parameter abstract-domain transfer channels.
     ///
     /// Each entry `(param_index, transfer)` describes how a caller-known
     /// abstract value at that parameter maps to the function's return
@@ -234,7 +234,7 @@ pub struct SsaFuncSummary {
     /// abstract values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub abstract_transfer: Vec<(usize, AbstractTransfer)>,
-    /// Phase CF-4: per-parameter return-path decomposition.
+    /// Per-parameter return-path decomposition.
     ///
     /// When non-empty, supplies finer-grained per-path data than
     /// [`Self::param_to_return`].  Each parameter maps to up to
@@ -249,7 +249,7 @@ pub struct SsaFuncSummary {
     /// could not derive per-return state (e.g. early-exit probes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_return_paths: Vec<(usize, SmallVec<[ReturnPathTransform; 2]>)>,
-    /// Phase CF-6: parameter-granularity points-to summary.
+    /// Parameter-granularity points-to summary.
     ///
     /// Records bounded alias edges between parameter positions and the
     /// return value, so summary-path cross-file resolution can spread
@@ -260,7 +260,7 @@ pub struct SsaFuncSummary {
     pub points_to: PointsToSummary,
 }
 
-/// Phase CF-4: union-merge two `param_return_paths` lists keyed by parameter
+/// Union-merge two `param_return_paths` lists keyed by parameter
 /// index.  Each parameter keeps its own deduped [`ReturnPathTransform`] list,
 /// joining abstract contributions on collision and enforcing the
 /// [`MAX_RETURN_PATHS`] cap.  Used by merge paths that combine summaries

@@ -20,7 +20,7 @@
         8
       ],
       "evidence_contains": [],
-      "notes": "array push + join taint tracked via container propagation (Phase 14)"
+      "notes": "array push + join taint tracked via container propagation"
     }
   ]
 }

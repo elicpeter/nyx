@@ -4,8 +4,8 @@
 // res.send is a Sink(Cap::HTML_ESCAPE). The taint engine strips the cap
 // before a finding is generated, so this should produce 0 taint findings.
 //
-// Phase 28: symex encoding modeling is complementary — this fixture
-// confirms no regression from the new Encode node recognition.
+// Symex encoding modeling is complementary — this fixture confirms
+// no regression from the new Encode node recognition.
 
 var express = require('express');
 var he = require('he');

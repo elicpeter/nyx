@@ -1,10 +1,11 @@
 //! Semantic regression suite for the SSA lowering + optimisation + taint
 //! pipeline.
 //!
-//! This file used to be a legacy/SSA equivalence test.  After legacy removal
-//! (Phase 6) the file degenerated to "scan each fixture and assert no panic",
-//! which proved almost nothing.  It has been restored as a multi-tier
-//! correctness signal.  Each `#[test]` fn below verifies a distinct property:
+//! This file used to be a legacy/SSA equivalence test.  After legacy
+//! was removed the file degenerated to "scan each fixture and assert
+//! no panic", which proved almost nothing.  It has been restored as a
+//! multi-tier correctness signal.  Each `#[test]` fn below verifies a
+//! distinct property:
 //!
 //!   * `ssa_structural_invariants_corpus` — every body in every real-world
 //!     fixture lowers to well-formed SSA.  Enforced via

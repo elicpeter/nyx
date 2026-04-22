@@ -1,4 +1,4 @@
-//! Symbolic value expression trees for Phase 18a.
+//! Symbolic value expression trees.
 #![allow(clippy::collapsible_if)]
 
 use std::fmt;
@@ -99,9 +99,9 @@ pub enum SymbolicValue {
     Concat(Box<SymbolicValue>, Box<SymbolicValue>),
     /// Uninterpreted function application.
     Call(String, Vec<SymbolicValue>),
-    /// Phi merge (stored structurally; not resolved in Phase 18a single-path).
+    /// Phi merge (stored structurally; not resolved in single-path mode).
     Phi(Vec<(BlockId, SymbolicValue)>),
-    // ── Phase 22: String operations ─────────────────────────────────────
+    // ── String operations ─────────────────────────────────────
     /// String substring extraction: `str.substring(start, end?)`.
     Substr(
         Box<SymbolicValue>,
@@ -118,7 +118,7 @@ pub enum SymbolicValue {
     Trim(Box<SymbolicValue>),
     /// String length (returns integer): `strlen(str)`.
     StrLen(Box<SymbolicValue>),
-    // ── Phase 28: Encoding/decoding transforms ───────────────────────────
+    // ── Encoding/decoding transforms ───────────────────────────
     /// Protective or representation transform applied to inner value.
     /// Preserves taint unconditionally — does NOT sanitize in symex.
     Encode(super::strings::TransformKind, Box<SymbolicValue>),
@@ -316,7 +316,7 @@ pub fn mk_phi(operands: Vec<(BlockId, SymbolicValue)>) -> SymbolicValue {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Phase 22: String operation smart constructors
+//  String operation smart constructors
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Build a `Trim` expression with concrete folding and depth bounding.
@@ -425,7 +425,7 @@ pub fn mk_strlen(s: SymbolicValue) -> SymbolicValue {
     SymbolicValue::StrLen(Box::new(s))
 }
 
-// ── Phase 28: Encoding/decoding smart constructors ───────────────────────────
+// ── Encoding/decoding smart constructors ───────────────────────────
 
 /// Build an `Encode` expression with concrete folding and depth bounding.
 ///
@@ -902,7 +902,7 @@ mod tests {
         assert_eq!(Op::from(cfg::BinOp::Mod), Op::Mod);
     }
 
-    // ── Phase 26: Bitwise and comparison operation tests ──────────────
+    // ── Bitwise and comparison operation tests ──────────────
 
     #[test]
     fn op_from_cfg_binop_extended() {
@@ -1047,7 +1047,7 @@ mod tests {
         SymbolicValue::Concrete(n)
     }
 
-    // ── Phase 22: String operation tests ──────────────────────────────
+    // ── String operation tests ──────────────────────────────
 
     #[test]
     fn mk_trim_concrete_fold() {
@@ -1184,7 +1184,7 @@ mod tests {
         assert_eq!(format!("{}", v), "sym(v6).substr(0, 5)");
     }
 
-    // ── Phase 28: Encode/Decode ──────────────────────────────────────────
+    // ── Encode/Decode ──────────────────────────────────────────
 
     #[test]
     fn mk_encode_concrete_folding() {

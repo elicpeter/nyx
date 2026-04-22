@@ -1555,7 +1555,7 @@ pub struct FusedResult {
     /// in the same file never collide.
     pub ssa_summaries: Vec<(crate::symbol::FuncKey, SsaFuncSummary)>,
     pub cfg_nodes: usize,
-    /// Phase 30: eligible callee bodies for cross-file symex, keyed by
+    /// Eligible callee bodies for cross-file symex, keyed by
     /// canonical [`crate::symbol::FuncKey`] (same identity model as
     /// `ssa_summaries`).
     pub ssa_bodies: Vec<(

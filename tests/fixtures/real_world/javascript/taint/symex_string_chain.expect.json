@@ -4,8 +4,7 @@
     "taint",
     "sqli",
     "symex",
-    "string-ops",
-    "phase-22"
+    "string-ops"
   ],
   "modes": [
     "full"

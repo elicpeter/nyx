@@ -26,8 +26,8 @@ pub struct PathConstraint {
 /// Tracks a symbolic expression tree per SSA value, branch constraints
 /// collected along the path, and a flat taint root-set with eager propagation.
 ///
-/// `Clone` is required for multi-path exploration (Phase 18b): the executor
-/// clones the state at branch forks to explore both successors independently.
+/// `Clone` is required for multi-path exploration: the executor clones the
+/// state at branch forks to explore both successors independently.
 #[derive(Clone)]
 pub struct SymbolicState {
     /// Symbolic value for each SSA value encountered on the path.
@@ -37,9 +37,9 @@ pub struct SymbolicState {
     /// SSA values known to carry taint. Eagerly propagated during transfer —
     /// no recursive expression-tree walking needed.
     tainted_roots: HashSet<SsaValue>,
-    /// Field-sensitive symbolic heap (Phase 21).
+    /// Field-sensitive symbolic heap.
     heap: SymbolicHeap,
-    /// Exception context for catch-path symbolic execution (Phase 25).
+    /// Exception context for catch-path symbolic execution.
     /// When `Some`, the next `CatchParam` instruction consumes this value and
     /// marks itself tainted. This is NOT a faithful model of the thrown value —
     /// it is a taint carrier that signals "this CatchParam was reached via an
@@ -105,7 +105,7 @@ impl SymbolicState {
         &self.tainted_roots
     }
 
-    /// Set the exception context for catch-path CatchParam seeding (Phase 25).
+    /// Set the exception context for catch-path CatchParam seeding.
     pub fn set_exception_context(&mut self, val: SymbolicValue) {
         self.exception_context = Some(val);
     }

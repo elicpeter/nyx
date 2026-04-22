@@ -19,7 +19,7 @@
         12
       ],
       "evidence_contains": [],
-      "notes": "r.URL.Query().Get to db.Query via string concat; must_match false because Go string concat taint propagation is a known Phase 1 gap"
+      "notes": "r.URL.Query().Get to db.Query via string concat; must_match false because Go string concat taint propagation is a known gap"
     }
   ]
 }

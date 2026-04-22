@@ -1,10 +1,10 @@
-"""Phase CF-6 fixture: dense alias graph in a single helper function.
+"""Points-to dense-alias fixture: dense alias graph in a single helper.
 
 The helper accepts five parameters and writes each one into a field of
-each other, producing ~20 raw alias edges.  CF-6's bounded-size
-invariant must cap the summary at MAX_ALIAS_EDGES (8) and fall back to
-the conservative `overflow = true` behaviour without exploding
-extraction time or summary size.
+each other, producing ~20 raw alias edges.  The bounded-size invariant
+must cap the summary at MAX_ALIAS_EDGES (8) and fall back to the
+conservative `overflow = true` behaviour without exploding extraction
+time or summary size.
 """
 
 

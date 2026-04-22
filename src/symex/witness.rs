@@ -1,4 +1,4 @@
-//! Witness generation for confirmed symbolic findings (Phase 18c).
+//! Witness generation for confirmed symbolic findings.
 //!
 //! When the multi-path explorer confirms a finding as feasible, this module
 //! generates a concrete proof witness — an actual input value that would
@@ -69,7 +69,7 @@ pub fn extract_witness(
     // 5. Find tainted symbols in expression tree
     let tainted = collect_tainted_symbols(&sym, state);
 
-    // 5b. Phase 21: Collect field paths from heap access trace.
+    // 5b. Collect field paths from heap access trace.
     let field_paths: Vec<String> = state
         .heap()
         .field_accesses()
@@ -96,8 +96,8 @@ pub fn extract_witness(
         let payload = witness_payload(cap);
         let substituted = substitute_tainted(&sym, &tainted, payload);
         let concrete = evaluate_concrete(&substituted);
-        // Phase 28: Heuristic mismatch note when a protective transform
-        // doesn't match the sink's vulnerability class.
+        // Heuristic mismatch note when a protective transform doesn't match
+        // the sink's vulnerability class.
         let mismatch_suffix = detect_transform_mismatch(&sym, cap)
             .map(|note| format!(" {}", note))
             .unwrap_or_default();
@@ -107,7 +107,7 @@ pub fn extract_witness(
         ))
     } else {
         // Not string-renderable: generic witness.
-        // Phase 28: Still check for transform mismatch in the expression tree.
+        // Still check for transform mismatch in the expression tree.
         let mismatch_suffix = detect_transform_mismatch(&sym, cap)
             .map(|note| format!(" {}", note))
             .unwrap_or_default();
@@ -234,13 +234,13 @@ fn is_string_renderable(expr: &SymbolicValue) -> bool {
         SymbolicValue::ConcreteStr(_) => true,
         SymbolicValue::Symbol(_) => true,
         SymbolicValue::Concat(l, r) => is_string_renderable(l) && is_string_renderable(r),
-        // Phase 22: String ops on string-renderable operands are renderable
+        // String ops on string-renderable operands are renderable
         SymbolicValue::Trim(s)
         | SymbolicValue::ToLower(s)
         | SymbolicValue::ToUpper(s)
         | SymbolicValue::Replace(s, _, _) => is_string_renderable(s),
         SymbolicValue::Substr(s, _, _) => is_string_renderable(s),
-        // Phase 28: Encoding/decoding transforms produce strings
+        // Encoding/decoding transforms produce strings
         SymbolicValue::Encode(_, s) | SymbolicValue::Decode(_, s) => is_string_renderable(s),
         // StrLen returns integer — not string-renderable
         SymbolicValue::StrLen(_) => false,
@@ -290,13 +290,13 @@ fn collect_tainted_inner(expr: &SymbolicValue, state: &SymbolicState, out: &mut 
                 collect_tainted_inner(v, state, out);
             }
         }
-        // Phase 22: String operations — recurse into operands
+        // String operations — recurse into operands
         SymbolicValue::ToLower(s)
         | SymbolicValue::ToUpper(s)
         | SymbolicValue::Trim(s)
         | SymbolicValue::StrLen(s)
         | SymbolicValue::Replace(s, _, _)
-        // Phase 28: Encoding/decoding transforms
+        // Encoding/decoding transforms
         | SymbolicValue::Encode(_, s)
         | SymbolicValue::Decode(_, s) => {
             collect_tainted_inner(s, state, out);
@@ -352,7 +352,7 @@ fn substitute_tainted(
                 .collect();
             SymbolicValue::Phi(new_ops)
         }
-        // Phase 22: String operations — recurse into operands
+        // String operations — recurse into operands
         SymbolicValue::Trim(s) => {
             SymbolicValue::Trim(Box::new(substitute_tainted(s, tainted, payload)))
         }
@@ -376,7 +376,7 @@ fn substitute_tainted(
             end.as_ref()
                 .map(|e| Box::new(substitute_tainted(e, tainted, payload))),
         ),
-        // Phase 28: Encoding/decoding transforms — preserve structure
+        // Encoding/decoding transforms — preserve structure
         SymbolicValue::Encode(kind, s) => {
             SymbolicValue::Encode(*kind, Box::new(substitute_tainted(s, tainted, payload)))
         }
@@ -407,7 +407,7 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
             let right = evaluate_concrete(r);
             format!("{}{}", left, right)
         }
-        // Phase 22: String operations — apply to recursively evaluated inner
+        // String operations — apply to recursively evaluated inner
         SymbolicValue::Trim(s) => evaluate_concrete(s).trim().to_owned(),
         SymbolicValue::ToLower(s) => evaluate_concrete(s).to_lowercase(),
         SymbolicValue::ToUpper(s) => evaluate_concrete(s).to_uppercase(),
@@ -439,7 +439,7 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
                 format!("{}", expr)
             }
         }
-        // Phase 28: Encoding/decoding — apply transform to recursively evaluated inner
+        // Encoding/decoding — apply transform to recursively evaluated inner
         SymbolicValue::Encode(kind, s) => {
             let inner = evaluate_concrete(s);
             super::strings::encode_concrete_for_witness(*kind, &inner)
@@ -458,7 +458,7 @@ fn evaluate_concrete(expr: &SymbolicValue) -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Phase 28: Transform–sink mismatch detection
+//  Transform–sink mismatch detection
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Heuristic check: does a protective transform in the expression match
@@ -951,7 +951,7 @@ mod tests {
         assert!(w.contains("SELECT 1"), "witness: {}", w);
     }
 
-    // ── Phase 22: String operation witness tests ──────────────────────
+    // ── String operation witness tests ──────────────────────
 
     #[test]
     fn test_string_ops_are_string_renderable() {
@@ -1031,7 +1031,7 @@ mod tests {
         assert!(tainted.contains(&tainted_val));
     }
 
-    // ── Phase 28: Encoding/decoding witness tests ────────────────────────
+    // ── Encoding/decoding witness tests ────────────────────────
 
     #[test]
     fn test_encoding_is_string_renderable() {

@@ -1,4 +1,4 @@
-//! SMT Solver Integration via Z3 (Phase 23 + Phase 27 string theory).
+//! SMT Solver Integration via Z3 with string theory support.
 //!
 //! Provides a hybrid constraint solving architecture: [`PathEnv`] handles the
 //! fast path (~95% of branches), and Z3 is invoked as a secondary solver for
@@ -9,7 +9,7 @@
 //! - **Capability-based escalation**: SMT is invoked when accumulated path
 //!   constraints contain comparisons that the translator can lower to Z3
 //!   (integer or string operands with at least one `Value`).
-//! - **Integer + string sorts (Phase 27)**: Both `Z3Int` and `Z3Str` variables
+//! - **Integer + string sorts**: Both `Z3Int` and `Z3Str` variables
 //!   are supported. Sort is inferred from PathEnv evidence, constant operands,
 //!   or comparison-context hints.
 //! - **Strict sort safety**: Z3 variables are only created when the sort is
@@ -20,7 +20,7 @@
 //!   (Sat, Unknown, timeout, translation failure) → continue as before.
 //!   This can never suppress a real finding.
 //!
-//! ## Phase 27 scope boundary
+//! ## Scope boundary
 //!
 //! This module supports direct `Operand`-level string guard reasoning only.
 //! It does NOT translate `SymbolicValue` expression trees (Concat, Substr,
@@ -333,7 +333,7 @@ fn seed_from_path_env(solver: &Solver, var_map: &mut VarMap, env: &PathEnv) {
             continue;
         }
 
-        // String evidence path (Phase 27).
+        // String evidence path.
         let has_str_evidence = matches!(fact.exact, Some(ConstValue::Str(_)))
             || fact.types.is_singleton_of(&TypeKind::String);
 
@@ -499,7 +499,7 @@ fn translate_operand(var_map: &mut VarMap, op: &Operand, env: &PathEnv) -> Optio
 /// Falls back to `translate_operand` first. If that returns `None` for a
 /// `Value` operand, applies the sort hint. When no hint is available
 /// (e.g., both sides are Values), defaults to Int for backward
-/// compatibility with pre-Phase 27 behavior.
+/// compatibility with pre-string-theory behavior.
 fn translate_operand_with_hint(
     var_map: &mut VarMap,
     op: &Operand,
@@ -519,7 +519,7 @@ fn translate_operand_with_hint(
                 Some(VarSort::Int) | None => {
                     // Default to Int when no hint is available (e.g., Value vs
                     // Value comparisons). This preserves backward compatibility:
-                    // pre-Phase 27, all Value operands were forced to Int.
+                    // pre-string-theory, all Value operands were forced to Int.
                     return force_int_var(var_map, *v).map(Z3Expr::Int);
                 }
             }
@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn escalation_fires_on_value_vs_int_const() {
-        // Phase 27: capability-based escalation also fires on Value vs Const.
+        // Capability-based escalation also fires on Value vs Const.
         let constraints = vec![comparison_constraint(
             val(0),
             CompOp::Gt,
@@ -837,7 +837,7 @@ mod tests {
         assert_eq!(result, SmtResult::Sat);
     }
 
-    // ── String equality (Phase 27) ───────────────────────────────────────
+    // ── String equality ───────────────────────────────────────
 
     #[test]
     fn string_equality_asserted() {
@@ -914,7 +914,7 @@ mod tests {
         assert_eq!(result, SmtResult::Unsat);
     }
 
-    // ── PathEnv string seeding (Phase 27) ────────────────────────────────
+    // ── PathEnv string seeding ────────────────────────────────
 
     #[test]
     fn path_env_string_seeding() {
@@ -1000,7 +1000,7 @@ mod tests {
         assert_eq!(result, SmtResult::Unsat);
     }
 
-    // ── Lexicographic string ordering (Phase 27) ─────────────────────────
+    // ── Lexicographic string ordering ─────────────────────────
 
     #[test]
     fn string_lexicographic_contradiction() {

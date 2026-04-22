@@ -1,4 +1,4 @@
-"""Phase 2b.2 — wrong-argument validation must not validate taint.
+"""Wrong-argument validation must not validate taint.
 
 `validate(limit, x)` — the validator takes `limit` (the bound) as its
 first argument.  `classify_condition_with_target` extracts `"limit"` as

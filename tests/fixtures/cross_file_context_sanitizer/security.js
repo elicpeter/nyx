@@ -2,7 +2,7 @@
 // registered HTML_ESCAPE sanitiser in the JS label rules.  The
 // wrapping function itself is user-defined, so resolution must go
 // through either the cross-file SSA summary (StripBits(HTML_ESCAPE))
-// or the CF-2 inline path to clear the taint.
+// or the cross-file inline path to clear the taint.
 
 const xss = require('xss');
 

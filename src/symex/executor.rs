@@ -1,15 +1,14 @@
-//! Multi-path symbolic exploration with bounded forking and loop awareness
-//! (Phase 18b + Phase 20).
+//! Multi-path symbolic exploration with bounded forking and loop awareness.
 //!
-//! Extends Phase 18a's single-path symbolic execution to explore multiple
-//! paths through the CFG from source to sink. At branch points where both
-//! successors lie on some source-to-sink CFG path, the executor forks the
-//! symbolic state and explores both branches independently.
+//! Extends single-path symbolic execution to explore multiple paths through
+//! the CFG from source to sink. At branch points where both successors lie on
+//! some source-to-sink CFG path, the executor forks the symbolic state and
+//! explores both branches independently.
 //!
-//! Phase 20 adds loop-aware execution: back edges are detected via dominator
-//! analysis, loops are unrolled up to `MAX_LOOP_UNROLL` iterations, then
-//! phi-defined values are widened to `Unknown` (preserving taint) and the
-//! executor jumps to the loop exit successor.
+//! Loop-aware execution: back edges are detected via dominator analysis,
+//! loops are unrolled up to `MAX_LOOP_UNROLL` iterations, then phi-defined
+//! values are widened to `Unknown` (preserving taint) and the executor jumps
+//! to the loop exit successor.
 //!
 //! Hard budgets on forks, paths, and total symbolic transfer steps guarantee
 //! termination. Verdict aggregation is sound: `Infeasible` is only returned
@@ -71,10 +70,10 @@ struct ExplorationState {
     steps_taken: usize,
     /// Constraints checked on this path.
     constraints_checked: u32,
-    /// Per-block visit count for bounded loop unrolling (Phase 20).
+    /// Per-block visit count for bounded loop unrolling.
     /// Inherited at fork points — both branches share the visit history.
     visit_counts: HashMap<BlockId, u8>,
-    /// When `Some`, this path entered via an exception edge (Phase 25).
+    /// When `Some`, this path entered via an exception edge.
     /// Moved into `sym_state.exception_context` immediately before block
     /// transfer so that `CatchParam` can consume it. This is a taint carrier
     /// (`SymbolicValue::Unknown`), not a faithful thrown-value model.
@@ -137,7 +136,7 @@ fn compute_source_sink_reachable(
                 }
             }
         }
-        // Phase 25: follow exception edges from this block
+        // Follow exception edges from this block
         if let Some(catches) = exception_succs.get(&bid) {
             for &catch in catches {
                 if forward.insert(catch) {
@@ -159,7 +158,7 @@ fn compute_source_sink_reachable(
                 }
             }
         }
-        // Phase 25: follow exception edges TO this block (reverse)
+        // Follow exception edges TO this block (reverse)
         if let Some(srcs) = exception_preds.get(&bid) {
             for &src in srcs {
                 if backward.insert(src) {
@@ -208,7 +207,7 @@ pub(super) fn explore_finding(finding: &Finding, ctx: &SymexContext) -> Explorat
     let source_block = path_blocks[0];
     let sink_block = path_blocks[path_blocks.len() - 1];
 
-    // Phase 25: precompute exception edge maps (O(n) once, reused everywhere)
+    // Precompute exception edge maps (O(n) once, reused everywhere)
     let exception_succs: HashMap<BlockId, SmallVec<[BlockId; 2]>> = {
         let mut map: HashMap<BlockId, SmallVec<[BlockId; 2]>> = HashMap::new();
         for &(src, catch) in &ssa.exception_edges {
@@ -239,10 +238,10 @@ pub(super) fn explore_finding(finding: &Finding, ctx: &SymexContext) -> Explorat
     );
     let on_path: HashSet<BlockId> = path_blocks.iter().copied().collect();
 
-    // Compute loop information (Phase 20)
+    // Compute loop information
     let loop_info = super::loops::analyse_loops(ssa);
 
-    // Seed symbolic state (same as Phase 18a analyse_finding_path)
+    // Seed symbolic state (same as single-path analyse_finding_path)
     let mut sym_state = SymbolicState::new();
     sym_state.seed_from_const_values(const_values);
     for step in &finding.flow_steps {
@@ -288,7 +287,7 @@ pub(super) fn explore_finding(finding: &Finding, ctx: &SymexContext) -> Explorat
     });
     let summary_ctx_ref = summary_ctx.as_ref();
 
-    // Phase 21: Build heap context for field-sensitive symbolic heap.
+    // Build heap context for field-sensitive symbolic heap.
     let heap_ctx = ctx.points_to.map(|pts| SymexHeapCtx {
         points_to: pts,
         ssa,
@@ -297,7 +296,7 @@ pub(super) fn explore_finding(finding: &Finding, ctx: &SymexContext) -> Explorat
     });
     let heap_ctx_ref = heap_ctx.as_ref();
 
-    // Phase 24A+B: Build interprocedural context for callee body execution.
+    // Build interprocedural context for callee body execution.
     let interproc_budget = std::cell::Cell::new(super::interproc::InterprocBudget::new());
     let interproc_cache = std::cell::RefCell::new(std::collections::HashMap::new());
     let interproc_reentry = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -322,7 +321,7 @@ pub(super) fn explore_finding(finding: &Finding, ctx: &SymexContext) -> Explorat
         });
     let interproc_ctx_ref = interproc_ctx.as_ref();
 
-    // Phase 23: Create SMT context for cross-variable constraint solving.
+    // Create SMT context for cross-variable constraint solving.
     #[cfg(feature = "smt")]
     let mut smt_ctx = if super::smt_enabled() {
         Some(super::smt::SmtContext::new())
@@ -426,7 +425,7 @@ fn run_path(
             }
         };
 
-        // Phase 20: Increment visit count and check bounded unrolling
+        // Increment visit count and check bounded unrolling
         let visit_count = {
             let count = state.visit_counts.entry(block_id).or_insert(0);
             *count = count.saturating_add(1);
@@ -467,7 +466,7 @@ fn run_path(
             return Some(record_outcome(state, finding, ssa, cfg));
         }
 
-        // Phase 25: move exception context into sym_state before block transfer
+        // Move exception context into sym_state before block transfer
         // so CatchParam can consume it during instruction transfer
         if let Some(exc_val) = state.exception_context.take() {
             state.sym_state.set_exception_context(exc_val);
@@ -488,7 +487,7 @@ fn run_path(
             None, // Caller-level: always uses real CFG
         );
 
-        // Phase 20: Collapse induction variables after re-visit to prevent
+        // Collapse induction variables after re-visit to prevent
         // expression tree growth like ((i+1)+1)+1. Only applied after the
         // first re-visit (count > 1), not on the initial iteration.
         if loop_info.loop_heads.contains(&block_id) && visit_count > 1 {
@@ -503,7 +502,7 @@ fn run_path(
         state.steps_taken += step_count;
         *total_steps += step_count;
 
-        // Phase 25: fork into exception paths from this block
+        // Fork into exception paths from this block
         if let Some(catch_blocks) = exception_succs.get(&block_id) {
             for &catch_blk in catch_blocks {
                 if !reachable.contains(&catch_blk) {
@@ -724,7 +723,7 @@ fn apply_branch_constraint(
         });
     }
 
-    // Phase 23: SMT escalation — check with Z3 when PathEnv says SAT but
+    // SMT escalation — check with Z3 when PathEnv says SAT but
     // accumulated constraints have cross-variable shape.
     #[cfg(feature = "smt")]
     if let Some(smt) = smt_ctx {
@@ -820,7 +819,7 @@ fn fork_at_branch(
     }
 
     // Enqueue feasible branches; record infeasible immediately.
-    // Phase 23: Also check SMT for cross-variable infeasibility.
+    // Also check SMT for cross-variable infeasibility.
     let true_infeasible = true_state.env.is_unsat() || {
         #[cfg(feature = "smt")]
         {
@@ -863,7 +862,7 @@ fn fork_at_branch(
     None
 }
 
-/// Phase 23: Check if a forked state is infeasible via SMT.
+/// Check if a forked state is infeasible via SMT.
 ///
 /// Only invoked when the `smt` feature is enabled and the escalation
 /// predicate fires (cross-variable constraints detected).
@@ -1648,7 +1647,7 @@ mod tests {
         assert!(result.search_exhausted);
     }
 
-    // ─── Phase 25: Exception-aware reachability and forking ─────────────
+    // ─── Exception-aware reachability and forking ─────────────
 
     #[test]
     fn reachable_includes_exception_edges() {

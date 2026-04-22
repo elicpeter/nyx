@@ -1,8 +1,8 @@
 // FP GUARD — cross-call-site specialization (JS: safe caller only).
 //
 // `runQuery` is a helper that forwards its second arg to db.query.
-// Phase 11 k=1 inline analysis means the caller-site cap signature
-// dictates whether the callee's internal sink surfaces as a flow.
+// k=1 inline analysis means the caller-site cap signature dictates
+// whether the callee's internal sink surfaces as a flow.
 // Here the only caller passes a compile-time-constant string, so no
 // finding may fire — even if elsewhere in the same codebase another
 // caller of `runQuery` sends tainted data (that case lives in

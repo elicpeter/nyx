@@ -1,6 +1,6 @@
 # Nyx Benchmark Results
 
-Current baseline (as of Phase CF-6, 2026-04-22):
+Current baseline (as of Phase CF-7, 2026-04-22):
 
 | Metric                | File-level | Rule-level | CI floor |
 |-----------------------|------------|------------|----------|
@@ -11,6 +11,90 @@ Current baseline (as of Phase CF-6, 2026-04-22):
 Corpus: 256 cases (159 vulnerable, 97 safe) across 10 languages. Scanner 0.5.0, full analysis mode.
 
 Machine-readable per-run data lives in `tests/benchmark/results/` (`latest.json` plus dated snapshots). This file is a narrative changelog — only the two most recent phases are kept in full detail; earlier phases are condensed into the history table at the end.
+
+---
+
+## Phase CF-7 — Demand-driven backwards analysis (2026-04-22)
+
+### Motivation
+
+The forward taint engine proceeds source-to-sink, spending budget on
+every function the source might touch.  Its precision ceiling is fixed
+by what summaries + inline re-analysis can preserve on every edge of a
+flow — a single lossy edge drops the finding.  This phase adds the
+opposite direction: start at each sink value and walk *reverse* SSA
+edges (and cross-file callee bodies via
+`GlobalSummaries.bodies_by_key`) until a source is reached, the
+accumulated predicate renders the flow infeasible, or a budget is
+exhausted.  Off by default; benchmark is neutral.
+
+### Changes
+
+1. **`src/taint/backwards.rs`** — new module with the core types:
+   `DemandState` (sink-side demand: caps + validated-predicate bits +
+   cross-function depth), `BackwardFlow` (the reached verdict per
+   walked value), `BackwardsCtx` (minimal driver-inputs view),
+   `FindingVerdict` (Confirmed / Inconclusive / Infeasible /
+   BudgetExhausted), and the `analyse_sink_backwards` driver.  The
+   backwards transfer handles every `SsaOp` variant — `Assign`/`Phi`
+   fan out to operands, `Call` tries cross-file body expansion before
+   falling back to arg-fanout, `Source`/`Const`/`Param`/`CatchParam`
+   terminate.  Source recognition also consults the defining CFG
+   node's `DataLabel::Source(_)` so Python-style call-sites like
+   `request.args.get` are treated as source terminals.  Budgets:
+   `DEFAULT_BACKWARDS_DEPTH = 2`, `BACKWARDS_VALUE_BUDGET = 1024`,
+   `MAX_BACKWARDS_CALLEE_BLOCKS = 500`.
+2. **Finding annotation** (`src/taint/mod.rs`): after forward taint
+   and symex complete, if `analysis.engine.backwards_analysis` is on,
+   the pass walks each finding's sink and writes its verdict onto
+   `Finding.symbolic.cutoff_notes` via `annotate_finding`.  Placed
+   after symex so its witness-style `symbolic` output survives;
+   backwards layers `backwards-confirmed` / `backwards-infeasible` /
+   `backwards-budget-exhausted` onto the notes vector.
+3. **Confidence integration** (`src/evidence.rs`):
+   `compute_taint_confidence` treats `backwards-confirmed` as a
+   `+1` signal and `backwards-infeasible` as a `-3` penalty (a
+   smaller-magnitude signal than the symex verdict, which reasons
+   about concrete payloads).  `compute_confidence_limiters` surfaces
+   infeasible/budget verdicts as user-readable strings.
+4. **Switch surfaces**: new `AnalysisOptions.backwards_analysis` field
+   (default `false`), CLI pair
+   `--backwards-analysis / --no-backwards-analysis`, and legacy
+   env-var `NYX_BACKWARDS=1`.  Same tri-state pattern as the other
+   engine toggles.
+5. **Docs** (`docs/advanced-analysis.md`): new "Demand-driven
+   analysis" section documents the pass, how to enable it, and the
+   first-cut limitations (no reverse-call-graph expansion past
+   `ReachedParam`; constraint pruning uses predicate-summary bits
+   only, not the full SMT backend; depth-bounded at k=2).
+
+### Test coverage
+
+* **Unit tests** (`src/taint/backwards.rs` — 12 tests): demand-state
+  seeding, backward transfer per op (`Source`, `Const`, `Param`,
+  `Assign`, `Phi`), driver end-to-end on a trivial
+  Source→Assign→sink body, phi fan-out producing per-predecessor
+  flows, verdict aggregation (`Confirmed` beats `Infeasible`), and
+  `annotate_finding` idempotence + inconclusive no-op.
+* **Integration** (`tests/backwards_analysis_tests.rs` + 4 fixtures):
+  `demand_driven_reach_source` confirms a SQL-injection source is
+  reached and picks up `backwards-confirmed` when the switch is on;
+  `demand_driven_prove_infeasible` locks in first-cut structural
+  behaviour (SMT-backed prune is a follow-up); `demand_driven_catch_new_fn`
+  locks in the first-cut ReachedParam termination; `demand_driven_no_source`
+  regression-guards against synthetic findings on source-free code.  A
+  fifth sub-case asserts backwards OFF is a strict no-op (no
+  annotations appear).
+
+### Benchmark delta
+
+Off-by-default posture preserves the benchmark floor byte-for-byte
+(P=0.940, R=0.994, F1=0.966 rule-level; P=0.941, R=1.000, F1=0.970
+file-level).  On-path precision improvements require two follow-ups:
+reverse-call-graph expansion for flows that escape a function's
+`ReachedParam` boundary, and full SMT integration for the infeasible
+path class.  Both are tracked as CF-7 follow-up work; the
+off-by-default switch lets operators opt in without disturbing CI.
 
 ---
 

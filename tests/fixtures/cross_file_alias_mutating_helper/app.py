@@ -1,7 +1,7 @@
-"""Phase CF-6 caller: reads a tainted environment variable, passes it
-to a cross-file void helper that stores the value into the first
-argument's field, then reads the mutated field back out and runs it as
-a shell command.
+"""Points-to alias caller: reads a tainted environment variable,
+passes it to a cross-file void helper that stores the value into the
+first argument's field, then reads the mutated field back out and
+runs it as a shell command.
 """
 
 import os

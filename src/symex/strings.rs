@@ -1,12 +1,12 @@
 //! String method recognition, concrete evaluation, sanitizer detection,
 //! and encoding/decoding transform classification.
 //!
-//! Phase 22: Symbolic String Theory — maps callee names to semantic string
-//! operations across languages.
+//! Symbolic string theory maps callee names to semantic string operations
+//! across languages.
 //!
-//! Phase 28: Symbolic Encoding and Decoding Models — recognizes encoding
-//! transforms (HTML escape, URL encode, etc.) for witness enrichment and
-//! heuristic mismatch diagnostics. Does NOT affect taint semantics.
+//! Encoding/decoding models recognize transforms (HTML escape, URL encode,
+//! etc.) for witness enrichment and heuristic mismatch diagnostics. They do
+//! NOT affect taint semantics.
 
 use crate::labels::Cap;
 use crate::symbol::Lang;
@@ -57,7 +57,7 @@ pub struct SanitizerInfo {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Phase 28: Encoding/decoding transform types
+//  Encoding/decoding transform types
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Category of encoding/decoding transform for symbolic modeling.
@@ -482,7 +482,7 @@ fn classify_c(method: &str) -> Option<StringMethodInfo> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Phase 28: Encoding/decoding transform classification
+//  Encoding/decoding transform classification
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Classify a callee as a recognized encoding/decoding transform.
@@ -615,7 +615,7 @@ fn classify_transform_php(callee: &str) -> Option<TransformMethodInfo> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Phase 28: Concrete encoding/decoding for witness rendering
+//  Concrete encoding/decoding for witness rendering
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Apply encoding for witness rendering.
@@ -850,8 +850,8 @@ pub fn evaluate_string_op_concrete(method: &StringMethod, receiver: &str) -> Opt
 /// Detect whether a Replace operation acts as a security sanitizer.
 ///
 /// Returns `None` if the pattern is not security-relevant. This is conservative:
-/// Phase 22 does NOT clear taint via Replace — detection is informational only
-/// for witness quality.
+/// the symbolic string theory does NOT clear taint via Replace — detection is
+/// informational only for witness quality.
 pub fn detect_replace_sanitizer(
     pattern: &str,
     _replacement: &str,
@@ -1179,7 +1179,7 @@ mod tests {
         assert!(!is_global_replace("strings.Replace", Lang::Go));
     }
 
-    // ── Phase 28: Transform classification ───────────────────────────────
+    // ── Transform classification ───────────────────────────────
 
     #[test]
     fn test_classify_transform_js_encode_uri_component() {
@@ -1302,7 +1302,7 @@ mod tests {
         assert!(classify_transform_method("url.QueryEscape", Lang::Go).is_none());
     }
 
-    // ── Phase 28: Concrete encoding ──────────────────────────────────────
+    // ── Concrete encoding ──────────────────────────────────────
 
     #[test]
     fn test_encode_concrete_html_escape() {
@@ -1375,7 +1375,7 @@ mod tests {
         assert_eq!(result.unwrap(), "hello world");
     }
 
-    // ── Phase 28: verified_cap ───────────────────────────────────────────
+    // ── verified_cap ───────────────────────────────────────────
 
     #[test]
     fn test_verified_cap_html_escape() {

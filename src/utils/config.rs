@@ -1212,7 +1212,7 @@ fn load_creates_example_and_reads_user_overrides() {
     assert!(!cfg.scanner.follow_symlinks);
 }
 
-// ─── Phase 1 tests: enum parsing ────────────────────────────────────────────
+// ─── Enum parsing tests ─────────────────────────────────────────────────────
 
 #[test]
 fn enum_roundtrip_output_format() {
@@ -1345,7 +1345,7 @@ fn auth_analysis_config_defaults() {
     assert!(cfg.authorization_check_names.is_empty());
 }
 
-// ─── Phase 2 tests: server and runs config ──────────────────────────────────
+// ─── Server and runs config tests ───────────────────────────────────────────
 
 #[test]
 fn server_config_defaults() {
@@ -1404,7 +1404,7 @@ fn missing_new_sections_use_defaults() {
     assert!(cfg.profiles.is_empty());
 }
 
-// ─── Phase 3 tests: profiles ────────────────────────────────────────────────
+// ─── Profiles tests ─────────────────────────────────────────────────────────
 
 #[test]
 fn profile_apply_overrides() {
@@ -1464,7 +1464,7 @@ fn profile_toml_roundtrip() {
     assert_eq!(profile.quiet, Some(true));
 }
 
-// ─── Phase 4 tests: validation ──────────────────────────────────────────────
+// ─── Validation tests ───────────────────────────────────────────────────────
 
 #[test]
 fn validate_good_config() {
@@ -1515,7 +1515,7 @@ fn validate_returns_all_errors() {
     assert!(err.len() >= 3);
 }
 
-// ─── Phase 5 test: excluded_files merge ─────────────────────────────────────
+// ─── excluded_files merge test ──────────────────────────────────────────────
 
 #[test]
 fn merge_excluded_files_union() {

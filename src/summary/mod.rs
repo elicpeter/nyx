@@ -20,10 +20,9 @@ use std::hash::{Hash, Hasher};
 /// the callee, rather than to the caller's call-site (which is all a
 /// bare `(param_idx, Cap)` pair could support).
 ///
-/// Phase 1 of the primary sink-location attribution work stores this data
-/// in the summary; phase 2 will consume it in `build_taint_diag()` to
-/// overwrite the caller-site `Finding.line` when the sink was resolved via
-/// summary.
+/// Primary sink-location attribution stores this data in the summary so
+/// `build_taint_diag()` can consume it and overwrite the caller-site
+/// `Finding.line` when the sink was resolved via summary.
 ///
 /// Fields
 /// ──────
@@ -360,7 +359,7 @@ pub struct FuncSummary {
     #[serde(default, deserialize_with = "deserialize_callee_sites")]
     pub callees: Vec<CalleeSite>,
 
-    // ── Identity discriminators (Phase: function-identity overhaul) ──────
+    // ── Identity discriminators ──────────────────────────────────────────
     /// Enclosing container path (class / impl / module / outer function),
     /// segments joined with `::`.  Empty for free top-level functions.
     #[serde(default)]
@@ -553,7 +552,7 @@ pub struct GlobalSummaries {
     /// Precise SSA-derived per-parameter summaries, keyed by `FuncKey`.
     /// These take precedence over `FuncSummary` during callee resolution.
     ssa_by_key: HashMap<FuncKey, SsaFuncSummary>,
-    /// Phase 30: Cross-file callee bodies for interprocedural symbolic execution.
+    /// Cross-file callee bodies for interprocedural symbolic execution.
     /// Keyed by `FuncKey` (same identity model as SSA summaries).
     bodies_by_key: HashMap<FuncKey, crate::taint::ssa_transfer::CalleeSsaBody>,
 }
@@ -844,7 +843,7 @@ impl GlobalSummaries {
         for (key, ssa_sum) in other.ssa_by_key {
             self.ssa_by_key.insert(key, ssa_sum);
         }
-        // Phase 30: Cross-file bodies: last-writer-wins
+        // Cross-file bodies: last-writer-wins
         for (key, body) in other.bodies_by_key {
             self.bodies_by_key.insert(key, body);
         }
@@ -889,13 +888,12 @@ impl GlobalSummaries {
         self.bodies_by_key.get(key)
     }
 
-    /// Phase CF-1: Direct access to the cross-file body map.
+    /// Direct access to the cross-file body map.
     ///
     /// Returns `None` when no cross-file bodies were loaded (empty map).
     /// The taint engine uses this to thread bodies through
     /// [`crate::taint::ssa_transfer::SsaTaintTransfer::cross_file_bodies`]
-    /// — CF-1 is pure plumbing (the field is not consumed yet); CF-2 wires
-    /// it into `resolve_callee` for context-sensitive cross-file inline
+    /// and `resolve_callee` for context-sensitive cross-file inline
     /// analysis.
     pub fn bodies_by_key(
         &self,
@@ -907,8 +905,8 @@ impl GlobalSummaries {
         }
     }
 
-    /// Phase CF-1: Count of cross-file bodies currently loaded.  Exposed
-    /// for `tracing::debug!` observability — lets CF-2 distinguish "no
+    /// Count of cross-file bodies currently loaded.  Exposed for
+    /// `tracing::debug!` observability — lets callers distinguish "no
     /// bodies available" from "bodies available but inline didn't fire".
     pub fn bodies_len(&self) -> usize {
         self.bodies_by_key.len()
@@ -1447,9 +1445,9 @@ fn ssa_summary_fits_arity(summary: &SsaFuncSummary, key_arity: Option<usize>) ->
             return false;
         }
     }
-    // Phase CF-6: every parameter referenced by a points-to edge must
-    // also fit the key's arity.  An overflow-flagged summary is
-    // conservative by construction and can be kept as-is.
+    // Every parameter referenced by a points-to edge must also fit the
+    // key's arity.  An overflow-flagged summary is conservative by
+    // construction and can be kept as-is.
     if let Some(max) = summary.points_to.max_param_index()
         && (max as usize) >= arity
     {

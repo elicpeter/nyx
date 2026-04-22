@@ -2,8 +2,8 @@
 
 ``run_it`` forwards its argument to ``subprocess.run`` with
 ``shell=True``.  The only caller in this file passes a constant
-string, so the Phase 11 inline analysis must see the safe cap and
-not emit a taint flow.  A separate TP fixture exists for the tainted
+string, so the inline k=1 analysis must see the safe cap and not
+emit a taint flow.  A separate TP fixture exists for the tainted
 caller path; keeping this fixture safe-only makes the FP-guard
 assertion unambiguous.
 

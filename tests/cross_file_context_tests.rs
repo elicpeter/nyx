@@ -1,20 +1,20 @@
-//! Phase CF-2 integration tests: cross-file k=1 context-sensitive inline
-//! taint.  These tests exercise the `resolve_callee` -> cross-file inline
+//! Cross-file k=1 context-sensitive inline taint integration tests.
+//! These tests exercise the `resolve_callee` -> cross-file inline
 //! path that consults [`GlobalSummaries::bodies_by_key`] before falling
 //! through to summary-based resolution.
 //!
 //! The four fixtures under `tests/fixtures/cross_file_context_*` cover
-//! the documented precision wins and guardrails for this phase:
+//! the documented precision wins and guardrails:
 //!
 //! * `cross_file_context_two_call_sites` (Python) — two calls to the same
 //!   cross-file helper, one tainted and one with a constant literal.
-//!   Asserts the tainted call still produces a finding after CF-2 lands.
+//!   Asserts the tainted call still produces a finding.
 //! * `cross_file_context_callback` (JS) — cross-file helper invokes a
 //!   caller-side function passed as a callback.  Inline re-analysis of
 //!   the helper must resolve the callback binding and surface the
 //!   flow through `child_process.exec`.
 //! * `cross_file_context_sanitizer` (JS) — cross-file sanitizer applied
-//!   before an HTML sink.  Regression guard: CF-2 inline must not
+//!   before an HTML sink.  Regression guard: cross-file inline must not
 //!   introduce a taint finding when the sanitiser is recognised.
 //! * `cross_file_context_deep_chain` (Python) — A -> B -> C chain with
 //!   the sink in C.  k=1 means B->C resolves via summary; the end-to-end
@@ -23,11 +23,12 @@
 //!
 //! The `bodies_by_key_populated_for_cross_file_fixtures` test is a
 //! direct `GlobalSummaries`-level assertion that pass 1 loaded cross-file
-//! SSA bodies for each fixture — i.e. CF-2 has something to consult.
-//! If this assertion flips to zero, CF-2 would silently fall back to
-//! summary resolution and every expectations.json check above would be
-//! driven by the less precise summary path, which is what the
-//! companion `cross_file_context_off_tests.rs` binary verifies.
+//! SSA bodies for each fixture — i.e. the cross-file inline path has
+//! something to consult.  If this assertion flips to zero, cross-file
+//! inline would silently fall back to summary resolution and every
+//! expectations.json check above would be driven by the less precise
+//! summary path, which is what the companion
+//! `cross_file_context_off_tests.rs` binary verifies.
 
 mod common;
 
@@ -100,9 +101,9 @@ fn pass1_bodies(root: &Path) -> GlobalSummaries {
 
 // ── Fixture-backed tests ────────────────────────────────────────────────────
 
-/// Two cross-file call sites: one tainted, one constant.  With CF-2 the
-/// tainted call still reaches the sink; the constant call does not
-/// produce an additional false-positive beyond the noise budget.
+/// Two cross-file call sites: one tainted, one constant.  The tainted
+/// call still reaches the sink; the constant call does not produce an
+/// additional false-positive beyond the noise budget.
 #[test]
 fn cross_file_context_two_call_sites() {
     let dir = fixture_path("cross_file_context_two_call_sites");
@@ -120,9 +121,9 @@ fn cross_file_context_callback() {
     validate_expectations(&diags, &dir);
 }
 
-/// Cross-file sanitiser applied before a sink.  Regression guard: CF-2
-/// inline must not introduce a finding that the summary path already
-/// suppresses.
+/// Cross-file sanitiser applied before a sink.  Regression guard:
+/// cross-file inline must not introduce a finding that the summary
+/// path already suppresses.
 #[test]
 fn cross_file_context_sanitizer() {
     let dir = fixture_path("cross_file_context_sanitizer");
@@ -140,14 +141,15 @@ fn cross_file_context_deep_chain() {
     validate_expectations(&diags, &dir);
 }
 
-// ── Phase CF-3: indexed-scan variants ───────────────────────────────────────
+// ── Indexed-scan variants ───────────────────────────────────────────────────
 //
-// Each CF-2 fixture above drives the in-memory scan path (`scan_no_index`).
+// Each fixture above drives the in-memory scan path (`scan_no_index`).
 // The indexed-scan path loads pre-lowered `CalleeSsaBody`s from SQLite
-// where `body_graph` is `#[serde(skip)]` and comes back `None`.  Before CF-3
+// where `body_graph` is `#[serde(skip)]` and comes back `None`.  Earlier
 // the taint engine's cross-file inline early-returned on that case, so
-// indexed and no-index scans could diverge on these fixtures.  Phase CF-3
-// rehydrates a proxy `Cfg` from `node_meta` at load time, restoring parity.
+// indexed and no-index scans could diverge on these fixtures.  The
+// indexed path now rehydrates a proxy `Cfg` from `node_meta` at load
+// time, restoring parity.
 //
 // These tests run the same fixtures through `scan_with_index_parallel` and
 // assert the same `validate_expectations` outcome.  A regression to the
@@ -207,11 +209,11 @@ fn cross_file_context_deep_chain_indexed() {
 
 // ── Direct GlobalSummaries assertions ───────────────────────────────────────
 
-/// Each CF-2 fixture must populate `GlobalSummaries.bodies_by_key` via
-/// the pass-1 pipeline.  If this assertion fails, the fixture-level
+/// Each fixture must populate `GlobalSummaries.bodies_by_key` via the
+/// pass-1 pipeline.  If this assertion fails, the fixture-level
 /// expectations above are being satisfied by the summary path alone
-/// (i.e. CF-2 is not actually firing) and a future regression to the
-/// cross-file inline resolver would go unnoticed.
+/// (i.e. cross-file inline is not actually firing) and a future
+/// regression to the cross-file inline resolver would go unnoticed.
 #[test]
 fn bodies_by_key_populated_for_cross_file_fixtures() {
     let fixtures = [
@@ -226,9 +228,9 @@ fn bodies_by_key_populated_for_cross_file_fixtures() {
         let gs = pass1_bodies(&dir);
         assert!(
             gs.bodies_len() >= 1,
-            "fixture `{}` produced zero cross-file SSA bodies — CF-2 has \
-             nothing to consult and every test in this file is falling \
-             through to summary resolution. Check that \
+            "fixture `{}` produced zero cross-file SSA bodies — cross-file \
+             inline has nothing to consult and every test in this file is \
+             falling through to summary resolution. Check that \
              `cross_file_symex_enabled()` is on and that \
              `analyse_file_fused` still returns `ssa_bodies`.",
             name

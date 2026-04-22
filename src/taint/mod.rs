@@ -1,5 +1,6 @@
 #![allow(clippy::collapsible_if, clippy::too_many_arguments)]
 
+pub mod backwards;
 pub mod domain;
 pub mod path_state;
 pub mod ssa_transfer;
@@ -27,9 +28,9 @@ pub struct FlowStepRaw {
 /// Resolved source-location of the primary (callee-internal) sink instruction.
 ///
 /// Populated on [`Finding`] when the sink was resolved via a callee summary
-/// that recorded a [`crate::summary::SinkSite`].  Phase 2 of primary
-/// sink-location attribution: data-only; downstream formatters (SARIF, JSON,
-/// diag) still report the caller's call-site until phase 3 opts in.
+/// that recorded a [`crate::summary::SinkSite`].  Data-only primary
+/// sink-location attribution: downstream formatters (SARIF, JSON, diag)
+/// still report the caller's call-site until they opt in.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SinkLocation {
     /// Callee file path relative to the workspace root.  Matches the
@@ -84,8 +85,8 @@ pub struct Finding {
     pub source_span: Option<usize>,
     /// Source-location of the callee-internal dangerous instruction when the
     /// sink was resolved via a function summary carrying a
-    /// [`crate::summary::SinkSite`] with concrete coordinates (phase 2 of
-    /// primary sink-location attribution).  `None` for:
+    /// [`crate::summary::SinkSite`] with concrete coordinates for primary
+    /// sink-location attribution.  `None` for:
     /// * intra-procedural / label-based sinks — the caller's `cfg[sink]`
     ///   span already names the dangerous instruction;
     /// * summary-resolved sinks whose `SinkSite` was cap-only (no tree or
@@ -186,15 +187,15 @@ pub fn analyse_file(
     } else {
         Some(&file_cfg.import_bindings)
     };
-    // Phase CF-1: Cross-file bodies come from GlobalSummaries. Threaded
-    // through the transfer for future consumption by CF-2 — no reader in
-    // CF-1, so pre-CF-1 behaviour is preserved byte-for-byte.
+    // Cross-file bodies come from GlobalSummaries. Threaded through the
+    // transfer for context-sensitive resolution; plumbing only when no
+    // reader is configured, preserving prior behaviour byte-for-byte.
     let cross_file_bodies_ref = global_summaries.and_then(|gs| gs.bodies_by_key());
     if let Some(map) = cross_file_bodies_ref {
         tracing::debug!(
             cross_file_bodies = map.len(),
             file = %caller_namespace,
-            "taint: cross-file bodies available for pass 2 (CF-1 plumbing)"
+            "taint: cross-file bodies available for pass 2"
         );
     }
 
@@ -403,6 +404,49 @@ fn analyse_body_with_seed(
                     cross_file_bodies: global_summaries,
                 };
                 crate::symex::annotate_findings(&mut findings, &symex_ctx);
+            }
+            // After forward taint + symex have produced a final
+            // `Finding.symbolic` shape, run the demand-driven backwards pass
+            // and layer its verdict on top.  Placing this *after* symex
+            // (which overwrites `symbolic`) preserves any symex witness
+            // while still annotating `backwards-confirmed` / `-infeasible`
+            // onto the `cutoff_notes` vector.  Gated by
+            // `analysis.engine.backwards_analysis` (default off).
+            if crate::utils::analysis_options::current().backwards_analysis {
+                let bctx = backwards::BackwardsCtx {
+                    ssa: &ssa_body,
+                    cfg,
+                    lang,
+                    global_summaries,
+                    intra_file_bodies: callee_bodies,
+                    depth_budget: backwards::DEFAULT_BACKWARDS_DEPTH,
+                };
+                for finding in &mut findings {
+                    let Some(sink_val) = ssa_body.cfg_node_map.get(&finding.sink).copied() else {
+                        continue;
+                    };
+                    let sink_caps = cfg[finding.sink]
+                        .taint
+                        .labels
+                        .iter()
+                        .fold(crate::labels::Cap::empty(), |acc, l| match l {
+                            crate::labels::DataLabel::Sink(c) => acc | *c,
+                            _ => acc,
+                        });
+                    let caps = if sink_caps.is_empty() {
+                        crate::labels::Cap::all()
+                    } else {
+                        sink_caps
+                    };
+                    let flows = backwards::analyse_sink_backwards(
+                        &bctx,
+                        sink_val,
+                        finding.sink,
+                        caps,
+                    );
+                    let verdict = backwards::aggregate_verdict(&flows);
+                    backwards::annotate_finding(finding, verdict);
+                }
             }
             // Extract exit state for seeding child bodies.
             let exit_state =
@@ -723,8 +767,8 @@ pub(crate) fn extract_intra_file_ssa_summaries(
             Some(&formal_params),
         );
 
-        // Only store if the summary has observable effects.  Phase CF-6
-        // adds `points_to`: a void helper whose only observable behaviour
+        // Only store if the summary has observable effects.  With
+        // `points_to` support, a void helper whose only observable behaviour
         // is a parameter-to-parameter alias (e.g. `fn set(t, v) { t.x = v; }`)
         // must survive this filter so summary application at cross-file
         // call sites can replay the alias edges.

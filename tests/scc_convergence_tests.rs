@@ -107,9 +107,9 @@ fn scc_small_cycle_converges_quickly() {
     );
 }
 
-/// Phase 2a Task 2a.3 regression guard: when an SCC batch exhausts the
-/// fix-point safety cap without converging, findings must still surface,
-/// each tagged with `confidence = Low` and a `scc_unconverged:` note so
+/// Regression guard: when an SCC batch exhausts the fix-point safety
+/// cap without converging, findings must still surface, each tagged
+/// with `confidence = Low` and a `scc_unconverged:` note so
 /// downstream reviewers can identify potentially-imprecise results.
 ///
 /// Uses `set_scc_fixpoint_cap_override` to force cap-hit on the same

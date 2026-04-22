@@ -1,4 +1,4 @@
-"""Phase CF-6 caller: invokes the dense-alias helper and reads one of
+"""Dense-alias caller: invokes the dense-alias helper and reads one of
 the mutated fields.  The caller's primary guarantee is that the scan
 *terminates* under the bounded alias graph, not that a particular
 finding fires — overflow promotes the callee to "any arg taints any

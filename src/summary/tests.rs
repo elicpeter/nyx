@@ -829,7 +829,7 @@ fn ssa_summary_backward_compat_missing_return_abstract() {
     assert_eq!(summary.return_abstract, None);
 }
 
-// ── Phase 30: CalleeSsaBody serde + GlobalSummaries body resolution ──────
+// ── CalleeSsaBody serde + GlobalSummaries body resolution ───────────────
 
 /// Helper: build a minimal CalleeSsaBody with a given number of blocks.
 #[allow(dead_code)] // used by tests below
@@ -1691,7 +1691,7 @@ fn mixed_callee_form_deserializes() {
     assert_eq!(s.callees[1].receiver.as_deref(), Some("obj"));
 }
 
-// ── Rust module-path resolution (Phase: qualified Rust paths) ────────────
+// ── Rust module-path resolution (qualified Rust paths) ──────────────────
 
 /// Helper: build a Rust summary populated with module-path + use-map fields.
 fn rust_summary_with_mod(
@@ -2497,7 +2497,7 @@ fn same_file_two_classes_same_method_typed_receiver_picks_exact() {
     // Two classes in the SAME file, both defining `run/1` with
     // incompatible security behaviour: `Safe::run` is a sanitizer-ish
     // passthrough (no sink bits) while `Unsafe::run` is a shell sink.
-    // When the caller has a typed receiver (Phase 10 inference), the
+    // When the caller has a typed receiver (via type inference), the
     // resolver must pick the exact class — the wrong pick would either
     // miss the Unsafe sink or wrongly flag the Safe path.
     let mut gs = GlobalSummaries::new();
@@ -3155,7 +3155,7 @@ fn insert_ssa_arity_overflow_rekeys() {
     assert!(kept.param_to_sink.is_empty());
 }
 
-// ── Phase 1: primary sink-location attribution — SinkSite round-trips ───
+// ── Primary sink-location attribution — SinkSite round-trips ────────────
 
 #[test]
 fn sink_site_serde_round_trip_solo() {
@@ -3230,7 +3230,7 @@ fn ssa_summary_serde_round_trip_with_sink_sites() {
 
 #[test]
 fn ssa_summary_deserialize_legacy_param_to_sink_missing_defaults_empty() {
-    // Summaries written before phase 1 omitted the new field entirely.  The
+    // Legacy summaries omitted the new field entirely.  The
     // `#[serde(default)]` attribute must carry the missing field through as
     // an empty vec rather than erroring out.
     let json = r#"{
@@ -3324,7 +3324,7 @@ fn merge_unions_sink_sites_with_dedup() {
     assert_eq!(merged.param_to_sink[0].1.len(), 2);
 }
 
-// ── Phase CF-4: per-return-path decomposition ───────────────────────────
+// ── Per-return-path decomposition ───────────────────────────────────────
 
 use super::ssa_summary::{
     MAX_RETURN_PATHS, ReturnPathTransform, merge_return_paths, union_param_return_paths,
@@ -3506,7 +3506,7 @@ fn cf4_ssa_summary_fits_arity_rejects_out_of_range_path_idx() {
     assert!(gs.get_ssa(&key).is_none());
 }
 
-// ── Phase CF-6: parameter-granularity points-to summary ─────────────────
+// ── Parameter-granularity points-to summary ─────────────────────────────
 
 #[test]
 fn cf6_ssa_summary_serde_round_trip_with_points_to() {
@@ -3537,7 +3537,7 @@ fn cf6_ssa_summary_serde_round_trip_with_points_to() {
 
 #[test]
 fn cf6_ssa_summary_legacy_json_without_points_to_deserialises() {
-    // Older on-disk JSON predates CF-6.  The serde(default) on
+    // Older on-disk JSON predates points-to tracking.  The serde(default) on
     // `points_to` must let those rows load cleanly with an empty
     // alias graph.
     let legacy = r#"{

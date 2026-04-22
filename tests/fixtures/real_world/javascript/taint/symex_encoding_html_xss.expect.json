@@ -1,11 +1,10 @@
 {
-  "description": "HTML escape before XSS sink: he.encode strips HTML_ESCAPE cap in taint engine so no taint finding should be produced. Phase 28 regression guard.",
+  "description": "HTML escape before XSS sink: he.encode strips HTML_ESCAPE cap in taint engine so no taint finding should be produced. Regression guard for symex encoding modeling.",
   "tags": [
     "taint",
     "xss",
     "sanitizer",
-    "encoding",
-    "phase-28"
+    "encoding"
   ],
   "modes": [
     "full"

@@ -117,7 +117,7 @@ The state engine recognizes language-specific cleanup patterns and suppresses fa
 | Auth in middleware | Auth check happens before handler is called |
 | Double-close via aliased reference | Alias analysis not performed |
 
-## Per-Language Detection Accuracy (Phase 6)
+## Per-Language Detection Accuracy
 
 | Language | Leak | Double-Close | Use-After-Close | Branch-Aware | Notes |
 |----------|------|-------------|----------------|-------------|-------|

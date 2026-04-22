@@ -1,4 +1,4 @@
-//! Interprocedural symbolic execution (Phase 24A + 24B).
+//! Interprocedural symbolic execution.
 //!
 //! When a callee's `CalleeSsaBody` is available, the symbolic executor walks
 //! the callee's SSA blocks as a nested frame instead of treating it as an
@@ -11,7 +11,7 @@
 //! Transitive descent is supported: callee Call instructions can themselves
 //! resolve to bodies, up to `InterprocCtx.max_depth`.
 //!
-//! Phase 24B adds:
+//! Additional capabilities:
 //!   - Full budget and cutoff controls (instructions, forks, solver checks, path states)
 //!   - Explicit recursion and SCC-aware policy
 //!   - Intra-callee forking with merge policies
@@ -55,7 +55,7 @@ pub(crate) const DEFAULT_MAX_DEPTH: usize = 3;
 /// Max callee blocks before declining to execute.
 const MAX_CALLEE_BLOCKS: usize = 200;
 
-/// Phase 30: Max cross-file nesting depth (one level of cross-file descent).
+/// Max cross-file nesting depth (one level of cross-file descent).
 const MAX_CROSS_FILE_DEPTH: usize = 1;
 
 /// Max transfer steps (phis + body instructions) per single callee frame.
@@ -269,11 +269,11 @@ pub struct InterprocCtx<'a> {
     pub max_scc_reentry: usize,
     /// Optional statistics counters.
     pub stats: &'a Cell<InterprocStats>,
-    /// Phase 30: Cross-file callee bodies via GlobalSummaries.
+    /// Cross-file callee bodies via GlobalSummaries.
     pub cross_file_bodies: Option<&'a crate::summary::GlobalSummaries>,
-    /// Phase 30: Current cross-file nesting depth.
+    /// Current cross-file nesting depth.
     pub cross_file_depth: usize,
-    /// Phase 30: Caller namespace (for cross-file resolution disambiguation).
+    /// Caller namespace (for cross-file resolution disambiguation).
     pub caller_namespace: &'a str,
 }
 
@@ -630,7 +630,7 @@ pub fn execute_callee(
     let (body, is_cross_file) = match intra_match {
         Some(b) => (b, false),
         None => {
-            // Phase 30: Cross-file body resolution (gated + depth-limited)
+            // Cross-file body resolution (gated + depth-limited)
             if !super::cross_file_symex_enabled() {
                 return None;
             }
@@ -769,7 +769,7 @@ pub fn execute_callee(
     let mut frame_chain = call_chain.to_vec();
     frame_chain.push(normalized.to_string());
 
-    // ─── Work-queue exploration (Phase 24B: intra-callee forking) ────────
+    // ─── Work-queue exploration (intra-callee forking) ────────
 
     let mut exit_states: Vec<CalleeExitState> = Vec::new();
     let mut internal_findings: Vec<InternalSinkFinding> = Vec::new();
@@ -918,7 +918,7 @@ pub fn execute_callee(
                     false_blk,
                     ..
                 } => {
-                    // Phase 24B: fork both branches when budget allows
+                    // Fork both branches when budget allows
                     let can_fork = path.forks_used < MAX_FORKS_PER_CALLEE && {
                         let b = ctx.budget.get();
                         b.symbolic_forks < b.max_symbolic_forks
@@ -1015,7 +1015,7 @@ fn detect_internal_sinks(
 ) {
     for inst in block.body.iter() {
         let labels: &[DataLabel] = if let Some(meta) = node_meta {
-            // Phase 30: cross-file body — use embedded metadata
+            // cross-file body — use embedded metadata
             meta.get(&(inst.cfg_node.index() as u32))
                 .map(|m| m.info.taint.labels.as_slice())
                 .unwrap_or(&[])

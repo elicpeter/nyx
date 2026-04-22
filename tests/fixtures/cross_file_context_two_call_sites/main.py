@@ -1,9 +1,10 @@
 """Two call sites to the same cross-file helper.
 
-Without CF-2, both calls go through the conservative `run_cmd` summary
-and the suite may report noise on the constant-string call.  With CF-2,
-the constant-string call is context-sensitively specialised and sees
-clean input, while the tainted call produces the expected finding.
+Without cross-file inline context sensitivity, both calls go through
+the conservative `run_cmd` summary and the suite may report noise on
+the constant-string call.  With it, the constant-string call is
+context-sensitively specialised and sees clean input, while the
+tainted call produces the expected finding.
 """
 
 import os

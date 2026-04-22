@@ -1,25 +1,26 @@
-//! Phase CF-6 integration tests: parameter-granularity points-to
-//! summaries carry alias information across file boundaries, closing
+//! Integration tests for parameter-granularity points-to summaries:
+//! they carry alias information across file boundaries, closing
 //! cross-file taint flows that travel through shared-object mutation
 //! rather than through return values.
 //!
-//! Three fixtures cover distinct structural shapes of the new summary
+//! Three fixtures cover distinct structural shapes of the summary
 //! channel:
 //!
 //! * `cross_file_alias_mutating_helper` (Java) — a void-returning
 //!   helper that stores its second argument into a field of its first
-//!   argument.  Without CF-6 the cross-file summary loses every taint
-//!   edge (void return, no container-op in pointsto.rs).  With CF-6 the
-//!   helper emits a `Param(1) → Param(0)` edge and the caller observes
-//!   the field write through the argument alias, producing a
-//!   Runtime.exec finding.
+//!   argument.  Without the points-to channel the cross-file summary
+//!   loses every taint edge (void return, no container-op in
+//!   pointsto.rs).  With it the helper emits a `Param(1) → Param(0)`
+//!   edge and the caller observes the field write through the argument
+//!   alias, producing a Runtime.exec finding.
 //!
 //! * `cross_file_alias_returned_alias` (JS) — a passthrough helper
 //!   whose return aliases its first parameter.  `param_to_return` with
-//!   `Identity` already covered the taint cap; CF-6 adds the
-//!   heap-identity alias `Param(0) → Return` so the caller threads the
-//!   points-to set through the call.  The existing shell-exec sink must
-//!   still fire — a regression guard on the return-alias channel.
+//!   `Identity` already covered the taint cap; the points-to channel
+//!   adds the heap-identity alias `Param(0) → Return` so the caller
+//!   threads the points-to set through the call.  The existing
+//!   shell-exec sink must still fire — a regression guard on the
+//!   return-alias channel.
 //!
 //! * `cross_file_alias_bounded_graph` (Python) — a helper with a 20-
 //!   edge alias graph that intentionally overflows `MAX_ALIAS_EDGES`.

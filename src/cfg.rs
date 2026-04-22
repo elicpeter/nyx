@@ -206,12 +206,12 @@ pub struct NodeInfo {
     /// `x.(io.Reader)` → `"io.Reader"`.  Used by type-flow constraint solving
     /// to refine the type environment at the SSA level.
     pub cast_target_type: Option<String>,
-    /// Arithmetic operator for binary expression assignments (Phase 17).
+    /// Arithmetic operator for binary expression assignments.
     /// Only set when the CFG node is a single binary expression with a
     /// clear one-to-one operator mapping. `None` for nested, compound,
     /// boolean, or ambiguous expressions.
     pub bin_op: Option<BinOp>,
-    /// Parsed literal operand from a binary expression (Phase 26).
+    /// Parsed literal operand from a binary expression.
     /// When `bin_op` is set and one operand is a numeric literal (the other
     /// being an identifier captured in `uses`), this holds the parsed value.
     /// Enables abstract-domain transfer even when the SSA instruction has
@@ -525,7 +525,7 @@ fn root_receiver_text(n: Node, lang: &str, code: &[u8]) -> Option<String> {
 ///
 /// Used when JS/Python `obj.method(x)` is classified as `Kind::CallFn` with a
 /// dotted function child: we want the leftmost segment (`request` in
-/// `request.args.get("q")`) as the structured receiver for Phase-10 type
+/// `request.args.get("q")`) as the structured receiver for type-qualified
 /// resolution.  Returns `None` when the chain does not resolve to a plain
 /// identifier (e.g. call expressions, subscripts, `this`/`self`, etc.).
 fn root_member_receiver(n: Node, code: &[u8]) -> Option<String> {
@@ -3113,7 +3113,7 @@ fn prefix_of_expression(node: Node, code: &[u8]) -> Option<String> {
     None
 }
 
-/// Extract the numeric literal operand from a binary expression (Phase 26).
+/// Extract the numeric literal operand from a binary expression.
 ///
 /// When a binary expression has one identifier operand (captured in `uses`)
 /// and one numeric literal operand, this returns the parsed literal value.
@@ -3948,7 +3948,7 @@ fn push_node<'a>(
     // 2. Kind::CallFn whose function child is a member_expression (JS/TS) or
     //    attribute (Python).  These grammars model `obj.method(x)` as a plain
     //    call_expression/call with a dotted-name function child.  Without this
-    //    branch the structured `receiver` stays `None` and Phase-10 type-qualified
+    //    branch the structured `receiver` stays `None` and type-qualified
     //    resolution loses its anchor.
     let receiver = if let Some(cn) = call_ast {
         match lookup(lang, cn.kind()) {
@@ -3968,7 +3968,7 @@ fn push_node<'a>(
                     // Complex receiver (chain / field access / nested call).
                     // Drill through member/field/call nodes to the leftmost
                     // plain identifier so var_stacks lookup resolves the SSA
-                    // value, which is what Phase-10 type-qualified resolution
+                    // value, which is what type-qualified resolution
                     // anchors on.  Falls back to `root_receiver_text` (which
                     // returns raw text like "conn.execute") only if drilling
                     // fails — preserving prior behavior for types we can't
@@ -7950,7 +7950,7 @@ pub(crate) fn export_summaries(
             propagating_params: local.propagating_params.clone(),
             propagates_taint: false,
             tainted_sink_params: local.tainted_sink_params.clone(),
-            // Phase 1 of primary sink-location attribution: legacy
+            // Primary sink-location attribution: the legacy
             // `export_summaries` runs without tree/bytes access, so
             // cannot resolve sink node spans to line/col/snippet.
             // `ParsedFile::export_summaries_with_root` is responsible

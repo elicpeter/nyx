@@ -112,10 +112,10 @@ pub struct SsaTaintState {
     /// abstract heap identity. Separate from `values` so container taint
     /// persists independently of the SSA value referencing the container.
     pub heap: HeapState,
-    /// Path constraint environment (Phase 15). `None` when constraint
-    /// solving is disabled (`analysis.engine.constraint_solving = false`).
+    /// Path constraint environment. `None` when constraint solving is
+    /// disabled (`analysis.engine.constraint_solving = false`).
     pub path_env: Option<constraint::PathEnv>,
-    /// Per-SSA-value abstract domain state (Phase 17). `None` when abstract
+    /// Per-SSA-value abstract domain state. `None` when abstract
     /// interpretation is disabled (`analysis.engine.abstract_interpretation
     /// = false`).
     pub abstract_state: Option<AbstractState>,
@@ -230,7 +230,7 @@ impl Lattice for SsaTaintState {
                 }
             }
         }
-        // Phase 17: abstract_state
+        // Abstract-state comparison
         match (&self.abstract_state, &other.abstract_state) {
             (None, Some(_)) => return false,
             (Some(a), Some(b)) if !a.leq(b) => return false,
@@ -466,8 +466,8 @@ pub(crate) struct InlineResult {
 /// in the `ArgTaintSig` component of the key.
 pub(crate) type InlineCache = HashMap<(FuncKey, ArgTaintSig), InlineResult>;
 
-/// Phase CF-5: drop every entry from an inline cache, marking the start
-/// of a new convergence epoch.
+/// Drop every entry from an inline cache, marking the start of a new
+/// convergence epoch.
 ///
 /// Cross-file SCC fixed-point iteration runs pass 2 repeatedly until the
 /// merged summaries stop changing.  Between iterations the callee-summary
@@ -481,14 +481,14 @@ pub(crate) type InlineCache = HashMap<(FuncKey, ArgTaintSig), InlineResult>;
 /// call is effectively a no-op plumbing hook.  Keeping the method (instead
 /// of relying on ambient re-construction) makes the lifecycle explicit for
 /// any future refactor that moves the cache up into the SCC orchestrator.
-#[allow(dead_code)] // CF-5 semantic hook; used by tests and future shared-cache refactor
+#[allow(dead_code)] // semantic hook; used by tests and future shared-cache refactor
 pub(crate) fn inline_cache_clear_epoch(cache: &mut InlineCache) {
     cache.clear();
 }
 
-/// Phase CF-5: set-equal fingerprint of an inline cache, used by the SCC
-/// orchestrator to detect when cross-file inline analysis has reached a
-/// fixed point alongside summary convergence.
+/// Set-equal fingerprint of an inline cache, used by the SCC orchestrator
+/// to detect when cross-file inline analysis has reached a fixed point
+/// alongside summary convergence.
 ///
 /// Returns a `HashMap` mapping each `(FuncKey, ArgTaintSig)` cache key to
 /// the return-value capability bits of its inline result.  `HashMap`
@@ -499,7 +499,7 @@ pub(crate) fn inline_cache_clear_epoch(cache: &mut InlineCache) {
 /// callers with identical caps (see the module-level note on origin
 /// attribution) and would cause the fingerprint to oscillate without
 /// reflecting a real precision change.
-#[allow(dead_code)] // CF-5 observability hook; used by tests and future shared-cache refactor
+#[allow(dead_code)] // observability hook; used by tests and future shared-cache refactor
 pub(crate) fn inline_cache_fingerprint(
     cache: &InlineCache,
 ) -> HashMap<(FuncKey, ArgTaintSig), u16> {
@@ -518,9 +518,9 @@ pub(crate) fn inline_cache_fingerprint(
 
 /// CFG node metadata embedded in cross-file callee bodies.
 ///
-/// ## Phase CF-3 (Option A) — why a full [`NodeInfo`] lives here
+/// ## Why a full [`NodeInfo`] lives here
 ///
-/// Earlier phases carried only the two fields the symex executor reads
+/// An earlier variant carried only the two fields the symex executor reads
 /// (`bin_op`, `labels`).  That was sufficient for symex but not for the taint
 /// engine, which reads ~20 fields off `cfg[inst.cfg_node]` across
 /// `transfer_inst`, `collect_block_events`, `compute_succ_states`, and helpers
@@ -545,8 +545,8 @@ pub struct CrossFileNodeMeta {
 /// ready for context-sensitive re-analysis with different argument taint.
 ///
 /// For intra-file use, `node_meta` is empty and the original CFG is used.
-/// For cross-file persistence (Phase 30), `node_meta` carries the minimal
-/// CFG metadata needed by the symex executor.
+/// For cross-file persistence, `node_meta` carries the minimal CFG
+/// metadata needed by the symex executor.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CalleeSsaBody {
     pub ssa: SsaBody,
@@ -765,13 +765,12 @@ pub struct SsaTaintTransfer<'a> {
     /// baseline-subtraction semantics; the findings pipeline flips this on
     /// to detect handler-style flows that have no registered caller.
     pub auto_seed_handler_params: bool,
-    /// Phase CF-1: Cross-file callee bodies sourced from
-    /// [`GlobalSummaries::bodies_iter`].  Populated in pass 2 so that a
-    /// follow-up phase (CF-2) can enable context-sensitive inline
-    /// re-analysis across file boundaries the same way `callee_bodies`
-    /// enables it intra-file.  This field is plumbing only in CF-1 — no
-    /// code path reads it yet.  `None` preserves pre-CF-1 behaviour for
-    /// unit tests and non-cross-file construction sites.
+    /// Cross-file callee bodies sourced from
+    /// [`GlobalSummaries::bodies_iter`].  Populated in pass 2 to enable
+    /// context-sensitive inline re-analysis across file boundaries the
+    /// same way `callee_bodies` enables it intra-file.  `None` preserves
+    /// non-cross-file behaviour for unit tests and non-cross-file
+    /// construction sites.
     pub cross_file_bodies: Option<&'a HashMap<FuncKey, CalleeSsaBody>>,
 }
 
@@ -826,7 +825,7 @@ fn run_ssa_taint_internal(
     let mut block_exit_states: Vec<Option<SsaTaintState>> = vec![None; num_blocks];
     block_states[ssa.entry.0 as usize] = Some(SsaTaintState::initial());
 
-    // Phase 15: Seed entry block's PathEnv from optimization results
+    // Seed entry block's PathEnv from optimization results
     if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
         if let Some(ref mut env) = entry_state.path_env {
             if let (Some(cv), Some(tf)) = (transfer.const_values, transfer.type_facts) {
@@ -835,7 +834,7 @@ fn run_ssa_taint_internal(
         }
     }
 
-    // Phase 17: Seed entry block's AbstractState from optimization results
+    // Seed entry block's AbstractState from optimization results
     if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
         if let Some(ref mut abs) = entry_state.abstract_state {
             if let Some(cv) = transfer.const_values {
@@ -879,7 +878,7 @@ fn run_ssa_taint_internal(
         }
     }
 
-    // Phase 17: Compute loop heads for widening
+    // Compute loop heads for widening
     let loop_heads: HashSet<usize> = back_edges
         .iter()
         .map(|(_, target)| target.0 as usize)
@@ -888,7 +887,7 @@ fn run_ssa_taint_internal(
     // Per-predecessor exit states for path-sensitive phi evaluation
     let mut pred_states: PredStates = HashMap::new();
 
-    // Phase 1: fixed-point iteration
+    // Fixed-point iteration
     let mut worklist: VecDeque<usize> = VecDeque::new();
     let mut in_worklist: HashSet<usize> = HashSet::new();
     worklist.push_back(ssa.entry.0 as usize);
@@ -953,7 +952,7 @@ fn run_ssa_taint_internal(
             let new_succ_state = match &block_states[succ_idx] {
                 Some(existing) => {
                     let mut joined = existing.join(&succ_state);
-                    // Phase 17: Widen abstract values at loop heads
+                    // Widen abstract values at loop heads
                     if loop_heads.contains(&succ_idx) {
                         if let (Some(new_abs), Some(old_abs)) =
                             (&joined.abstract_state, &existing.abstract_state)
@@ -1010,7 +1009,7 @@ fn run_ssa_taint_internal(
         }
     }
 
-    // Phase 2: single pass over converged states to collect events
+    // Single pass over converged states to collect events
     let mut events: Vec<SsaTaintEvent> = Vec::new();
 
     for bid in 0..num_blocks {
@@ -1267,7 +1266,7 @@ fn transfer_block(
                     continue;
                 }
 
-                // Phase 15: Skip predecessor operands from infeasible paths
+                // Skip predecessor operands from infeasible paths
                 if let Some(ps) = pred_states {
                     if let Some(pred_st) = ps.get(&(block_idx, pred_blk.0 as usize)) {
                         if pred_st.path_env.as_ref().is_some_and(|e| e.is_unsat()) {
@@ -1353,7 +1352,7 @@ fn transfer_block(
         }
     }
 
-    // Phase 17: Abstract value phi join (from predecessor exit states)
+    // Abstract value phi join (from predecessor exit states)
     if state.abstract_state.is_some() {
         for phi in &block.phis {
             if let SsaOp::Phi(ref operands) = phi.op {
@@ -1489,7 +1488,7 @@ fn compute_succ_states(
                     transfer.interner,
                 );
 
-                // Phase 15/16: Constraint refinement
+                // Constraint refinement
                 //
                 // `lower_condition` returns a ConditionExpr that represents the
                 // full semantic condition (it already applies `condition_negated`
@@ -1677,15 +1676,15 @@ fn build_arg_taint_sig(
 ///
 /// 1. **Intra-file** (`transfer.callee_bodies`): resolve the callee via
 ///    [`resolve_local_func_key`] against this file's local summaries and
-///    look up the body by canonical [`FuncKey`].  This is the original
-///    Phase 11 path.
-/// 2. **Cross-file** (Phase CF-2): if (1) misses but
+///    look up the body by canonical [`FuncKey`].  This is the intra-file
+///    context-sensitive path.
+/// 2. **Cross-file**: if (1) misses but
 ///    [`GlobalSummaries::resolve_callee`] resolves the call site to a
 ///    cross-file [`FuncKey`], look up the body in
 ///    `transfer.cross_file_bodies`.  Both in-memory and indexed-scan
 ///    bodies are usable here: the former arrives with `body_graph`
 ///    already set (pass 1), the latter has it rehydrated from
-///    `node_meta` via [`rebuild_body_graph`] at load time (Phase CF-3).
+///    `node_meta` via [`rebuild_body_graph`] at load time.
 ///
 /// The cache ([`InlineCache`]) is keyed by `(FuncKey, ArgTaintSig)`.
 /// `FuncKey` carries the callee's namespace, so cross-file and intra-file
@@ -1708,7 +1707,7 @@ fn inline_analyse_callee(
     let cache_ref = transfer.inline_cache?;
 
     // Resolve the call site to a canonical FuncKey and the body to inline.
-    // Step 1: intra-file (Phase 11).  Step 2: cross-file (Phase CF-2).
+    // Step 1: intra-file.  Step 2: cross-file.
     //
     // Without a resolved key we cannot inline safely — bare-name lookup could
     // pick the wrong same-name sibling (e.g. `A::process/1` vs `B::process/1`).
@@ -1736,7 +1735,7 @@ fn inline_analyse_callee(
     let (callee_key, callee_body) = if let (Some(k), Some(b)) = (intra_key, intra_body) {
         (k, b)
     } else if let Some(gs) = transfer.global_summaries {
-        // Phase CF-2: Cross-file fallback.  Build a structured query mirroring
+        // Cross-file fallback.  Build a structured query mirroring
         // resolve_callee_full (qualifier/receiver_var/caller_container) so that
         // qualified-first policy is preserved.
         let (namespace_qualifier, receiver_var) = split_qualifier(callee);
@@ -1768,7 +1767,7 @@ fn inline_analyse_callee(
             CalleeResolution::Resolved(key) => {
                 let xfile_bodies = transfer.cross_file_bodies?;
                 let body = xfile_bodies.get(&key)?;
-                // Phase CF-3: indexed-scan bodies deserialized from SQLite
+                // Indexed-scan bodies deserialized from SQLite
                 // arrive with `body_graph: None`, but the load path
                 // ([`rebuild_body_graph`] in `load_all_ssa_bodies`)
                 // synthesizes a proxy `Cfg` from `node_meta` so the taint
@@ -1843,7 +1842,7 @@ fn inline_analyse_callee(
             let mut combined_caps = Cap::empty();
             let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
-            // Phase CF-2 note: `populate_span` lazily fills
+            // Cross-file note: `populate_span` lazily fills
             // `source_span` from the *caller's* CFG before the origin
             // crosses into the callee.  The Param-op branch of
             // `transfer_inst` remaps `node` to the callee's own
@@ -2163,7 +2162,7 @@ fn transfer_inst(
 ) {
     let info = &cfg[inst.cfg_node];
 
-    // Phase 17 hardening: cross-file abstract return fact from callee resolution.
+    // Cross-file abstract return fact from callee resolution.
     // Set inside the Call arm, applied after transfer_abstract to override Top.
     let mut callee_return_abstract: Option<crate::abstract_interp::AbstractValue> = None;
 
@@ -2316,7 +2315,7 @@ fn transfer_inst(
             // analysis doesn't model cross-parameter container stores.
             let mut resolved_container_to_return: Vec<usize> = Vec::new();
             let mut resolved_container_store: Vec<(usize, usize)> = Vec::new();
-            // Phase CF-6: captured alongside container fields because the
+            // Captured alongside container fields because the
             // callee_summary gets moved when the main taint branch takes it
             // below.  We only need the points_to summary itself — clone it
             // out before the move so application can still read it.
@@ -2356,10 +2355,10 @@ fn transfer_inst(
                 resolved_container_store = resolved.param_to_container_store.clone();
                 resolved_points_to = resolved.points_to.clone();
 
-                // Phase 17 hardening: capture abstract return for post-transfer injection
+                // Capture abstract return for post-transfer injection
                 callee_return_abstract = resolved.return_abstract.clone();
 
-                // Phase CF-3: apply per-parameter abstract transfers.
+                // Apply per-parameter abstract transfers.
                 //
                 // For each (param_idx, transfer) in the callee's summary,
                 // apply the transfer to the caller's current abstract value
@@ -2368,7 +2367,7 @@ fn transfer_inst(
                 // valid over-approximation of the return), then `meet` with
                 // the baseline `return_abstract` (both facts must hold).
                 //
-                // Runs regardless of whether inline analysis (CF-2) already
+                // Runs regardless of whether inline analysis already
                 // resolved the call: inline re-analyses taint only; abstract
                 // values are not threaded into or out of the callee body on
                 // that path, so abstract transfer remains the summary-level
@@ -2479,7 +2478,7 @@ fn transfer_inst(
                     }
                 }
 
-                // Phase CF-4: per-parameter predicate-consistent transforms.
+                // Per-parameter predicate-consistent transforms.
                 //
                 // When the summary carries `param_return_paths`, apply a
                 // per-parameter effective sanitizer narrowed by the caller's
@@ -2824,7 +2823,7 @@ fn transfer_inst(
                 }
             }
 
-            // Phase CF-6: parameter-granularity points-to summary application.
+            // Parameter-granularity points-to summary application.
             //
             // Extends the container-store channel above (which catches
             // `arr.push(v)` / `map.set(k, v)`) to direct field writes like
@@ -2881,7 +2880,7 @@ fn transfer_inst(
                                 p2r.push(s as usize);
                             }
                             // Return → Param / Return → Return are not emitted
-                            // by the CF-6 analysis; ignore defensively.
+                            // by the points-to analysis; ignore defensively.
                             _ => {}
                         }
                     }
@@ -3235,7 +3234,7 @@ fn transfer_inst(
         }
     }
 
-    // Phase 15/16: Constraint propagation through instructions
+    // Constraint propagation through instructions
     if let Some(ref mut env) = state.path_env {
         match &inst.op {
             SsaOp::Assign(uses) if uses.len() == 1 => {
@@ -3245,7 +3244,7 @@ fn transfer_inst(
                     env.refine(inst.value, &src_fact);
                     env.assert_equal(inst.value, uses[0]);
                 }
-                // Phase 16: Cast/assertion type narrowing.
+                // Cast/assertion type narrowing.
                 //
                 // If this Assign's CFG node is a cast/type-assertion expression,
                 // narrow the destination value's type in PathEnv.
@@ -3314,12 +3313,12 @@ fn transfer_inst(
         }
     }
 
-    // Phase 17: Forward abstract value transfer
+    // Forward abstract value transfer
     if let Some(ref mut abs) = state.abstract_state {
         transfer_abstract(inst, cfg, abs);
     }
 
-    // Phase 17 hardening: cross-file abstract return injection.
+    // Cross-file abstract return injection.
     // Applied after transfer_abstract so summary-provided facts override the
     // default Top that transfer_abstract assigns to unknown callees.
     if let Some(ref abs_val) = callee_return_abstract {
@@ -3329,7 +3328,7 @@ fn transfer_inst(
     }
 }
 
-/// Phase 17: Compute abstract values for an SSA instruction.
+/// Compute abstract values for an SSA instruction.
 ///
 /// Propagates interval and string domain facts forward through constants,
 /// copies, binary arithmetic, and concatenation. Conservative (Top) for
@@ -3407,7 +3406,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
         }
 
         SsaOp::Assign(uses) if uses.len() == 1 => {
-            // Phase 26: single-use Assign with bin_op + literal operand.
+            // Single-use Assign with bin_op + literal operand.
             // When a binary expression like `x & 0x07` has one identifier use
             // and one numeric literal, the SSA sees only the identifier (1 use).
             // Use bin_op_const from the CFG node to reconstruct the full binary
@@ -3581,7 +3580,7 @@ fn strip_string_quotes(text: &str) -> String {
     }
 }
 
-/// Collect events from a block (Phase 2).
+/// Collect events from a block.
 fn collect_block_events(
     block: &SsaBlock,
     cfg: &Cfg,
@@ -3685,7 +3684,7 @@ fn collect_block_events(
         }
     }
 
-    // Phase 17: Replay abstract value phi join (from predecessor exit states).
+    // Replay abstract value phi join (from predecessor exit states).
     // Mirrors the same logic in transfer_block() — without this, abstract
     // values for phi-defined SSA values would be stale during sink suppression.
     if state.abstract_state.is_some() {
@@ -3840,7 +3839,7 @@ fn collect_block_events(
                                         source_kind,
                                         source_span: None,
                                     };
-                                    // Phase 2: pick callback-path sink sites.
+                                    // Pick callback-path sink sites.
                                     // The callback callee's `param_to_sink_sites`
                                     // drives attribution when available; cap-only
                                     // fallback yields `primary_sink_site = None`.
@@ -3876,7 +3875,7 @@ fn collect_block_events(
             continue;
         }
 
-        // Phase 16: Receiver type incompatibility check.
+        // Receiver type incompatibility check.
         // If the receiver's flow-sensitive type proves it cannot be the kind
         // of object the sink expects (e.g., Int receiver → not an HTTP response
         // sink), strip those sink caps.
@@ -3894,7 +3893,7 @@ fn collect_block_events(
             continue;
         }
 
-        // Phase 16: Go interface satisfaction check.
+        // Go interface satisfaction check.
         // For Go sinks that require http.ResponseWriter (e.g., fmt.Fprintf),
         // skip if the first argument's type is known to NOT satisfy the interface.
         if transfer.lang == Lang::Go {
@@ -3980,7 +3979,7 @@ fn collect_block_events(
             }
         }
 
-        // Phase 16: Path-sensitive type-safe sink filtering.
+        // Path-sensitive type-safe sink filtering.
         // Uses flow-sensitive type constraints from PathEnv (branch narrowing,
         // casts) to suppress sinks when all argument values are proven to have
         // non-injectable types (Int, Bool).
@@ -3992,7 +3991,7 @@ fn collect_block_events(
             }
         }
 
-        // Phase 17: Abstract-domain-aware sink suppression.
+        // Abstract-domain-aware sink suppression.
         // Includes SSRF prefix locking and dual-gate (type + interval) for SQL/FILE_IO.
         if let Some(ref abs) = state.abstract_state {
             if is_abstract_safe_for_sink(
@@ -4008,7 +4007,7 @@ fn collect_block_events(
                 continue;
             }
         }
-        // Phase 17: Call-site abstract suppression.
+        // Call-site abstract suppression.
         if let SsaOp::Call { ref args, .. } = inst.op {
             if let Some(ref abs) = state.abstract_state {
                 if is_call_abstract_safe(
@@ -4061,8 +4060,8 @@ fn collect_block_events(
                 .iter()
                 .any(|(val, _, _)| state.get(*val).is_some_and(|t| t.uses_summary));
 
-            // Phase 2: pick primary sink sites (if any) from the resolved
-            // callee summary.  Multi-site cases emit one event per matching
+            // Pick primary sink sites (if any) from the resolved callee
+            // summary.  Multi-site cases emit one event per matching
             // [`SinkSite`] so each downstream Finding carries one attribution.
             let primary_sites =
                 pick_primary_sink_sites(inst, &tainted, sink_caps, &sink_info.param_to_sink_sites);
@@ -4080,7 +4079,7 @@ fn collect_block_events(
     }
 }
 
-// ── Primary sink-site attribution (Phase 2) ─────────────────────────────
+// ── Primary sink-site attribution ───────────────────────────────────────
 
 /// Pick primary [`SinkSite`]s for a summary-based sink event in the main
 /// sink-detection path.
@@ -4722,8 +4721,8 @@ struct SinkInfo {
     /// Per-parameter [`SinkSite`] records carried from the callee summary,
     /// mirroring `param_to_sink` by parameter index.  Empty for label-based
     /// sinks and for cap-only summaries that do not retain source
-    /// coordinates.  Phase 2 uses this to attribute findings to the
-    /// dangerous callee-internal instruction.
+    /// coordinates.  Used to attribute findings to the dangerous
+    /// callee-internal instruction.
     param_to_sink_sites: Vec<(usize, SmallVec<[SinkSite; 1]>)>,
 }
 
@@ -5304,7 +5303,7 @@ fn resolve_type_qualified_labels(
         }
     }
 
-    // 2. Try flow-sensitive type from PathEnv (Phase 16)
+    // 2. Try flow-sensitive type from PathEnv
     if let Some(env) = path_env {
         for rv in &receiver_candidates {
             let types = env.get(*rv).types;
@@ -5440,7 +5439,7 @@ fn is_type_safe_for_sink(
     crate::ssa::type_facts::is_type_safe_for_sink(&used, sink_caps, type_facts)
 }
 
-// ── Phase 16: Centralized Type-Sink Compatibility Helpers ────────────────
+// ── Centralized Type-Sink Compatibility Helpers ──────────────────────────
 
 /// Check if a [`TypeKind`] is safe for a given sink capability.
 ///
@@ -5501,7 +5500,7 @@ fn is_path_type_safe_for_sink(inst: &SsaInst, sink_caps: Cap, env: &constraint::
     })
 }
 
-// ── Phase 17: Abstract-Domain Sink Suppression ─────────────────────────
+// ── Abstract-Domain Sink Suppression ────────────────────────────────────
 
 /// Check if abstract domain facts prove a sink is safe.
 ///
@@ -6137,7 +6136,7 @@ struct ResolvedSummary {
     param_to_container_store: Vec<(usize, usize)>,
     /// Inferred return type from cross-file SSA summary.
     return_type: Option<crate::ssa::type_facts::TypeKind>,
-    /// Abstract domain fact for the return value (Phase 17 hardening).
+    /// Abstract domain fact for the return value.
     return_abstract: Option<crate::abstract_interp::AbstractValue>,
     /// Internal source taint flows to a call of parameter N with these caps.
     source_to_callback: Vec<(usize, Cap)>,
@@ -6148,7 +6147,7 @@ struct ResolvedSummary {
     /// Caps that receiver taint reaches at internal sinks.
     #[allow(dead_code)]
     receiver_to_sink: Cap,
-    /// Phase CF-3: per-parameter abstract-domain transfer channels.
+    /// Per-parameter abstract-domain transfer channels.
     ///
     /// Populated only when the callee was resolved via an SSA summary
     /// (`convert_ssa_to_resolved`).  The label, local-summary, interop
@@ -6157,7 +6156,7 @@ struct ResolvedSummary {
     /// call site to synthesise an abstract return value from the
     /// caller's knowledge of each argument.
     abstract_transfer: Vec<(usize, crate::abstract_interp::AbstractTransfer)>,
-    /// Phase CF-4: per-parameter return-path decomposition.
+    /// Per-parameter return-path decomposition.
     ///
     /// Populated only when the callee was resolved via an SSA summary
     /// and the summary carries ≥2 distinct return-path predicate gates.
@@ -6171,7 +6170,7 @@ struct ResolvedSummary {
         usize,
         smallvec::SmallVec<[crate::summary::ssa_summary::ReturnPathTransform; 2]>,
     )>,
-    /// Phase CF-6: parameter-granularity points-to summary.
+    /// Parameter-granularity points-to summary.
     ///
     /// Populated only via `convert_ssa_to_resolved`; other resolution
     /// paths leave it empty (they do not derive alias edges).  Empty /
@@ -6473,9 +6472,9 @@ fn resolve_callee_full(
                             .iter()
                             .map(|&i| (i, fs.sink_caps()))
                             .collect(),
-                        // Phase 1/2: carry [`SinkSite`]s from the global
-                        // FuncSummary so cross-file findings can attribute
-                        // to the callee-internal dangerous instruction.
+                        // Carry [`SinkSite`]s from the global FuncSummary
+                        // so cross-file findings can attribute to the
+                        // callee-internal dangerous instruction.
                         param_to_sink_sites: fs.param_to_sink.clone(),
                         propagates_taint: fs.propagates_any(),
                         propagating_params: fs.propagating_params.clone(),
@@ -6541,8 +6540,8 @@ fn resolve_callee_full(
     None
 }
 
-/// Phase CF-4: compute the effective sanitizer bits that apply at the call
-/// site for a specific parameter, narrowed by the caller's predicate state.
+/// Compute the effective sanitizer bits that apply at the call site for a
+/// specific parameter, narrowed by the caller's predicate state.
 ///
 /// When the resolved summary carries `param_return_paths` for `param_idx`:
 /// filter the entries by predicate consistency with the caller's current
@@ -6884,7 +6883,7 @@ fn pick_tainted_operand_call(
 ///
 /// # Invariants enforced by debug_assert!
 ///
-/// The `primary_location` field carries Phase 2's primary sink-location
+/// The `primary_location` field carries the primary sink-location
 /// attribution.  One invariant must hold across every emitted Finding:
 ///
 /// * A populated `primary_location` implies the attribution came from a
@@ -7079,12 +7078,11 @@ pub fn extract_ssa_func_summary(
     let all_param_values: std::collections::HashSet<SsaValue> =
         param_info.iter().map(|(_, _, v)| *v).collect();
 
-    // Phase CF-4: per-return-block observation captured alongside the
-    // aggregate return caps.  Each entry records one return block's exit
-    // state — caps contributed on that path, path-predicate hash,
-    // known_true/false bits, and the return SSA value's abstract fact —
-    // so the per-param loop can emit one [`ReturnPathTransform`] per
-    // distinct predicate gate.
+    // Per-return-block observation captured alongside the aggregate return
+    // caps.  Each entry records one return block's exit state — caps
+    // contributed on that path, path-predicate hash, known_true/false bits,
+    // and the return SSA value's abstract fact — so the per-param loop can
+    // emit one [`ReturnPathTransform`] per distinct predicate gate.
     struct ReturnBlockObs {
         /// Caps at the return SSA value (or joined live values for
         /// implicit returns) on this block's exit.
@@ -7108,7 +7106,7 @@ pub fn extract_ssa_func_summary(
 
     // Helper: run a taint probe with a given global_seed and return
     // the aggregate return caps, sink events, joined return abstract,
-    // and the per-return-block observation list used by CF-4 to derive
+    // and the per-return-block observation list used to derive
     // per-return-path transforms.
     let run_probe = |seed: HashMap<BindingKey, VarTaint>| -> (
         Cap,
@@ -7154,7 +7152,7 @@ pub fn extract_ssa_func_summary(
         let mut total_param_caps = Cap::empty();
         // Extract abstract value of the return SSA value.
         let mut return_abstract: Option<crate::abstract_interp::AbstractValue> = None;
-        // Phase CF-4: per-return-block observations for per-path transforms.
+        // Per-return-block observations for per-path transforms.
         let mut per_return: Vec<ReturnBlockObs> = Vec::with_capacity(return_blocks.len());
         for &bid in &return_blocks {
             if let Some(entry) = &block_states[bid] {
@@ -7244,7 +7242,7 @@ pub fn extract_ssa_func_summary(
                     }
                 }
 
-                // Phase CF-4: derive a predicate hash + known-true/false
+                // Derive a predicate hash + known-true/false
                 // intersection across tracked variables at this return.
                 // The hash is stable across runs for a given predicate
                 // shape so call sites can compare paths deterministically.
@@ -7284,9 +7282,9 @@ pub fn extract_ssa_func_summary(
     let mut param_to_return = Vec::new();
     let mut param_to_sink: Vec<(usize, SmallVec<[SinkSite; 1]>)> = Vec::new();
     let mut param_to_sink_param = Vec::new();
-    // Phase CF-4: per-param return-path decomposition.  Populated only
-    // when the param has ≥2 distinct return-block predicate hashes —
-    // a single-return-path callee is already precise via `param_to_return`.
+    // Per-param return-path decomposition.  Populated only when the param
+    // has ≥2 distinct return-block predicate hashes — a single-return-path
+    // callee is already precise via `param_to_return`.
     let mut param_return_paths: Vec<(
         usize,
         SmallVec<[crate::summary::ssa_summary::ReturnPathTransform; 2]>,
@@ -7323,7 +7321,7 @@ pub fn extract_ssa_func_summary(
             param_to_return.push((idx, transform));
         }
 
-        // Phase CF-4: derive per-return-path decomposition.  For each
+        // Derive per-return-path decomposition.  For each
         // observed return block, derive a `ReturnPathTransform` mirroring
         // the aggregate logic (prefer derived caps, fall back to param
         // caps, strip baseline source caps).  Only emit when ≥2 distinct
@@ -7404,7 +7402,7 @@ pub fn extract_ssa_func_summary(
     let (param_container_to_return, param_to_container_store) =
         extract_container_flow_summary(ssa, lang, effective_params);
 
-    // Phase CF-6: parameter-granularity points-to summary.
+    // Parameter-granularity points-to summary.
     let points_to = crate::ssa::param_points_to::analyse_param_points_to(
         ssa,
         &param_info,
@@ -7456,7 +7454,7 @@ pub fn extract_ssa_func_summary(
         vec![]
     };
 
-    // Phase CF-3: per-parameter abstract-domain transfers.
+    // Per-parameter abstract-domain transfers.
     //
     // Derived structurally from the SSA body — no additional taint probes.
     // Three-step inference per parameter:
@@ -7489,8 +7487,8 @@ pub fn extract_ssa_func_summary(
     }
 }
 
-/// Phase CF-4: derive a deterministic predicate-hash + known-true/false
-/// intersection for a return-block exit state.
+/// Derive a deterministic predicate-hash + known-true/false intersection
+/// for a return-block exit state.
 ///
 /// The hash combines the sorted `(SymbolId, known_true, known_false)` tuples
 /// from the state's `predicates` list with the validated_must bitmask.  Two
@@ -7540,8 +7538,8 @@ fn summarise_return_predicates(state: &SsaTaintState) -> (u64, u8, u8) {
     (hash, known_true, known_false)
 }
 
-/// Phase CF-3: Derive per-parameter [`AbstractTransfer`] entries for a
-/// function's SSA body.
+/// Derive per-parameter [`AbstractTransfer`] entries for a function's SSA
+/// body.
 ///
 /// `return_abstract` is the callee's intrinsic baseline (from the no-seed
 /// probe).  When present, it describes a fact that holds for the return
@@ -7928,7 +7926,7 @@ pub(crate) fn extract_container_flow_summary(
     (ctr, container_store)
 }
 
-// ── Phase 30: populate_node_meta + CrossFileNodeMeta tests ───────────────
+// ── populate_node_meta + CrossFileNodeMeta tests ─────────────────────────
 
 #[cfg(test)]
 mod cross_file_tests {
@@ -8097,7 +8095,7 @@ mod cross_file_tests {
         assert!(meta.info.taint.labels.is_empty());
     }
 
-    // ── Phase CF-3: rebuild_body_graph ──────────────────────────────────
+    // ── rebuild_body_graph ──────────────────────────────────────────────
 
     #[test]
     fn rebuild_body_graph_synthesizes_proxy_cfg() {
@@ -8147,7 +8145,7 @@ mod cross_file_tests {
 
 #[cfg(test)]
 mod inline_cache_epoch_tests {
-    //! Phase CF-5 hooks for cross-file SCC joint fixed-point iteration.
+    //! Hooks for cross-file SCC joint fixed-point iteration.
     //!
     //! These do not exercise the full inline pipeline — they lock down the
     //! semantic contract of [`inline_cache_clear_epoch`] and
@@ -8604,10 +8602,10 @@ mod worklist_tests {
 
 #[cfg(test)]
 mod primary_sink_location_tests {
-    //! Regression guard for the primary sink-location attribution contract
-    //! introduced in phases 1-4: a [`SinkSite`] carried on an
-    //! [`SsaFuncSummary`] must propagate unchanged through summary
-    //! resolution → [`SsaTaintEvent::primary_sink_site`] →
+    //! Regression guard for the primary sink-location attribution contract:
+    //! a [`SinkSite`] carried on an [`SsaFuncSummary`] must propagate
+    //! unchanged through summary resolution →
+    //! [`SsaTaintEvent::primary_sink_site`] →
     //! [`crate::taint::Finding::primary_location`].
     //!
     //! The test is deliberately low-level — it wires up synthetic SSA and

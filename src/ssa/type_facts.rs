@@ -19,7 +19,7 @@ pub enum TypeKind {
     Array,
     Null,
     Unknown,
-    // Security-relevant abstract types (Phase 10)
+    // Security-relevant abstract types.
     HttpResponse,
     DatabaseConnection,
     FileHandle,
@@ -574,14 +574,14 @@ static JAVA_HIERARCHY: &[(&str, &[&str])] = &[
     ("HashMap", &["Map"]),
     ("StringBuilder", &["CharSequence"]),
     ("StringBuffer", &["CharSequence"]),
-    // Framework types (Phase 10 hardening)
+    // Framework types.
     ("OkHttpClient", &["HttpClient"]),
     ("WebClient", &["HttpClient"]),
     ("RestTemplate", &["HttpClient"]),
     ("MongoClient", &["DatabaseConnection"]),
     ("RedisTemplate", &["DatabaseConnection"]),
     ("JmsTemplate", &["DatabaseConnection"]),
-    // Phase 16 hardening — Spring, Servlet, I/O
+    // Spring, Servlet, and I/O framework types.
     ("ResponseEntity", &["HttpResponse"]),
     (
         "HttpServletRequestWrapper",
@@ -653,7 +653,7 @@ impl GoInterfaceTable {
             "io.ReadCloser" | "ReadCloser" => {
                 matches!(kind, TypeKind::FileHandle | TypeKind::HttpResponse)
             }
-            // Phase 16 hardening — database and extended I/O interfaces
+            // Database and extended I/O interfaces.
             "sql.DB" | "sql.Conn" | "sql.Tx" | "DB" => {
                 matches!(kind, TypeKind::DatabaseConnection)
             }
@@ -692,7 +692,7 @@ impl GoInterfaceTable {
                     | TypeKind::Url
                     | TypeKind::HttpClient
             ),
-            // Phase 16 hardening — database and extended I/O interfaces
+            // Database and extended I/O interfaces.
             "sql.DB" | "sql.Conn" | "sql.Tx" | "DB" => matches!(
                 kind,
                 TypeKind::Int
@@ -1008,7 +1008,7 @@ mod tests {
         ));
     }
 
-    // ── Phase 10 hardening: constructor_type() expansions ────────────────
+    // ── constructor_type() expansions ────────────────────────────────────
 
     #[test]
     fn constructor_type_php() {
@@ -1300,7 +1300,7 @@ mod tests {
         ));
     }
 
-    // ── Phase 16: Hierarchy expansion ──────────────────────────────────
+    // ── Hierarchy expansion ────────────────────────────────────────────
 
     #[test]
     fn java_hierarchy_resolve_response_entity() {
@@ -1337,7 +1337,7 @@ mod tests {
         ));
     }
 
-    // ── Phase 16: Go interface expansion ────────────────────────────────
+    // ── Go interface expansion ──────────────────────────────────────────
 
     #[test]
     fn go_interface_sql_db_definitely_not_response() {

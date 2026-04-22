@@ -624,10 +624,10 @@ fn cross_file_sink_resolved_via_global_summaries() {
 
 #[test]
 fn cross_file_sink_finding_carries_primary_location() {
-    // Phase 2 of primary sink-location attribution: when a callee summary
-    // carries a [`SinkSite`] with resolved coordinates, the emitted Finding
-    // must expose those coordinates via `primary_location`.  This guards
-    // the event→finding plumbing independent of any CFG/label changes.
+    // Primary sink-location attribution: when a callee summary carries a
+    // [`SinkSite`] with resolved coordinates, the emitted Finding must
+    // expose those coordinates via `primary_location`.  This guards the
+    // event→finding plumbing independent of any CFG/label changes.
     use crate::summary::{FuncSummary, SinkSite};
     use smallvec::smallvec;
 
@@ -3020,7 +3020,7 @@ fn c_curl_handle_no_taint() {
     );
 }
 
-// ── Per-argument propagation tests (Phase 10) ────────────────────────────
+// ── Per-argument propagation tests ───────────────────────────────────────
 
 #[test]
 fn per_arg_propagation_tainted_param_propagates() {
@@ -4463,7 +4463,7 @@ fn ssa_interproc_container_store_summary() {
     );
 }
 
-// ── Phase 5.2: Loop Induction Variable Optimization ──────────────────────
+// ── Loop Induction Variable Optimization ─────────────────────────────────
 
 #[test]
 fn ssa_induction_var_no_taint() {
@@ -4528,7 +4528,7 @@ fn ssa_taint_through_loop_still_works() {
     );
 }
 
-// ── Phase 5.3: Enhanced Condition Predicate Classification ───────────────
+// ── Enhanced Condition Predicate Classification ──────────────────────────
 
 #[test]
 fn ssa_validation_targets_specific_var() {
@@ -4575,7 +4575,7 @@ fn ssa_method_validation_target() {
     assert_eq!(target.as_deref(), Some("x"));
 }
 
-// ── Phase 5.1: Path Sensitivity via Phi Structure ────────────────────────
+// ── Path Sensitivity via Phi Structure ───────────────────────────────────
 
 #[test]
 fn ssa_phi_path_sensitive_both_branches_validated() {
@@ -4639,7 +4639,7 @@ fn ssa_phi_path_sensitive_one_branch_not_validated() {
     );
 }
 
-// ── Phase 9: Cross-language reassignment kill verification ──────────────
+// ── Cross-language reassignment kill verification ───────────────────────
 
 #[test]
 fn ssa_reassignment_kills_taint_js() {
@@ -4800,7 +4800,7 @@ fn ssa_reassignment_kills_taint_cpp() {
     );
 }
 
-// ── Phase 9: Compound assignment preserves taint ────────────────────────
+// ── Compound assignment preserves taint ─────────────────────────────────
 
 #[test]
 fn ssa_compound_preserves_taint_js() {
@@ -4878,7 +4878,7 @@ fn ssa_compound_preserves_taint_java() {
     );
 }
 
-// ── Phase 9: PHI merge preserves taint on non-reassigned path ───────────
+// ── PHI merge preserves taint on non-reassigned path ────────────────────
 
 #[test]
 fn ssa_phi_preserves_taint_on_non_reassigned_path_js() {
@@ -4947,7 +4947,7 @@ fn abstract_ssrf_prefix_linear_suppression() {
     );
 }
 
-/// Regression test for Phase 17B: abstract phi replay in collect_block_events.
+/// Regression test for abstract phi replay in collect_block_events.
 ///
 /// Two predecessor blocks produce string concat values with different safe
 /// prefixes ("https://api.example.com/users/" and "https://api.example.com/admins/").

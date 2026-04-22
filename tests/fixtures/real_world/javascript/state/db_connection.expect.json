@@ -19,7 +19,7 @@
         11
       ],
       "evidence_contains": [],
-      "notes": "mysql.createConnection without conn.end(); Phase 13 added mysql.createConnection acquire and .end release"
+      "notes": "mysql.createConnection without conn.end(); resource-pair rules include mysql.createConnection acquire and .end release"
     }
   ]
 }

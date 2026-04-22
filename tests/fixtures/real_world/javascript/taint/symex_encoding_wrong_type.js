@@ -4,7 +4,7 @@
 // client.query is a Sink(Cap::SQL_QUERY). URL encoding does NOT protect
 // against SQL injection.
 //
-// Phase 28: symex should model the encoding structurally and produce a
+// Symex should model the encoding structurally and produce a
 // heuristic mismatch note in the witness.
 
 var express = require('express');

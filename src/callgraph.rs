@@ -405,7 +405,7 @@ pub fn analyse(cg: &CallGraph) -> CallGraphAnalysis {
 ///
 /// `has_mutual_recursion` triggers the SCC fixed-point loop in
 /// [`crate::commands::scan::run_topo_batches`].  `cross_file` is a tighter
-/// signal used by Phase CF-5 joint fixed-point convergence: it implies the
+/// signal used by joint fixed-point convergence: it implies the
 /// recursion involves at least one cross-file call edge, so the inline
 /// cache and per-iteration findings need joint convergence — not just
 /// summary convergence.
@@ -415,7 +415,7 @@ pub struct FileBatch<'a> {
     /// True when at least one SCC contributing to this batch has nodes
     /// in more than one distinct file (namespace).  When `true`, the
     /// SCC iteration loop should consult the cross-file inline cache
-    /// fingerprint as part of its convergence check (Phase CF-5).
+    /// fingerprint as part of its convergence check.
     ///
     /// `cross_file` ⊆ `has_mutual_recursion`: a cross-file SCC must be
     /// recursive (else it would topo-sort linearly across files and not
@@ -425,7 +425,7 @@ pub struct FileBatch<'a> {
 
 /// Returns `true` when the given SCC has nodes belonging to more than one
 /// distinct namespace (file).  Used to flag cross-file SCCs that need the
-/// Phase CF-5 joint fixed-point treatment.
+/// cross-file joint fixed-point treatment.
 ///
 /// Single-node SCCs always return `false`.  Multi-node SCCs whose nodes
 /// all belong to the same namespace return `false`.
@@ -463,7 +463,7 @@ pub fn scc_file_batches_with_metadata<'a>(
 
     // 2. Build file relative-path → (min topo index, has_mutual_recursion, cross_file).
     //    `cross_file` is set whenever the file participates in an SCC whose
-    //    nodes span more than one namespace — the Phase CF-5 signal.
+    //    nodes span more than one namespace — the cross-file signal.
     let mut file_topo: HashMap<&str, (usize, bool, bool)> = HashMap::new();
     for (topo_pos, &scc_idx) in analysis.topo_scc_callee_first.iter().enumerate() {
         let scc_recursive = analysis.sccs[scc_idx].len() > 1;
@@ -1308,7 +1308,7 @@ mod tests {
         assert!(cg.unresolved_ambiguous.is_empty());
     }
 
-    // ── structured-metadata disambiguation (Phase: callee metadata) ──────
+    // ── structured-metadata disambiguation (callee metadata) ─────────────
 
     /// Helper: build a summary whose callees carry structured CalleeSite
     /// metadata — used by the tests below to exercise arity / receiver /

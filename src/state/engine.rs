@@ -44,7 +44,7 @@ pub trait Transfer<S: Lattice> {
 pub struct DataflowResult<S, E> {
     /// Converged state at the entry of each node.
     pub states: HashMap<NodeIndex, S>,
-    /// Events emitted during Phase 2 transfer over converged states.
+    /// Events emitted during the second pass over converged states.
     pub events: Vec<E>,
     /// Whether the analysis converged (false if budget was hit).
     #[allow(dead_code)]
@@ -53,9 +53,9 @@ pub struct DataflowResult<S, E> {
 
 /// Run a forward worklist dataflow analysis over the CFG.
 ///
-/// Two-phase design:
-/// - Phase 1: fixed-point iteration to converge states (no event collection).
-/// - Phase 2: single pass over converged states to collect events.
+/// Two-pass design:
+/// - First pass: fixed-point iteration to converge states (no event collection).
+/// - Second pass: single pass over converged states to collect events.
 ///
 /// Termination is guaranteed by lattice finiteness + iteration budget.
 pub fn run_forward<S: Lattice, T: Transfer<S>>(
@@ -70,7 +70,7 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
     // Initialize entry node
     states.insert(entry, initial);
 
-    // ── Phase 1: fixed-point iteration (compute converged states) ─────
+    // ── First pass: fixed-point iteration (compute converged states) ──
     let _phase1_span = tracing::debug_span!("state_engine_phase1").entered();
     let mut worklist: VecDeque<NodeIndex> = VecDeque::new();
     let mut in_worklist: HashSet<NodeIndex> = HashSet::new();
@@ -144,7 +144,7 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
     tracing::debug!(iterations, converged, "state_engine_phase1 complete");
     drop(_phase1_span);
 
-    // ── Phase 2: single pass over converged states to collect events ──
+    // ── Second pass: single pass over converged states to collect events ──
     let _phase2_span = tracing::debug_span!("state_engine_phase2").entered();
     let mut events: Vec<T::Event> = Vec::new();
     let mut seen_edges: std::collections::HashSet<(NodeIndex, NodeIndex)> =
@@ -167,7 +167,7 @@ pub fn run_forward<S: Lattice, T: Transfer<S>>(
         }
 
         for &(edge_kind, target) in &edges {
-            // Same redundant-Seq-edge skip as Phase 1.
+            // Same redundant-Seq-edge skip as the first pass.
             if matches!(edge_kind, EdgeKind::Seq)
                 && edges
                     .iter()

@@ -469,7 +469,7 @@ fn java_twr_no_false_leak() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// (8b-2) Java constructor callee fix (Phase 8)
+// (8b-2) Java constructor callee fix
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -689,7 +689,7 @@ fn php_fopen_close() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// (12b) PHP OOP constructor fix (Phase 8)
+// (12b) PHP OOP constructor fix
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -763,7 +763,7 @@ fn ts_stream_use_after_destroy() {
 fn variable_shadowing_known_limitation() {
     // Inner-scope fclose(f) masks outer-scope f within the same function.
     // Known limitation: SymbolInterner scopes by enclosing function, not
-    // lexical block.  Block-level shadowing is out of scope for Phase 11.
+    // lexical block.  Block-level shadowing is out of scope.
     assert_no_state_findings("variable_shadowing.c");
 }
 
@@ -861,7 +861,7 @@ fn loop_reopen_clean() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// (16) Phase 13: Expanded resource pairs
+// (16) Expanded resource pairs
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -930,7 +930,7 @@ fn ruby_tempfile_leak() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// (17) Phase 13: Expanded auth detection
+// (17) Expanded auth detection
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]

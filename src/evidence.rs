@@ -395,6 +395,19 @@ fn compute_taint_confidence(diag: &Diag) -> Confidence {
             }
             Verdict::Inconclusive | Verdict::NotAttempted => {}
         }
+
+        // Backwards-driven corroboration / infeasibility.  We
+        // deliberately use a smaller magnitude than the symex verdict so
+        // symex (which reasons about concrete payloads) stays the stronger
+        // signal; backwards is a structural agreement check.
+        use crate::taint::backwards::{NOTE_BUDGET, NOTE_CONFIRMED, NOTE_INFEASIBLE};
+        if sv.cutoff_notes.iter().any(|n| n == NOTE_CONFIRMED) {
+            score += 1;
+        }
+        if sv.cutoff_notes.iter().any(|n| n == NOTE_INFEASIBLE) {
+            score -= 3;
+        }
+        let _ = NOTE_BUDGET;
     }
 
     match score {
@@ -611,6 +624,26 @@ pub fn compute_confidence_limiters(diag: &Diag) -> Vec<String> {
         if sv.verdict == Verdict::Infeasible {
             limiters.push("Symbolic analysis proved this path is infeasible".into());
         }
+    }
+
+    // Demand-driven backwards analysis notes (stored on
+    // `symbolic.cutoff_notes` so the evidence pipeline already plumbs
+    // them).  When the backwards walk proved the flow infeasible or ran
+    // out of budget, surface a user-readable limiter.
+    if let Some(ref sv) = ev.symbolic {
+        use crate::taint::backwards::{NOTE_BUDGET, NOTE_CONFIRMED, NOTE_INFEASIBLE};
+        if sv.cutoff_notes.iter().any(|n| n == NOTE_INFEASIBLE) {
+            limiters.push(
+                "Backwards demand-driven analysis proved this flow infeasible".into(),
+            );
+        } else if sv.cutoff_notes.iter().any(|n| n == NOTE_BUDGET) {
+            limiters.push(
+                "Backwards demand-driven analysis exceeded its budget (verdict not reached)".into(),
+            );
+        }
+        // Confirmation is *not* a limiter — it is a positive signal.  The
+        // taint-confidence scorer picks it up separately.
+        let _ = NOTE_CONFIRMED;
     }
 
     limiters

@@ -1,4 +1,4 @@
-//! Loop analysis for the symbolic executor (Phase 20).
+//! Loop analysis for the symbolic executor.
 //!
 //! Detects back edges, computes natural loop bodies, identifies induction
 //! variables, and determines loop exit successors. All analysis is computed

@@ -56,16 +56,24 @@ impl Default for SymexOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AnalysisOptions {
-    /// Path-constraint solving (Phase 15).  Prunes infeasible paths from the
-    /// taint worklist and records unsat contexts in findings.
+    /// Path-constraint solving.  Prunes infeasible paths from the taint
+    /// worklist and records unsat contexts in findings.
     pub constraint_solving: bool,
-    /// Abstract interpretation (Phase 17): interval/string/bit domains carried
-    /// through the SSA worklist and used to suppress provably safe sinks.
+    /// Abstract interpretation: interval/string/bit domains carried through
+    /// the SSA worklist and used to suppress provably safe sinks.
     pub abstract_interpretation: bool,
-    /// k=1 context-sensitive inlining for intra-file callees (Phase 11).
+    /// k=1 context-sensitive inlining for intra-file callees.
     pub context_sensitive: bool,
-    /// Symbolic-execution pipeline (Phase 18+).
+    /// Symbolic-execution pipeline.
     pub symex: SymexOptions,
+    /// Demand-driven backwards taint analysis from sinks.
+    ///
+    /// When enabled, after forward pass 2 completes, a backwards walk runs
+    /// from each sink's tainted SSA operands to corroborate or rule out the
+    /// forward finding.  Corroborated findings get a `backwards-confirmed`
+    /// note; flows the backward walk proves infeasible get a
+    /// `backwards-infeasible` note that caps confidence.  Defaults off.
+    pub backwards_analysis: bool,
     /// Per-file tree-sitter parse timeout in milliseconds.  `0` disables the
     /// cap entirely (not recommended outside of controlled benchmarks).
     pub parse_timeout_ms: u64,
@@ -78,6 +86,7 @@ impl Default for AnalysisOptions {
             abstract_interpretation: true,
             context_sensitive: true,
             symex: SymexOptions::default(),
+            backwards_analysis: false,
             parse_timeout_ms: DEFAULT_PARSE_TIMEOUT_MS,
         }
     }
@@ -114,6 +123,7 @@ pub fn current() -> AnalysisOptions {
             interprocedural: env_bool_default("NYX_SYMEX_INTERPROC", true),
             smt: env_bool_default("NYX_SMT", true),
         },
+        backwards_analysis: env_bool_default("NYX_BACKWARDS", false),
         parse_timeout_ms: env_u64_default("NYX_PARSE_TIMEOUT_MS", DEFAULT_PARSE_TIMEOUT_MS),
     }
 }
@@ -146,6 +156,7 @@ mod tests {
         assert!(opts.symex.cross_file);
         assert!(opts.symex.interprocedural);
         assert!(opts.symex.smt);
+        assert!(!opts.backwards_analysis, "backwards analysis defaults off");
         assert_eq!(opts.parse_timeout_ms, DEFAULT_PARSE_TIMEOUT_MS);
     }
 
@@ -161,6 +172,7 @@ mod tests {
                 interprocedural: true,
                 smt: false,
             },
+            backwards_analysis: true,
             parse_timeout_ms: 5_000,
         };
         let s = toml::to_string(&opts).unwrap();

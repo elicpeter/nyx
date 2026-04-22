@@ -75,7 +75,7 @@ pub static RULES: &[LabelRule] = &[
             "reqwest::Client.head",
             "reqwest::Client.patch",
             "reqwest::Client.request",
-            // Phase 10 type-qualified (receiver typed as HttpClient)
+            // Type-qualified (receiver typed as HttpClient)
             "HttpClient.get",
             "HttpClient.post",
             "HttpClient.put",
@@ -102,7 +102,7 @@ pub static RULES: &[LabelRule] = &[
             "postgres::Client.execute",
             "postgres::Client.query",
             "postgres::Client.prepare",
-            // Phase 10 type-qualified (receiver typed as DatabaseConnection)
+            // Type-qualified (receiver typed as DatabaseConnection)
             "DatabaseConnection.execute",
             "DatabaseConnection.query",
             "DatabaseConnection.query_row",

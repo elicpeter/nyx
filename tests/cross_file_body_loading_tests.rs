@@ -1,12 +1,12 @@
-//! Phase CF-1 smoke test: cross-file SSA bodies load into
+//! Smoke test: cross-file SSA bodies load into
 //! [`GlobalSummaries::bodies_by_key`] from the pass-1 fused pipeline.
 //!
-//! CF-1 is pure plumbing: the taint engine carries a new
-//! `cross_file_bodies` field on `SsaTaintTransfer`, but no code path
-//! reads it yet (CF-2 will).  This test guards the *availability*
-//! invariant — if pass 1 stops populating `bodies_by_key`, CF-2 would
-//! silently fall back to summary resolution even when cross-file bodies
-//! could have given context-sensitive precision.
+//! The body-loading path is pure plumbing: the taint engine carries a
+//! `cross_file_bodies` field on `SsaTaintTransfer` that the cross-file
+//! inline path consumes.  This test guards the *availability*
+//! invariant — if pass 1 stops populating `bodies_by_key`, the inline
+//! path would silently fall back to summary resolution even when
+//! cross-file bodies could have given context-sensitive precision.
 //!
 //! Fixture shape: `a.py` defines `helper(token)`, `b.py` calls it.  The
 //! test runs pass-1 extraction on both files, merges the results into a
@@ -96,9 +96,9 @@ fn cross_file_body_loading_smoke_python_two_files() {
     let cfg = test_config();
     let gs = pass1(root, &[a_py.clone(), b_py.clone()], &cfg);
 
-    // Availability: the accessor must expose a non-empty map so CF-2's
-    // consumer (`SsaTaintTransfer::cross_file_bodies`) has something to
-    // consult on a cross-file call.
+    // Availability: the accessor must expose a non-empty map so the
+    // inline consumer (`SsaTaintTransfer::cross_file_bodies`) has
+    // something to consult on a cross-file call.
     assert!(
         gs.bodies_len() >= 1,
         "pass 1 must populate at least one cross-file SSA body for a two-file fixture; \
@@ -135,7 +135,8 @@ fn cross_file_body_loading_smoke_python_two_files() {
 
     // Quick sanity on the SSA shape — an eligible body must have at
     // least one block.  Zero blocks would mean we stored an empty stub,
-    // which would let CF-2 silently do nothing on every inline attempt.
+    // which would let the inline path silently do nothing on every
+    // inline attempt.
     assert!(
         !body.ssa.blocks.is_empty(),
         "loaded body must carry a non-empty SSA graph"
@@ -145,10 +146,10 @@ fn cross_file_body_loading_smoke_python_two_files() {
 #[test]
 fn cross_file_body_loading_empty_without_callees() {
     // A single file with no inter-procedural flow is still expected to
-    // produce a body for its one function — that's what CF-1 enables.
-    // The *empty* case this test guards is "bodies_by_key returns None
-    // when no bodies are loaded," which keeps the threaded-through
-    // `Option` explicit for CF-2 consumers.
+    // produce a body for its one function — that's what body loading
+    // enables.  The *empty* case this test guards is "bodies_by_key
+    // returns None when no bodies are loaded," which keeps the
+    // threaded-through `Option` explicit for inline consumers.
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path();
 

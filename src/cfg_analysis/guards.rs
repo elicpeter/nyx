@@ -730,7 +730,7 @@ impl CfgAnalysis for UnguardedSink {
             // are proven to carry non-injectable types (e.g. integers parsed
             // from a raw source), the arguments cannot form a payload for
             // SHELL/SQL/FILE sinks.  Skip the structural finding — the taint
-            // engine already covers the source→sink flow via Phase 10 type
+            // engine already covers the source→sink flow via type-aware
             // suppression.  Unknown-typed or mixed operands fall through.
             if !has_taint && sink_args_typed_safe(ctx, *sink, sink_caps) {
                 continue;

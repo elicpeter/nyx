@@ -86,7 +86,7 @@ static COMMON_AUTH: &[AuthRule] = &[AuthRule {
         "check_auth",
         "verify_token",
         "validate_token",
-        // Phase 13 additions
+        // Additional patterns
         "ensureAuthenticated",
         "ensureAuth",
         "requireAuth",
@@ -109,7 +109,7 @@ static GO_AUTH: &[AuthRule] = &[AuthRule {
         "validate_token",
         "middleware.auth",
         "auth.required",
-        // Phase 13 additions
+        // Additional patterns
         "ensureAuthenticated",
         "ensureAuth",
         "requireAuth",
@@ -134,7 +134,7 @@ static JAVA_AUTH: &[AuthRule] = &[AuthRule {
         "checkPermission",
         "hasAuthority",
         "hasRole",
-        // Phase 13 additions
+        // Additional patterns
         "ensureAuthenticated",
         "ensureAuth",
         "requireAuth",
@@ -163,7 +163,7 @@ static JS_AUTH: &[AuthRule] = &[AuthRule {
         "check_auth",
         "verify_token",
         "validate_token",
-        // Phase 13: JS/TS middleware & JWT
+        // JS/TS middleware & JWT
         "ensureAuthenticated",
         "ensureAuth",
         "requireAuth",
@@ -197,7 +197,7 @@ static PYTHON_AUTH: &[AuthRule] = &[AuthRule {
         "check_auth",
         "verify_token",
         "validate_token",
-        // Phase 13: Python-specific
+        // Python-specific
         "ensureAuthenticated",
         "ensureAuth",
         "requireAuth",
@@ -442,7 +442,7 @@ static GO_RESOURCES: &[ResourcePair] = &[
         resource_name: "mutex",
         use_patterns: &[],
     },
-    // Phase 13 additions
+    // Additional patterns
     ResourcePair {
         acquire: &["sql.Open"],
         release: &[".Close"],
@@ -502,7 +502,7 @@ static JAVA_RESOURCES: &[ResourcePair] = &[
         resource_name: "socket",
         use_patterns: &[".getInputStream", ".getOutputStream", ".connect"],
     },
-    // Phase 13 additions
+    // Additional patterns
     ResourcePair {
         acquire: &["prepareStatement"],
         release: &[".close"],
@@ -576,7 +576,7 @@ static PYTHON_RESOURCES: &[ResourcePair] = &[
         resource_name: "mutex",
         use_patterns: &[],
     },
-    // Phase 13 additions
+    // Additional patterns
     ResourcePair {
         acquire: &["urllib.request.urlopen", "urlopen"],
         release: &[".close"],
@@ -668,7 +668,7 @@ static RUBY_RESOURCES: &[ResourcePair] = &[
         resource_name: "db connection",
         use_patterns: &[".exec", ".query", ".exec_params", ".prepare", ".execute"],
     },
-    // Phase 13 additions
+    // Additional patterns
     ResourcePair {
         acquire: &["Net::HTTP.start"],
         release: &[".finish"],
@@ -707,7 +707,7 @@ static PHP_RESOURCES: &[ResourcePair] = &[
         resource_name: "curl handle",
         use_patterns: &["curl_exec", "curl_getinfo", "curl_setopt"],
     },
-    // Phase 13 additions
+    // Additional patterns
     ResourcePair {
         acquire: &["pg_connect"],
         release: &["pg_close"],
@@ -752,7 +752,7 @@ static JS_RESOURCES: &[ResourcePair] = &[
         resource_name: "stream",
         use_patterns: &[".pipe", ".resume", ".write", ".read", ".push"],
     },
-    // Phase 13 additions
+    // Additional patterns
     ResourcePair {
         acquire: &["net.createConnection", "net.connect"],
         release: &[".end", ".destroy"],

@@ -241,6 +241,13 @@ pub enum Commands {
         #[arg(long, overrides_with = "smt")]
         no_smt: bool,
 
+        /// Enable demand-driven backwards analysis (default: off)
+        #[arg(long, overrides_with = "no_backwards_analysis")]
+        backwards_analysis: bool,
+        /// Disable demand-driven backwards analysis
+        #[arg(long, overrides_with = "backwards_analysis")]
+        no_backwards_analysis: bool,
+
         /// Override per-file tree-sitter parse timeout (ms). 0 disables the cap.
         #[arg(long)]
         parse_timeout_ms: Option<u64>,

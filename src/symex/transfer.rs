@@ -3,7 +3,7 @@
 //! Walks SSA blocks and builds `SymbolicValue` expression trees for each
 //! defined SSA value, while eagerly propagating taint through the root-set.
 //!
-//! Phase 18c adds cross-file symbolic summary modeling: when a callee has an
+//! Cross-file symbolic summary modeling: when a callee has an
 //! `SsaFuncSummary` available via `GlobalSummaries`, the Call instruction's
 //! return value is modeled symbolically instead of being treated as opaque.
 #![allow(
@@ -40,16 +40,16 @@ pub struct SymexSummaryCtx<'a> {
     pub global_summaries: &'a GlobalSummaries,
     pub lang: Lang,
     pub namespace: &'a str,
-    /// Phase 31: Type facts for type-qualified symbolic summary resolution.
+    /// Type facts for type-qualified symbolic summary resolution.
     /// When present, receiver types guide callee name qualification.
     pub type_facts: Option<&'a TypeFactResult>,
 }
 
-/// Context for field-sensitive heap operations during transfer (Phase 21/29).
+/// Context for field-sensitive heap operations during transfer.
 ///
 /// When provided, Assign and Call instructions attempt store/load operations
 /// through the symbolic heap using allocation-site identities from points-to.
-/// Phase 29: `const_values` enables per-index array slot resolution.
+/// `const_values` enables per-index array slot resolution.
 pub struct SymexHeapCtx<'a> {
     pub points_to: &'a PointsToResult,
     pub ssa: &'a SsaBody,
@@ -108,7 +108,7 @@ pub fn transfer_inst(
 
         SsaOp::CatchParam => {
             if let Some(exc_val) = state.take_exception_context() {
-                // Phase 25: on an exception path — seed from exception context
+                // On an exception path — seed from exception context
                 // and mark tainted (matches taint engine: CatchParam gets Cap::all())
                 state.set(inst.value, exc_val);
                 state.mark_tainted(inst.value);
@@ -137,7 +137,7 @@ pub fn transfer_inst(
                     state.propagate_taint(inst.value, uses_slice);
                 }
                 2 => {
-                    // Phase 21: Field-load pattern detection.
+                    // Field-load pattern detection.
                     // When RHS is a member expression, SSA produces 2 uses:
                     //   uses[0] = dotted-path SSA value (e.g., v for "user.name")
                     //   uses[1] = base variable SSA value (e.g., v for "user")
@@ -153,7 +153,7 @@ pub fn transfer_inst(
                         }
                     }
 
-                    // Phase 21: Heap-based cross-alias load fallback.
+                    // Heap-based cross-alias load fallback.
                     // If the instruction defines a dotted path but the first
                     // operand doesn't have a dotted var_name (aliased object),
                     // try loading from the symbolic heap via points-to.
@@ -187,7 +187,7 @@ pub fn transfer_inst(
                 }
             }
 
-            // Phase 21: If this instruction defines a dotted path, record
+            // If this instruction defines a dotted path, record
             // the store in the symbolic heap for cross-alias resolution.
             try_heap_field_store(state, inst, ssa, heap_ctx);
         }
@@ -213,9 +213,9 @@ pub fn transfer_inst(
                 }
             }
 
-            // Phase 21/29: Container store/load via symbolic heap.
-            // Phase 29: resolve index_arg via const_values for per-index
-            // precision when the index is a known constant.
+            // Container store/load via symbolic heap.
+            // Resolve index_arg via const_values for per-index precision when
+            // the index is a known constant.
             if let Some(hctx) = heap_ctx {
                 if let Some(container_op) = classify_container_op(callee, hctx.lang) {
                     let recv_obj = receiver
@@ -284,7 +284,7 @@ pub fn transfer_inst(
                 }
             }
 
-            // Phase 22: String method recognition
+            // String method recognition
             if let Some(result) =
                 try_string_method(state, callee, receiver, &arg_syms, &all_operands, lang)
             {
@@ -295,7 +295,7 @@ pub fn transfer_inst(
                 return;
             }
 
-            // Phase 28: Encoding/decoding transform recognition
+            // Encoding/decoding transform recognition
             if let Some(result) =
                 try_transform_method(state, callee, receiver, &arg_syms, &all_operands, lang)
             {
@@ -306,7 +306,7 @@ pub fn transfer_inst(
                 return;
             }
 
-            // Phase 24A: Interprocedural symbolic execution.
+            // Interprocedural symbolic execution.
             // Execute callee body when available — full state propagation.
             if let Some(ictx) = interproc_ctx {
                 let mut callee_args: Vec<(crate::ssa::ir::SsaValue, SymbolicValue, bool)> =
@@ -392,7 +392,7 @@ pub fn transfer_inst(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Phase 21: Heap helpers
+//  Heap helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Record a field store in the symbolic heap when the instruction defines
@@ -655,7 +655,7 @@ pub fn transfer_block(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Phase 22: String method dispatch
+//  String method dispatch
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Attempt to model a callee as a recognized string operation.
@@ -730,7 +730,7 @@ fn try_string_method(
     Some(SymbolicCallResult { value, tainted })
 }
 
-/// Phase 28: Recognize encoding/decoding transforms and build structured
+/// Recognize encoding/decoding transforms and build structured
 /// `Encode`/`Decode` nodes instead of opaque `Call`.
 ///
 /// Taint is always propagated from the operand — encoding preserves taint
@@ -869,10 +869,9 @@ fn model_from_summary(
 /// Returns `Some(SymbolicCallResult)` if the summary provides actionable
 /// modeling. Returns `None` to fall through to the opaque `mk_call` path.
 ///
-/// Phase 31: When a receiver has a known type via type facts, tries
-/// type-qualified callee name (e.g., `"HttpClient.send"`) before bare-name
-/// resolution. This improves summary-based modeling only — not general
-/// virtual dispatch.
+/// When a receiver has a known type via type facts, tries type-qualified
+/// callee name (e.g., `"HttpClient.send"`) before bare-name resolution. This
+/// improves summary-based modeling only — not general virtual dispatch.
 fn resolve_callee_symbolically(
     ctx: &SymexSummaryCtx,
     callee: &str,
@@ -882,7 +881,7 @@ fn resolve_callee_symbolically(
     result_value: SsaValue,
     receiver: Option<SsaValue>,
 ) -> Option<SymbolicCallResult> {
-    // Phase 31: Type-qualified symbolic resolution when receiver has a known type.
+    // Type-qualified symbolic resolution when receiver has a known type.
     // Improves summary-based modeling only — not general virtual dispatch.
     // Precedence: exact qualified > type-aided disambiguation > bare-name fallback.
     if let (Some(tf), Some(recv)) = (ctx.type_facts, receiver)
@@ -1896,7 +1895,7 @@ mod tests {
         assert!(state.is_tainted(SsaValue(1)));
     }
 
-    // ─── Phase 31: Type-qualified symbolic resolution tests ──────────
+    // ─── Type-qualified symbolic resolution tests ──────────
 
     use crate::ssa::type_facts::{TypeFact, TypeFactResult};
     use std::collections::HashMap;

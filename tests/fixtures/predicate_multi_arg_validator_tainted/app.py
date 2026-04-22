@@ -1,4 +1,4 @@
-"""Phase 2b.2 — targeted validation of first argument.
+"""Targeted validation of first argument.
 
 `validate(x, 100)` — `x` is a plain identifier in the first position.
 `classify_condition_with_target` extracts `"x"` as the validation target, so

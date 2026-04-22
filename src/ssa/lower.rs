@@ -473,7 +473,7 @@ fn compute_dominance_frontiers(
 
 /// Identify variables used but not defined within the scoped blocks.
 /// These represent external (e.g. global/top-level) variables that need
-/// synthetic Param instructions so the SSA rename phase can reference them.
+/// synthetic Param instructions so the SSA rename pass can reference them.
 fn identify_external_uses(
     cfg: &Cfg,
     blocks_nodes: &[Vec<NodeIndex>],
@@ -876,7 +876,7 @@ fn rename_variables(
                     .iter()
                     .filter_map(|u| var_stacks.get(u).and_then(|s| s.last().copied()))
                     .collect();
-                // Phase 26: inject Const for binary expression literal operand.
+                // Inject Const for binary expression literal operand.
                 // When a binary expression has one identifier and one numeric literal
                 // (e.g., `flags & 0x07`), the literal isn't in `uses`. Inject a
                 // synthetic Const instruction so the Assign has 2 uses, preventing
@@ -1206,7 +1206,7 @@ fn rename_variables(
     }
 
     // Inject synthetic Param instructions at START of block 0 for external variables.
-    // These create SSA definitions so the rename phase can reference them.
+    // These create SSA definitions so the rename pass can reference them.
     // Pre-seed var_stacks so process_block sees them.
     if !external_vars.is_empty() {
         let entry_cfg_node = blocks_nodes[0][0];
@@ -1822,7 +1822,7 @@ mod tests {
         debug_assert_bfs_ordering(&block_preds);
     }
 
-    /// Phase 2a regression guard: a catch block that joins an exception
+    /// Regression guard: a catch block that joins an exception
     /// predecessor and a normal control-flow predecessor must lower to a
     /// consistent phi. For variables defined before the try (live on
     /// *both* edges), the phi at the catch block has exactly two operands
@@ -1962,7 +1962,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "SSA phi operand count exceeds predecessor count")]
     fn phi_assertion_helper_rejects_more_operands_than_preds() {
-        // Phase 2a: promoted to release assertion. A phi with MORE operands
+        // Promoted to release assertion. A phi with MORE operands
         // than preds references a nonexistent predecessor — guaranteed
         // unsound because downstream consumers either panic on the lookup
         // or silently feed garbage taint into the join. This must fire

@@ -1,5 +1,5 @@
-//! Phase CF-3 integration tests: per-parameter [`AbstractTransfer`]
-//! channels propagate abstract facts across cross-file calls.
+//! Integration tests for per-parameter [`AbstractTransfer`] channels
+//! propagating abstract facts across cross-file calls.
 //!
 //! Three fixtures cover the documented transfer forms currently tractable
 //! against the JS/Python abstract-suppression pipelines:
@@ -9,19 +9,21 @@
 //!   file boundary and SHELL_ESCAPE suppression fires on the bounded int.
 //! * `cross_file_abstract_bounded_index` (Python) — Clamped transfer
 //!   derived from a baseline-invariant fact.  The callee returns a
-//!   literal `42`; CF-3 attaches it as `Clamped { 42, 42 }` and the
-//!   caller sees a bounded integer without Phase 17's return-abstract
-//!   alone carrying the fact through summary resolution ambiguity.
+//!   literal `42`; the per-parameter transfer attaches it as
+//!   `Clamped { 42, 42 }` and the caller sees a bounded integer
+//!   without the return-abstract channel alone carrying the fact
+//!   through summary resolution ambiguity.
 //! * `cross_file_abstract_url_prefix_lock` (JS) — String-prefix transfer
 //!   across an Identity wrapper.  The caller writes
 //!   `url = asIs('https://internal/...' + userPath)` and passes `url` to
-//!   `axios.get`.  The CFG node's `string_prefix` is consumed by Phase
-//!   17's `transfer_abstract` Call-with-prefix arm; the resulting
-//!   StringFact prefix locks the host and SSRF suppression fires.
+//!   `axios.get`.  The CFG node's `string_prefix` is consumed by the
+//!   abstract transfer's Call-with-prefix arm; the resulting StringFact
+//!   prefix locks the host and SSRF suppression fires.
 //!
 //! Each fixture's `expectations.json` treats the cross-file SHELL/SSRF
-//! sink as *forbidden* on the main file — if CF-3 regresses, the sink
-//! fires and the forbidden-finding assertion trips.
+//! sink as *forbidden* on the main file — if cross-file abstract
+//! propagation regresses, the sink fires and the forbidden-finding
+//! assertion trips.
 
 mod common;
 

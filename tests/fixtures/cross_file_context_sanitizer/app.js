@@ -1,6 +1,6 @@
 // Cross-file sanitizer applied before a sink: no XSS finding expected.
 // The cross-file summary path already recognises encodeURIComponent
-// as a sanitizer; the regression guard here is that CF-2 inline
+// as a sanitizer; the regression guard here is that cross-file inline
 // re-analysis does not *introduce* a finding by mis-resolving taint.
 
 const { xssSafe } = require('./security');

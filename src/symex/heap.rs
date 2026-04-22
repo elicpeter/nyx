@@ -1,4 +1,4 @@
-//! Symbolic heap: field-sensitive memory model for symbolic execution (Phase 21).
+//! Symbolic heap: field-sensitive memory model for symbolic execution.
 //!
 //! Maps `(HeapObjectId, FieldSlot)` → `SymbolicValue`, enabling the symbolic
 //! executor to track taint through object property stores/loads and container
@@ -101,7 +101,7 @@ pub struct FieldAccessRecord {
 
 /// Bounded symbolic heap tracking field-level symbolic values and taint.
 ///
-/// Cloned at fork points during multi-path exploration (Phase 18b).  Bounded
+/// Cloned at fork points during multi-path exploration.  Bounded
 /// by [`MAX_HEAP_ENTRIES`] total entries and [`MAX_FIELDS_PER_OBJECT`] per
 /// object to prevent blowup on object-heavy code.
 #[derive(Clone, Debug)]
@@ -236,7 +236,7 @@ impl SymbolicHeap {
 
     /// Compute a compact 64-bit fingerprint of the heap state.
     ///
-    /// Used as part of the interprocedural cache key (Phase 24B).
+    /// Used as part of the interprocedural cache key.
     /// Deterministic: entries are sorted by key for consistent hashing.
     pub fn fingerprint(&self) -> u64 {
         if self.fields.is_empty() {
@@ -601,7 +601,7 @@ mod tests {
         assert_eq!(heap.field_accesses()[0].field_name, "name");
     }
 
-    // ── Phase 29: Index sensitivity tests ────────────────────────────────
+    // ── Index sensitivity tests ────────────────────────────────
 
     fn index_key(obj_id: u32, idx: u64) -> HeapKey {
         HeapKey {

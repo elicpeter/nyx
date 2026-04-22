@@ -12,9 +12,10 @@ import (
 // sanitising), so a per-return-path summary records two entries whose
 // joined transform preserves the validation on every branch.
 //
-// CF-4 ensures the callee's "validated on both branches" fact survives
-// the summary, and the caller does not lose it to an over-approximated
-// union that might suggest an unsanitised path exists.
+// The per-return-path decomposition ensures the callee's "validated
+// on both branches" fact survives the summary, and the caller does
+// not lose it to an over-approximated union that might suggest an
+// unsanitised path exists.
 var alnum = regexp.MustCompile(`^[A-Za-z0-9]+$`)
 
 func validateFormat(raw string) (string, error) {

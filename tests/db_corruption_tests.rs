@@ -13,8 +13,8 @@
 //!      `SQLITE_NOTADB` during pragma/schema execution.  We expect the
 //!      indexer to return a structured error, not a panic.
 //!
-//! Phase 2c may later add an auto-rebuild path gated by `--rebuild-db`; if
-//! so, the garbage-header test should flip to assert success with a
+//! A later change may add an auto-rebuild path gated by `--rebuild-db`;
+//! if so, the garbage-header test should flip to assert success with a
 //! diagnostic note.  For now we pin current behaviour.
 
 use nyx_scanner::commands::index::build_index;
@@ -189,6 +189,6 @@ fn garbage_header_db_returns_structured_error() {
 // takes 150–200 seconds before returning — unsuitable for CI wall-clock
 // budgets.  The two tests above already cover the "corrupt-on-arrival"
 // cases that users actually hit (crash-truncated file, deliberate clobber).
-// A follow-up (not in scope for Phase 4a) should either short-circuit
-// `PRAGMA integrity_check` up front or wrap the init path in a timeout so
-// mid-page corruption also fails fast.
+// A follow-up should either short-circuit `PRAGMA integrity_check` up
+// front or wrap the init path in a timeout so mid-page corruption
+// also fails fast.

@@ -1,7 +1,7 @@
 var express = require('express');
 var app = express();
 
-// Phase-2 positive case: fetch accepts a Request-like object whose `url`
+// Positive case: fetch accepts a Request-like object whose `url`
 // field carries the destination. When `url` is attacker-controlled, SSRF
 // must fire even though `body` (non-destination) is fixed.
 app.get('/proxy', function(req, res) {

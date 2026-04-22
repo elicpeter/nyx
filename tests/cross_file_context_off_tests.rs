@@ -1,10 +1,11 @@
-//! Phase CF-2 off-path tests: with `NYX_CONTEXT_SENSITIVE=0` (the
-//! runtime switch for the Phase 11 + CF-2 inline pipeline) the
+//! Context-sensitive off-path tests: with `NYX_CONTEXT_SENSITIVE=0`
+//! (the runtime switch for the inline context-sensitive pipeline) the
 //! analyser falls back to summary-based resolution across file
-//! boundaries.  CF-2 is *strictly additive* over this path: the four
-//! fixtures in `tests/fixtures/cross_file_context_*` must still satisfy
-//! their `expectations.json` under summary-only resolution, and the
-//! sanitiser fixture must remain free of taint findings.
+//! boundaries.  Cross-file inline is *strictly additive* over this
+//! path: the four fixtures in `tests/fixtures/cross_file_context_*`
+//! must still satisfy their `expectations.json` under summary-only
+//! resolution, and the sanitiser fixture must remain free of taint
+//! findings.
 //!
 //! This binary is split from `cross_file_context_tests.rs` because
 //! Cargo compiles each `tests/*.rs` file into its own test binary —
@@ -47,9 +48,9 @@ fn disable_context_sensitive() {
     }
 }
 
-/// CF-2 must be strictly additive: the summary path was already
-/// correct for this fixture pre-CF-2, and CF-2's inline override must
-/// not drop recall when we disable it.
+/// Cross-file inline must be strictly additive: the summary path was
+/// already correct for this fixture before cross-file inline landed,
+/// and the inline override must not drop recall when we disable it.
 #[test]
 fn two_call_sites_still_passes_without_context_sensitivity() {
     disable_context_sensitive();
@@ -61,8 +62,8 @@ fn two_call_sites_still_passes_without_context_sensitivity() {
 /// The cross-file sanitiser regression guard: with summary-only
 /// resolution the `xss` library is still a registered sanitiser and
 /// the taint finding must not surface.  This also rules out the
-/// possibility that CF-2 was the only thing suppressing the finding
-/// in the default-on tests.
+/// possibility that cross-file inline was the only thing suppressing
+/// the finding in the default-on tests.
 #[test]
 fn sanitizer_still_clean_without_context_sensitivity() {
     disable_context_sensitive();
@@ -81,9 +82,9 @@ fn sanitizer_still_clean_without_context_sensitivity() {
 }
 
 /// Deep chain (A->B->C) finding persists under summary-only
-/// resolution via the AST-pattern `py.cmdi` path.  CF-2 does not
-/// change the AST-pattern suite, so this assertion is a simple
-/// regression guard.
+/// resolution via the AST-pattern `py.cmdi` path.  Cross-file inline
+/// does not change the AST-pattern suite, so this assertion is a
+/// simple regression guard.
 #[test]
 fn deep_chain_still_passes_without_context_sensitivity() {
     disable_context_sensitive();

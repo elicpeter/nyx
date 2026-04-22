@@ -2,7 +2,7 @@
 // caller passes `child_process.exec` directly as the callback, so the
 // callback-argument mechanism in the caller's transfer_inst pairs
 // `apply`'s (cross-file) summary with the labelled-sink callback and
-// surfaces the taint flow.  CF-2 cross-file inline must not interfere
+// surfaces the taint flow.  Cross-file inline must not interfere
 // with this path.
 
 const { apply } = require('./apply');

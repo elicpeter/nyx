@@ -823,7 +823,7 @@ mod tests {
         assert!(r.lo.is_none() || r.hi.is_none());
     }
 
-    // ── Phase 26: Bitwise interval transfer tests ──────────────────────
+    // ── Bitwise interval transfer tests ────────────────────────────────
 
     #[test]
     fn bit_and_constant_mask() {

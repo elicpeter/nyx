@@ -1,4 +1,4 @@
-//! Phase CF-6: Parameter-granularity points-to summaries.
+//! Parameter-granularity points-to summaries.
 //!
 //! Captures the subset of intra-procedural alias behaviour that matters
 //! at cross-file call sites: which parameters' heap/field writes are
@@ -9,7 +9,7 @@
 //!
 //! This is **intentionally not** a whole-program points-to analysis.
 //! Nyx already has bounded intra-procedural heap tracking
-//! ([`crate::ssa::heap`]); CF-6 bridges the cross-file cliff by recording
+//! ([`crate::ssa::heap`]); this module bridges the cross-file cliff by recording
 //! a small, bounded alias graph between parameter positions and the return
 //! value, then replaying it at summary-resolution time.
 //!
@@ -25,7 +25,7 @@
 //!   the coarser [`TaintTransform::Identity`] view already carried in
 //!   [`crate::summary::ssa_summary::SsaFuncSummary::param_to_return`].
 //!
-//! `MustAlias` is intentionally omitted in this phase — the ROI on
+//! `MustAlias` is intentionally omitted — the ROI on
 //! must-alias inference for cross-file summaries is low, and the soundness
 //! story for `MayAlias`-only application is straightforward ("take the
 //! union").
@@ -56,10 +56,11 @@ pub enum AliasPosition {
     Return,
 }
 
-/// Strength of an alias edge.  Phase CF-6 only emits [`AliasKind::MayAlias`]
+/// Strength of an alias edge.  Only [`AliasKind::MayAlias`] is emitted
 /// — the analysis over-approximates identity-level aliasing rather than
-/// proving must-alias.  The variant is kept as an enum so a future phase
-/// that distinguishes the two can slot in without migrating on-disk data.
+/// proving must-alias.  The variant is kept as an enum so a future
+/// extension that distinguishes the two can slot in without migrating
+/// on-disk data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AliasKind {
     /// Under some execution, the two positions may reference the same
@@ -100,12 +101,12 @@ pub const MAX_ALIAS_EDGES: usize = 8;
 /// When the callee's alias graph exceeds [`MAX_ALIAS_EDGES`], extraction
 /// sets [`overflow = true`](Self::overflow) and callers must treat every
 /// parameter as reaching every other parameter and the return.  This is
-/// the conservative fallback described in the CF-6 plan.
+/// the conservative fallback for bounded alias analysis.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PointsToSummary {
     /// Bounded edge list, deduped by `(source, target, kind)`.  The
-    /// [`serde(default)`] attribute lets summaries pre-dating CF-6
-    /// deserialise cleanly (no edges).
+    /// [`serde(default)`] attribute lets summaries pre-dating points-to
+    /// tracking deserialise cleanly (no edges).
     #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
     pub edges: SmallVec<[AliasEdge; 4]>,
     /// Conservative fallback flag — set when extraction hit

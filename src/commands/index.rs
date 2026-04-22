@@ -270,8 +270,8 @@ pub fn build_index_with_observer(
                 idx.replace_ssa_summaries_for_file(&path, &hash, &ssa_rows)?;
             }
 
-            // Phase CF-3: persist SSA callee bodies at index-build time so
-            // CLI-initiated rebuilds (`--index rebuild`) populate the same
+            // Persist SSA callee bodies at index-build time so CLI-initiated
+            // rebuilds (`--index rebuild`) populate the same
             // `ssa_function_bodies` rows that `scan_with_index_parallel`
             // would have written via its pass-1 branch.  Without this,
             // indexed scans load zero cross-file bodies and cross-file
