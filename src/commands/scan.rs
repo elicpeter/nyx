@@ -42,7 +42,10 @@ fn make_progress_bar(len: u64, msg: &str, show: bool) -> ProgressBar {
 }
 
 fn record_persist_error(errors: &Arc<Mutex<Vec<String>>>, message: String) {
-    errors.lock().expect("persist error mutex").push(message);
+    // Recover from a poisoned mutex rather than panicking: a panic in another
+    // rayon worker must not brick the whole scan's error-reporting channel.
+    let mut guard = errors.lock().unwrap_or_else(|p| p.into_inner());
+    guard.push(message);
 }
 
 /// Run per-file analysis, optionally catching panics so the scan can
@@ -96,7 +99,7 @@ fn recover_or_propagate<T>(
 }
 
 fn fail_if_persist_errors(stage: &str, errors: Arc<Mutex<Vec<String>>>) -> NyxResult<()> {
-    let errors = errors.lock().expect("persist error mutex");
+    let errors = errors.lock().unwrap_or_else(|p| p.into_inner());
     if errors.is_empty() {
         return Ok(());
     }
@@ -696,7 +699,24 @@ fn run_topo_batches(
                         if let Some(p) = progress {
                             p.set_current_file(&path.to_string_lossy());
                         }
-                        let bytes = std::fs::read(path).unwrap_or_default();
+                        let bytes = match std::fs::read(path) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "pass 2 (SCC iter {}): cannot read {}: {e}",
+                                    iter,
+                                    path.display()
+                                );
+                                if let Some(l) = logs {
+                                    l.warn(
+                                        format!("Cannot read file for pass 2: {e}"),
+                                        Some(path.display().to_string()),
+                                        None,
+                                    );
+                                }
+                                return (path.to_path_buf(), vec![], vec![], vec![], vec![]);
+                            }
+                        };
                         match recover_or_propagate(
                             cfg.scanner.enable_panic_recovery,
                             path,
@@ -993,7 +1013,26 @@ pub(crate) fn scan_filesystem_with_observer(
         let mut diags: Vec<Diag> = all_paths
             .par_iter()
             .flat_map_iter(|path| {
-                let bytes = std::fs::read(path).unwrap_or_default();
+                let bytes = match std::fs::read(path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!("analysis: cannot read {}: {e}", path.display());
+                        if let Some(l) = logs {
+                            l.warn(
+                                format!("Cannot read file: {e}"),
+                                Some(path.display().to_string()),
+                                None,
+                            );
+                        }
+                        pb.inc(1);
+                        if let Some(p) = progress {
+                            p.inc_parsed(1);
+                            p.inc_analyzed(1);
+                            p.set_current_file(&path.to_string_lossy());
+                        }
+                        return Vec::<Diag>::new();
+                    }
+                };
                 let result = match recover_or_propagate(
                     cfg.scanner.enable_panic_recovery,
                     path,
@@ -1815,7 +1854,11 @@ pub fn scan_with_index_parallel_observer(
     }
 
     // ── Taint mode: build call graph + topo-ordered pass 2 ────────────
-    let mut global_summaries = global_summaries.unwrap();
+    let mut global_summaries = global_summaries.ok_or_else(|| {
+        crate::errors::NyxError::Msg(
+            "internal: global_summaries missing in taint-mode pass 2".to_string(),
+        )
+    })?;
     if let Some(p) = progress {
         p.set_stage(ScanStage::BuildingCallGraph);
     }

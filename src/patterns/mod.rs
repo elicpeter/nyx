@@ -295,7 +295,11 @@ static REGISTRY: Lazy<HashMap<&'static str, &'static [Pattern]>> = Lazy::new(|| 
 
 /// Return all patterns for the requested language (case-insensitive).
 ///
-/// Unknown patterns yield an **empty** `Vec`.
+/// Unknown languages yield an **empty** `Vec`. This function cannot
+/// fail: the registry is pure static data (no tree-sitter queries are
+/// compiled here). Compilation is deferred to `crate::utils::query_cache`,
+/// which drops malformed queries via `filter_map` + warn-log rather
+/// than panicking.
 pub fn load(lang: &str) -> Vec<Pattern> {
     let key = lang.to_ascii_lowercase();
     REGISTRY.get(key.as_str()).copied().unwrap_or(&[]).to_vec()

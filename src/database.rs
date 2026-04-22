@@ -577,12 +577,19 @@ pub mod index {
 
             let issue_iter = stmt.query_map([file_id], |row| {
                 let sev_str: String = row.get(1)?;
+                let severity = Severity::from_str(&sev_str).unwrap_or_else(|_| {
+                    tracing::warn!(
+                        severity = %sev_str,
+                        "unknown severity in DB row; defaulting to Medium"
+                    );
+                    Severity::Medium
+                });
                 Ok(Diag {
                     path: path.to_string_lossy().to_string(),
                     id: row.get::<_, String>(0)?, // rule_id
                     line: row.get::<_, i64>(2)? as usize,
                     col: row.get::<_, i64>(3)? as usize,
-                    severity: Severity::from_str(&sev_str).unwrap(),
+                    severity,
                     category: crate::patterns::FindingCategory::Security,
                     path_validated: false,
                     guard_kind: None,
