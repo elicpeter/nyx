@@ -16,7 +16,75 @@ use crate::labels::{
 use crate::summary::FuncSummary;
 use crate::symbol::{FuncKey, Lang};
 use smallvec::{SmallVec, smallvec};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+
+// -------------------------------------------------------------------------
+// Structural DFS index for function bodies (Phase 6)
+// -------------------------------------------------------------------------
+//
+// Per-file map of function-node start_byte → depth-first preorder index.
+// Populated at the start of `build_cfg`, consumed by every site that
+// previously formatted `<anon@{start_byte}>` or stored `start_byte` as
+// the disambig.  The DFS index is stable against edits elsewhere in the
+// file (inserting a line above a function does not change its index).
+//
+// Thread-local is safe because `build_cfg` is not re-entrant within a
+// single rayon worker: each file is parsed and CFG-built to completion
+// before the next one starts.
+thread_local! {
+    static FN_DFS_INDICES: RefCell<HashMap<usize, u32>> = RefCell::new(HashMap::new());
+}
+
+/// Populate the per-file DFS-index map from a preorder walk of the
+/// tree-sitter AST.  Every node classifying as `Kind::Function` gets
+/// a monotonically increasing `u32` starting at 0.
+fn populate_fn_dfs_indices(tree: &Tree, lang: &str) {
+    fn walk(n: Node, lang: &str, counter: &mut u32, map: &mut HashMap<usize, u32>) {
+        if lookup(lang, n.kind()) == Kind::Function {
+            map.insert(n.start_byte(), *counter);
+            *counter += 1;
+        }
+        let mut c = n.walk();
+        for child in n.children(&mut c) {
+            walk(child, lang, counter, map);
+        }
+    }
+    let mut map = HashMap::new();
+    let mut counter: u32 = 0;
+    walk(tree.root_node(), lang, &mut counter, &mut map);
+    FN_DFS_INDICES.with(|cell| *cell.borrow_mut() = map);
+}
+
+/// Clear the per-file DFS-index map.  Called at the end of `build_cfg`
+/// to avoid leaking state between files on the same thread.
+fn clear_fn_dfs_indices() {
+    FN_DFS_INDICES.with(|cell| cell.borrow_mut().clear());
+}
+
+/// Lookup a function node's DFS index by its `start_byte`.
+fn fn_dfs_index(start_byte: usize) -> Option<u32> {
+    FN_DFS_INDICES.with(|cell| cell.borrow().get(&start_byte).copied())
+}
+
+/// Synthetic name for an anonymous function.  Uses the DFS index when
+/// available (`<anon#N>`), falls back to the byte offset when the map
+/// is empty (e.g. during tests that bypass `build_cfg`).  The `#`
+/// sigil is intentionally different from `@` so the two formats are
+/// distinguishable by downstream consumers.
+pub(crate) fn anon_fn_name(start_byte: usize) -> String {
+    match fn_dfs_index(start_byte) {
+        Some(idx) => format!("<anon#{idx}>"),
+        None => format!("<anon@{start_byte}>"),
+    }
+}
+
+/// Prefix check that accepts both the new `<anon#...>` and legacy
+/// `<anon@...>` formats.  Used by code paths that classify whether a
+/// function name came from anonymous synthesis.
+pub(crate) fn is_anon_fn_name(name: &str) -> bool {
+    name.starts_with("<anon#") || name.starts_with("<anon@")
+}
 
 /// -------------------------------------------------------------------------
 ///  Public AST‑to‑CFG data structures
@@ -660,7 +728,7 @@ fn first_call_ident_with_span<'a>(
                         .and_then(|f| {
                             let unwrapped = unwrap_parens(f);
                             if lookup(lang, unwrapped.kind()) == Kind::Function {
-                                Some(format!("<anon@{}>", unwrapped.start_byte()))
+                                Some(anon_fn_name(unwrapped.start_byte()))
                             } else {
                                 text_of(f, code)
                             }
@@ -2475,11 +2543,11 @@ fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> 
     match lookup(lang, n.kind()) {
         Kind::Function => {
             // Function/closure expression passed as argument — return the same
-            // `<anon@byte>` name used by build_sub so callback_bindings and
+            // synthetic anon name used by build_sub so callback_bindings and
             // source_to_callback can match it to the extracted BodyCfg.
             n.child_by_field_name("name")
                 .and_then(|nm| text_of(nm, code))
-                .or_else(|| Some(format!("<anon@{}>", n.start_byte())))
+                .or_else(|| Some(anon_fn_name(n.start_byte())))
         }
         Kind::CallFn => n
             .child_by_field_name("function")
@@ -2490,7 +2558,7 @@ fn call_ident_of<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> 
             .and_then(|f| {
                 let unwrapped = unwrap_parens(f);
                 if lookup(lang, unwrapped.kind()) == Kind::Function {
-                    Some(format!("<anon@{}>", unwrapped.start_byte()))
+                    Some(anon_fn_name(unwrapped.start_byte()))
                 } else {
                     text_of(f, code)
                 }
@@ -3512,7 +3580,7 @@ fn push_node<'a>(
                 // summary key.
                 let unwrapped = unwrap_parens(n);
                 if lookup(lang, unwrapped.kind()) == Kind::Function {
-                    Some(format!("<anon@{}>", unwrapped.start_byte()))
+                    Some(anon_fn_name(unwrapped.start_byte()))
                 } else {
                     text_of(n, code)
                 }
@@ -4768,7 +4836,7 @@ fn compute_container_and_kind(
         || ast_kind == "function_expression"
         || ast_kind == "anonymous_function"
         || ast_kind == "closure_expression"
-        || fn_name.starts_with("<anon@")
+        || is_anon_fn_name(fn_name)
     {
         FuncKind::Closure
     } else {
@@ -6720,10 +6788,11 @@ fn build_sub<'a>(
         // Function item – create a header and dive into its body
         Kind::Function => {
             // ── 1) Extract function name ──────────────────────────────────────
-            // Lambda expressions don't have meaningful names; force <anon@byte>
-            // to avoid C++ lambdas picking up parameter names via "declarator".
+            // Lambda expressions don't have meaningful names; force the
+            // synthetic anon name to avoid C++ lambdas picking up parameter
+            // names via "declarator".
             let fn_name = if ast.kind() == "lambda_expression" {
-                format!("<anon@{}>", ast.start_byte())
+                anon_fn_name(ast.start_byte())
             } else {
                 ast.child_by_field_name("name")
                     .or_else(|| ast.child_by_field_name("declarator"))
@@ -6732,7 +6801,7 @@ fn build_sub<'a>(
                         collect_idents(n, code, &mut tmp);
                         tmp.into_iter().next()
                     })
-                    .unwrap_or_else(|| format!("<anon@{}>", ast.start_byte()))
+                    .unwrap_or_else(|| anon_fn_name(ast.start_byte()))
             };
 
             // When the grammar-level name is anonymous, try to derive a binding
@@ -6741,26 +6810,30 @@ fn build_sub<'a>(
             // in callback resolution — callers referencing `h` or `run` can
             // find the body via `resolve_local_func_key` and intra-file calls
             // like `h()` can resolve to the anonymous body's summary. Without
-            // this, the body is keyed `<anon@byte>` with no path from the
-            // variable identifier to the body.
-            let fn_name = if fn_name.starts_with("<anon@") {
+            // this, the body is keyed with the synthetic anon name and there
+            // is no path from the variable identifier to the body.
+            let fn_name = if is_anon_fn_name(&fn_name) {
                 derive_anon_fn_name_from_context(ast, lang, code).unwrap_or(fn_name)
             } else {
                 fn_name
             };
 
-            let is_anon = fn_name.starts_with("<anon@");
+            let is_anon = is_anon_fn_name(&fn_name);
             let param_names = extract_param_names(ast, lang, code);
             let param_count = param_names.len();
 
             // ── 1b) Compute identity discriminators ───────────────────────────
             let (fn_container, fn_kind) =
                 compute_container_and_kind(ast, ast.kind(), &fn_name, code);
-            // Disambiguator: function body start byte.  Always populated so
-            // two same-name, same-container definitions never collide (e.g.
-            // duplicate defs in a file, overload-like patterns, nested defs
-            // with identical names in sibling scopes).
-            let fn_disambig: Option<u32> = Some(ast.start_byte() as u32);
+            // Disambiguator: depth-first preorder index of this function node
+            // within the file.  Always populated so two same-name, same-
+            // container definitions never collide (e.g. duplicate defs in a
+            // file, overload-like patterns, nested defs with identical names
+            // in sibling scopes).  Stable against unrelated edits above the
+            // function (Phase 6).  Falls back to the start byte when the
+            // DFS-index map is absent (tests bypassing build_cfg).
+            let fn_disambig: Option<u32> =
+                Some(fn_dfs_index(ast.start_byte()).unwrap_or(ast.start_byte() as u32));
 
             // ── 2) Create a separate body graph for this function ─────────────
             let (mut fn_graph, fn_entry, fn_exit) =
@@ -7711,6 +7784,11 @@ pub(crate) fn build_cfg<'a>(
 ) -> FileCfg {
     debug!(target: "cfg", "Building CFG for {:?}", tree.root_node());
 
+    // Populate the per-file structural DFS-index map before any build_sub
+    // call reads from it (Phase 6).  Cleared unconditionally at the end
+    // of this function so thread-local state never leaks between files.
+    populate_fn_dfs_indices(tree, lang);
+
     // Create the top-level body graph (BodyId(0)).
     let (mut g, entry, exit) = create_body_graph(0, code.len(), None);
 
@@ -7831,6 +7909,10 @@ pub(crate) fn build_cfg<'a>(
     if !promisify_aliases.is_empty() {
         apply_promisify_labels(&mut bodies, &promisify_aliases, lang, extra);
     }
+
+    // Clear the per-file DFS-index map so it does not leak to the next
+    // file built on this thread (Phase 6).
+    clear_fn_dfs_indices();
 
     FileCfg {
         bodies,
@@ -9777,7 +9859,7 @@ def outer(cmd):
     #[test]
     fn anon_fn_passed_as_arg_stays_anonymous_js() {
         // Function literal passed directly as argument has no stable
-        // syntactic binding → must remain <anon@byte>.
+        // syntactic binding → must remain a synthetic anon name.
         let src = b"apply(function(x) { eval(x); });";
         let names = js_body_names(src);
         let kinds = js_body_kinds(src);
@@ -9787,8 +9869,8 @@ def outer(cmd):
             kinds
         );
         assert!(
-            names.iter().any(|n| n.starts_with("<anon@")),
-            "expected <anon@BYTE> name on FuncKey for call-argument fn literal, got: {:?}",
+            names.iter().any(|n| is_anon_fn_name(n)),
+            "expected synthetic anon name on FuncKey for call-argument fn literal, got: {:?}",
             names
         );
         assert!(
@@ -9829,7 +9911,7 @@ def outer(cmd):
     #[test]
     fn iife_callee_resolves_to_anon_body_js() {
         // `(function(arg){eval(arg);})(q)` — the CallFn arm must produce
-        // `<anon@BYTE>` for the callee text so that taint can match the
+        // a synthetic anon callee name so that taint can match the
         // inline body's FuncKey.
         let src = b"(function(arg){ eval(arg); })(q);";
         let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
@@ -9841,8 +9923,8 @@ def outer(cmd):
             .filter_map(|i| top.graph[i].call.callee.clone())
             .collect();
         assert!(
-            callee_names.iter().any(|c| c.starts_with("<anon@")),
-            "IIFE call site should record `<anon@BYTE>` callee, got: {:?}",
+            callee_names.iter().any(|c| is_anon_fn_name(c)),
+            "IIFE call site should record synthetic anon callee, got: {:?}",
             callee_names
         );
     }

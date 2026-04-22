@@ -161,6 +161,22 @@ pub mod index {
     /// Engine version used to detect stale caches across upgrades.
     pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+    /// On-disk schema version for cached analysis data.
+    ///
+    /// Bumped independently of `ENGINE_VERSION` whenever the serialized
+    /// layout or identity of a cached artefact changes in an incompatible
+    /// way — e.g. a `FuncKey` field semantic change that would cause old
+    /// summaries to misbehave when rehydrated.
+    ///
+    /// History:
+    /// * `"1"` — initial.
+    /// * `"2"` — Phase 6 (0.5.0): `FuncKey.disambig` changed from the
+    ///   function-node byte offset to a depth-first structural index.
+    ///   Pre-0.5.0 caches store byte-offset disambigs and would fail to
+    ///   match bodies built by the new engine, so they are silently
+    ///   rebuilt on open.
+    pub const SCHEMA_VERSION: &str = "2";
+
     // TODO: ADD CLEANS FOR EACH TABLE BASED ON PROJECT WHICH RUNS ON CLEAN
     // TODO: ADD DROP AND GIVE A CLI PARAMETER FOR DROP
 
@@ -319,11 +335,60 @@ pub mod index {
                     conn.execute_batch(SCHEMA)?;
                 }
 
+                // Schema version check: invalidate cached summary tables
+                // when the on-disk artefact layout has changed in an
+                // incompatible way, independently of the engine version.
+                // Runs before `check_engine_version` so the engine-version
+                // branch below does not race with a stale schema.
+                Self::check_schema_version(&conn)?;
+
                 // Engine version check: invalidate all caches when the scanner
                 // version changes so stale serialized data cannot be loaded.
                 Self::check_engine_version(&conn)?;
             }
             Ok(pool)
+        }
+
+        /// Check stored schema version against the compiled-in value.
+        ///
+        /// On mismatch (including first-time open), wipe the cached
+        /// summary tables so pre-schema-bump artefacts cannot be
+        /// rehydrated against the current engine.  Intentionally does
+        /// not drop `files`, `scans`, or triage data: those are not
+        /// layout-sensitive across this bump.
+        fn check_schema_version(conn: &Connection) -> NyxResult<()> {
+            let stored: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM nyx_metadata WHERE key = 'schema_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+
+            let current = SCHEMA_VERSION;
+
+            match stored {
+                Some(ref v) if v == current => {
+                    // Schema version matches — nothing to do.
+                }
+                _ => {
+                    let old = stored.as_deref().unwrap_or("<none>");
+                    tracing::info!(
+                        "db schema version changed ({old} → {current}), clearing summary caches"
+                    );
+                    conn.execute_batch(
+                        "DELETE FROM function_summaries;
+                         DELETE FROM ssa_function_summaries;
+                         DELETE FROM ssa_function_bodies;
+                         DELETE FROM files;",
+                    )?;
+                    conn.execute(
+                        "INSERT OR REPLACE INTO nyx_metadata (key, value) VALUES ('schema_version', ?1)",
+                        params![current],
+                    )?;
+                }
+            }
+            Ok(())
         }
 
         /// Check stored engine version against the running binary.

@@ -514,11 +514,13 @@ fn analyse_body_with_seed(
             || has_nonempty_seed
             || is_java_lambda);
     let ssa_result = if use_scoped_lowering {
-        let func_name = body
-            .meta
-            .name
-            .clone()
-            .unwrap_or_else(|| format!("<anon@{}>", body.meta.span.0));
+        let func_name = body.meta.name.clone().unwrap_or_else(|| {
+            body.meta
+                .func_key
+                .as_ref()
+                .and_then(|k| k.disambig.map(|d| format!("<anon#{d}>")))
+                .unwrap_or_else(|| format!("<anon@{}>", body.meta.span.0))
+        });
         crate::ssa::lower_to_ssa_with_params(cfg, entry, Some(&func_name), false, &body.meta.params)
     } else {
         crate::ssa::lower_to_ssa(cfg, entry, None, true)
@@ -1088,11 +1090,13 @@ fn lower_all_functions_from_bodies(
     let mut bodies = std::collections::HashMap::new();
 
     for body in file_cfg.function_bodies() {
-        let func_name = body
-            .meta
-            .name
-            .clone()
-            .unwrap_or_else(|| format!("<anon@{}>", body.meta.span.0));
+        let func_name = body.meta.name.clone().unwrap_or_else(|| {
+            body.meta
+                .func_key
+                .as_ref()
+                .and_then(|k| k.disambig.map(|d| format!("<anon#{d}>")))
+                .unwrap_or_else(|| format!("<anon@{}>", body.meta.span.0))
+        });
 
         let interner = SymbolInterner::from_cfg(&body.graph);
         let formal_params = &body.meta.params;
