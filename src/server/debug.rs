@@ -1261,6 +1261,8 @@ function consume() {
                 receiver_to_return: None,
 
                 receiver_to_sink: Cap::empty(),
+
+                abstract_transfer: vec![],
             },
         );
 

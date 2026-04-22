@@ -392,6 +392,8 @@ mod tests {
                         receiver_to_return: None,
 
                         receiver_to_sink: Cap::empty(),
+
+                        abstract_transfer: vec![],
                     },
                 )],
             )
@@ -590,6 +592,8 @@ mod tests {
                         receiver_to_return: None,
 
                         receiver_to_sink: Cap::empty(),
+
+                        abstract_transfer: vec![],
                     },
                 )],
             )

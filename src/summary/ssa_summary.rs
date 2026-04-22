@@ -1,4 +1,4 @@
-use crate::abstract_interp::AbstractValue;
+use crate::abstract_interp::{AbstractTransfer, AbstractValue};
 use crate::labels::Cap;
 use crate::ssa::type_facts::TypeKind;
 use crate::summary::SinkSite;
@@ -77,6 +77,23 @@ pub struct SsaFuncSummary {
     /// Empty when the receiver is not used as a sink payload inside the body.
     #[serde(default)]
     pub receiver_to_sink: Cap,
+    /// Phase CF-3: per-parameter abstract-domain transfer channels.
+    ///
+    /// Each entry `(param_index, transfer)` describes how a caller-known
+    /// abstract value at that parameter maps to the function's return
+    /// abstract value.  At cross-file call sites the caller applies each
+    /// transfer to the corresponding argument's abstract state and joins
+    /// the results (then `meet`s with [`Self::return_abstract`]) to
+    /// synthesise the return abstract value — recovering interval bounds
+    /// and string prefixes that would otherwise be lost to the summary's
+    /// Top-seeded baseline.
+    ///
+    /// Empty when no parameter carries useful abstract flow.  Individual
+    /// entries are omitted when their transfer is "top" (no knowledge),
+    /// so on-disk size grows only when the callee really does propagate
+    /// abstract values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abstract_transfer: Vec<(usize, AbstractTransfer)>,
 }
 
 impl SsaFuncSummary {

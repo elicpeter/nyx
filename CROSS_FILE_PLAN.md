@@ -13,15 +13,15 @@ document.
 
 ## Phase summary
 
-| Phase | Title                                               | Depends on  | Est. session size |
-|-------|-----------------------------------------------------|-------------|-------------------|
-| CF-1  | Cross-file SSA body availability (infrastructure)   | —           | 1 session         |
-| CF-2  | Cross-file k=1 context-sensitive inline taint       | CF-1        | 1 session         |
-| CF-3  | Abstract-domain transfer channels in summaries      | —           | 1 session         |
-| CF-4  | Per-return-path summary decomposition               | —           | 1 session         |
-| CF-5  | Cross-file SCC joint fixed-point                    | CF-1, CF-2  | 1 session         |
-| CF-6  | Parameter-granularity points-to summaries           | CF-4        | 1 session         |
-| CF-7  | Demand-driven backwards analysis from sinks         | CF-1..CF-4  | 1 full session    |
+| Phase | Title                                               | Depends on  | Est. session size | Status                       |
+|-------|-----------------------------------------------------|-------------|-------------------|------------------------------|
+| CF-1  | Cross-file SSA body availability (infrastructure)   | —           | 1 session         | Landed 2026-04-21            |
+| CF-2  | Cross-file k=1 context-sensitive inline taint       | CF-1        | 1 session         | Landed 2026-04-22            |
+| CF-3  | Abstract-domain transfer channels in summaries      | —           | 1 session         | Landed 2026-04-22            |
+| CF-4  | Per-return-path summary decomposition               | —           | 1 session         | Not started                  |
+| CF-5  | Cross-file SCC joint fixed-point                    | CF-1, CF-2  | 1 session         | Not started                  |
+| CF-6  | Parameter-granularity points-to summaries           | CF-4        | 1 session         | Not started                  |
+| CF-7  | Demand-driven backwards analysis from sinks         | CF-1..CF-4  | 1 full session    | Not started                  |
 
 Recommended order: CF-1 → CF-2 first (the biggest immediate precision
 win). CF-3 and CF-4 are independent and can run in parallel. CF-5 follows
@@ -336,7 +336,14 @@ NYX_CONTEXT_SENSITIVE=0 cargo test --test cross_file_context_tests
 
 ## Phase CF-3 — Abstract-domain transfer channels in summaries
 
-**Status:** Not started
+**Status:** Landed 2026-04-22 on `release/0.5.0`. Benchmark neutral
+(rule-level F1 0.966 — unchanged from CF-2); the precision win is
+latent pending resolution of a pre-existing JS suppression-pipeline
+quirk documented in `memory/project_cf3_suppression_quirks.md`.
+Structural Identity detection and transfer-apply semantics are
+covered by `tests/abstract_transfer_tests.rs` (29 unit tests plus
+an end-to-end passthrough-identity test through the real extraction
+pipeline).
 **Estimated effort:** 1 session
 **Depends on:** Nothing (independent of CF-1 / CF-2)
 

@@ -115,7 +115,7 @@ path's worst-case union.
   next cross-file hop. CF-5 (SCC joint fixed-point) will revisit this
   for mutually recursive cross-file SCCs.
 
-### CF-3 — Indexed-scan parity for cross-file inline (2026-04-22)
+### CF-2 follow-up — Indexed-scan parity for cross-file inline (2026-04-22)
 
 On-disk layout: `CrossFileNodeMeta` now embeds a full `crate::cfg::NodeInfo`
 (up from just `bin_op` + `labels`). The engine-version salt was bumped
@@ -123,8 +123,126 @@ to `+cf3-xfile-meta` to invalidate stale DBs. Indexed-scan variants of the
 four CF-2 fixture tests were added (`*_indexed` in
 `tests/cross_file_context_tests.rs`) and pass alongside the in-memory
 variants. Benchmark unchanged at rule-level P=0.940, R=0.994, F1=0.966 —
-CF-3 is a correctness/parity fix, not a precision delta, because the CF-2
-fixtures already exercised the in-memory scan path.
+this follow-up is a correctness/parity fix, not a precision delta, because
+the CF-2 fixtures already exercised the in-memory scan path.
+
+---
+
+## Phase CF-3 — Abstract-domain transfer channels in summaries (2026-04-22)
+
+Scanner version: 0.5.0
+Analysis mode: Full (taint + AST patterns + state analysis)
+Corpus: 256 cases (159 vulnerable, 97 safe) across 10 languages
+
+### Motivation
+
+Phase 17 abstract interpretation tracks per-SSA-value intervals, string
+prefix/suffix facts, and known-bit masks during pass 2 and uses them to
+suppress findings via `is_abstract_safe_for_sink`. None of those facts
+crossed function boundaries through summaries: a caller that proved
+`port ∈ [1024, 65535]` lost the bound the moment the value entered a
+cross-file callee. The callee's `SsaFuncSummary.return_abstract` was
+computed under ⊤-seeded inputs (Phase 17 baseline), so any passthrough
+function looked like "return value unknown" to the caller.
+
+CF-3 records, per parameter, a bounded symbolic description of how that
+parameter's abstract value maps to the return. Callers synthesise the
+return abstract at summary-path call sites without re-running the callee.
+
+### Changes
+
+1. **`AbstractTransfer` domain** (`src/abstract_interp/mod.rs`). Product
+   of bounded per-subdomain forms:
+   - `IntervalTransfer`: `Top` | `Identity` | `Affine { add, mul }` |
+     `Clamped { lo, hi }`.
+   - `StringTransfer`: `Unknown` | `Identity` | `LiteralPrefix(String)`,
+     capped at `MAX_LITERAL_PREFIX_LEN = 64` chars so the on-disk
+     summary size stays bounded regardless of callee body size.
+   - Bit subdomain is intentionally not carried cross-file (always Top).
+
+2. **Summary schema** (`src/summary/ssa_summary.rs`): new
+   `SsaFuncSummary.abstract_transfer: Vec<(usize, AbstractTransfer)>`.
+   Serde-gated with `#[serde(default, skip_serializing_if = "Vec::is_empty")]`
+   — old DBs deserialise unchanged; only functions that actually
+   propagate abstract facts contribute bytes on the wire. Identity
+   disambig hashing updated to include the new field.
+
+3. **Pass-1 extraction** (`src/taint/ssa_transfer.rs`,
+   `derive_abstract_transfer`). Structural inference:
+   - *Identity* when every return block's return value traces (through
+     single-use `Assign` and same-param `Phi` merges, bounded depth 8)
+     to the same `SsaOp::Param { index }`.
+   - *Clamped / LiteralPrefix* attached per parameter when the callee's
+     baseline `return_abstract` has a bounded interval or known prefix —
+     captures callee-intrinsic facts that hold regardless of caller
+     input, and lets a caller consult them via the summary path even
+     when CF-2 inline is unavailable.
+
+4. **Pass-2 application** (`SsaOp::Call` arm of `transfer_inst`). Runs
+   whenever the callee was resolved via an SSA summary; fires
+   regardless of whether CF-2 inline already produced return taint, because
+   inline analysis threads taint but not abstract state. Per-param
+   transfers evaluate on the caller's current abstract value of the
+   argument, the per-param contributions are joined, then `meet`-ed with
+   the baseline `return_abstract` (falling back to the less restrictive
+   side if the meet contradicts).
+
+### Fixtures and tests
+
+- `tests/abstract_transfer_tests.rs` (new, 29 tests): serde round-trip
+  for every form, per-subdomain `apply` semantics, join widening, LCP
+  join on shared literal prefixes, and an end-to-end pass-1 structural
+  test that drives a two-file Python identity passthrough through the
+  real extraction pipeline and asserts the resulting summary carries
+  `Identity` on both subdomains.
+- `tests/fixtures/cross_file_abstract_port_range/`,
+  `tests/fixtures/cross_file_abstract_bounded_index/` (new): regression
+  guards that exercise the cross-file summary path on known-good Python
+  callees; `tests/cross_file_abstract_tests.rs` runs both.
+- A JS `url_prefix_lock` fixture was intentionally held back — a
+  pre-existing JS pipeline quirk (args-shape divergence across the
+  containment + iterative-convergence passes, plus the gated-sink path
+  for `fetch` / `axios.get`) drops the abstract string prefix before
+  `is_call_abstract_safe` consults it even in the single-file literal
+  case. Captured in `memory/project_cf3_suppression_quirks.md` with
+  repro, backtrace, and a reintroduction recipe.
+
+### Benchmark delta
+
+| Metric                   | Before CF-3 | After CF-3 |
+|--------------------------|-------------|------------|
+| File-level precision     | 0.941       | 0.941      |
+| File-level recall        | 1.000       | 1.000      |
+| File-level F1            | 0.970       | 0.970      |
+| Rule-level precision     | 0.940       | 0.940      |
+| Rule-level recall        | 0.994       | 0.994      |
+| Rule-level F1            | 0.966       | 0.966      |
+
+CF-3 is byte-for-byte neutral on the current benchmark corpus. This is
+expected: the corpus does not yet include call chains where an
+identity-passthrough cross-file callee is the only thing standing
+between a caller-side abstract bound and a downstream abstract-domain
+suppression. The CI floor (P=86.1 / R=94.4 / F1=90.1) is well clear.
+
+The precision win will materialise when (a) the JS suppression pipeline
+quirks above are resolved and the `url_prefix_lock`-style fixtures can
+land, and (b) broader corpora exercise cross-file integer-bound
+propagation.
+
+### Known limitations
+
+- Per-return-path decomposition is CF-4's scope. A callee whose return
+  traces to `param_0` on one branch and `param_1` on another yields
+  `identity_consistent = false` and falls back to the baseline-invariant
+  form (or Top). CF-4 will replace `abstract_transfer` with a bounded
+  per-return-path vector.
+- Only single-use `Assign` and consistent-origin `Phi` merges are
+  followed by the Identity tracer; more complex alias chains degrade
+  silently to the baseline form. Intentional — richer alias reasoning
+  is CF-6.
+- `Affine` is defined in the domain but the pass-1 structural inferrer
+  never emits it. Added as the natural next form for a follow-up once
+  we have the fixtures to justify emitting it.
 
 ---
 

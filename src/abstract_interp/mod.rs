@@ -137,6 +137,220 @@ impl AbstractDomain for AbstractValue {
     }
 }
 
+// ── AbstractTransfer (Phase CF-3) ───────────────────────────────────────
+
+/// Maximum length of a literal prefix tracked by [`StringTransfer::LiteralPrefix`].
+///
+/// Caps the on-disk summary size when a callee produces a long known prefix.
+/// The interval domain already has a natural bound (two `i64`s); the string
+/// side needs an explicit cap so a callee that returns a 10KB constant does
+/// not balloon every cross-file summary that references it.
+pub const MAX_LITERAL_PREFIX_LEN: usize = 64;
+
+/// Per-parameter interval-to-return transform.
+///
+/// This is a **bounded** description of how a caller-known interval on one
+/// parameter maps to the callee's return interval.  The forms are intentionally
+/// restricted so the summary size stays constant regardless of callee body
+/// complexity:
+///
+/// * [`IntervalTransfer::Top`] — no interval knowledge crosses (default).
+/// * [`IntervalTransfer::Identity`] — return = param (pass-through).
+/// * [`IntervalTransfer::Affine`] — return = param * `mul` + `add` with
+///   `i64` constants; overflow defaults to Top at apply time.
+/// * [`IntervalTransfer::Clamped`] — return is always in `[lo, hi]` regardless
+///   of input.  Captures callee-intrinsic bounds (e.g. `saturating` ops).
+///
+/// No unbounded expression trees, no nesting.  A callee whose behaviour does
+/// not fit one of these forms falls back to `Top` — we never try to encode
+/// richer algebra in the summary.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IntervalTransfer {
+    Top,
+    Identity,
+    Affine { add: i64, mul: i64 },
+    Clamped { lo: i64, hi: i64 },
+}
+
+impl Default for IntervalTransfer {
+    fn default() -> Self {
+        Self::Top
+    }
+}
+
+impl IntervalTransfer {
+    /// Apply the transform to a caller-known input interval.
+    pub fn apply(&self, input: &IntervalFact) -> IntervalFact {
+        match self {
+            Self::Top => IntervalFact::top(),
+            Self::Identity => input.clone(),
+            Self::Affine { add, mul } => input
+                .mul(&IntervalFact::exact(*mul))
+                .add(&IntervalFact::exact(*add)),
+            Self::Clamped { lo, hi } if lo <= hi => IntervalFact {
+                lo: Some(*lo),
+                hi: Some(*hi),
+            },
+            Self::Clamped { .. } => IntervalFact::top(),
+        }
+    }
+
+    /// Join two transforms.  Used when multiple return paths produce
+    /// differing transforms for the same parameter: the aggregate is the
+    /// widest safe form.
+    pub fn join(&self, other: &Self) -> Self {
+        use IntervalTransfer::*;
+        match (self, other) {
+            (Top, _) | (_, Top) => Top,
+            (a, b) if a == b => a.clone(),
+            (Clamped { lo: a, hi: b }, Clamped { lo: c, hi: d }) => Clamped {
+                lo: (*a).min(*c),
+                hi: (*b).max(*d),
+            },
+            // Identity ⊔ anything else = Top (different flow shapes).
+            _ => Top,
+        }
+    }
+}
+
+/// Per-parameter string-to-return transform.
+///
+/// Mirrors [`IntervalTransfer`] for the string subdomain.  Bounded by
+/// [`MAX_LITERAL_PREFIX_LEN`] to keep summary size constant.
+///
+/// * [`StringTransfer::Unknown`] — default.
+/// * [`StringTransfer::Identity`] — return = param.
+/// * [`StringTransfer::LiteralPrefix`] — return has this literal prefix
+///   regardless of input (callee-intrinsic).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StringTransfer {
+    Unknown,
+    Identity,
+    LiteralPrefix(String),
+}
+
+impl Default for StringTransfer {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+impl StringTransfer {
+    /// Construct a `LiteralPrefix`, truncating to [`MAX_LITERAL_PREFIX_LEN`]
+    /// and degrading to `Unknown` on empty input.
+    pub fn literal_prefix(s: &str) -> Self {
+        if s.is_empty() {
+            return Self::Unknown;
+        }
+        if s.len() <= MAX_LITERAL_PREFIX_LEN {
+            Self::LiteralPrefix(s.to_string())
+        } else {
+            // Truncate on a char boundary to stay valid UTF-8.
+            let mut cut = MAX_LITERAL_PREFIX_LEN;
+            while cut > 0 && !s.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            if cut == 0 {
+                Self::Unknown
+            } else {
+                Self::LiteralPrefix(s[..cut].to_string())
+            }
+        }
+    }
+
+    /// Apply the transform to a caller-known input string fact.
+    pub fn apply(&self, input: &StringFact) -> StringFact {
+        match self {
+            Self::Unknown => StringFact::top(),
+            Self::Identity => input.clone(),
+            Self::LiteralPrefix(p) => StringFact::from_prefix(p),
+        }
+    }
+
+    /// Join two transforms.
+    pub fn join(&self, other: &Self) -> Self {
+        use StringTransfer::*;
+        match (self, other) {
+            (Unknown, _) | (_, Unknown) => Unknown,
+            (a, b) if a == b => a.clone(),
+            (LiteralPrefix(a), LiteralPrefix(b)) => {
+                // Longest common prefix.
+                let lcp: String = a
+                    .chars()
+                    .zip(b.chars())
+                    .take_while(|(x, y)| x == y)
+                    .map(|(x, _)| x)
+                    .collect();
+                if lcp.is_empty() {
+                    Unknown
+                } else {
+                    Self::literal_prefix(&lcp)
+                }
+            }
+            // Identity vs LiteralPrefix → Unknown (different flow shapes).
+            _ => Unknown,
+        }
+    }
+}
+
+/// Per-parameter abstract-domain transfer channel.
+///
+/// Combines the per-subdomain transforms into one record attached to each
+/// parameter in [`crate::summary::ssa_summary::SsaFuncSummary`].  Used at
+/// cross-file call sites to synthesise a return abstract value from the
+/// caller's knowledge of each argument, without having to re-run the callee.
+///
+/// Composition rule: `apply(input) = (interval.apply, string.apply,
+/// bits=top)`.  The bit domain is always Top — we do not track cross-file
+/// bit transfers in CF-3.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AbstractTransfer {
+    #[serde(default, skip_serializing_if = "is_interval_top")]
+    pub interval: IntervalTransfer,
+    #[serde(default, skip_serializing_if = "is_string_unknown")]
+    pub string: StringTransfer,
+}
+
+fn is_interval_top(t: &IntervalTransfer) -> bool {
+    matches!(t, IntervalTransfer::Top)
+}
+
+fn is_string_unknown(t: &StringTransfer) -> bool {
+    matches!(t, StringTransfer::Unknown)
+}
+
+impl AbstractTransfer {
+    /// Fully-imprecise transfer: no information crosses.  Used as the
+    /// conservative default when a parameter's flow does not fit any of the
+    /// bounded forms.
+    pub fn top() -> Self {
+        Self::default()
+    }
+
+    /// True when neither subdomain carries any information — equivalent to
+    /// "omit this entry entirely".
+    pub fn is_top(&self) -> bool {
+        is_interval_top(&self.interval) && is_string_unknown(&self.string)
+    }
+
+    /// Apply the transform to a caller-known input abstract value.
+    pub fn apply(&self, input: &AbstractValue) -> AbstractValue {
+        AbstractValue {
+            interval: self.interval.apply(&input.interval),
+            string: self.string.apply(&input.string),
+            bits: BitFact::top(),
+        }
+    }
+
+    /// Join two transfers component-wise.
+    pub fn join(&self, other: &Self) -> Self {
+        Self {
+            interval: self.interval.join(&other.interval),
+            string: self.string.join(&other.string),
+        }
+    }
+}
+
 // ── AbstractState ───────────────────────────────────────────────────────
 
 /// Maximum abstract values tracked per block (performance bound).

@@ -1438,7 +1438,8 @@ fn ssa_summary_fits_arity(summary: &SsaFuncSummary, key_arity: Option<usize>) ->
                 .iter()
                 .flat_map(|(a, b)| [*a, *b]),
         )
-        .chain(summary.source_to_callback.iter().map(|(i, _)| *i));
+        .chain(summary.source_to_callback.iter().map(|(i, _)| *i))
+        .chain(summary.abstract_transfer.iter().map(|(i, _)| *i));
     for i in refs {
         if i >= arity {
             return false;
@@ -1463,6 +1464,7 @@ fn synthesize_ssa_disambig(summary: &SsaFuncSummary) -> u32 {
     summary.return_type.is_some().hash(&mut h);
     summary.return_abstract.is_some().hash(&mut h);
     summary.source_to_callback.len().hash(&mut h);
+    summary.abstract_transfer.len().hash(&mut h);
     h.finish() as u32
 }
 

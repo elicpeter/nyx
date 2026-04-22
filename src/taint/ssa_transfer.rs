@@ -2303,6 +2303,73 @@ fn transfer_inst(
                 // Phase 17 hardening: capture abstract return for post-transfer injection
                 callee_return_abstract = resolved.return_abstract.clone();
 
+                // Phase CF-3: apply per-parameter abstract transfers.
+                //
+                // For each (param_idx, transfer) in the callee's summary,
+                // apply the transfer to the caller's current abstract value
+                // of the argument at that position.  Join the per-parameter
+                // contributions (disjunctive: any transfer's output is a
+                // valid over-approximation of the return), then `meet` with
+                // the baseline `return_abstract` (both facts must hold).
+                //
+                // Runs regardless of whether inline analysis (CF-2) already
+                // resolved the call: inline re-analyses taint only; abstract
+                // values are not threaded into or out of the callee body on
+                // that path, so abstract transfer remains the summary-level
+                // channel for propagating intervals / string prefixes across
+                // a cross-file call.
+                if !resolved.abstract_transfer.is_empty() {
+                    let mut synthesised: Option<crate::abstract_interp::AbstractValue> = None;
+                    for (idx, transfer) in &resolved.abstract_transfer {
+                        if transfer.is_top() {
+                            continue;
+                        }
+                        let arg_abs = if let Some(group) = args.get(*idx) {
+                            let mut joined: Option<crate::abstract_interp::AbstractValue> = None;
+                            for &v in group {
+                                let av = state
+                                    .abstract_state
+                                    .as_ref()
+                                    .map(|a| a.get(v))
+                                    .unwrap_or_else(crate::abstract_interp::AbstractValue::top);
+                                joined = Some(match joined {
+                                    None => av,
+                                    Some(prev) => prev.join(&av),
+                                });
+                            }
+                            joined.unwrap_or_else(crate::abstract_interp::AbstractValue::top)
+                        } else {
+                            crate::abstract_interp::AbstractValue::top()
+                        };
+                        let applied = transfer.apply(&arg_abs);
+                        if applied.is_top() {
+                            continue;
+                        }
+                        synthesised = Some(match synthesised {
+                            None => applied,
+                            Some(prev) => prev.join(&applied),
+                        });
+                    }
+                    if let Some(synth) = synthesised {
+                        callee_return_abstract = match callee_return_abstract.take() {
+                            Some(base) => {
+                                let m = base.meet(&synth);
+                                // Fall back to whichever side is non-bottom
+                                // (meet can contradict when the callee's
+                                // baseline and the caller-side transfer
+                                // describe disjoint facts — rare, but sound
+                                // to widen back to the less restrictive).
+                                if m.is_bottom() {
+                                    Some(synth.join(&base))
+                                } else {
+                                    Some(m)
+                                }
+                            }
+                            None => Some(synth),
+                        };
+                    }
+                }
+
                 // Cross-file type propagation: if the callee has a known return
                 // type (from SSA summary), inject it into the caller's path env
                 // so downstream type-qualified resolution can use it.
@@ -5789,6 +5856,15 @@ struct ResolvedSummary {
     /// Caps that receiver taint reaches at internal sinks.
     #[allow(dead_code)]
     receiver_to_sink: Cap,
+    /// Phase CF-3: per-parameter abstract-domain transfer channels.
+    ///
+    /// Populated only when the callee was resolved via an SSA summary
+    /// (`convert_ssa_to_resolved`).  The label, local-summary, interop
+    /// and coarse `FuncSummary` paths carry `Vec::new()` because those
+    /// forms do not record abstract-domain behaviour.  Applied at the
+    /// call site to synthesise an abstract return value from the
+    /// caller's knowledge of each argument.
+    abstract_transfer: Vec<(usize, crate::abstract_interp::AbstractTransfer)>,
 }
 
 fn resolve_callee(
@@ -5929,6 +6005,8 @@ fn resolve_callee_full(
                     receiver_to_return: None,
 
                     receiver_to_sink: Cap::empty(),
+
+                    abstract_transfer: vec![],
                 });
             }
             // Try label classification for the bound function (by leaf name)
@@ -5965,6 +6043,8 @@ fn resolve_callee_full(
                     receiver_to_return: None,
 
                     receiver_to_sink: Cap::empty(),
+
+                    abstract_transfer: vec![],
                 });
             }
         }
@@ -6040,6 +6120,8 @@ fn resolve_callee_full(
                 receiver_to_return: None,
 
                 receiver_to_sink: Cap::empty(),
+
+                abstract_transfer: vec![],
             });
         }
     } else {
@@ -6086,6 +6168,8 @@ fn resolve_callee_full(
                         receiver_to_return: None,
 
                         receiver_to_sink: Cap::empty(),
+
+                        abstract_transfer: vec![],
                     });
                 }
             }
@@ -6124,6 +6208,8 @@ fn resolve_callee_full(
                 receiver_to_return: None,
 
                 receiver_to_sink: Cap::empty(),
+
+                abstract_transfer: vec![],
             });
         }
     }
@@ -6176,6 +6262,7 @@ fn convert_ssa_to_resolved(
         source_to_callback: ssa_sum.source_to_callback.clone(),
         receiver_to_return: ssa_sum.receiver_to_return.clone(),
         receiver_to_sink: ssa_sum.receiver_to_sink,
+        abstract_transfer: ssa_sum.abstract_transfer.clone(),
     }
 }
 
@@ -6832,6 +6919,22 @@ pub fn extract_ssa_func_summary(
         vec![]
     };
 
+    // Phase CF-3: per-parameter abstract-domain transfers.
+    //
+    // Derived structurally from the SSA body — no additional taint probes.
+    // Three-step inference per parameter:
+    //   1. Identity: return SSA value at every return block traces back to
+    //      this parameter (possibly through assigns / phi merges all feeding
+    //      from the same param).
+    //   2. Callee-intrinsic bound: baseline `return_abstract` carries a
+    //      concrete fact (bounded interval or known prefix) that holds
+    //      regardless of caller input — record it once per parameter as
+    //      `Clamped` / `LiteralPrefix` so the caller sees the bound even
+    //      when it has no abstract info on its own argument.
+    //   3. Top: default; the entry is omitted (empty transfer is meaningless).
+    let abstract_transfer =
+        derive_abstract_transfer(ssa, &param_info, return_abstract.as_ref());
+
     SsaFuncSummary {
         param_to_return,
         param_to_sink,
@@ -6844,7 +6947,133 @@ pub fn extract_ssa_func_summary(
         source_to_callback,
         receiver_to_return: None,
         receiver_to_sink: Cap::empty(),
+        abstract_transfer,
     }
+}
+
+/// Phase CF-3: Derive per-parameter [`AbstractTransfer`] entries for a
+/// function's SSA body.
+///
+/// `return_abstract` is the callee's intrinsic baseline (from the no-seed
+/// probe).  When present, it describes a fact that holds for the return
+/// regardless of parameter input — so it can be attached as a
+/// `Clamped` / `LiteralPrefix` transform to every parameter that flows to
+/// the return.
+///
+/// Identity detection is structural: walk the return values back through
+/// [`SsaOp::Assign`] / [`SsaOp::Phi`] chains (bounded) and check whether
+/// every leaf resolves to the same [`SsaOp::Param`].  The trace is cheap
+/// and can only produce `Identity` for passthrough callees — anything
+/// more complex degrades to the baseline fact or `Top`.
+fn derive_abstract_transfer(
+    ssa: &SsaBody,
+    param_info: &[(usize, String, SsaValue)],
+    return_abstract: Option<&crate::abstract_interp::AbstractValue>,
+) -> Vec<(usize, crate::abstract_interp::AbstractTransfer)> {
+    use crate::abstract_interp::{AbstractTransfer, IntervalTransfer, StringTransfer};
+
+    if param_info.is_empty() {
+        return Vec::new();
+    }
+
+    // Build a lookup from SsaValue → defining op by scanning the body once.
+    let mut defs: HashMap<SsaValue, &SsaOp> = HashMap::new();
+    for block in &ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            defs.insert(inst.value, &inst.op);
+        }
+    }
+
+    // Trace an SSA value backwards to the single source parameter index it
+    // resolves to, if any.  Returns `None` when the trace diverges, hits a
+    // non-pass-through op, or exceeds the depth bound.
+    fn trace_to_param(
+        v: SsaValue,
+        defs: &HashMap<SsaValue, &SsaOp>,
+        depth: usize,
+    ) -> Option<usize> {
+        const MAX_DEPTH: usize = 8;
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        match defs.get(&v)? {
+            SsaOp::Param { index } => Some(*index),
+            SsaOp::Assign(ops) if ops.len() == 1 => trace_to_param(ops[0], defs, depth + 1),
+            SsaOp::Phi(preds) => {
+                let mut result: Option<usize> = None;
+                for (_, pv) in preds {
+                    let p = trace_to_param(*pv, defs, depth + 1)?;
+                    match result {
+                        None => result = Some(p),
+                        Some(existing) if existing == p => {}
+                        Some(_) => return None,
+                    }
+                }
+                result
+            }
+            _ => None,
+        }
+    }
+
+    // For every return block, trace its return value and record which
+    // parameter (if any) it resolves to.  If all return blocks agree on the
+    // same parameter index, that parameter has `Identity`.  If they disagree
+    // (or some don't resolve), no parameter gets `Identity` and we fall
+    // back to baseline-derived forms.
+    let mut identity_param: Option<usize> = None;
+    let mut identity_consistent = true;
+    for block in &ssa.blocks {
+        if let Terminator::Return(Some(rv)) = &block.terminator {
+            let traced = trace_to_param(*rv, &defs, 0);
+            match (identity_param, traced) {
+                (None, Some(p)) => identity_param = Some(p),
+                (Some(existing), Some(p)) if existing == p => {}
+                _ => {
+                    identity_consistent = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Derive a baseline-invariant transform from `return_abstract`.  This is
+    // the "callee intrinsic" fact that always holds — each parameter that
+    // flows to the return gets it attached as the conservative transfer.
+    let baseline_invariant: Option<AbstractTransfer> = return_abstract.map(|av| {
+        let interval = match (av.interval.lo, av.interval.hi) {
+            (Some(lo), Some(hi)) if lo <= hi => IntervalTransfer::Clamped { lo, hi },
+            _ => IntervalTransfer::Top,
+        };
+        let string = match &av.string.prefix {
+            Some(p) if !p.is_empty() => StringTransfer::literal_prefix(p),
+            _ => StringTransfer::Unknown,
+        };
+        AbstractTransfer { interval, string }
+    });
+
+    let mut result: Vec<(usize, AbstractTransfer)> = Vec::new();
+
+    for (idx, _, _) in param_info {
+        let mut transfer = AbstractTransfer::top();
+
+        if identity_consistent && identity_param == Some(*idx) {
+            transfer.interval = IntervalTransfer::Identity;
+            transfer.string = StringTransfer::Identity;
+        } else if let Some(base) = baseline_invariant.as_ref() {
+            // Baseline intrinsic bound applies to every parameter that could
+            // reach the return.  We conservatively attach it to all params
+            // — at apply time the caller meets it with the real return
+            // abstract (also from this same summary), so double-counting
+            // would collapse to the tighter of the two.
+            transfer = base.clone();
+        }
+
+        if !transfer.is_top() {
+            result.push((*idx, transfer));
+        }
+    }
+
+    result
 }
 
 /// Detect callback patterns where internal source taint flows to a call of a
