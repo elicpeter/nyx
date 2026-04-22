@@ -3474,8 +3474,10 @@ fn cf4_union_param_return_paths_by_index() {
 #[test]
 fn cf4_ssa_summary_fits_arity_rejects_out_of_range_path_idx() {
     // A path whose param index exceeds the key's arity is incompatible.
-    let mut bad = SsaFuncSummary::default();
-    bad.param_return_paths = vec![(5, smallvec![rpt(TaintTransform::Identity, 1, 0, 0)])];
+    let bad = SsaFuncSummary {
+        param_return_paths: vec![(5, smallvec![rpt(TaintTransform::Identity, 1, 0, 0)])],
+        ..Default::default()
+    };
     let key = FuncKey {
         lang: Lang::Rust,
         namespace: "test.rs".into(),

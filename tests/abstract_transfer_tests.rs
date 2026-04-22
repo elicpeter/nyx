@@ -375,7 +375,7 @@ fn passthrough_callee_gets_identity_transfer() {
     std::fs::write(&a_py, "def passthrough(x):\n    return x\n").expect("write a.py");
 
     let cfg = test_config();
-    let gs = pass1(root, &[a_py.clone()], &cfg);
+    let gs = pass1(root, std::slice::from_ref(&a_py), &cfg);
 
     let (_, summary) = gs
         .snapshot_ssa()
