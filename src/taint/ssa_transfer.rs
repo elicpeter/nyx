@@ -466,15 +466,29 @@ pub(crate) struct InlineResult {
 /// in the `ArgTaintSig` component of the key.
 pub(crate) type InlineCache = HashMap<(FuncKey, ArgTaintSig), InlineResult>;
 
-/// Minimal CFG node metadata embedded in cross-file callee bodies.
+/// CFG node metadata embedded in cross-file callee bodies.
 ///
-/// The symex executor accesses `bin_op` (for binary-op detection in Assign
-/// transfer) and `labels` (for internal sink detection) from the CFG.
-/// Cross-file bodies store these per-NodeIndex so the original CFG is not needed.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+/// ## Phase CF-3 (Option A) — why a full [`NodeInfo`] lives here
+///
+/// Earlier phases carried only the two fields the symex executor reads
+/// (`bin_op`, `labels`).  That was sufficient for symex but not for the taint
+/// engine, which reads ~20 fields off `cfg[inst.cfg_node]` across
+/// `transfer_inst`, `collect_block_events`, `compute_succ_states`, and helpers
+/// (callee name, `arg_uses`, `arg_callees`, `call_ordinal`, `outer_callee`,
+/// `kwargs`, `arg_string_literals`, `ast.span`, `ast.enclosing_func`,
+/// `condition_*`, `all_args_literal`, `catch_param`, `parameterized_query`,
+/// `in_defer`, `cast_target_type`, `string_prefix`, `taint.uses`,
+/// `taint.defines`, `taint.extra_defines`, `taint.const_text`, …).  Rather
+/// than shuttling each of those through a `CfgView` accessor at every
+/// callsite, we store a full serde-able [`NodeInfo`] snapshot here so the
+/// indexed-scan path can rehydrate an equivalent `Cfg` on load
+/// (see [`rebuild_body_graph`]).  Both scan paths then feed the same
+/// `&Cfg` into the taint engine, and cross-file inline fires regardless of
+/// whether the body came from pass 1 or from SQLite.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CrossFileNodeMeta {
-    pub bin_op: Option<crate::cfg::BinOp>,
-    pub labels: smallvec::SmallVec<[crate::labels::DataLabel; 2]>,
+    /// Full `NodeInfo` snapshot for this body-local NodeIndex.
+    pub info: crate::cfg::NodeInfo,
 }
 
 /// Pre-lowered and optimized SSA body for a function,
@@ -504,25 +518,109 @@ pub struct CalleeSsaBody {
 /// Returns `true` if all referenced NodeIndex values were resolved successfully.
 /// Returns `false` if any node was out of bounds (body is ineligible for cross-file use).
 pub fn populate_node_meta(body: &mut CalleeSsaBody, cfg: &crate::cfg::Cfg) -> bool {
+    // Collect every NodeIndex this body references, then snapshot each one's
+    // NodeInfo into `node_meta`.  Done in two passes so the inner loop can
+    // mutate `body.node_meta` without borrow-checker conflicts on
+    // `body.ssa.blocks`.
+    //
+    // `Terminator::Branch.cond` must be captured as well: it is consumed by
+    // `compute_succ_states` via `cfg[*cond]`, so without it the synthesized
+    // cross-file proxy CFG (`rebuild_body_graph`) ends up too small whenever
+    // the callee body has any conditional branch whose `cond` index sits
+    // past the maximum `inst.cfg_node` index — inline analysis then panics
+    // with an out-of-bounds index.
+    let mut referenced: Vec<NodeIndex> = Vec::new();
+    for block in &body.ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            referenced.push(inst.cfg_node);
+        }
+        if let Terminator::Branch { cond, .. } = &block.terminator {
+            referenced.push(*cond);
+        }
+    }
+    for node in referenced {
+        let idx = node.index() as u32;
+        if body.node_meta.contains_key(&idx) {
+            continue;
+        }
+        if node.index() >= cfg.node_count() {
+            return false;
+        }
+        let info = cfg[node].clone();
+        body.node_meta.insert(idx, CrossFileNodeMeta { info });
+    }
+    true
+}
+
+/// Synthesize a proxy [`Cfg`] from `node_meta` so the taint engine can
+/// index `cfg[inst.cfg_node]` uniformly on the indexed-scan path.
+///
+/// When the callee body was loaded from SQLite, `body_graph` is `None`
+/// (it is `#[serde(skip)]`), but `node_meta` carries a full [`NodeInfo`]
+/// for every referenced NodeIndex (see [`populate_node_meta`]).  This
+/// helper rebuilds a petgraph `Cfg` with nodes at exactly the right
+/// NodeIndex positions so the taint engine's existing indexing works
+/// without change.
+///
+/// Returns `true` if a proxy graph was freshly installed.  Idempotent:
+/// subsequent calls are cheap no-ops once `body_graph` is `Some`.  No-op
+/// for intra-file bodies (which arrive with `body_graph` already set and
+/// `node_meta` empty).
+pub fn rebuild_body_graph(body: &mut CalleeSsaBody) -> bool {
+    if body.body_graph.is_some() {
+        return false;
+    }
+    if body.node_meta.is_empty() {
+        return false;
+    }
+    // Determine the maximum NodeIndex referenced by the SSA so the
+    // synthesized graph has an entry at every position the engine may
+    // index.  We fill any unreferenced intermediate indices with
+    // `NodeInfo::default()`.
+    //
+    // Walks both instruction `cfg_node`s and `Terminator::Branch.cond` —
+    // the latter is read by `compute_succ_states` via `cfg[*cond]`, so
+    // missing it produces an OOB panic when a conditional branch's cond
+    // node has a higher index than any `inst.cfg_node` in the body.
+    let mut max_idx: u32 = 0;
     for block in &body.ssa.blocks {
         for inst in block.phis.iter().chain(block.body.iter()) {
             let idx = inst.cfg_node.index() as u32;
-            if body.node_meta.contains_key(&idx) {
-                continue;
+            if idx > max_idx {
+                max_idx = idx;
             }
-            if inst.cfg_node.index() >= cfg.node_count() {
-                return false;
+        }
+        if let Terminator::Branch { cond, .. } = &block.terminator {
+            let idx = cond.index() as u32;
+            if idx > max_idx {
+                max_idx = idx;
             }
-            let info = &cfg[inst.cfg_node];
-            body.node_meta.insert(
-                idx,
-                CrossFileNodeMeta {
-                    bin_op: info.bin_op,
-                    labels: info.taint.labels.clone(),
-                },
-            );
         }
     }
+    // Also consider node_meta keys — they should be a subset of the
+    // SSA-referenced indices, but be defensive.
+    for &k in body.node_meta.keys() {
+        if k > max_idx {
+            max_idx = k;
+        }
+    }
+
+    use petgraph::graph::Graph;
+    let mut graph: crate::cfg::Cfg = Graph::new();
+    // petgraph allocates sequential NodeIndex values.  Insert placeholders
+    // up to and including max_idx.
+    for i in 0..=max_idx {
+        let info = body
+            .node_meta
+            .get(&i)
+            .map(|m| m.info.clone())
+            .unwrap_or_default();
+        graph.add_node(info);
+    }
+    // Edges are not consulted by the taint engine during inline analysis
+    // (control flow comes from `SsaBlock::preds`/`succs` and
+    // `SsaBlock::terminator`), so we leave the graph edge-free.
+    body.body_graph = Some(graph);
     true
 }
 
@@ -1270,7 +1368,17 @@ fn compute_succ_states(
             false_blk,
             condition,
         } => {
-            let cond_info = &cfg[*cond];
+            // Defensive: `cond` should always be present in `cfg`, but cross-file
+            // proxy CFGs synthesized in `rebuild_body_graph` previously missed
+            // Branch.cond entries (now fixed above).  Falling through to uniform
+            // propagation on a missing cond preserves liveness rather than
+            // crashing the worker thread if a future regression re-introduces it.
+            let Some(cond_info) = cfg.node_weight(*cond) else {
+                return smallvec::smallvec![
+                    (*true_blk, exit_state.clone()),
+                    (*false_blk, exit_state.clone()),
+                ];
+            };
             if cond_info.kind == crate::cfg::StmtKind::If && !cond_info.condition_vars.is_empty() {
                 let cond_text = cond_info.condition_text.as_deref().unwrap_or("");
                 let (kind, target_var) = classify_condition_with_target(cond_text);
@@ -1522,12 +1630,10 @@ fn build_arg_taint_sig(
 /// 2. **Cross-file** (Phase CF-2): if (1) misses but
 ///    [`GlobalSummaries::resolve_callee`] resolves the call site to a
 ///    cross-file [`FuncKey`], look up the body in
-///    `transfer.cross_file_bodies`.  A cross-file body is only
-///    usable here when its `body_graph` is populated (in-memory scan
-///    path); indexed-scan bodies deserialized from SQLite have
-///    `body_graph: None` and rely on `node_meta`, which the taint
-///    engine does not yet consume — those fall through to the summary
-///    path.
+///    `transfer.cross_file_bodies`.  Both in-memory and indexed-scan
+///    bodies are usable here: the former arrives with `body_graph`
+///    already set (pass 1), the latter has it rehydrated from
+///    `node_meta` via [`rebuild_body_graph`] at load time (Phase CF-3).
 ///
 /// The cache ([`InlineCache`]) is keyed by `(FuncKey, ArgTaintSig)`.
 /// `FuncKey` carries the callee's namespace, so cross-file and intra-file
@@ -1610,16 +1716,17 @@ fn inline_analyse_callee(
             CalleeResolution::Resolved(key) => {
                 let xfile_bodies = transfer.cross_file_bodies?;
                 let body = xfile_bodies.get(&key)?;
-                // Indexed-scan bodies deserialized from SQLite have
-                // `body_graph: None`.  The taint engine indexes the CFG
-                // graph directly and does not yet consume `node_meta`, so
-                // fall through to summary resolution when the body graph
-                // is absent.  The in-memory scan path populates
-                // `body_graph` and reaches this branch normally.
+                // Phase CF-3: indexed-scan bodies deserialized from SQLite
+                // arrive with `body_graph: None`, but the load path
+                // ([`rebuild_body_graph`] in `load_all_ssa_bodies`)
+                // synthesizes a proxy `Cfg` from `node_meta` so the taint
+                // engine can index `cfg[inst.cfg_node]` uniformly.  A
+                // body that still has neither a real graph nor any
+                // rehydrated metadata is structurally unusable — skip it.
                 if body.body_graph.is_none() {
                     tracing::debug!(
                         callee = %normalized,
-                        "cross-file inline miss: body has no body_graph (indexed scan)"
+                        "cross-file inline miss: body has no body_graph and no node_meta"
                     );
                     return None;
                 }
@@ -1875,7 +1982,7 @@ fn extract_inline_return_taint(
     transfer: &SsaTaintTransfer,
     block_states: &[Option<SsaTaintState>],
     induction_vars: &HashSet<SsaValue>,
-    _call_site_node: NodeIndex,
+    call_site_node: NodeIndex,
 ) -> Option<VarTaint> {
     // Collect all param SSA values to separate from derived values
     let param_values: HashSet<SsaValue> = ssa
@@ -1890,6 +1997,43 @@ fn extract_inline_return_taint(
     let mut derived_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
     let mut param_caps = Cap::empty();
     let mut param_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+
+    // Origins crossing back into the caller must reference NodeIndex values
+    // valid in the **caller's** body CFG.  Callee-internal origins (e.g. a
+    // `Source` op inside the inlined body) carry a `node` from the callee
+    // body's NodeIndex space, which is out-of-bounds when finding emission
+    // later does `caller_body_cfg[finding.source]`.  Remap them to the
+    // caller's call-site node and lazily fill `source_span` from the
+    // callee CFG so the byte→line lookup in `build_taint_diag` still has
+    // something to render.  Origins that already have `source_span` set
+    // (e.g. caller-arg origins forwarded through a Param) are remapped the
+    // same way — their `node` was rewritten to a callee-internal Param
+    // index by `transfer_inst::SsaOp::Param` before reaching this exit
+    // state, so leaving the node untouched would re-introduce the OOB.
+    let remap_origin = |o: &TaintOrigin| -> TaintOrigin {
+        let mut out = *o;
+        if out.source_span.is_none() {
+            if let Some(info) = cfg.node_weight(o.node) {
+                out.source_span = Some(info.ast.span);
+            }
+        }
+        out.node = call_site_node;
+        out
+    };
+
+    let push_remapped =
+        |target_origins: &mut SmallVec<[TaintOrigin; 2]>, orig: &TaintOrigin| {
+            let new_orig = remap_origin(orig);
+            if target_origins.len() < MAX_ORIGINS
+                && !target_origins.iter().any(|o| {
+                    o.node == new_orig.node
+                        && o.source_span == new_orig.source_span
+                        && o.source_kind == new_orig.source_kind
+                })
+            {
+                target_origins.push(new_orig);
+            }
+        };
 
     for (bid, block) in ssa.blocks.iter().enumerate() {
         let ret_val = match &block.terminator {
@@ -1919,11 +2063,7 @@ fn extract_inline_return_taint(
                     };
                     *target_caps |= taint.caps;
                     for orig in &taint.origins {
-                        if target_origins.len() < MAX_ORIGINS
-                            && !target_origins.iter().any(|o| o.node == orig.node)
-                        {
-                            target_origins.push(*orig);
-                        }
+                        push_remapped(target_origins, orig);
                     }
                 }
             } else {
@@ -1937,11 +2077,7 @@ fn extract_inline_return_taint(
                     };
                     *target_caps |= taint.caps;
                     for orig in &taint.origins {
-                        if target_origins.len() < MAX_ORIGINS
-                            && !target_origins.iter().any(|o| o.node == orig.node)
-                        {
-                            target_origins.push(*orig);
-                        }
+                        push_remapped(target_origins, orig);
                     }
                 }
             }
@@ -6965,14 +7101,18 @@ mod cross_file_tests {
 
         // Node 0: has bin_op=Add and Source label
         let meta0 = &body.node_meta[&0];
-        assert_eq!(meta0.bin_op, Some(BinOp::Add));
-        assert_eq!(meta0.labels.len(), 1);
-        assert!(matches!(meta0.labels[0], DataLabel::Source(_)));
+        assert_eq!(meta0.info.bin_op, Some(BinOp::Add));
+        assert_eq!(meta0.info.taint.labels.len(), 1);
+        assert!(matches!(meta0.info.taint.labels[0], DataLabel::Source(_)));
+        // Full NodeInfo round-trip: span, defines, and kind are preserved.
+        assert_eq!(meta0.info.ast.span, (0, 10));
+        assert_eq!(meta0.info.taint.defines.as_deref(), Some("x"));
 
         // Node 1: no bin_op, no labels
         let meta1 = &body.node_meta[&1];
-        assert_eq!(meta1.bin_op, None);
-        assert!(meta1.labels.is_empty());
+        assert_eq!(meta1.info.bin_op, None);
+        assert!(meta1.info.taint.labels.is_empty());
+        assert_eq!(meta1.info.taint.defines.as_deref(), Some("y"));
     }
 
     #[test]
@@ -7007,8 +7147,55 @@ mod cross_file_tests {
     #[test]
     fn cross_file_node_meta_default() {
         let meta = CrossFileNodeMeta::default();
-        assert_eq!(meta.bin_op, None);
-        assert!(meta.labels.is_empty());
+        assert_eq!(meta.info.bin_op, None);
+        assert!(meta.info.taint.labels.is_empty());
+    }
+
+    // ── Phase CF-3: rebuild_body_graph ──────────────────────────────────
+
+    #[test]
+    fn rebuild_body_graph_synthesizes_proxy_cfg() {
+        let cfg = make_test_cfg();
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let mut body = make_body_referencing_nodes(n0, n1);
+        populate_node_meta(&mut body, &cfg);
+        // Simulate the indexed-scan load: body_graph is skipped by serde.
+        body.body_graph = None;
+
+        let rebuilt = rebuild_body_graph(&mut body);
+        assert!(rebuilt, "rebuild should install a fresh graph");
+        let graph = body.body_graph.as_ref().expect("graph rebuilt");
+        assert_eq!(graph.node_count(), 2);
+        let info0 = &graph[n0];
+        assert_eq!(info0.bin_op, Some(BinOp::Add));
+        assert_eq!(info0.taint.labels.len(), 1);
+        assert!(matches!(info0.taint.labels[0], DataLabel::Source(_)));
+    }
+
+    #[test]
+    fn rebuild_body_graph_is_idempotent() {
+        let cfg = make_test_cfg();
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let mut body = make_body_referencing_nodes(n0, n1);
+        populate_node_meta(&mut body, &cfg);
+        body.body_graph = None;
+
+        assert!(rebuild_body_graph(&mut body));
+        assert!(!rebuild_body_graph(&mut body), "second call must no-op");
+    }
+
+    #[test]
+    fn rebuild_body_graph_noop_without_meta() {
+        // Intra-file body: node_meta empty, body_graph comes from pass 1.
+        let n0 = NodeIndex::new(0);
+        let n1 = NodeIndex::new(1);
+        let mut body = make_body_referencing_nodes(n0, n1);
+        assert!(body.node_meta.is_empty());
+        assert!(body.body_graph.is_none());
+        assert!(!rebuild_body_graph(&mut body));
+        assert!(body.body_graph.is_none());
     }
 }
 

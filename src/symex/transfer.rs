@@ -165,7 +165,7 @@ pub fn transfer_inst(
                     // Check for binary op metadata on the CFG node
                     let bin_op_val = if let Some(meta) = node_meta {
                         meta.get(&(inst.cfg_node.index() as u32))
-                            .and_then(|m| m.bin_op)
+                            .and_then(|m| m.info.bin_op)
                     } else {
                         cfg[inst.cfg_node].bin_op
                     };

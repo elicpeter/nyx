@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { apiGet } from '../client';
 import type { PaginatedFindings, FindingView, FilterValues } from '../types';
 
@@ -40,6 +40,18 @@ export function useFinding(id: number | string) {
     queryKey: ['findings', id],
     queryFn: ({ signal }) => apiGet<FindingView>(`/findings/${id}`, signal),
     enabled: id !== undefined && id !== null && id !== '',
+  });
+}
+
+export function fetchFindingDetail(
+  qc: QueryClient,
+  index: number,
+  signal?: AbortSignal,
+): Promise<FindingView> {
+  return qc.fetchQuery({
+    queryKey: ['findings', String(index)],
+    queryFn: ({ signal: s }) =>
+      apiGet<FindingView>(`/findings/${index}`, s ?? signal),
   });
 }
 

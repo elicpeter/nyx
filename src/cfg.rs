@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 /// -------------------------------------------------------------------------
 ///  Public AST‑to‑CFG data structures
 /// -------------------------------------------------------------------------
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum StmtKind {
     Entry,
     Exit,
@@ -77,7 +77,7 @@ pub enum BinOp {
 }
 
 /// Call-related metadata for CFG nodes.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CallMeta {
     pub callee: Option<String>,
     /// When `find_classifiable_inner_call` overrides the primary callee
@@ -118,7 +118,7 @@ pub struct CallMeta {
 }
 
 /// Taint-classification and variable-flow metadata.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TaintMeta {
     pub labels: SmallVec<[DataLabel; 2]>, // taint classifications (multi-label)
     /// Raw text of a constant/literal RHS when this node defines a variable
@@ -132,14 +132,14 @@ pub struct TaintMeta {
 }
 
 /// AST origin/location metadata.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AstMeta {
     pub span: (usize, usize), // byte offsets in the original file
     /// Name of the enclosing function (set during CFG construction).
     pub enclosing_func: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NodeInfo {
     pub kind: StmtKind,
     pub call: CallMeta,

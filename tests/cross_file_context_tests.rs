@@ -33,9 +33,13 @@ mod common;
 
 use common::{scan_fixture_dir, validate_expectations};
 use nyx_scanner::ast::analyse_file_fused;
+use nyx_scanner::commands::index::build_index;
+use nyx_scanner::commands::scan::{Diag, scan_with_index_parallel};
+use nyx_scanner::database::index::Indexer;
 use nyx_scanner::summary::GlobalSummaries;
 use nyx_scanner::utils::config::{AnalysisMode, Config};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -133,6 +137,71 @@ fn cross_file_context_sanitizer() {
 fn cross_file_context_deep_chain() {
     let dir = fixture_path("cross_file_context_deep_chain");
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+// ── Phase CF-3: indexed-scan variants ───────────────────────────────────────
+//
+// Each CF-2 fixture above drives the in-memory scan path (`scan_no_index`).
+// The indexed-scan path loads pre-lowered `CalleeSsaBody`s from SQLite
+// where `body_graph` is `#[serde(skip)]` and comes back `None`.  Before CF-3
+// the taint engine's cross-file inline early-returned on that case, so
+// indexed and no-index scans could diverge on these fixtures.  Phase CF-3
+// rehydrates a proxy `Cfg` from `node_meta` at load time, restoring parity.
+//
+// These tests run the same fixtures through `scan_with_index_parallel` and
+// assert the same `validate_expectations` outcome.  A regression to the
+// early-return (or to the node_meta → body_graph rebuild) would cause the
+// tainted-call fixtures to lose their finding on the indexed path while
+// keeping it on the in-memory path.
+
+fn scan_indexed(fixture_dir: &Path, mode: AnalysisMode) -> Vec<Diag> {
+    let mut cfg = Config::default();
+    cfg.scanner.mode = mode;
+    cfg.scanner.read_vcsignore = false;
+    cfg.scanner.require_git_to_read_vcsignore = false;
+    cfg.scanner.enable_state_analysis = true;
+    cfg.scanner.enable_auth_analysis = true;
+    cfg.performance.worker_threads = Some(1);
+    cfg.performance.batch_size = 64;
+    cfg.performance.channel_multiplier = 1;
+
+    let td = tempfile::tempdir().expect("tempdir");
+    let db_path = td.path().join("cf3.sqlite");
+
+    build_index("cf3", fixture_dir, &db_path, &cfg, false).expect("build_index");
+    let pool = Indexer::init(&db_path).expect("init pool");
+    let diags = scan_with_index_parallel("cf3", Arc::clone(&pool), &cfg, false, fixture_dir)
+        .expect("indexed scan");
+    std::mem::drop(td);
+    diags
+}
+
+#[test]
+fn cross_file_context_two_call_sites_indexed() {
+    let dir = fixture_path("cross_file_context_two_call_sites");
+    let diags = scan_indexed(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn cross_file_context_callback_indexed() {
+    let dir = fixture_path("cross_file_context_callback");
+    let diags = scan_indexed(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn cross_file_context_sanitizer_indexed() {
+    let dir = fixture_path("cross_file_context_sanitizer");
+    let diags = scan_indexed(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+#[test]
+fn cross_file_context_deep_chain_indexed() {
+    let dir = fixture_path("cross_file_context_deep_chain");
+    let diags = scan_indexed(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
 

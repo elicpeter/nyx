@@ -1048,7 +1048,12 @@ pub mod index {
                                     e
                                 })
                                 .ok()
-                                .map(|b| {
+                                .map(|mut b| {
+                                    // Phase CF-3: rehydrate a proxy Cfg from node_meta so
+                                    // the taint engine's cross-file inline path can index
+                                    // `cfg[inst.cfg_node]` uniformly.  No-op for intra-file
+                                    // bodies that carry node_meta empty.
+                                    crate::taint::ssa_transfer::rebuild_body_graph(&mut b);
                                     (
                                         fp.clone(),
                                         name.clone(),
@@ -1069,7 +1074,9 @@ pub mod index {
                 let mut out = Vec::with_capacity(rows.len());
                 for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
                     match serde_json::from_str::<crate::taint::ssa_transfer::CalleeSsaBody>(json) {
-                        Ok(b) => {
+                        Ok(mut b) => {
+                            // Phase CF-3: see note in parallel branch above.
+                            crate::taint::ssa_transfer::rebuild_body_graph(&mut b);
                             out.push((
                                 fp.clone(),
                                 name.clone(),
@@ -2236,6 +2243,7 @@ fn ssa_bodies_replace_on_rescan() {
 
 #[test]
 fn ssa_bodies_with_node_meta_round_trip() {
+    use crate::cfg::{NodeInfo, TaintMeta};
     use crate::labels::{Cap, DataLabel};
     use crate::taint::ssa_transfer::CrossFileNodeMeta;
 
@@ -2252,8 +2260,14 @@ fn ssa_bodies_with_node_meta_round_trip() {
     body.node_meta.insert(
         0,
         CrossFileNodeMeta {
-            bin_op: Some(crate::cfg::BinOp::Add),
-            labels: smallvec::smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+            info: NodeInfo {
+                bin_op: Some(crate::cfg::BinOp::Add),
+                taint: TaintMeta {
+                    labels: smallvec::smallvec![DataLabel::Sink(Cap::SQL_QUERY)],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
         },
     );
 
@@ -2274,8 +2288,8 @@ fn ssa_bodies_with_node_meta_round_trip() {
 
     let meta = &loaded[0].8.node_meta;
     assert_eq!(meta.len(), 1);
-    assert_eq!(meta[&0].bin_op, Some(crate::cfg::BinOp::Add));
-    assert!(matches!(meta[&0].labels[0], DataLabel::Sink(cap) if cap == Cap::SQL_QUERY));
+    assert_eq!(meta[&0].info.bin_op, Some(crate::cfg::BinOp::Add));
+    assert!(matches!(meta[&0].info.taint.labels[0], DataLabel::Sink(cap) if cap == Cap::SQL_QUERY));
 }
 
 #[test]

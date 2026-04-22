@@ -872,6 +872,7 @@ fn callee_body_serde_round_trip_multi_block() {
 
 #[test]
 fn callee_body_serde_round_trip_with_node_meta() {
+    use crate::cfg::{NodeInfo, TaintMeta};
     use crate::labels::{Cap, DataLabel};
     use crate::taint::ssa_transfer::CrossFileNodeMeta;
 
@@ -879,15 +880,20 @@ fn callee_body_serde_round_trip_with_node_meta() {
     body.node_meta.insert(
         0,
         CrossFileNodeMeta {
-            bin_op: Some(crate::cfg::BinOp::Add),
-            labels: smallvec::smallvec![DataLabel::Sink(Cap::HTML_ESCAPE)],
+            info: NodeInfo {
+                bin_op: Some(crate::cfg::BinOp::Add),
+                taint: TaintMeta {
+                    labels: smallvec::smallvec![DataLabel::Sink(Cap::HTML_ESCAPE)],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
         },
     );
     body.node_meta.insert(
         1,
         CrossFileNodeMeta {
-            bin_op: None,
-            labels: smallvec::smallvec![],
+            info: NodeInfo::default(),
         },
     );
 
@@ -896,10 +902,10 @@ fn callee_body_serde_round_trip_with_node_meta() {
 
     assert_eq!(back.node_meta.len(), 2);
     let meta0 = &back.node_meta[&0];
-    assert_eq!(meta0.bin_op, Some(crate::cfg::BinOp::Add));
-    assert_eq!(meta0.labels.len(), 1);
-    assert!(matches!(meta0.labels[0], DataLabel::Sink(cap) if cap == Cap::HTML_ESCAPE));
-    assert!(back.node_meta[&1].labels.is_empty());
+    assert_eq!(meta0.info.bin_op, Some(crate::cfg::BinOp::Add));
+    assert_eq!(meta0.info.taint.labels.len(), 1);
+    assert!(matches!(meta0.info.taint.labels[0], DataLabel::Sink(cap) if cap == Cap::HTML_ESCAPE));
+    assert!(back.node_meta[&1].info.taint.labels.is_empty());
 }
 
 #[test]

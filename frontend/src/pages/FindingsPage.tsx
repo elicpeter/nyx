@@ -1,11 +1,19 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { useFindingsURLState } from '../hooks/useFindingsURLState';
 import { useDebounce } from '../hooks/useDebounce';
-import { useFindings, useFindingFilters } from '../api/queries/findings';
+import {
+  useFindings,
+  useFindingFilters,
+  fetchFindingDetail,
+} from '../api/queries/findings';
 import { useBulkTriage, useAddSuppression } from '../api/mutations/triage';
 import { Pagination } from '../components/ui/Pagination';
+import { Dropdown, DropdownItem } from '../components/ui/Dropdown';
+import { CopyMarkdownButton } from '../components/CopyMarkdownButton';
 import { truncPath } from '../utils/truncPath';
+import { findingsToMarkdown } from '../utils/findingMarkdown';
 import type { FindingView, FilterValues } from '../api/types';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -48,45 +56,116 @@ function FilterSelect({
 
 interface BulkBarProps {
   selectedCount: number;
+  sharedStatus: string | null;
   onBulkTriage: (state: string) => void;
   onSuppressByPattern: () => void;
+  onBulkCopy: () => Promise<string>;
 }
+
+const STATUS_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'investigating', label: 'Investigating' },
+  { value: 'false_positive', label: 'Mark as False Positive' },
+  { value: 'accepted_risk', label: 'Accept Risk' },
+];
 
 function BulkActionBar({
   selectedCount,
+  sharedStatus,
   onBulkTriage,
   onSuppressByPattern,
+  onBulkCopy,
 }: BulkBarProps) {
+  const disabled = selectedCount === 0;
+
   return (
-    <div className={`bulk-action-bar${selectedCount > 0 ? ' visible' : ''}`}>
+    <div
+      className={`bulk-action-bar${selectedCount > 0 ? ' visible' : ''}`}
+      aria-hidden={disabled}
+    >
       <span className="bulk-count">{selectedCount} selected</span>
-      <button
-        className="btn btn-sm btn-bulk-triage"
-        onClick={() => onBulkTriage('suppressed')}
-      >
-        Suppress
-      </button>
-      <button
-        className="btn btn-sm btn-bulk-triage"
-        onClick={() => onBulkTriage('false_positive')}
-      >
-        Mark FP
-      </button>
-      <button
-        className="btn btn-sm btn-bulk-triage"
-        onClick={() => onBulkTriage('accepted_risk')}
-      >
-        Accept Risk
-      </button>
-      <button
-        className="btn btn-sm btn-bulk-triage"
-        onClick={() => onBulkTriage('investigating')}
-      >
-        Investigating
-      </button>
-      <button className="btn btn-sm" onClick={onSuppressByPattern}>
-        Suppress by Pattern
-      </button>
+
+      <div className="bulk-actions">
+        <Dropdown
+          align="right"
+          trigger={({ open }) => (
+            <button
+              type="button"
+              className="btn btn-sm bulk-menu-btn"
+              disabled={disabled}
+            >
+              Status
+              <span className={`bulk-caret${open ? ' bulk-caret--open' : ''}`}>
+                ▾
+              </span>
+            </button>
+          )}
+        >
+          {({ close }) =>
+            STATUS_OPTIONS.map((opt) => (
+              <DropdownItem
+                key={opt.value}
+                checked={sharedStatus === opt.value}
+                onClick={() => {
+                  onBulkTriage(opt.value);
+                  close();
+                }}
+              >
+                {opt.label}
+              </DropdownItem>
+            ))
+          }
+        </Dropdown>
+
+        <Dropdown
+          align="right"
+          trigger={({ open }) => (
+            <button
+              type="button"
+              className="btn btn-sm bulk-menu-btn bulk-menu-btn--warning"
+              disabled={disabled}
+            >
+              Suppress
+              <span className={`bulk-caret${open ? ' bulk-caret--open' : ''}`}>
+                ▾
+              </span>
+            </button>
+          )}
+        >
+          {({ close }) => (
+            <>
+              <DropdownItem
+                tone="warning"
+                onClick={() => {
+                  onBulkTriage('suppressed');
+                  close();
+                }}
+              >
+                Suppress this finding
+              </DropdownItem>
+              <DropdownItem
+                tone="warning"
+                hint="advanced"
+                onClick={() => {
+                  onSuppressByPattern();
+                  close();
+                }}
+              >
+                Suppress by pattern
+              </DropdownItem>
+            </>
+          )}
+        </Dropdown>
+
+        <div className="bulk-divider" aria-hidden />
+
+        <CopyMarkdownButton
+          className="bulk-copy-btn"
+          iconOnly
+          label="Copy selected as markdown"
+          title="Copy selected as markdown"
+          getMarkdown={onBulkCopy}
+        />
+      </div>
     </div>
   );
 }
@@ -201,6 +280,7 @@ function SortableTh({
 
 export function FindingsPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { state, updateState, resetFilters, hasActiveFilters } =
     useFindingsURLState();
 
@@ -283,6 +363,16 @@ export function FindingsPage() {
     data.findings.length > 0 &&
     data.findings.every((f) => selected.has(f.index));
 
+  const sharedStatus = useMemo<string | null>(() => {
+    if (!data || selected.size === 0) return null;
+    const states = new Set(
+      data.findings
+        .filter((f) => selected.has(f.index))
+        .map((f) => f.triage_state || f.status),
+    );
+    return states.size === 1 ? [...states][0] : null;
+  }, [data, selected]);
+
   // ── Bulk action handlers ──
 
   const getSelectedFingerprints = useCallback((): string[] => {
@@ -308,6 +398,22 @@ export function FindingsPage() {
     if (selected.size === 0 || !data) return;
     setSuppressModalOpen(true);
   }, [selected.size, data]);
+
+  const handleBulkCopy = useCallback(async (): Promise<string> => {
+    const indices =
+      data?.findings.filter((f) => selected.has(f.index)).map((f) => f.index) ??
+      [];
+    const results = await Promise.allSettled(
+      indices.map((i) => fetchFindingDetail(queryClient, i)),
+    );
+    const views = results
+      .filter(
+        (r): r is PromiseFulfilledResult<FindingView> =>
+          r.status === 'fulfilled',
+      )
+      .map((r) => r.value);
+    return findingsToMarkdown(views);
+  }, [data, selected, queryClient]);
 
   const suppressPatternRules = useMemo(() => {
     if (!data) return [];
@@ -464,8 +570,10 @@ export function FindingsPage() {
       {/* Bulk action bar */}
       <BulkActionBar
         selectedCount={selected.size}
+        sharedStatus={sharedStatus}
         onBulkTriage={handleBulkTriage}
         onSuppressByPattern={handleSuppressByPattern}
+        onBulkCopy={handleBulkCopy}
       />
 
       {/* Findings table */}

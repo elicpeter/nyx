@@ -4,6 +4,9 @@ import { useFinding } from '../api/queries/findings';
 import { useBulkTriage } from '../api/mutations/triage';
 import { truncPath } from '../utils/truncPath';
 import { escapeHtml, highlightSyntax } from '../utils/syntaxHighlight';
+import { parseNoteText } from '../utils/parseNote';
+import { findingToMarkdown } from '../utils/findingMarkdown';
+import { CopyMarkdownButton } from '../components/CopyMarkdownButton';
 import { CodeViewerModal } from '../modals/CodeViewerModal';
 import type {
   FindingView,
@@ -27,30 +30,6 @@ const TRIAGE_STATES = [
   'suppressed',
   'fixed',
 ] as const;
-
-function parseNoteText(note: string): string {
-  if (note.startsWith('source_kind:')) {
-    const kind = note.split(':')[1];
-    const readable: Record<string, string> = {
-      UserInput: 'User Input',
-      EnvironmentConfig: 'Environment/Config',
-      Database: 'Database',
-      FileSystem: 'File System',
-      CaughtException: 'Caught Exception',
-      Unknown: 'Unclassified',
-    };
-    return `Source type: ${readable[kind] || kind}`;
-  }
-  if (note.startsWith('hop_count:'))
-    return `Path length: ${note.split(':')[1]} blocks`;
-  if (note === 'uses_summary') return 'Uses cross-file summary';
-  if (note === 'path_validated') return 'Path has validation guard';
-  if (note.startsWith('cap_specificity:'))
-    return `Cap specificity: ${note.split(':')[1]}`;
-  if (note.startsWith('degraded:'))
-    return `Degraded analysis: ${note.split(':')[1]}`;
-  return note;
-}
 
 function isStateFinding(f: FindingView): boolean {
   return f.rule_id.startsWith('state-');
@@ -574,7 +553,6 @@ function TriageActions({
 
 export function FindingDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
 
   const { data: finding, isLoading, isError, error } = useFinding(id ?? '');
 
@@ -640,15 +618,14 @@ export function FindingDetailPage() {
 
   return (
     <div className="detail-panel">
-      <button
-        className="btn btn-sm"
-        style={{ marginBottom: 'var(--space-4)' }}
-        onClick={() => navigate('/findings')}
-      >
-        Back to Findings
-      </button>
-
-      <h2>{f.rule_id}</h2>
+      <div className="detail-title-row">
+        <h2>{f.rule_id}</h2>
+        <CopyMarkdownButton
+          iconOnly
+          title="Copy as markdown"
+          getMarkdown={() => findingToMarkdown(f)}
+        />
+      </div>
 
       <div className="badge-row">
         <span className={`badge badge-${f.severity.toLowerCase()}`}>

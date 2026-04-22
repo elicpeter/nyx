@@ -99,14 +99,32 @@ path's worst-case union.
 
 ### Known limitations
 
-- Cross-file inline fires only when `body_graph` is populated. In the
+- ~~Cross-file inline fires only when `body_graph` is populated. In the
   indexed-scan path, bodies deserialised from SQLite have
   `body_graph: None` and the taint engine does not yet consume
   `node_meta`, so CF-2 currently falls through to the summary path in
-  indexed scans. Surfacing this to full parity is a follow-up.
+  indexed scans. Surfacing this to full parity is a follow-up.~~
+  **Resolved by Phase CF-3 (2026-04-22).** Indexed-scan parity restored;
+  cross-file inline now fires on both scan paths. `CrossFileNodeMeta` was
+  extended to carry a full `NodeInfo` snapshot, and `rebuild_body_graph`
+  rehydrates a proxy `Cfg` from `node_meta` at DB load time. A companion
+  fix in `build_index` persists `ssa_bodies` rows at index-build time so
+  `--index rebuild` invocations populate the cross-file body cache (prior
+  behaviour silently wrote zero bodies).
 - k=1 is preserved: cross-file inline will not recursively inline the
   next cross-file hop. CF-5 (SCC joint fixed-point) will revisit this
   for mutually recursive cross-file SCCs.
+
+### CF-3 — Indexed-scan parity for cross-file inline (2026-04-22)
+
+On-disk layout: `CrossFileNodeMeta` now embeds a full `crate::cfg::NodeInfo`
+(up from just `bin_op` + `labels`). The engine-version salt was bumped
+to `+cf3-xfile-meta` to invalidate stale DBs. Indexed-scan variants of the
+four CF-2 fixture tests were added (`*_indexed` in
+`tests/cross_file_context_tests.rs`) and pass alongside the in-memory
+variants. Benchmark unchanged at rule-level P=0.940, R=0.994, F1=0.966 —
+CF-3 is a correctness/parity fix, not a precision delta, because the CF-2
+fixtures already exercised the in-memory scan path.
 
 ---
 

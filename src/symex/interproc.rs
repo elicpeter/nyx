@@ -1017,7 +1017,7 @@ fn detect_internal_sinks(
         let labels: &[DataLabel] = if let Some(meta) = node_meta {
             // Phase 30: cross-file body — use embedded metadata
             meta.get(&(inst.cfg_node.index() as u32))
-                .map(|m| m.labels.as_slice())
+                .map(|m| m.info.taint.labels.as_slice())
                 .unwrap_or(&[])
         } else {
             &cfg[inst.cfg_node].taint.labels

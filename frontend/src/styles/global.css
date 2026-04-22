@@ -271,6 +271,7 @@ a:hover {
   color: var(--text-tertiary);
   font-size: var(--text-xs);
   user-select: none;
+  margin: 0 var(--space-2);
 }
 .breadcrumb-current {
   color: var(--text);
@@ -1107,7 +1108,7 @@ tr.selected td {
 
 /* ── Bulk Action Bar ──────────────────────────────────────────────── */
 .bulk-action-bar {
-  display: none;
+  display: flex;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-4);
@@ -1118,12 +1119,184 @@ tr.selected td {
   font-size: var(--text-sm);
   color: var(--accent);
   font-weight: var(--weight-medium);
+  opacity: 0;
+  transform: translateY(-4px);
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-width: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease-out,
+    transform 120ms ease-out,
+    max-height 160ms ease-out,
+    padding 160ms ease-out,
+    margin-bottom 160ms ease-out,
+    border-width 160ms ease-out;
 }
 .bulk-action-bar.visible {
-  display: flex;
+  opacity: 1;
+  transform: translateY(0);
+  max-height: 80px;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-3);
+  border-width: 1px;
+  pointer-events: auto;
+  overflow: visible;
 }
 .bulk-action-bar .bulk-count {
   flex: 1;
+}
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.bulk-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.bulk-menu-btn--warning {
+  color: var(--sev-high);
+  border-color: var(--sev-high);
+}
+.bulk-menu-btn--warning:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sev-high) 8%, transparent);
+  border-color: var(--sev-high);
+}
+.bulk-caret {
+  display: inline-block;
+  font-size: 0.7rem;
+  line-height: 1;
+  transition: transform 120ms ease-out;
+}
+.bulk-caret--open {
+  transform: rotate(-180deg);
+}
+.bulk-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 0 var(--space-1);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.bulk-copy-btn {
+  color: var(--text-secondary);
+  border-color: transparent;
+  background: transparent;
+}
+.bulk-copy-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-secondary);
+  border-color: var(--border);
+}
+
+/* ── Dropdown ─────────────────────────────────────────────────────── */
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+.dropdown-trigger {
+  display: inline-block;
+}
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  min-width: 220px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+}
+.dropdown-menu--left {
+  left: 0;
+}
+.dropdown-menu--right {
+  right: 0;
+}
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-weight: 400;
+}
+.dropdown-item:hover {
+  background: var(--bg-secondary);
+}
+.dropdown-item--warning {
+  color: var(--sev-high);
+}
+.dropdown-item--warning:hover {
+  background: color-mix(in srgb, var(--sev-high) 8%, transparent);
+}
+.dropdown-item-check {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 0.85rem;
+  text-align: center;
+}
+.dropdown-item-label {
+  flex: 1;
+}
+.dropdown-item-hint {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-style: italic;
+}
+
+/* ── Copy button ────────────────────────────────────────────────── */
+.copy-btn--copied {
+  background: var(--success);
+  color: var(--bg);
+  border-color: var(--success);
+}
+.copy-btn--failed {
+  background: var(--sev-high);
+  color: var(--bg);
+  border-color: var(--sev-high);
+}
+
+/* Icon-only variant */
+.copy-btn--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  line-height: 1;
+}
+.copy-btn--icon svg {
+  display: block;
+}
+
+/* Finding detail header: title + copy button on one row */
+.detail-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.detail-title-row h2 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
 }
 
 /* ── Enhanced Pagination ──────────────────────────────────────────── */

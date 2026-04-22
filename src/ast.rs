@@ -124,18 +124,54 @@ fn build_taint_diag(
 ) -> Diag {
     let call_site_byte = cfg_graph[finding.sink].ast.span.0;
     let call_site_point = byte_offset_to_point(tree, call_site_byte);
-    // For cross-body origins, prefer the preserved source_span over
-    // indexing into the (possibly different) body's graph.
+    // `finding.source` should be a NodeIndex valid in this body's CFG, but
+    // cross-body / cross-file inline analysis has historically leaked
+    // callee-NodeIndex origins (see `extract_inline_return_taint`).  Guard
+    // the lookup so a stray out-of-bounds index degrades the diagnostic
+    // rather than panicking the worker thread.
+    let source_info = cfg_graph.node_weight(finding.source);
+    // The reconstructed flow path is the authoritative view of where the
+    // taint started *in this body*. When present, prefer its first step's
+    // CFG span over `finding.source_span` — which can be stale across
+    // multi-hop cross-body remaps (e.g. JS two-level solve where a
+    // callee-interior source gets its span rewritten to the enclosing
+    // body's entry node). Fall back to `source_span`, then to the source
+    // NodeIndex, then finally to the sink byte.
     let source_byte = finding
-        .source_span
-        .unwrap_or_else(|| cfg_graph[finding.source].ast.span.0);
+        .flow_steps
+        .first()
+        .and_then(|s| cfg_graph.node_weight(s.cfg_node).map(|i| i.ast.span.0))
+        .or(finding.source_span)
+        .or_else(|| source_info.map(|i| i.ast.span.0))
+        .unwrap_or(call_site_byte);
     let source_point = byte_offset_to_point(tree, source_byte);
 
-    let source_callee = cfg_graph[finding.source]
-        .call
-        .callee
-        .as_deref()
+    // Prefer the source CFG node's callee string when it's a call expression
+    // (e.g. `os.getenv("X")`). For property-access sources like
+    // `navigator.userAgent` there is no callee — fall back to the first flow
+    // step's `variable` (the SSA var name, e.g. "userAgent"), then to the
+    // source node's `taint.defines` / first `taint.uses` entry, before
+    // finally giving up and rendering "(unknown)".
+    let source_callee = source_info
+        .and_then(|i| i.call.callee.as_deref())
         .map(sanitize_desc)
+        .or_else(|| {
+            finding
+                .flow_steps
+                .first()
+                .and_then(|s| s.var_name.as_deref())
+                .map(sanitize_desc)
+        })
+        .or_else(|| {
+            source_info
+                .and_then(|i| i.taint.defines.as_deref())
+                .map(sanitize_desc)
+        })
+        .or_else(|| {
+            source_info
+                .and_then(|i| i.taint.uses.first().map(String::as_str))
+                .map(sanitize_desc)
+        })
         .unwrap_or_else(|| "(unknown)".into());
     let call_site_callee = cfg_graph[finding.sink]
         .call

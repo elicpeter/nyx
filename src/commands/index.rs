@@ -270,6 +270,32 @@ pub fn build_index_with_observer(
                 idx.replace_ssa_summaries_for_file(&path, &hash, &ssa_rows)?;
             }
 
+            // Phase CF-3: persist SSA callee bodies at index-build time so
+            // CLI-initiated rebuilds (`--index rebuild`) populate the same
+            // `ssa_function_bodies` rows that `scan_with_index_parallel`
+            // would have written via its pass-1 branch.  Without this,
+            // indexed scans load zero cross-file bodies and cross-file
+            // inline silently falls back to summary resolution.
+            if !fused.ssa_bodies.is_empty() {
+                let body_rows: Vec<_> = fused
+                    .ssa_bodies
+                    .into_iter()
+                    .map(|(key, body)| {
+                        (
+                            key.name,
+                            key.arity.unwrap_or(0),
+                            key.lang.as_str().to_string(),
+                            key.namespace,
+                            key.container,
+                            key.disambig,
+                            key.kind,
+                            body,
+                        )
+                    })
+                    .collect();
+                idx.replace_ssa_bodies_for_file(&path, &hash, &body_rows)?;
+            }
+
             pb.inc(1);
             Ok(())
         })?;
