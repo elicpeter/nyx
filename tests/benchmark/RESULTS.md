@@ -1,5 +1,115 @@
 # Nyx Benchmark Results
 
+## Phase CF-2 — Cross-file k=1 context-sensitive inline taint (2026-04-22)
+
+Scanner version: 0.5.0
+Analysis mode: Full (taint + AST patterns + state analysis)
+Corpus: 256 cases (159 vulnerable, 97 safe) across 10 languages
+
+### Motivation
+
+Phase CF-1 landed cross-file SSA body availability as pure plumbing: every
+cross-file callee now has an in-memory `CalleeSsaBody` reachable through
+`GlobalSummaries.bodies_by_key`, but `resolve_callee` never consulted it. CF-2
+turns that switch on — intra-file k=1 context-sensitive inline analysis now
+fires on cross-file call edges too.
+
+Before CF-2 every cross-file call fell through to the `SsaFuncSummary`
+path, so call-site-specific argument taint, call-site constants, and
+path-predicate structure were collapsed into the callee's worst-case
+summary. Same-file callees already had the richer picture via Phase 11;
+CF-2 extends that to cross-file callees without touching the intra-file
+machinery.
+
+### Changes
+
+1. **Cross-file body fallback in `inline_analyse_callee`**
+   (`src/taint/ssa_transfer.rs`): the intra-file lookup via
+   `resolve_local_func_key` + `transfer.callee_bodies` runs first; on
+   miss, a second step resolves the call via
+   `GlobalSummaries.resolve_callee` and loads the body from
+   `transfer.cross_file_bodies`. Body-size budget (`MAX_INLINE_BLOCKS`),
+   k=1 depth cap, and the `context_sensitive` config switch are shared
+   with the intra-file path via the existing `InlineCache`.
+
+2. **Origin source-span pre-fill in param seed**
+   (`src/taint/ssa_transfer.rs`): before origins cross into a callee
+   body, `inline_analyse_callee` populates `source_span` from the
+   caller's CFG. The callee's `Param`-op transfer remaps `node` to its
+   own local `cfg_node` and preserves only `source_span`, so without
+   the pre-fill cross-file inline would lose the caller's source line
+   and produce different finding attribution than the summary path.
+   This is what `parity_full_cross_file_ssa_propagation` guards against.
+
+3. **`bodies_by_key` / inline hit / miss debug logging**
+   (`src/taint/ssa_transfer.rs`): CF-1 added per-scan cross-file body
+   counters; CF-2 adds per-call hit/miss lines so operators can tell
+   "no bodies available" from "bodies available but budget-exceeded".
+
+### Fixtures (new)
+
+Four cross-file fixtures under `tests/fixtures/cross_file_context_*`:
+
+- `cross_file_context_two_call_sites/` — Python. Two calls to the same
+  cross-file helper, one tainted (`os.environ.get`) and one with a
+  constant literal. Exercises the primary CF-2 win without callback
+  binding.
+- `cross_file_context_callback/` — JS. Caller passes a labelled sink
+  (`child_process.exec`) directly as the callback argument to a
+  cross-file `apply(fn, data)` helper. Exercises the callback-argument
+  summary resolution through the cross-file summary path; CF-2 inline
+  runs alongside but does not regress it.
+- `cross_file_context_sanitizer/` — JS. Cross-file `xssSafe` wrapper
+  delegates to the `xss` library (HTML_ESCAPE sanitiser). Regression
+  guard that CF-2 inline must not introduce a taint finding where the
+  summary path already strips the taint.
+- `cross_file_context_deep_chain/` — Python. Three-file chain
+  (main → middle → sinks). k=1 means the B→C hop resolves via summary;
+  the end-to-end finding still surfaces via `py.cmdi`.
+
+Each fixture's `expectations.json` carries required-findings or
+forbidden-findings guardrails plus a noise budget.
+
+### Test coverage
+
+- `tests/cross_file_context_tests.rs` — 5 tests: the 4 fixture scans
+  plus a direct `GlobalSummaries.bodies_by_key` availability
+  assertion.
+- `tests/cross_file_context_off_tests.rs` — 4 tests under
+  `NYX_CONTEXT_SENSITIVE=0` verifying summary-only fallback still
+  satisfies every fixture (CF-2 is strictly additive).
+
+All 1640 lib tests + 9 CF-2 integration tests + 33 parity tests pass.
+
+### Benchmark delta
+
+| Metric         | Pre-CF-2 baseline | Post-CF-2 | Floor  |
+|----------------|-------------------|-----------|--------|
+| Rule precision | 0.911             | 0.940     | 0.861  |
+| Rule recall    | 0.994             | 0.994     | 0.944  |
+| Rule F1        | 0.951             | 0.966     | 0.901  |
+
+Precision is up **+2.9pp**; recall is unchanged; F1 is up **+1.5pp**.
+No per-language F1 regression. Per-language: Python, Rust, TypeScript
+now at 1.000; all other languages ≥ 0.889.
+
+The precision gain is consistent with the CF-2 hypothesis — cross-file
+inline with call-site-specific argument taint avoids the summary
+path's worst-case union.
+
+### Known limitations
+
+- Cross-file inline fires only when `body_graph` is populated. In the
+  indexed-scan path, bodies deserialised from SQLite have
+  `body_graph: None` and the taint engine does not yet consume
+  `node_meta`, so CF-2 currently falls through to the summary path in
+  indexed scans. Surfacing this to full parity is a follow-up.
+- k=1 is preserved: cross-file inline will not recursively inline the
+  next cross-file hop. CF-5 (SCC joint fixed-point) will revisit this
+  for mutually recursive cross-file SCCs.
+
+---
+
 ## Rust Weak Spot Fixes (2026-04-20)
 
 Scanner version: 0.5.0

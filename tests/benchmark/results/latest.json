@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-21T22:45:23Z",
+  "timestamp": "2026-04-22T04:27:12Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -842,13 +842,13 @@
       "matched_rule_ids": [
         "go.cmdi.exec_command",
         "state-unauthed-access",
-        "taint-unsanitised-flow (source 9:2)"
+        "taint-unsanitised-flow (source 10:2)"
       ],
       "unexpected_rule_ids": [],
       "all_finding_ids": [
         "go.cmdi.exec_command",
         "state-unauthed-access",
-        "taint-unsanitised-flow (source 9:2)"
+        "taint-unsanitised-flow (source 10:2)"
       ],
       "security_finding_count": 3,
       "non_security_finding_count": 0

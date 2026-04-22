@@ -1512,6 +1512,26 @@ fn build_arg_taint_sig(
 ///
 /// Returns `Some(InlineResult)` if inline analysis succeeded, `None` if the
 /// callee is unavailable, the body is too large, or we're already at depth limit.
+///
+/// Resolution ordering for the callee body:
+///
+/// 1. **Intra-file** (`transfer.callee_bodies`): resolve the callee via
+///    [`resolve_local_func_key`] against this file's local summaries and
+///    look up the body by canonical [`FuncKey`].  This is the original
+///    Phase 11 path.
+/// 2. **Cross-file** (Phase CF-2): if (1) misses but
+///    [`GlobalSummaries::resolve_callee`] resolves the call site to a
+///    cross-file [`FuncKey`], look up the body in
+///    `transfer.cross_file_bodies`.  A cross-file body is only
+///    usable here when its `body_graph` is populated (in-memory scan
+///    path); indexed-scan bodies deserialized from SQLite have
+///    `body_graph: None` and rely on `node_meta`, which the taint
+///    engine does not yet consume — those fall through to the summary
+///    path.
+///
+/// The cache ([`InlineCache`]) is keyed by `(FuncKey, ArgTaintSig)`.
+/// `FuncKey` carries the callee's namespace, so cross-file and intra-file
+/// entries never collide even when two files define same-leaf helpers.
 fn inline_analyse_callee(
     callee: &str,
     args: &[SmallVec<[SsaValue; 2]>],
@@ -1527,11 +1547,13 @@ fn inline_analyse_callee(
         return None;
     }
 
-    let callee_bodies = transfer.callee_bodies?;
     let cache_ref = transfer.inline_cache?;
-    // Resolve the call site to a canonical intra-file FuncKey.  Without a
-    // resolved key we cannot inline safely — bare-name lookup could pick the
-    // wrong same-name sibling (e.g. `A::process/1` vs `B::process/1`).
+
+    // Resolve the call site to a canonical FuncKey and the body to inline.
+    // Step 1: intra-file (Phase 11).  Step 2: cross-file (Phase CF-2).
+    //
+    // Without a resolved key we cannot inline safely — bare-name lookup could
+    // pick the wrong same-name sibling (e.g. `A::process/1` vs `B::process/1`).
     let normalized = callee_leaf_name(callee);
     let container_raw = callee_container_hint(callee);
     let container_hint = if container_raw.is_empty() {
@@ -1539,17 +1561,90 @@ fn inline_analyse_callee(
     } else {
         Some(container_raw)
     };
-    let callee_key = resolve_local_func_key(
-        transfer.local_summaries,
-        transfer.lang,
-        transfer.namespace,
-        normalized,
-        container_hint,
-    )?;
-    let callee_body = callee_bodies.get(&callee_key)?;
+
+    let intra_key = transfer.callee_bodies.and_then(|_| {
+        resolve_local_func_key(
+            transfer.local_summaries,
+            transfer.lang,
+            transfer.namespace,
+            normalized,
+            container_hint,
+        )
+    });
+    let intra_body = intra_key
+        .as_ref()
+        .and_then(|k| transfer.callee_bodies.and_then(|cb| cb.get(k)));
+
+    let (callee_key, callee_body) = if let (Some(k), Some(b)) = (intra_key, intra_body) {
+        (k, b)
+    } else if let Some(gs) = transfer.global_summaries {
+        // Phase CF-2: Cross-file fallback.  Build a structured query mirroring
+        // resolve_callee_full (qualifier/receiver_var/caller_container) so that
+        // qualified-first policy is preserved.
+        let (namespace_qualifier, receiver_var) = split_qualifier(callee);
+        let caller_func = caller_ssa
+            .blocks
+            .iter()
+            .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+            .filter_map(|inst| {
+                cfg.node_weight(inst.cfg_node)
+                    .and_then(|info| info.ast.enclosing_func.as_deref())
+            })
+            .next()
+            .unwrap_or("");
+        let caller_container_opt = caller_container_for(transfer, caller_func);
+        let caller_container: Option<&str> = caller_container_opt.as_deref();
+        let receiver_type = receiver_type_prefix(transfer, *receiver);
+        let arity_hint = Some(args.len());
+        let query = CalleeQuery {
+            name: normalized,
+            caller_lang: transfer.lang,
+            caller_namespace: transfer.namespace,
+            caller_container,
+            receiver_type,
+            namespace_qualifier,
+            receiver_var,
+            arity: arity_hint,
+        };
+        match gs.resolve_callee(&query) {
+            CalleeResolution::Resolved(key) => {
+                let xfile_bodies = transfer.cross_file_bodies?;
+                let body = xfile_bodies.get(&key)?;
+                // Indexed-scan bodies deserialized from SQLite have
+                // `body_graph: None`.  The taint engine indexes the CFG
+                // graph directly and does not yet consume `node_meta`, so
+                // fall through to summary resolution when the body graph
+                // is absent.  The in-memory scan path populates
+                // `body_graph` and reaches this branch normally.
+                if body.body_graph.is_none() {
+                    tracing::debug!(
+                        callee = %normalized,
+                        "cross-file inline miss: body has no body_graph (indexed scan)"
+                    );
+                    return None;
+                }
+                tracing::debug!(
+                    callee = %normalized,
+                    namespace = %key.namespace,
+                    "cross-file inline hit: using GlobalSummaries.bodies_by_key"
+                );
+                (key, body)
+            }
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
 
     // Skip very large function bodies
     if callee_body.ssa.blocks.len() > MAX_INLINE_BLOCKS {
+        tracing::debug!(
+            callee = %callee_key.name,
+            namespace = %callee_key.namespace,
+            blocks = callee_body.ssa.blocks.len(),
+            max = MAX_INLINE_BLOCKS,
+            "inline miss: body too large (budget-exceeded)"
+        );
         return None;
     }
 
@@ -1589,6 +1684,26 @@ fn inline_analyse_callee(
             let mut combined_caps = Cap::empty();
             let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
+            // Phase CF-2 note: `populate_span` lazily fills
+            // `source_span` from the *caller's* CFG before the origin
+            // crosses into the callee.  The Param-op branch of
+            // `transfer_inst` remaps `node` to the callee's own
+            // `cfg_node` and preserves only `source_span`, so without
+            // this pre-fill cross-file inline would lose the caller's
+            // source line entirely (finding emission in `ast.rs` uses
+            // `source_span` first, falls back to indexing the caller's
+            // CFG at `node` — which is now the callee's NodeIndex and
+            // resolves to a wrong or missing span).  Intra-file inline
+            // also benefits: the caller-scoped anchor stays canonical.
+            let populate_span = |mut o: TaintOrigin| -> TaintOrigin {
+                if o.source_span.is_none() {
+                    if let Some(info) = cfg.node_weight(o.node) {
+                        o.source_span = Some(info.ast.span);
+                    }
+                }
+                o
+            };
+
             match &inst.op {
                 SsaOp::Param { .. } => {
                     if let Some(arg_vals) = source_values {
@@ -1599,7 +1714,7 @@ fn inline_analyse_callee(
                                     if combined_origins.len() < MAX_ORIGINS
                                         && !combined_origins.iter().any(|o| o.node == orig.node)
                                     {
-                                        combined_origins.push(*orig);
+                                        combined_origins.push(populate_span(*orig));
                                     }
                                 }
                             }
@@ -1614,7 +1729,7 @@ fn inline_analyse_callee(
                                 if combined_origins.len() < MAX_ORIGINS
                                     && !combined_origins.iter().any(|o| o.node == orig.node)
                                 {
-                                    combined_origins.push(*orig);
+                                    combined_origins.push(populate_span(*orig));
                                 }
                             }
                         }

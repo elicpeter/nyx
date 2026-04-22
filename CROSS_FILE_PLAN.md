@@ -210,7 +210,8 @@ cargo bench --bench scan_bench -- --save-baseline post-phase-cf-1
 
 ## Phase CF-2 — Cross-file k=1 context-sensitive inline taint
 
-**Status:** Not started
+**Status:** Landed 2026-04-22 — see `tests/benchmark/RESULTS.md` for the
+benchmark delta (F1 0.951 → 0.966, precision +2.9pp, recall unchanged).
 **Estimated effort:** 1 session
 **Depends on:** CF-1
 
