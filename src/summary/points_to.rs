@@ -145,7 +145,7 @@ impl PointsToSummary {
             target,
             kind,
         };
-        if self.edges.iter().any(|e| *e == edge) {
+        if self.edges.contains(&edge) {
             return;
         }
         if self.edges.len() >= MAX_ALIAS_EDGES {

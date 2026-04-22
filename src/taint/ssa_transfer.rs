@@ -2852,9 +2852,11 @@ fn transfer_inst(
                 // Effective edge set: when overflow is signalled, synthesise
                 // the conservative all-pairs graph instead of reading the
                 // possibly-truncated edge vector.
+                type ParamToParamEdges = SmallVec<[(usize, usize); 8]>;
+                type ParamToReturnEdges = SmallVec<[usize; 4]>;
                 let (param_to_param_edges, param_to_return_edges): (
-                    SmallVec<[(usize, usize); 8]>,
-                    SmallVec<[usize; 4]>,
+                    ParamToParamEdges,
+                    ParamToReturnEdges,
                 ) = if resolved_points_to.overflow {
                     let n = args.len();
                     let mut p2p: SmallVec<[(usize, usize); 8]> = SmallVec::new();

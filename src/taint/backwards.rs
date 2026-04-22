@@ -654,10 +654,6 @@ pub fn annotate_finding(finding: &mut Finding, verdict: FindingVerdict) {
     // corroboration survives finding → diag → evidence without requiring
     // a new schema field.  When `symbolic` is empty we synthesise one with
     // `Verdict::NotAttempted` to make the notes addressable.
-    match verdict {
-        FindingVerdict::Inconclusive => return,
-        _ => {}
-    }
     let note = match verdict {
         FindingVerdict::Confirmed => NOTE_CONFIRMED,
         FindingVerdict::Infeasible => NOTE_INFEASIBLE,
