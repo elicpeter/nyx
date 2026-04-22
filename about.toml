@@ -25,7 +25,7 @@ accepted = [
 
     # --- compression / libs ---
     "bzip2-1.0.6",
-    "libpng",
+    "Libpng",
     "libpng-2.0",
     "IJG",
     "FTL",
@@ -38,21 +38,16 @@ accepted = [
     # --- weak copyleft (GPL-compatible) ---
     "MPL-2.0",
     "LGPL-3.0",
-    "LGPL-3.0-only",
-    "LGPL-3.0-or-later",
     "EPL-2.0",
 
     # --- GPL family ---
     "GPL-3.0",
-    "GPL-3.0-only",
-    "GPL-3.0-or-later",
-    "GPL-2.0-or-later",
+    "GPL-2.0",
 
     # --- Python / PSF ---
     "PSF-2.0",
     "Python-2.0",
     "Python-2.0.1",
-    "Python-2.0.1+",
 
     # --- Artistic / Perl ---
     "Artistic-2.0",

@@ -25,8 +25,11 @@ jobs:
             build-mode: none
           - language: javascript-typescript
             build-mode: none
-          - language: rust
-            build-mode: none
+          # Rust is intentionally excluded: CodeQL only supports
+          # `build-mode: none` for Rust, which is a query-based scan
+          # without the dataflow CodeQL provides for other languages.
+          # Rust supply-chain advisories are covered by the `cargo-deny`
+          # job in ci.yml, which runs `cargo deny check advisories`.
 
     steps:
       - name: Checkout repository

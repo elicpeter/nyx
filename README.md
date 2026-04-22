@@ -69,7 +69,18 @@ $ cargo install nyx-scanner
 
     ```nyx-x86_64-apple-darwin.zip``` or ```nyx-aarch64-apple-darwin.zip``` for macOS (Intel or Apple Silicon)
 
-3. Unzip the file and move the executable to a directory in your system PATH:
+3. (Recommended) Verify the archive against the published `SHA256SUMS`:
+    ```bash
+    # Download SHA256SUMS from the same release, then:
+    sha256sum -c SHA256SUMS --ignore-missing
+    ```
+    ```pwsh
+    # Windows PowerShell equivalent
+    (Get-FileHash .\nyx-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
+    # Compare against the matching line in SHA256SUMS
+    ```
+
+4. Unzip the file and move the executable to a directory in your system PATH:
     ```bash
     # Example for Unix systems
     unzip nyx-x86_64-unknown-linux-gnu.zip
@@ -82,7 +93,7 @@ $ cargo install nyx-scanner
     Move-Item -Path .\nyx.exe -Destination "C:\Program Files\Nyx\"  # Add to PATH manually if needed
     ```
 
-4. Verify the installation:
+5. Verify the installation:
      ```bash
     nyx --version
     ```
@@ -541,4 +552,4 @@ the Free Software Foundation, either version 3 of the License, or
 
 The optional `smt` feature bundles the Z3 SMT solver (MIT-licensed). Distributors of binaries built with `--features smt` should include Z3's license in their attribution.
 
-See [LICENSE](./LICENSE) for full details.
+See [LICENSE](./LICENSE) for full details. Third-party dependencies and their licenses are listed in [THIRDPARTY-LICENSES.html](./THIRDPARTY-LICENSES.html).

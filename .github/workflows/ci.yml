@@ -96,6 +96,32 @@ jobs:
       - name: License & advisory checks
         run: cargo deny check advisories licenses bans sources
 
+  third-party-licenses:
+    # Regenerate the third-party license attribution bundle and diff it
+    # against the committed copy. If any dependency changes the set of
+    # transitive licenses, THIRDPARTY-LICENSES.html must be regenerated
+    # and committed as part of that change. Pinned to a specific
+    # cargo-about version so generator drift can't silently break the diff.
+    name: third-party-licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.7.1
+
+      - name: Regenerate license attribution
+        run: cargo about generate about.hbs -o /tmp/THIRDPARTY-LICENSES.html
+
+      - name: Diff against committed file
+        run: diff -u THIRDPARTY-LICENSES.html /tmp/THIRDPARTY-LICENSES.html
+
   rust-beta-build:
     name: rust-beta-build
     runs-on: ubuntu-latest
@@ -125,6 +151,35 @@ jobs:
 
       - name: Rust tests (stable)
         run: cargo nextest run --all-features
+
+  cross-platform-smoke:
+    # Confirm the binary still builds and a focused subset of tests pass on
+    # the platforms for which we distribute release artifacts. Full test
+    # suites stay on Linux for cost/speed; these three files exercise CLI
+    # argument parsing, tree-sitter parsing, and pattern matching, which
+    # together catch the platform-sensitive regressions (path handling,
+    # endianness-adjacent serde, tree-sitter cdylib loading).
+    name: cross-platform-smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - uses: taiki-e/install-action@nextest
+
+      - name: Build
+        run: cargo build --release --all-features
+
+      - name: Smoke tests
+        run: cargo nextest run --all-features --test integration_tests --test pattern_tests --test cli_validation_tests
 
   rust-beta-test:
     name: rust-beta-test
