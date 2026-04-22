@@ -18,6 +18,58 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::IntoNodeReferences;
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Safety cap on JS/TS in-file pass-2 convergence iterations.
+///
+/// Pass 2 runs a Jacobi-style round over every non-toplevel body in a
+/// JS/TS file, combining each body's exit state (filtered to top-level
+/// keys) into the shared seed and re-running non-toplevel bodies until
+/// the seed stabilises.  A chain of `k` top-level bindings threaded
+/// through `k` helper functions needs up to `k` iterations for taint to
+/// walk the chain; the old hardcoded `3` silently truncated any
+/// 4-stage chain with no warning.
+///
+/// This mirrors `scan::SCC_FIXPOINT_SAFETY_CAP` in intent: the lattice
+/// is monotone and finite-height, so the real fixed-point is always
+/// reachable in a small multiple of the chain depth.  64 is generous
+/// enough to cover every realistic JS/TS file we have seen while still
+/// bounding worst-case cost.
+const JS_TS_PASS2_SAFETY_CAP: usize = 64;
+
+/// Test-only override for [`JS_TS_PASS2_SAFETY_CAP`].  When non-zero,
+/// the pass-2 loop uses this value instead of the const cap.  Default
+/// `0` leaves production behaviour unchanged.
+static JS_TS_PASS2_CAP_OVERRIDE: AtomicUsize = AtomicUsize::new(0);
+
+/// Observability hook: records the number of pass-2 iterations used by
+/// the most recent [`analyse_file`] invocation.  Reset at the start of
+/// each call so convergence regression tests can read a fresh value.
+/// `1` means the initial lexical-containment pass completed; higher
+/// values indicate the iterative convergence loop ran that many times
+/// without detecting convergence (so the `iters`th iteration was the
+/// last round actually executed).  `1` is the common case for
+/// non-JS/TS languages and for JS/TS files with no cross-body globals.
+static LAST_JS_TS_PASS2_ITERATIONS: AtomicUsize = AtomicUsize::new(0);
+
+/// Set (or clear) the test-only JS/TS pass-2 cap override.  `cap = 0`
+/// restores the default.  Intended exclusively for integration tests
+/// that need to force cap-hit behaviour on small fixtures.
+#[doc(hidden)]
+pub fn set_js_ts_pass2_cap_override(cap: usize) {
+    JS_TS_PASS2_CAP_OVERRIDE.store(cap, Ordering::Relaxed);
+}
+
+/// Returns the pass-2 iteration count observed during the most recent
+/// [`analyse_file`] invocation.  Intended for tests and diagnostics.
+pub fn last_js_ts_pass2_iterations() -> usize {
+    LAST_JS_TS_PASS2_ITERATIONS.load(Ordering::Relaxed)
+}
+
+fn js_ts_pass2_cap() -> usize {
+    let o = JS_TS_PASS2_CAP_OVERRIDE.load(Ordering::Relaxed);
+    if o == 0 { JS_TS_PASS2_SAFETY_CAP } else { o }
+}
 
 /// A raw flow step at CFG level (before line/col resolution).
 #[derive(Debug, Clone)]
@@ -199,11 +251,21 @@ pub fn analyse_file(
     };
 
     // 3. Unified multi-body analysis with lexical containment propagation.
+    //
+    // `max_iterations` is the safety cap, not an expected depth — the
+    // pass-2 loop breaks on seed equality (monotone lattice, finite
+    // height) and only rides the cap when convergence legitimately
+    // needs more rounds than the cap allows.  See
+    // [`JS_TS_PASS2_SAFETY_CAP`] for the rationale.
     let max_iterations = if matches!(caller_lang, Lang::JavaScript | Lang::TypeScript) {
-        3
+        js_ts_pass2_cap()
     } else {
         1
     };
+    // Reset the observability counter before this scan so tests always
+    // read a fresh value.  Non-JS/TS languages leave it at `1` (the
+    // lexical-containment pass counts as a single round).
+    LAST_JS_TS_PASS2_ITERATIONS.store(0, Ordering::Relaxed);
     let import_bindings_ref = if file_cfg.import_bindings.is_empty() {
         None
     } else {
@@ -577,6 +639,14 @@ fn analyse_multi_body(
     // ── Pass 2: JS/TS iterative convergence ──────────────────────────
     // Only for JS/TS: functions that modify global variables can feed taint
     // back to other functions.  Iterate until the top-level seed stabilises.
+    //
+    // `iters_used` counts how many rounds of the convergence loop
+    // actually ran (not including the initial lexical-containment pass
+    // above).  It is used to detect cap-hit after the loop exits: a
+    // cap-hit is the case where we exhausted the budget without the
+    // `combined_exit == current_seed` break firing.
+    let mut converged_early = true;
+    let mut iters_used: usize = 0;
     if max_iterations > 1 {
         let top = file_cfg.toplevel();
         let top_cfg = &top.graph;
@@ -601,7 +671,10 @@ fn analyse_multi_body(
             .cloned()
             .unwrap_or_default();
 
-        for _round in 0..max_iterations.saturating_sub(1) {
+        let rounds = max_iterations.saturating_sub(1);
+        converged_early = rounds == 0;
+        for round in 0..rounds {
+            iters_used = round + 1;
             // Combine function body exits filtered to top-level scope.
             let mut combined_exit = current_seed.clone();
             for &idx in &order {
@@ -617,6 +690,7 @@ fn analyse_multi_body(
 
             // Converged: seed didn't change.
             if combined_exit == current_seed {
+                converged_early = true;
                 break;
             }
             current_seed = combined_exit;
@@ -662,6 +736,37 @@ fn analyse_multi_body(
                     body_exit_states.insert(body.meta.id, es);
                 }
             }
+        }
+    }
+
+    // Record observability counter.  `iters_used == 0` covers the
+    // non-JS/TS path (`max_iterations == 1`) and the JS/TS case where
+    // the convergence loop did not enter — report `1` so the counter
+    // always reflects "at least the lexical-containment pass ran".
+    let reported_iters = if iters_used == 0 { 1 } else { iters_used };
+    LAST_JS_TS_PASS2_ITERATIONS.store(reported_iters, Ordering::Relaxed);
+
+    // Cap-hit: the loop exhausted `max_iterations` without the
+    // `combined_exit == current_seed` break firing.  Tag every finding
+    // produced by this file so downstream consumers know the results
+    // may be under-reported.  Only meaningful for JS/TS
+    // (`max_iterations > 1`); single-iteration languages always
+    // converge trivially by definition.
+    if max_iterations > 1 && !converged_early {
+        tracing::warn!(
+            file = %namespace,
+            iterations = iters_used,
+            cap = max_iterations,
+            "JS/TS pass-2 in-file fixpoint did not converge within safety cap — \
+             results may be imprecise. This usually indicates a very deep chain \
+             of top-level bindings threaded through helper functions; please \
+             file a bug with a reproducer."
+        );
+        let note = EngineNote::InFileFixpointCapped {
+            iterations: iters_used as u32,
+        };
+        for f in &mut all_findings {
+            f.merge_note(note.clone());
         }
     }
 
