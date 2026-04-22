@@ -138,6 +138,44 @@ $ nyx scan --quiet --format json
 $ nyx scan --keep-nonprod-severity
 ```
 
+### Use in CI
+
+Nyx ships a reusable GitHub Action. Pin to a tagged release; the action downloads the matching binary, runs `nyx scan`, and optionally fails the job on a severity threshold.
+
+```yaml
+- name: Scan with Nyx
+  uses: elicpeter/nyx@v0.5.0
+  with:
+    format: sarif
+    fail-on: MEDIUM
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: nyx-results.sarif
+```
+
+**Inputs** (all optional):
+
+| Input | Default | Description |
+|---|---|---|
+| `path` | `.` | Directory to scan |
+| `version` | `latest` | Release tag (e.g. `v0.5.0`) or `latest` |
+| `format` | `sarif` | `sarif`, `json`, or `console` |
+| `fail-on` | _(empty)_ | Exit non-zero if findings meet this severity (`HIGH`, `MEDIUM`, or `LOW`) |
+| `args` | _(empty)_ | Additional CLI arguments (e.g. `--severity >=MEDIUM --profile ci`) |
+| `token` | `${{ github.token }}` | GitHub token used for release download (avoids rate limits) |
+
+**Outputs**:
+
+| Output | Description |
+|---|---|
+| `finding-count` | Number of findings detected |
+| `sarif-file` | Path to SARIF results file (empty when `format` is not `sarif`) |
+| `exit-code` | Raw nyx exit code (`0` clean, `1` threshold breached) |
+| `nyx-version` | Installed nyx version |
+
+Linux and macOS runners are supported (x86_64 and ARM64).
+
 ### Index Management
 
 ```bash
@@ -194,11 +232,11 @@ Nyx supports four analysis modes, selectable via `--mode` or the `scanner.mode` 
 | Unreachable security code | `cfg-unreachable-*` | Sanitizers, guards, or sinks in dead code branches |
 | Error fallthrough | `cfg-error-fallthrough` | Error-handling branches that don't terminate, allowing execution to fall through to dangerous operations |
 | Resource leak | `cfg-resource-leak` | Resources acquired but not released on all exit paths (malloc/free, fopen/fclose, Lock/Unlock) |
-| Use-after-close | `state-use-after-close` | Variable read/written after its resource handle was closed (opt-in) |
-| Double-close | `state-double-close` | Resource handle closed more than once (opt-in) |
-| Must-leak | `state-resource-leak` | Resource acquired but never closed on any exit path (opt-in) |
-| May-leak | `state-resource-leak-possible` | Resource open on some but not all exit paths (opt-in) |
-| Unauthenticated access | `state-unauthed-access` | Sensitive sink reached without a preceding auth/admin check (opt-in) |
+| Use-after-close | `state-use-after-close` | Variable read/written after its resource handle was closed |
+| Double-close | `state-double-close` | Resource handle closed more than once |
+| Must-leak | `state-resource-leak` | Resource acquired but never closed on any exit path |
+| May-leak | `state-resource-leak-possible` | Resource open on some but not all exit paths |
+| Unauthenticated access | `state-unauthed-access` | Sensitive sink reached without a preceding auth/admin check |
 
 ### Attack Surface Ranking
 
@@ -327,6 +365,16 @@ With indexing enabled, Pass 1 skips files whose blake3 content hash is unchanged
 
 ---
 
+## What's New in 0.5.0
+
+- **SSA-based taint engine.** Taint analysis now runs over a pruned SSA IR (Cytron phi insertion over petgraph dominance frontiers) for all 10 languages. Value-keyed lattice with per-predecessor phi merging, induction-variable pruning, and targeted validation predicates. Replaces the legacy AST-level taint engine entirely.
+- **Cross-file SCC fixed-point with parameter-granularity points-to summaries.** Pass 2 processes call-graph SCCs in topological order and iterates within each SCC until taint summaries converge, so mutually recursive functions get accurate summaries. `SsaFuncSummary` carries a parameter-granularity `PointsToSummary` (container stores + return aliases) that is applied at call sites so heap-backed taint propagates across file boundaries.
+- **Demand-driven backwards taint (opt-in).** Enable with `--backwards-analysis` or `NYX_BACKWARDS=1`. Walks the SSA backwards from candidate sinks to uncover flows the forward solver gave up on; adds cutoff notes to findings instead of silently losing precision.
+- **Symbolic execution with SMT (opt-in).** Interprocedural symbolic executor walks callee bodies as nested frames, models six string operations (substr/replace/trim/case/len), and can escalate to Z3 for cross-variable constraints when built with `--features smt`.
+- **Local web UI (`nyx serve`).** React + Vite frontend over an Axum server with loopback-only bind, host-header and CSRF enforcement, triage state persisted to `.nyx/triage.json`, and flow-path visualisation for findings.
+
+---
+
 ## Status
 
 Nyx is under active development. APIs, detector behavior, and configuration options may change between releases.
@@ -341,7 +389,7 @@ Nyx is a static analysis engine focused on:
 - Control-flow-aware structural detectors
 - Security-oriented AST pattern matching
 - Optional cross-language interop edges (requires explicit configuration)
-- Optional resource lifecycle and auth state analysis (disabled by default)
+- Resource lifecycle and auth state analysis (enabled by default; disable with `scanner.enable_state_analysis = false`)
 
 Nyx is not intended to replace full commercial SAST tools. Some analyses are heuristic-based and results may require manual review.
 
@@ -349,7 +397,7 @@ Nyx is not intended to replace full commercial SAST tools. Some analyses are heu
 
 ## Limitations
 
-- State analysis (`use-after-close`, `double-close`, `resource-leak`, `unauthenticated-access`) is disabled by default; enable with `scanner.enable_state_analysis = true`
+- State analysis (`use-after-close`, `double-close`, `resource-leak`, `unauthenticated-access`) is enabled by default; disable with `scanner.enable_state_analysis = false`
 - Cross-language interop edges must be configured explicitly
 - Taint analysis is intra-procedural with cross-file function summaries; it does not perform full inter-procedural analysis
 - Some detectors rely on heuristic matching (see [AST Patterns](docs/detectors/patterns.md) for false positive/negative details)
@@ -385,6 +433,8 @@ Current rule-level baseline on the 262-case corpus:
 | Recall | 99.4% |
 | F1 | 95.1% |
 
+**What these numbers mean.** The benchmark corpus is 264 synthetic mini-fixtures (20–120 LOC each), curated for known-good and known-bad cases. F1 numbers are reported per language in the Language Maturity matrix; the aggregate hides per-tier variance (Rust ≈ 76%, C/C++ ≈ 80–86%, Python/TS ≈ 100%). The benchmark uses `allowed_alternative_rule_ids` to credit findings under any of several semantically equivalent rule IDs, which softens precision compared to a strict-rule-only scoring. Real-world repositories with framework-specific idioms (Django middleware, Spring DI, async runtimes, ORMs) will produce different numbers; treat 95.1% as a regression-protection floor on this corpus, not a general accuracy claim.
+
 The benchmark is wired as a CI regression gate. Every pull request runs `tests/benchmark_test.rs::benchmark_evaluation` in release mode under the `benchmark-gate` job and fails if rule-level Precision, Recall, or F1 drops below the thresholds encoded in the test:
 
 | Metric | Floor | Current baseline |
@@ -408,7 +458,7 @@ Recall is strong across all classes. Precision is limited by false positives on 
 | Feature | Status | Description |
 |---|--------|---|
 | Interprocedural call graph | Done | Precise symbol resolution via `FuncKey`, language-scoped namespaces, cross-module linking. Full call graph with SCC and topological analysis. |
-| Path-sensitive analysis | Done | Track path predicates and conditional constraints. Detect infeasible paths and validation-only-in-one-branch patterns. Monotone predicate summaries with contradiction pruning. |
+| Predicate-aware analysis | Done | Per-predecessor phi merging with classified condition predicates. Validation-only-in-one-branch detection via PredStates. Symbolic / SMT path-sensitive variants are opt-in. |
 | Dataflow & state modeling | Done | Resource state machines (init -> use -> close), auth state transitions, privilege level tracking. Generic `Transfer` trait over bounded lattices with guaranteed convergence. |
 | Monotone taint analysis | Done | Forward worklist dataflow analysis over a finite `TaintState` lattice. Multi-origin tracking, dual validated-must/may sets, JS/TS two-level solve. Termination guaranteed by lattice finiteness. |
 | Attack surface ranking | Done | Deterministic post-analysis scoring of findings by severity, analysis kind, evidence strength, source-kind exploitability, and validation state. Findings sorted by score before truncation so `max_results` keeps the most important results. |
@@ -437,7 +487,7 @@ Recall is strong across all classes. Precision is limited by false positives on 
 | Area | Details |
 |---|---|
 | Output formats | JUnit XML, HTML report generator |
-| UX | `nyx serve` local UI, smart file-watch re-scan, richer artifact browsing, interactive trace inspection |
+| UX | Smart file-watch re-scan, richer artifact browsing, interactive trace inspection |
 | Language coverage | Expanded taint rules per language |
 | Rule updates | Remote rule feed with signature verification |
 | UX | Smart file-watch re-scan |
@@ -488,5 +538,7 @@ This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
+
+The optional `smt` feature bundles the Z3 SMT solver (MIT-licensed). Distributors of binaries built with `--features smt` should include Z3's license in their attribution.
 
 See [LICENSE](./LICENSE) for full details.

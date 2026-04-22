@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.5.0] - 2026-04-22
+
+**Note**: 0.5.0 introduces an SSA-based taint engine and major cross-file improvements. If you upgrade and see new false positives or regressions on cross-file flows, please open an issue with a minimal reproduction.
+
+### Added
+
 - **Localhost UI and hostile-repo security hardening** — tightened Nyx's trust boundaries for malicious repositories, persisted scan artifacts, and browser traffic to the local web UI.
   - **Centralized repo path containment** — new shared path helper in `src/utils/path.rs` now resolves repo-relative and absolute in-repo paths through one canonicalization path, rejects traversal and symlink escapes, rejects special files for text reads, and enforces a consistent UI/debug file-size cap. File serving, explorer/debug routes, and finding code-context loading now use the same guardrail.
   - **Loopback-only web serving** — `nyx serve` now refuses non-loopback bind hosts and normalizes serving to `localhost` / `127.0.0.1` / `::1` only.

@@ -62,7 +62,7 @@ excluded_extensions = ["foo", "jpg"]
 | `follow_symlinks` | bool | `false` | Follow symbolic links |
 | `scan_hidden_files` | bool | `false` | Scan dot-files |
 | `include_nonprod` | bool | `false` | Keep original severity for test/vendor paths |
-| `enable_state_analysis` | bool | `false` | Enable resource lifecycle + auth state analysis. Detects use-after-close, double-close, resource leaks (per-function scope), and unauthenticated access. Requires `mode = "full"` or `mode = "taint"`. |
+| `enable_state_analysis` | bool | `true` | Enable resource lifecycle + auth state analysis. Detects use-after-close, double-close, resource leaks (per-function scope), and unauthenticated access. Requires `mode = "full"` or `mode = "taint"`. |
 
 ### `[database]`
 
@@ -332,21 +332,21 @@ Invalid config produces structured error messages identifying the section, field
 
 ---
 
-## Enabling State Analysis
+## State Analysis
 
-State analysis detects resource lifecycle violations (use-after-close, double-close, resource leaks) and unauthenticated access patterns. It is disabled by default because it adds analysis overhead and may produce findings that require more careful review.
+State analysis detects resource lifecycle violations (use-after-close, double-close, resource leaks) and unauthenticated access patterns. It is **enabled by default**.
 
-To enable:
+To disable:
 
 ```toml
 [scanner]
-enable_state_analysis = true
+enable_state_analysis = false
 ```
 
 State analysis requires `mode = "full"` or `mode = "taint"`. It has no effect in `mode = "ast"`.
 
 **Tradeoffs**:
-- Increased scan time due to additional per-function state machine analysis
+- Additional per-function state-machine pass adds some scan time
 - May produce findings that require domain knowledge to evaluate (e.g., whether a resource handle is intentionally left open)
 - Most useful for C, C++, Rust, Go, and Java where acquire/release patterns are common
 

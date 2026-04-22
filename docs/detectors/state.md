@@ -4,7 +4,7 @@
 
 Nyx's state model analysis tracks **resource lifecycle** and **authentication state** through a function using monotone dataflow over bounded lattices. It detects use-after-close bugs, double-close bugs, resource leaks, and unauthenticated access to privileged operations.
 
-State analysis is **opt-in** -- enable it with `scanner.enable_state_analysis = true` in config. It requires `mode = "full"` or `mode = "cfg"`.
+State analysis is **enabled by default**. Disable it with `scanner.enable_state_analysis = false` in config if you only want taint findings. It requires `mode = "full"` or `mode = "cfg"`.
 
 ## Rule IDs
 
