@@ -1,0 +1,15 @@
+{
+  "description": "Ternary where both branches apply a sanitizer. Each branch node in the decomposed CFG carries a Sanitizer(HTML_ESCAPE) label that strips the cap; the phi at the join merges two sanitized values; res.send(safe) should not fire.",
+  "tags": ["taint", "xss", "express", "ternary", "sanitizer"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [8, 15],
+      "evidence_contains": [],
+      "notes": "escapeHtml sanitizes in both branches; phi preserves sanitization across both paths."
+    }
+  ]
+}

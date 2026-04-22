@@ -6786,7 +6786,7 @@ pub fn extract_ssa_func_summary(
     }
 
     let (param_container_to_return, param_to_container_store) =
-        extract_container_flow_summary(ssa, lang);
+        extract_container_flow_summary(ssa, lang, effective_params);
 
     // Infer return type: scan return-reaching blocks for constructor calls.
     let return_type = infer_summary_return_type(ssa, lang);
@@ -6982,6 +6982,7 @@ fn trace_to_param(
 pub(crate) fn extract_container_flow_summary(
     ssa: &SsaBody,
     lang: Lang,
+    formal_param_count: usize,
 ) -> (Vec<usize>, Vec<(usize, usize)>) {
     use crate::ssa::pointsto::{ContainerOp, classify_container_op};
 
@@ -6989,7 +6990,15 @@ pub(crate) fn extract_container_flow_summary(
     let mut container_to_return: HashSet<usize> = HashSet::new();
     let mut container_store: Vec<(usize, usize)> = Vec::new();
 
-    // 1. param_container_to_return: trace Assign/Phi ops in return blocks to params
+    // 1. param_container_to_return: trace Assign/Phi ops in return blocks to params.
+    //
+    // `trace_to_param` will happily return any `SsaOp::Param { index }`, but
+    // scoped lowering synthesises `Param` ops for external captures (module
+    // imports, free identifiers) at indices beyond the formal parameter count.
+    // Those must not enter the summary — the key's arity only covers formal
+    // params, and an out-of-range index trips `ssa_summary_fits_arity`, forcing
+    // the reconciliation probe to generate a synthetic disambiguator that no
+    // caller will ever look up.
     for block in &ssa.blocks {
         if !matches!(block.terminator, Terminator::Return(_)) {
             continue;
@@ -7002,6 +7011,7 @@ pub(crate) fn extract_container_flow_summary(
                 SsaOp::Assign(_) | SsaOp::Phi(_) => {
                     if let Some(idx) =
                         trace_to_param(inst.value, ssa, &inst_map, &mut HashSet::new())
+                        && idx < formal_param_count
                     {
                         container_to_return.insert(idx);
                     }
@@ -7056,10 +7066,12 @@ pub(crate) fn extract_container_flow_summary(
                 // Trace container to positional param (SelfParam → None, so
                 // when the container is the receiver we skip — the caller
                 // tracks that via `receiver_to_container_store` if needed).
+                // Same arity filter as above: reject synthetic Param ops that
+                // were injected for free captures.
                 let container_param =
                     match trace_to_param(container_val, ssa, &inst_map, &mut HashSet::new()) {
-                        Some(idx) => idx,
-                        None => continue,
+                        Some(idx) if idx < formal_param_count => idx,
+                        _ => continue,
                     };
 
                 // Go container ops are plain function calls with the container
@@ -7072,19 +7084,18 @@ pub(crate) fn extract_container_flow_summary(
                     0
                 };
 
-                // Trace each value arg to param
+                // Trace each value arg to param (same arity filter as above).
                 for &va_idx in &op {
                     let effective_idx = va_idx + arg_offset;
                     if let Some(arg_vals) = args.get(effective_idx) {
                         for &av in arg_vals {
                             if let Some(src_param) =
                                 trace_to_param(av, ssa, &inst_map, &mut HashSet::new())
+                                && src_param < formal_param_count
+                                && src_param != container_param
+                                && !container_store.contains(&(src_param, container_param))
                             {
-                                if src_param != container_param
-                                    && !container_store.contains(&(src_param, container_param))
-                                {
-                                    container_store.push((src_param, container_param));
-                                }
+                                container_store.push((src_param, container_param));
                             }
                         }
                     }

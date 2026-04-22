@@ -13,13 +13,13 @@
     {
       "rule_id": "taint-unsanitised-flow",
       "severity": null,
-      "must_match": false,
+      "must_match": true,
       "line_range": [
         3,
         8
       ],
       "evidence_contains": [],
-      "notes": "req.query.name flows through ternary expression to res.send; must_match false because ternary taint propagation may not be fully modeled"
+      "notes": "req.query.name → output via ternary true branch; decomposed diamond CFG puts cond on the If terminator and `uses=[input]` on the true-branch Seq, so phi at the join preserves the source taint into res.send"
     }
   ]
 }

@@ -1,0 +1,15 @@
+{
+  "description": "Ternary where the true branch interpolates a tainted identifier. The decomposed CFG gives each branch a Seq node; the true branch has uses=[name] and inherits the source taint. The phi at the join is the union of the tainted branch and the literal fallback, which is still tainted — res.send must fire.",
+  "tags": ["taint", "xss", "express", "ternary"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [8, 14],
+      "evidence_contains": [],
+      "notes": "req.query.name flows into the true branch of the ternary; phi at the join preserves the taint; res.send(out) must fire."
+    }
+  ]
+}
