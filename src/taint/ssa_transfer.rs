@@ -532,32 +532,33 @@ pub struct SsaTaintEvent {
 // The inline-analysis cache below ([`InlineCache`]) is keyed by
 // `(FuncKey, ArgTaintSig)`, where [`ArgTaintSig`] encodes **per-arg capability
 // bits only** — not the identity of the source [`TaintOrigin`]s that produced
-// those caps.  This is a deliberate trade-off:
+// those caps.  The stored value ([`CachedInlineShape`]) captures **only the
+// structural** shape of the callee's return taint: return caps,
+// callee-internal origins (from `Source` ops inside the callee body), and
+// per-parameter provenance flags that record which formal parameters
+// contributed to the return.  Caller-specific origin identity is *not*
+// stored — it is re-attributed at cache-apply time from the current call
+// site's argument taint.
 //
 // * **Soundness is preserved.**  Capability flow through the callee body is
 //   determined entirely by the seed caps; two callers with identical
 //   `ArgTaintSig` provably produce the same return caps and the same
 //   callee-internal sink activations.
 //
-// * **Origin attribution is non-deterministic across callers with matching
-//   caps but differing origins.**  The first caller to populate a cache entry
-//   writes its origin set into `return_taint.origins`; every later caller
-//   with the same `ArgTaintSig` reads back those origins and unions them
-//   into its own state.  Attribution remains deterministic within a single
-//   file analysis (the cache is a per-scope `RefCell` populated in a fixed
-//   traversal order), but an individual caller's finding may display an
-//   origin that was seeded by a sibling call site.
+// * **Origin attribution is per-call-site correct.**  On every cache hit,
+//   `apply_cached_shape` replays attribution from scratch: internal origins
+//   (callee-body-local) are cloned verbatim with the current call site's
+//   `NodeIndex`; caller-originated origins are unioned in from the actual
+//   argument taint at the parameter positions marked by `param_provenance`.
+//   Two call sites with identical caps but different sources therefore
+//   produce two findings whose `source` points to the correct call site's
+//   own argument chain, not to whichever caller first populated the cache.
 //
-// The engine prefers cap-based correctness over origin-attribution stability.
-// If a future change makes origin identity load-bearing for a finding field
-// (e.g. a new `primary_source_site` attribution path that reads
-// `return_taint.origins` and trusts them to belong to the current caller),
-// the fix is to either (a) extend `ArgTaintSig` with a truncated origin-set
-// hash, accepting the resulting cache-miss cost, or (b) re-derive origins at
-// the call site from the caller's own argument taint rather than from the
-// cached `InlineResult`.  Today no downstream consumer assumes this — the
-// two read sites (inline-result return-taint union, cross-file summary
-// resolution) treat cached origins as best-effort provenance.
+// `MAX_ORIGINS` is enforced during the re-attribution step; when the
+// combined origin set overflows, an [`EngineNote::OriginsTruncated`] is
+// recorded.  A cache hit additionally records
+// [`EngineNote::InlineCacheReused`] for observability — the note does not
+// lower confidence (`lowers_confidence()` returns `false`).
 
 /// Maximum SSA blocks in a callee body before skipping inline analysis.
 const MAX_INLINE_BLOCKS: usize = 500;
@@ -571,16 +572,64 @@ const MAX_INLINE_BLOCKS: usize = 500;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ArgTaintSig(SmallVec<[(usize, u16); 4]>);
 
-/// Cached result of inline-analyzing a callee with specific argument taint.
+/// Call-site-adapted result of inline-analyzing a callee.
 ///
-/// The `return_taint.origins` set is populated by the first caller that
-/// populated the cache entry; later callers with matching caps but different
-/// origins read back those same origins.  Cap bits are authoritative; origins
-/// are best-effort provenance.
+/// Constructed fresh per call site by [`apply_cached_shape`] from a stored
+/// [`CachedInlineShape`]; carries origins that point to the *current*
+/// caller's source chain, not to whichever caller first populated the cache
+/// entry.
 #[derive(Clone, Debug)]
 pub(crate) struct InlineResult {
     /// Taint on the return value after inline analysis.
     return_taint: Option<VarTaint>,
+}
+
+/// Structural (callsite-agnostic) summary of an inline-analyzed callee.
+///
+/// Stored in [`InlineCache`] in place of a fully-attributed `InlineResult`.
+/// Origin-identity information that depends on the caller's argument chain
+/// is *not* kept here; instead, [`param_provenance`](ReturnShape::param_provenance)
+/// records which callee parameter positions contributed seed taint to the
+/// return, and the actual caller origins are re-unioned in at apply time.
+///
+/// `None` means "this callee produced no return taint for the given
+/// argument shape".  A cached `None` is still a meaningful result — it
+/// short-circuits re-analysis on subsequent calls with matching caps.
+#[derive(Clone, Debug)]
+pub(crate) struct CachedInlineShape(Option<ReturnShape>);
+
+/// Structural parts of a non-trivial inline-analysis result.
+///
+/// Split from the full [`VarTaint`] so that cached entries can be re-used
+/// across call sites with matching arg-cap signatures but differing source
+/// origins.  See the module-level note above on origin attribution.
+#[derive(Clone, Debug)]
+pub(crate) struct ReturnShape {
+    /// Return value caps (cap bits only — structural).
+    caps: Cap,
+    /// Origins produced **inside the callee body** (e.g. `Source` op fired
+    /// in the callee).  `node` is set to a placeholder; at apply time the
+    /// caller remaps it to its own call-site NodeIndex.  `source_span` is
+    /// stable (from the callee CFG) and preserved as-is.
+    internal_origins: SmallVec<[TaintOrigin; 2]>,
+    /// Bit i set = callee's `Param(i)` seed taint reached the return value.
+    /// At apply time, caller's argument origins at matching positions are
+    /// unioned into the applied `VarTaint`.  Params beyond index 63 are
+    /// dropped (matching `SmallBitSet` semantics); the capped case is rare
+    /// and still yields cap-correct results.
+    param_provenance: u64,
+    /// Whether the receiver (`SelfParam`) seed taint flowed to the return.
+    receiver_provenance: bool,
+    /// Whether the applied `VarTaint` should be tagged `uses_summary`.
+    uses_summary: bool,
+}
+
+impl CachedInlineShape {
+    /// Cap bits of the return value, or zero if this shape records "no
+    /// return taint".  Used by [`inline_cache_fingerprint`].
+    fn return_caps_bits(&self) -> u16 {
+        self.0.as_ref().map(|s| s.caps.bits()).unwrap_or(0)
+    }
 }
 
 /// Cache for context-sensitive inline analysis results.
@@ -588,9 +637,10 @@ pub(crate) struct InlineResult {
 /// Keyed by the callee's canonical [`FuncKey`] rather than a bare string name
 /// so that same-name definitions (e.g. two `process/1` methods on different
 /// classes in the same file) never share or overwrite each other's cache
-/// entries.  See the module-level note above for the cap-vs-origin trade-off
-/// in the `ArgTaintSig` component of the key.
-pub(crate) type InlineCache = HashMap<(FuncKey, ArgTaintSig), InlineResult>;
+/// entries.  Values are stored as [`CachedInlineShape`]; see the module-level
+/// note above for why origins are stripped from the cache value and
+/// re-attributed at apply time.
+pub(crate) type InlineCache = HashMap<(FuncKey, ArgTaintSig), CachedInlineShape>;
 
 /// Drop every entry from an inline cache, marking the start of a new
 /// convergence epoch.
@@ -631,14 +681,7 @@ pub(crate) fn inline_cache_fingerprint(
 ) -> HashMap<(FuncKey, ArgTaintSig), u16> {
     cache
         .iter()
-        .map(|(k, v)| {
-            let caps_bits = v
-                .return_taint
-                .as_ref()
-                .map(|vt| vt.caps.bits())
-                .unwrap_or(0);
-            (k.clone(), caps_bits)
-        })
+        .map(|(k, v)| (k.clone(), v.return_caps_bits()))
         .collect()
 }
 
@@ -1967,11 +2010,21 @@ fn inline_analyse_callee(
     // Build cache key from actual argument taint
     let sig = build_arg_taint_sig(args, receiver, state);
 
-    // Check cache (keyed by FuncKey + arg signature)
+    // Check cache (keyed by FuncKey + arg signature).  The cached value
+    // is a structural shape — re-attribute origins to the current call
+    // site before returning so two callers with matching caps but
+    // different origins see their own source chains.
     {
         let cache = cache_ref.borrow();
         if let Some(cached) = cache.get(&(callee_key.clone(), sig.clone())) {
-            return Some(cached.clone());
+            record_engine_note(crate::engine_notes::EngineNote::InlineCacheReused);
+            return Some(apply_cached_shape(
+                cached,
+                args,
+                receiver,
+                state,
+                call_inst.cfg_node,
+            ));
         }
     }
 
@@ -2158,41 +2211,78 @@ fn inline_analyse_callee(
     let (_, callee_block_states) =
         run_ssa_taint_full(&callee_body.ssa, callee_cfg, &child_transfer);
 
-    // Extract return taint from return-block exit states
+    // Extract the structural return shape from return-block exit states
     let empty_induction = HashSet::new();
-    let return_taint = extract_inline_return_taint(
+    let shape = extract_inline_return_taint(
         &callee_body.ssa,
         callee_cfg,
         &child_transfer,
         &callee_block_states,
         &empty_induction,
-        call_inst.cfg_node,
     );
 
-    let result = InlineResult { return_taint };
-
-    // Cache the result under the canonical FuncKey.
+    // Cache the structural shape under the canonical FuncKey, then
+    // re-attribute to this call site's actual arg/receiver origins.
     {
         let mut cache = cache_ref.borrow_mut();
-        cache.insert((callee_key, sig), result.clone());
+        cache.insert((callee_key, sig), shape.clone());
     }
 
-    Some(result)
+    Some(apply_cached_shape(
+        &shape,
+        args,
+        receiver,
+        state,
+        call_inst.cfg_node,
+    ))
 }
 
-/// Extract the return value taint from an inline-analyzed callee.
+/// Per-NodeIndex provenance bits for the callee's Param/SelfParam ops.
 ///
-/// Replays `transfer_block` on converged return-block states and collects
-/// taint from all live values at return points. Remaps origin nodes to the
-/// call site for cleaner finding paths.
+/// Multiple synthetic `Param` ops can share the same `cfg_node` (the
+/// lowering emits them all at the function entry; see
+/// [`crate::ssa::lower::reorder_external_vars`]).  When that happens, an
+/// origin whose `node` points at the shared entry cannot be attributed to
+/// a single param position from node identity alone.  This struct unions
+/// the provenance of every Param/SelfParam sitting on the same node.
+///
+/// Over-attribution is safe: at apply time, set-bit indices beyond the
+/// caller's actual argument count are skipped, and set bits whose param
+/// contributed no taint union an empty set of caller origins.
+#[derive(Copy, Clone, Debug, Default)]
+struct CalleeParamNodeBits {
+    /// Bit i = a `Param { index: i }` op sits on this node.
+    params: u64,
+    /// At least one `SelfParam` op sits on this node.
+    receiver: bool,
+}
+
+/// Extract the structural shape of the return value taint from an
+/// inline-analyzed callee.
+///
+/// Replays `transfer_block` on converged return-block states and classifies
+/// each contributing origin as either **callee-internal** (originated from a
+/// `Source`/`CatchParam` op inside the callee body) or **caller-seeded**
+/// (propagated through a `Param`/`SelfParam` op; its `node` points at the
+/// callee's Param NodeIndex).
+///
+/// Caller-seeded origins are *not* baked into the cached shape — their
+/// identity depends on the caller's argument chain, which varies across call
+/// sites with matching cap signatures.  Instead, the origin position is
+/// recorded as a bit in [`ReturnShape::param_provenance`] (or the
+/// `receiver_provenance` flag), and the actual caller origins are re-unioned
+/// in by [`apply_cached_shape`] on each cache hit.
+///
+/// Callee-internal origins *are* baked in: they carry `source_span` from the
+/// callee CFG (stable across callers) and a placeholder `node` that the
+/// applying caller overwrites with its own call-site NodeIndex.
 fn extract_inline_return_taint(
     ssa: &SsaBody,
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
     block_states: &[Option<SsaTaintState>],
     induction_vars: &HashSet<SsaValue>,
-    call_site_node: NodeIndex,
-) -> Option<VarTaint> {
+) -> CachedInlineShape {
     // Collect all param SSA values to separate from derived values
     let param_values: HashSet<SsaValue> = ssa
         .blocks
@@ -2202,46 +2292,90 @@ fn extract_inline_return_taint(
         .map(|i| i.value)
         .collect();
 
-    let mut derived_caps = Cap::empty();
-    let mut derived_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
-    let mut param_caps = Cap::empty();
-    let mut param_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+    // Map callee Param/SelfParam NodeIndex → union of provenance bits so
+    // we can identify caller-seeded origins by inspecting `orig.node`
+    // (which was rewritten to the Param's cfg_node in
+    // `transfer_inst::SsaOp::Param`).  Multiple Param ops may share a
+    // cfg_node (synthetic external-var params emitted at the entry), so
+    // a HashMap<NodeIndex, single-value> would lose information; we
+    // union provenance bits per node instead.
+    let mut param_node_map: HashMap<NodeIndex, CalleeParamNodeBits> = HashMap::new();
+    for block in &ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            match &inst.op {
+                SsaOp::Param { index } => {
+                    let entry = param_node_map.entry(inst.cfg_node).or_default();
+                    if *index < 64 {
+                        entry.params |= 1u64 << *index;
+                    }
+                }
+                SsaOp::SelfParam => {
+                    let entry = param_node_map.entry(inst.cfg_node).or_default();
+                    entry.receiver = true;
+                }
+                _ => {}
+            }
+        }
+    }
 
-    // Origins crossing back into the caller must reference NodeIndex values
-    // valid in the **caller's** body CFG.  Callee-internal origins (e.g. a
-    // `Source` op inside the inlined body) carry a `node` from the callee
-    // body's NodeIndex space, which is out-of-bounds when finding emission
-    // later does `caller_body_cfg[finding.source]`.  Remap them to the
-    // caller's call-site node and lazily fill `source_span` from the
-    // callee CFG so the byte→line lookup in `build_taint_diag` still has
-    // something to render.  Origins that already have `source_span` set
-    // (e.g. caller-arg origins forwarded through a Param) are remapped the
-    // same way — their `node` was rewritten to a callee-internal Param
-    // index by `transfer_inst::SsaOp::Param` before reaching this exit
-    // state, so leaving the node untouched would re-introduce the OOB.
-    let remap_origin = |o: &TaintOrigin| -> TaintOrigin {
+    // Callee-internal origins carry their span from the callee CFG (lazily
+    // filled when missing) but have `node` set to a placeholder — the
+    // applying call site fills in its own call-site NodeIndex via
+    // `apply_cached_shape`.
+    //
+    // `node` is initialized to `NodeIndex::end()` (the max-u32 sentinel) so
+    // a forgotten override is loud (indexing it later panics) rather than
+    // silently rendering wrong spans.
+    let placeholder_node = NodeIndex::end();
+    let prep_internal = |o: &TaintOrigin| -> TaintOrigin {
         let mut out = *o;
         if out.source_span.is_none() {
             if let Some(info) = cfg.node_weight(o.node) {
                 out.source_span = Some(info.classification_span());
             }
         }
-        out.node = call_site_node;
+        out.node = placeholder_node;
         out
     };
 
-    let push_remapped = |target_origins: &mut SmallVec<[TaintOrigin; 2]>, orig: &TaintOrigin| {
-        let new_orig = remap_origin(orig);
-        if target_origins.len() < effective_max_origins()
-            && !target_origins.iter().any(|o| {
-                o.node == new_orig.node
-                    && o.source_span == new_orig.source_span
-                    && o.source_kind == new_orig.source_kind
+    let push_internal = |target: &mut SmallVec<[TaintOrigin; 2]>, orig: &TaintOrigin| {
+        let new_orig = prep_internal(orig);
+        if target.len() < effective_max_origins()
+            && !target.iter().any(|o| {
+                o.source_span == new_orig.source_span && o.source_kind == new_orig.source_kind
             })
         {
-            target_origins.push(new_orig);
+            target.push(new_orig);
         }
     };
+
+    let mut derived_caps = Cap::empty();
+    let mut derived_internal: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+    let mut derived_params: u64 = 0;
+    let mut derived_receiver: bool = false;
+
+    let mut param_caps = Cap::empty();
+    let mut param_internal: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+    let mut param_params: u64 = 0;
+    let mut param_receiver: bool = false;
+
+    let classify_and_push =
+        |orig: &TaintOrigin,
+         internal: &mut SmallVec<[TaintOrigin; 2]>,
+         provenance: &mut u64,
+         receiver_prov: &mut bool| {
+            match param_node_map.get(&orig.node) {
+                Some(bits) => {
+                    *provenance |= bits.params;
+                    if bits.receiver {
+                        *receiver_prov = true;
+                    }
+                }
+                None => {
+                    push_internal(internal, orig);
+                }
+            }
+        };
 
     for (bid, block) in ssa.blocks.iter().enumerate() {
         let ret_val = match &block.terminator {
@@ -2261,53 +2395,175 @@ fn extract_inline_return_taint(
 
             if let Some(rv) = ret_val {
                 // Explicit return value: use ONLY its taint.
-                // If rv has no taint entry, this block contributes nothing —
-                // the return value is provably untainted on this path.
                 if let Some(taint) = exit.get(rv) {
-                    let (target_caps, target_origins) = if param_values.contains(&rv) {
-                        (&mut param_caps, &mut param_origins)
+                    if param_values.contains(&rv) {
+                        param_caps |= taint.caps;
+                        for orig in &taint.origins {
+                            classify_and_push(
+                                orig,
+                                &mut param_internal,
+                                &mut param_params,
+                                &mut param_receiver,
+                            );
+                        }
                     } else {
-                        (&mut derived_caps, &mut derived_origins)
-                    };
-                    *target_caps |= taint.caps;
-                    for orig in &taint.origins {
-                        push_remapped(target_origins, orig);
+                        derived_caps |= taint.caps;
+                        for orig in &taint.origins {
+                            classify_and_push(
+                                orig,
+                                &mut derived_internal,
+                                &mut derived_params,
+                                &mut derived_receiver,
+                            );
+                        }
                     }
                 }
             } else {
                 // Return(None): implicit return / empty body.
                 // Fall back to collecting all live values.
                 for (val, taint) in &exit.values {
-                    let (target_caps, target_origins) = if param_values.contains(val) {
-                        (&mut param_caps, &mut param_origins)
+                    if param_values.contains(val) {
+                        param_caps |= taint.caps;
+                        for orig in &taint.origins {
+                            classify_and_push(
+                                orig,
+                                &mut param_internal,
+                                &mut param_params,
+                                &mut param_receiver,
+                            );
+                        }
                     } else {
-                        (&mut derived_caps, &mut derived_origins)
-                    };
-                    *target_caps |= taint.caps;
-                    for orig in &taint.origins {
-                        push_remapped(target_origins, orig);
+                        derived_caps |= taint.caps;
+                        for orig in &taint.origins {
+                            classify_and_push(
+                                orig,
+                                &mut derived_internal,
+                                &mut derived_params,
+                                &mut derived_receiver,
+                            );
+                        }
                     }
                 }
             }
         }
     }
 
-    // Prefer derived caps; fall back to param caps for passthrough functions
-    let (final_caps, final_origins) = if !derived_caps.is_empty() {
-        (derived_caps, derived_origins)
+    // Prefer derived caps; fall back to param-return caps for passthrough functions.
+    let (final_caps, final_internal, final_params, final_receiver) = if !derived_caps.is_empty() {
+        (derived_caps, derived_internal, derived_params, derived_receiver)
     } else {
-        (param_caps, param_origins)
+        (param_caps, param_internal, param_params, param_receiver)
     };
 
-    if final_caps.is_empty() {
-        return None;
+    if final_caps.is_empty() && final_params == 0 && !final_receiver && final_internal.is_empty() {
+        return CachedInlineShape(None);
     }
 
-    Some(VarTaint {
+    CachedInlineShape(Some(ReturnShape {
         caps: final_caps,
-        origins: final_origins,
+        internal_origins: final_internal,
+        param_provenance: final_params,
+        receiver_provenance: final_receiver,
         uses_summary: true, // inline analysis is a form of summary
-    })
+    }))
+}
+
+/// Re-attribute a [`CachedInlineShape`] to a specific call site.
+///
+/// Called on every inline-analysis return (both cache miss and cache hit) so
+/// that `InlineResult.return_taint.origins` always reflect the *current*
+/// caller's argument chain.  See the module-level note on cache-vs-origin
+/// attribution.
+///
+/// # Attribution rules
+///
+/// * **Internal origins** (recorded by the callee's `Source` ops): cloned
+///   with `node` overwritten to `call_site_node`; `source_span` preserved
+///   from the callee CFG.
+/// * **Param-provenance bits**: for each set bit `i`, union caller's arg
+///   origins at position `i` into the result.  Receiver provenance does the
+///   same for `receiver`.
+/// * **Truncation**: the combined origin set is capped at
+///   [`effective_max_origins`]; when any origins are dropped,
+///   [`EngineNote::OriginsTruncated`] is recorded via
+///   [`record_engine_note`].
+fn apply_cached_shape(
+    shape: &CachedInlineShape,
+    args: &[SmallVec<[SsaValue; 2]>],
+    receiver: &Option<SsaValue>,
+    state: &SsaTaintState,
+    call_site_node: NodeIndex,
+) -> InlineResult {
+    let Some(ret) = shape.0.as_ref() else {
+        return InlineResult { return_taint: None };
+    };
+
+    let cap = effective_max_origins();
+    let mut origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+    let mut dropped: u32 = 0;
+
+    let push = |origins: &mut SmallVec<[TaintOrigin; 2]>,
+                dropped: &mut u32,
+                new_orig: TaintOrigin| {
+        if origins.iter().any(|o| {
+            o.node == new_orig.node
+                && o.source_span == new_orig.source_span
+                && o.source_kind == new_orig.source_kind
+        }) {
+            return;
+        }
+        if origins.len() < cap {
+            origins.push(new_orig);
+        } else {
+            *dropped += 1;
+        }
+    };
+
+    // 1. Callee-internal origins: rewrite `node` to the current call site.
+    for orig in &ret.internal_origins {
+        let mut o = *orig;
+        o.node = call_site_node;
+        push(&mut origins, &mut dropped, o);
+    }
+
+    // 2. Caller-attributed origins from param-provenance bits.
+    let mut bits = ret.param_provenance;
+    while bits != 0 {
+        let idx = bits.trailing_zeros() as usize;
+        bits &= bits - 1;
+        if let Some(arg_vals) = args.get(idx) {
+            for v in arg_vals {
+                if let Some(taint) = state.get(*v) {
+                    for orig in &taint.origins {
+                        push(&mut origins, &mut dropped, *orig);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Receiver-attributed origins (SelfParam provenance).
+    if ret.receiver_provenance {
+        if let Some(rv) = receiver {
+            if let Some(taint) = state.get(*rv) {
+                for orig in &taint.origins {
+                    push(&mut origins, &mut dropped, *orig);
+                }
+            }
+        }
+    }
+
+    if dropped > 0 {
+        record_engine_note(crate::engine_notes::EngineNote::OriginsTruncated { dropped });
+    }
+
+    InlineResult {
+        return_taint: Some(VarTaint {
+            caps: ret.caps,
+            origins,
+            uses_summary: ret.uses_summary,
+        }),
+    }
 }
 
 /// Transfer a single SSA instruction.
@@ -8336,21 +8592,21 @@ mod inline_cache_epoch_tests {
         ArgTaintSig(SmallVec::new())
     }
 
-    fn result(caps_bits: u16) -> InlineResult {
-        InlineResult {
-            return_taint: Some(VarTaint {
-                caps: Cap::from_bits_retain(caps_bits),
-                origins: SmallVec::new(),
-                uses_summary: false,
-            }),
-        }
+    fn shape(caps_bits: u16) -> CachedInlineShape {
+        CachedInlineShape(Some(ReturnShape {
+            caps: Cap::from_bits_retain(caps_bits),
+            internal_origins: SmallVec::new(),
+            param_provenance: 0,
+            receiver_provenance: false,
+            uses_summary: false,
+        }))
     }
 
     #[test]
     fn clear_epoch_drops_all_entries() {
         let mut c: InlineCache = HashMap::new();
-        c.insert((key("a"), sig()), result(1));
-        c.insert((key("b"), sig()), result(2));
+        c.insert((key("a"), sig()), shape(1));
+        c.insert((key("b"), sig()), shape(2));
         assert_eq!(c.len(), 2);
 
         inline_cache_clear_epoch(&mut c);
@@ -8360,12 +8616,12 @@ mod inline_cache_epoch_tests {
     #[test]
     fn fingerprint_is_order_independent() {
         let mut a: InlineCache = HashMap::new();
-        a.insert((key("alpha"), sig()), result(3));
-        a.insert((key("beta"), sig()), result(5));
+        a.insert((key("alpha"), sig()), shape(3));
+        a.insert((key("beta"), sig()), shape(5));
 
         let mut b: InlineCache = HashMap::new();
-        b.insert((key("beta"), sig()), result(5));
-        b.insert((key("alpha"), sig()), result(3));
+        b.insert((key("beta"), sig()), shape(5));
+        b.insert((key("alpha"), sig()), shape(3));
 
         assert_eq!(inline_cache_fingerprint(&a), inline_cache_fingerprint(&b));
     }
@@ -8373,10 +8629,10 @@ mod inline_cache_epoch_tests {
     #[test]
     fn fingerprint_changes_when_return_caps_change() {
         let mut c: InlineCache = HashMap::new();
-        c.insert((key("f"), sig()), result(0));
+        c.insert((key("f"), sig()), shape(0));
         let before = inline_cache_fingerprint(&c);
 
-        c.insert((key("f"), sig()), result(1));
+        c.insert((key("f"), sig()), shape(1));
         let after = inline_cache_fingerprint(&c);
 
         assert_ne!(before, after, "cap refinement must change fingerprint");
@@ -8388,9 +8644,108 @@ mod inline_cache_epoch_tests {
         // two converged iterations both producing "no return taint" are
         // recognised as equal.
         let mut c: InlineCache = HashMap::new();
-        c.insert((key("f"), sig()), InlineResult { return_taint: None });
+        c.insert((key("f"), sig()), CachedInlineShape(None));
         let fp = inline_cache_fingerprint(&c);
         assert_eq!(*fp.get(&(key("f"), sig())).unwrap(), 0);
+    }
+
+    // ── apply_cached_shape: origin re-attribution (Phase 5) ─────────────
+
+    use crate::labels::SourceKind;
+    use petgraph::graph::NodeIndex;
+
+    fn origin_at(node: usize, kind: SourceKind, span: Option<(usize, usize)>) -> TaintOrigin {
+        TaintOrigin {
+            node: NodeIndex::new(node),
+            source_kind: kind,
+            source_span: span,
+        }
+    }
+
+    #[test]
+    fn apply_reattributes_param_origins_per_call_site() {
+        // Shared cached shape: cap bit set, Param(0) marked as provenance source.
+        let cached = CachedInlineShape(Some(ReturnShape {
+            caps: Cap::SHELL_ESCAPE,
+            internal_origins: SmallVec::new(),
+            param_provenance: 1u64 << 0,
+            receiver_provenance: false,
+            uses_summary: true,
+        }));
+
+        // Caller A: argument carries an env-source origin.
+        let mut state_a = SsaTaintState::initial();
+        state_a.set(
+            SsaValue(1),
+            VarTaint {
+                caps: Cap::SHELL_ESCAPE,
+                origins: SmallVec::from_vec(vec![origin_at(
+                    10,
+                    SourceKind::EnvironmentConfig,
+                    Some((100, 120)),
+                )]),
+                uses_summary: false,
+            },
+        );
+        let args_a: Vec<SmallVec<[SsaValue; 2]>> = vec![SmallVec::from_vec(vec![SsaValue(1)])];
+        let res_a = apply_cached_shape(&cached, &args_a, &None, &state_a, NodeIndex::new(200));
+        let vt_a = res_a.return_taint.expect("apply a");
+        assert_eq!(vt_a.origins.len(), 1);
+        assert_eq!(vt_a.origins[0].source_kind, SourceKind::EnvironmentConfig);
+        assert_eq!(vt_a.origins[0].source_span, Some((100, 120)));
+
+        // Caller B: same caps, different origin (filesystem read).
+        let mut state_b = SsaTaintState::initial();
+        state_b.set(
+            SsaValue(2),
+            VarTaint {
+                caps: Cap::SHELL_ESCAPE,
+                origins: SmallVec::from_vec(vec![origin_at(
+                    20,
+                    SourceKind::FileSystem,
+                    Some((300, 320)),
+                )]),
+                uses_summary: false,
+            },
+        );
+        let args_b: Vec<SmallVec<[SsaValue; 2]>> = vec![SmallVec::from_vec(vec![SsaValue(2)])];
+        let res_b = apply_cached_shape(&cached, &args_b, &None, &state_b, NodeIndex::new(201));
+        let vt_b = res_b.return_taint.expect("apply b");
+        assert_eq!(vt_b.origins.len(), 1);
+        assert_eq!(
+            vt_b.origins[0].source_kind,
+            SourceKind::FileSystem,
+            "second caller must see its own source, not caller A's cached origin"
+        );
+        assert_eq!(vt_b.origins[0].source_span, Some((300, 320)));
+    }
+
+    #[test]
+    fn apply_remaps_internal_origins_to_call_site() {
+        // Cached shape with a single callee-internal origin.
+        let internal_origin = TaintOrigin {
+            node: NodeIndex::end(), // placeholder written by extract
+            source_kind: SourceKind::UserInput,
+            source_span: Some((55, 77)),
+        };
+        let mut internal_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+        internal_origins.push(internal_origin);
+        let cached = CachedInlineShape(Some(ReturnShape {
+            caps: Cap::HTML_ESCAPE,
+            internal_origins,
+            param_provenance: 0,
+            receiver_provenance: false,
+            uses_summary: true,
+        }));
+
+        let state = SsaTaintState::initial();
+        let args: Vec<SmallVec<[SsaValue; 2]>> = vec![];
+        let call_site = NodeIndex::new(777);
+        let res = apply_cached_shape(&cached, &args, &None, &state, call_site);
+        let vt = res.return_taint.expect("apply");
+        assert_eq!(vt.origins.len(), 1);
+        assert_eq!(vt.origins[0].node, call_site);
+        assert_eq!(vt.origins[0].source_span, Some((55, 77)));
     }
 }
 
