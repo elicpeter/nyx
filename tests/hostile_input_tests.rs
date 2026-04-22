@@ -433,3 +433,98 @@ fn scan_of_mixed_hostile_directory_is_bounded() {
         "normal.js should still produce findings: {diags:?}",
     );
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+//  Symlink loops — infinite-loop resistance
+// ───────────────────────────────────────────────────────────────────────────
+
+/// A self-referencing symlink (`a/self -> ../a`) is a classic hostile-input
+/// shape: a naive follow-symlinks walker will recurse forever.  The `ignore`
+/// crate's `WalkBuilder` handles cycles, but the scanner wraps that behind
+/// its own canonicalization + containment check; a regression that re-enables
+/// a cyclic walk would hang CI indefinitely.  The test enforces a hard wall-
+/// clock budget so a hang is caught as a timeout rather than as silent CI
+/// stall.
+#[cfg(unix)]
+#[test]
+fn symlink_loop_does_not_hang_with_follow() {
+    use nyx_scanner::scan_no_index;
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // Real file so the scan has legitimate work to do.
+    std::fs::write(root.join("real.js"), b"var x = 1;\n").unwrap();
+
+    // Nested directory with a self-referencing symlink: `a/self -> ../a`
+    // expands infinitely under a naive follow-symlinks walk.
+    let a = root.join("a");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::write(a.join("inside.js"), b"var y = 2;\n").unwrap();
+    symlink("../a", a.join("self")).unwrap();
+
+    let mut cfg = hostile_cfg();
+    cfg.scanner.follow_symlinks = true;
+
+    let _diags = with_time_budget(Duration::from_secs(10), "symlink loop follow=true", || {
+        scan_no_index(root, &cfg).expect("scan of cyclic symlink tree must not error")
+    });
+}
+
+/// Same fixture with `follow_symlinks = false` must also terminate in
+/// bounded time — the symlink is not followed, so the loop never expands,
+/// but we pin the contract so flipping the default cannot introduce a hang
+/// regression.
+#[cfg(unix)]
+#[test]
+fn symlink_loop_does_not_hang_without_follow() {
+    use nyx_scanner::scan_no_index;
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    std::fs::write(root.join("real.js"), b"var x = 1;\n").unwrap();
+    let a = root.join("a");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::write(a.join("inside.js"), b"var y = 2;\n").unwrap();
+    symlink("../a", a.join("self")).unwrap();
+
+    let mut cfg = hostile_cfg();
+    cfg.scanner.follow_symlinks = false;
+
+    let _diags = with_time_budget(Duration::from_secs(10), "symlink loop follow=false", || {
+        scan_no_index(root, &cfg).expect("scan must not error on cyclic symlink with follow=false")
+    });
+}
+
+/// Mutually-referencing symlinks (`dirA/link -> ../dirB`, `dirB/link -> ../dirA`)
+/// are the second common loop shape.  Like the self-loop, this must terminate.
+#[cfg(unix)]
+#[test]
+fn mutual_symlink_loop_does_not_hang() {
+    use nyx_scanner::scan_no_index;
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    std::fs::write(root.join("real.js"), b"var x = 1;\n").unwrap();
+
+    let dir_a = root.join("dirA");
+    let dir_b = root.join("dirB");
+    std::fs::create_dir(&dir_a).unwrap();
+    std::fs::create_dir(&dir_b).unwrap();
+    std::fs::write(dir_a.join("a.js"), b"var a = 1;\n").unwrap();
+    std::fs::write(dir_b.join("b.js"), b"var b = 2;\n").unwrap();
+    symlink("../dirB", dir_a.join("to_b")).unwrap();
+    symlink("../dirA", dir_b.join("to_a")).unwrap();
+
+    let mut cfg = hostile_cfg();
+    cfg.scanner.follow_symlinks = true;
+
+    let _diags = with_time_budget(Duration::from_secs(10), "mutual symlink loop", || {
+        scan_no_index(root, &cfg).expect("scan must terminate on mutual symlink cycle")
+    });
+}

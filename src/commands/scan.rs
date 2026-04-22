@@ -45,6 +45,56 @@ fn record_persist_error(errors: &Arc<Mutex<Vec<String>>>, message: String) {
     errors.lock().expect("persist error mutex").push(message);
 }
 
+/// Run per-file analysis, optionally catching panics so the scan can
+/// continue past a poisoned input.
+///
+/// When `enabled` is true, a panic inside `f` is caught, logged, and
+/// converted into a `NyxError::Msg`; callers that already match on
+/// `Err(_)` will gracefully skip the file.  When `enabled` is false,
+/// the panic propagates unchanged — preserving the default behaviour
+/// for users who want to catch engine bugs loudly.
+///
+/// `AssertUnwindSafe` is load-bearing: closures over `&Config` /
+/// `&GlobalSummaries` are not automatically unwind-safe, and the
+/// protection only needs to hold per-file (any unwind-poisoned local
+/// state is discarded when the closure returns).
+fn recover_or_propagate<T>(
+    enabled: bool,
+    path: &Path,
+    logs: Option<&Arc<ScanLogCollector>>,
+    f: impl FnOnce() -> NyxResult<T>,
+) -> NyxResult<T> {
+    if !enabled {
+        return f();
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .map(str::to_owned)
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic>".to_string());
+            tracing::warn!(
+                path = %path.display(),
+                panic = %msg,
+                "analysis panicked; continuing"
+            );
+            if let Some(l) = logs {
+                l.warn(
+                    format!("Analysis panicked: {msg}"),
+                    Some(path.display().to_string()),
+                    Some(msg.clone()),
+                );
+            }
+            Err(crate::errors::NyxError::Msg(format!(
+                "analysis panicked: {msg}"
+            )))
+        }
+    }
+}
+
 fn fail_if_persist_errors(stage: &str, errors: Arc<Mutex<Vec<String>>>) -> NyxResult<()> {
     let errors = errors.lock().expect("persist error mutex");
     if errors.is_empty() {
@@ -647,12 +697,19 @@ fn run_topo_batches(
                             p.set_current_file(&path.to_string_lossy());
                         }
                         let bytes = std::fs::read(path).unwrap_or_default();
-                        match analyse_file_fused(
-                            &bytes,
+                        match recover_or_propagate(
+                            cfg.scanner.enable_panic_recovery,
                             path,
-                            cfg,
-                            Some(global_summaries),
-                            scan_root,
+                            logs,
+                            || {
+                                analyse_file_fused(
+                                    &bytes,
+                                    path,
+                                    cfg,
+                                    Some(global_summaries),
+                                    scan_root,
+                                )
+                            },
                         ) {
                             Ok(r) => {
                                 pb.inc(0); // don't double-count iterations in progress bar
@@ -763,7 +820,12 @@ fn run_topo_batches(
                     if let Some(p) = progress {
                         p.set_current_file(&path.to_string_lossy());
                     }
-                    let d = match run_rules_on_file(path, cfg, Some(global_summaries), scan_root) {
+                    let d = match recover_or_propagate(
+                        cfg.scanner.enable_panic_recovery,
+                        path,
+                        logs,
+                        || run_rules_on_file(path, cfg, Some(global_summaries), scan_root),
+                    ) {
                         Ok(d) => d,
                         Err(e) => {
                             tracing::warn!("pass 2: {}: {e}", path.display());
@@ -806,7 +868,12 @@ fn run_topo_batches(
                 if let Some(p) = progress {
                     p.set_current_file(&path.to_string_lossy());
                 }
-                let d = match run_rules_on_file(path, cfg, Some(global_summaries), scan_root) {
+                let d = match recover_or_propagate(
+                    cfg.scanner.enable_panic_recovery,
+                    path,
+                    logs,
+                    || run_rules_on_file(path, cfg, Some(global_summaries), scan_root),
+                ) {
                     Ok(d) => d,
                     Err(e) => {
                         tracing::warn!("pass 2: {}: {e}", path.display());
@@ -926,12 +993,12 @@ pub(crate) fn scan_filesystem_with_observer(
         let mut diags: Vec<Diag> = all_paths
             .par_iter()
             .flat_map_iter(|path| {
-                let result = match analyse_file_fused(
-                    &std::fs::read(path).unwrap_or_default(),
+                let bytes = std::fs::read(path).unwrap_or_default();
+                let result = match recover_or_propagate(
+                    cfg.scanner.enable_panic_recovery,
                     path,
-                    cfg,
-                    None,
-                    Some(root),
+                    logs,
+                    || analyse_file_fused(&bytes, path, cfg, None, Some(root)),
                 ) {
                     Ok(r) => r.diags,
                     Err(e) => {
@@ -1006,7 +1073,12 @@ pub(crate) fn scan_filesystem_with_observer(
             .par_iter()
             .fold(GlobalSummaries::new, |mut local_gs, path| {
                 if let Ok(bytes) = std::fs::read(path) {
-                    match analyse_file_fused(&bytes, path, cfg, None, Some(root)) {
+                    match recover_or_propagate(
+                        cfg.scanner.enable_panic_recovery,
+                        path,
+                        logs,
+                        || analyse_file_fused(&bytes, path, cfg, None, Some(root)),
+                    ) {
                         Ok(r) => {
                             // Extract lang slug before consuming summaries
                             let first_lang = r.summaries.first().map(|s| s.lang.clone());
@@ -1372,11 +1444,18 @@ pub fn scan_with_index_parallel_observer(
                     let hash = Indexer::digest_bytes(&bytes);
                     let needs_scan = idx.should_scan_with_hash(path, &hash).unwrap_or(true);
                     if needs_scan {
-                        match extract_all_summaries_from_bytes(
-                            &bytes,
+                        match recover_or_propagate(
+                            cfg.scanner.enable_panic_recovery,
                             path,
-                            cfg,
-                            Some(&scan_root_ref),
+                            logs,
+                            || {
+                                extract_all_summaries_from_bytes(
+                                    &bytes,
+                                    path,
+                                    cfg,
+                                    Some(&scan_root_ref),
+                                )
+                            },
                         ) {
                             Ok((func_sums, ssa_sums, ssa_bodies)) => {
                                 if let Some(p) = &progress_ref {
@@ -1641,13 +1720,16 @@ pub fn scan_with_index_parallel_observer(
                         p.inc_parsed(1);
                         p.inc_analyzed(1);
                     }
-                    let d = match &bytes_opt {
-                        Some(bytes) => run_rules_on_bytes(bytes, &path, cfg, None, Some(scan_root))
-                            .unwrap_or_default(),
-                        None => {
-                            run_rules_on_file(&path, cfg, None, Some(scan_root)).unwrap_or_default()
-                        }
-                    };
+                    let d = recover_or_propagate(
+                        cfg.scanner.enable_panic_recovery,
+                        &path,
+                        logs,
+                        || match &bytes_opt {
+                            Some(bytes) => run_rules_on_bytes(bytes, &path, cfg, None, Some(scan_root)),
+                            None => run_rules_on_file(&path, cfg, None, Some(scan_root)),
+                        },
+                    )
+                    .unwrap_or_default();
 
                     let file_id = match &hash {
                         Some(h) => idx.upsert_file_with_hash(&path, h),

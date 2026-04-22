@@ -41,6 +41,24 @@ fn parse_timeout_ms() -> u64 {
     crate::utils::analysis_options::current().parse_timeout_ms
 }
 
+/// Test-only: when the `NYX_TEST_FORCE_PANIC_PATH` env var is set, any file
+/// path containing that substring triggers a deterministic panic here.  Used
+/// by `tests/panic_recovery_tests.rs` to exercise per-file panic behaviour in
+/// the scan pipeline.  The env var is re-read each call so successive tests
+/// in the same process can toggle injection; `std::env::var` is an in-memory
+/// lookup on supported platforms so the overhead is negligible.
+fn maybe_inject_test_panic(path: &Path) {
+    if let Ok(marker) = std::env::var("NYX_TEST_FORCE_PANIC_PATH") {
+        if !marker.is_empty() && path.to_string_lossy().contains(marker.as_str()) {
+            panic!(
+                "NYX_TEST_FORCE_PANIC_PATH injection: {} matches {:?}",
+                path.display(),
+                marker
+            );
+        }
+    }
+}
+
 /// Convenience alias for node indices.
 fn byte_offset_to_point(tree: &tree_sitter::Tree, byte: usize) -> tree_sitter::Point {
     tree.root_node()
@@ -1419,6 +1437,7 @@ pub fn run_rules_on_bytes(
     scan_root: Option<&Path>,
 ) -> NyxResult<Vec<Diag>> {
     let _span = tracing::debug_span!("run_rules", file = %path.display()).entered();
+    maybe_inject_test_panic(path);
 
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
         // Not a recognized tree-sitter language — try text-based patterns.
@@ -1513,6 +1532,7 @@ pub fn analyse_file_fused(
     scan_root: Option<&Path>,
 ) -> NyxResult<FusedResult> {
     let _span = tracing::debug_span!("analyse_fused", file = %path.display()).entered();
+    maybe_inject_test_panic(path);
 
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
         // Not a recognized tree-sitter language — try text-based patterns.

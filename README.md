@@ -26,7 +26,7 @@ Rule depth and detection confidence differ meaningfully between languages — Py
 | Multi-language support | 10 languages across three maturity tiers — see [Language Maturity](docs/language-maturity.md). Stable: Python, JavaScript, TypeScript. Beta: Go, Java, Ruby, PHP. Experimental: C, C++, Rust. |
 | AST-level pattern matching | Language-specific queries written against precise parse trees |
 | Control-flow graph analysis | Auth gaps, unguarded sinks, unreachable security code, resource leaks, error fallthrough |
-| Cross-file taint tracking | Monotone forward dataflow taint analysis from sources through sanitizers to sinks with function summaries |
+| Cross-file taint via function summaries | Intra-procedural monotone forward dataflow from sources through sanitizers to sinks, with cross-file call resolution through summarized capabilities. Not full inter-procedural analysis — see the detail below. |
 | Cross-language interop | Taint flows across language boundaries via explicit interop edges (requires configuration) |
 | Two-pass architecture | Pass 1 extracts function summaries; Pass 2 runs taint with full cross-file context |
 | Incremental indexing | SQLite database stores file hashes, summaries, and findings to skip unchanged files |
@@ -43,7 +43,7 @@ Rule depth and detection confidence differ meaningfully between languages — Py
 | Property | Details |
 |---|---|
 | **Pure-Rust, single binary** | No JVM, Python, or server required. |
-| **Parallel** | Uses Rayon for concurrent file walking and analysis; scales with available CPU cores. Typically scans large repositories in seconds in AST-only mode on modern hardware. |
+| **Parallel** | Uses Rayon for concurrent file walking and analysis; scales with available CPU cores. Per-fixture wall-clock budgets are enforced in CI by `tests/perf_tests.rs`; run `cargo bench` locally for numbers on your hardware. |
 | **CFG + taint analysis** | Intra-procedural CFG construction and monotone forward dataflow taint analysis with guaranteed termination. Cross-file function summaries and capability-based sanitizer tracking. |
 | **Index-aware** | An optional SQLite index stores file hashes and findings; subsequent scans skip unchanged files. |
 | **Offline** | No login, cloud account, or telemetry required. Suitable for air-gapped environments. |
@@ -243,6 +243,17 @@ All 10 languages parse via tree-sitter and run through the full CFG + taint + AS
 
 Resource-leak detection is available for every tier where language-specific acquire/release pairs are defined.
 
+### Scope caveats for narrower-tier languages
+
+- **C and C++** currently cover command injection, buffer overflow, format
+  string, file I/O, SSRF, and basic path traversal only. SQL injection, code
+  execution, and deserialization rules are not yet implemented. For
+  comprehensive C/C++ coverage, pair Nyx with clang-tidy, the Clang Static
+  Analyzer, or Infer.
+- **PHP** support is production-ready for plain PHP. Laravel-specific ORM,
+  validation, and middleware patterns are not comprehensively modeled.
+  Laravel codebases should pair Nyx with Psalm or PHPStan.
+
 ---
 
 ## Configuration Overview
@@ -357,9 +368,16 @@ Incremental indexing significantly reduces scan time for subsequent runs on unch
 
 ### Detection Accuracy
 
-Measured against a 262-case ground-truth corpus (155 vulnerable, 107 safe) across 10 languages (C, C++, Go, Java, JavaScript, PHP, Python, Ruby, Rust, TypeScript) covering 14 vulnerability classes. Full per-phase results live in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
+Measured on our 262-case benchmark corpus (155 vulnerable, 107 safe) at
+[`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json) across
+10 languages (C, C++, Go, Java, JavaScript, PHP, Python, Ruby, Rust,
+TypeScript) covering 14 vulnerability classes. These numbers are specific to
+that corpus and are not a general-purpose accuracy claim — real-world results
+depend on the language mix, rule coverage for your stack, and the
+vulnerability classes that matter to you. Full per-phase results live in
+[`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
 
-Current rule-level baseline:
+Current rule-level baseline on the 262-case corpus:
 
 | Metric | Score |
 |---|---|

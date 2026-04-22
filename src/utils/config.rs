@@ -194,6 +194,12 @@ pub struct ScannerConfig {
     /// only resource lifecycle findings (leak, use-after-close, double-close)
     /// are produced.  Default: true.
     pub enable_auth_analysis: bool,
+
+    /// When true, per-file panics during analysis are caught and logged
+    /// as warnings; the scan continues with the remaining files.  Default
+    /// false: a panic aborts the scan, preserving existing behaviour for
+    /// users who want to catch engine bugs loudly.
+    pub enable_panic_recovery: bool,
 }
 impl Default for ScannerConfig {
     fn default() -> Self {
@@ -229,6 +235,7 @@ impl Default for ScannerConfig {
             include_nonprod: false,
             enable_state_analysis: true,
             enable_auth_analysis: true,
+            enable_panic_recovery: false,
         }
     }
 }
@@ -861,6 +868,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.scanner.include_nonprod = user.scanner.include_nonprod;
     default.scanner.enable_state_analysis = user.scanner.enable_state_analysis;
     default.scanner.enable_auth_analysis = user.scanner.enable_auth_analysis;
+    default.scanner.enable_panic_recovery = user.scanner.enable_panic_recovery;
 
     // Merge exclusion lists (default ⊔ user), then sort & dedupe
     default

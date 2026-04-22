@@ -19,6 +19,10 @@ Welcome to the Nyx documentation. Nyx is a multi-language static vulnerability s
 - [State Model Analysis](detectors/state.md) -- Resource lifecycle and authentication state
 - [AST Patterns](detectors/patterns.md) -- Tree-sitter structural pattern matching
 
+## Advanced
+
+- [Advanced Analysis](advanced-analysis.md) -- Abstract interpretation, context sensitivity, symbolic execution, and constraint solving (all on by default; each independently switchable)
+
 ## Rule Reference
 
 - [Rule Index](rules/index.md) -- How rules are organized
