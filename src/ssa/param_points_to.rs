@@ -254,8 +254,7 @@ pub fn analyse_param_points_to(
             }
             for u in uses {
                 let mut visited = HashSet::new();
-                let Some(hit) = trace_to_param_hit(*u, &op_map, &var_names, &mut visited)
-                else {
+                let Some(hit) = trace_to_param_hit(*u, &op_map, &var_names, &mut visited) else {
                     continue;
                 };
                 let src_idx = param_hit_to_formal_index(&hit, &params_by_name);
@@ -422,7 +421,10 @@ mod tests {
         let body = mk_body(vec![block], 3);
         let pinfo = vec![(0usize, "b".to_string(), SsaValue(0))];
         let s = analyse_param_points_to(&body, &pinfo, 1, None);
-        assert!(s.is_empty(), "self-alias edges should not be emitted: {s:?}");
+        assert!(
+            s.is_empty(),
+            "self-alias edges should not be emitted: {s:?}"
+        );
     }
 
     #[test]
@@ -435,11 +437,7 @@ mod tests {
             body: vec![
                 inst(0, SsaOp::Param { index: 5 }, Some("capture")),
                 inst(1, SsaOp::Param { index: 1 }, Some("b")),
-                inst(
-                    2,
-                    SsaOp::Assign(smallvec![SsaValue(0)]),
-                    Some("b.data"),
-                ),
+                inst(2, SsaOp::Assign(smallvec![SsaValue(0)]), Some("b.data")),
             ],
             terminator: Terminator::Return(None),
             preds: smallvec![],
@@ -468,9 +466,7 @@ mod tests {
         for i in 0..n {
             insts.push(inst(
                 i,
-                SsaOp::Param {
-                    index: i as usize,
-                },
+                SsaOp::Param { index: i as usize },
                 Some(&format!("p{i}")),
             ));
             phi_operands.push((BlockId(0), SsaValue(i)));

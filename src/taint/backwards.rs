@@ -172,7 +172,6 @@ impl<'a> BackwardsCtx<'a> {
             depth_budget: DEFAULT_BACKWARDS_DEPTH,
         }
     }
-
 }
 
 // ─── Transfer function ─────────────────────────────────────────────────────
@@ -378,9 +377,11 @@ fn walk_dfs(
     let def_cfg_node = ctx.ssa.def_of(value).cfg_node;
     if def_cfg_node.index() < ctx.cfg.node_count() {
         let info = &ctx.cfg[def_cfg_node];
-        let source_cap_match = info.taint.labels.iter().any(|l| {
-            matches!(l, DataLabel::Source(c) if !(*c & sink_caps).is_empty())
-        });
+        let source_cap_match = info
+            .taint
+            .labels
+            .iter()
+            .any(|l| matches!(l, DataLabel::Source(c) if !(*c & sink_caps).is_empty()));
         if source_cap_match {
             let source_kind = classify_source_kind(ctx, def_cfg_node, sink_caps);
             out.push(BackwardFlow {
@@ -476,10 +477,7 @@ fn walk_dfs(
                 let mut callee_budget: u32 = 0;
                 let callee_ctx = BackwardsCtx {
                     ssa: &callee_body.ssa,
-                    cfg: callee_body
-                        .body_graph
-                        .as_ref()
-                        .unwrap_or(ctx.cfg),
+                    cfg: callee_body.body_graph.as_ref().unwrap_or(ctx.cfg),
                     lang: ctx.lang,
                     global_summaries: ctx.global_summaries,
                     intra_file_bodies: ctx.intra_file_bodies,
@@ -582,9 +580,11 @@ fn classify_source_kind(ctx: &BackwardsCtx<'_>, node: NodeIndex, sink_caps: Cap)
     // can use the existing `infer_source_kind` heuristic against the
     // callee name for finer-grained classification (UserInput vs
     // EnvironmentConfig vs FileSystem …).
-    let caps_match = info.taint.labels.iter().any(|l| {
-        matches!(l, DataLabel::Source(c) if !(*c & sink_caps).is_empty())
-    });
+    let caps_match = info
+        .taint
+        .labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Source(c) if !(*c & sink_caps).is_empty()));
     if caps_match {
         let callee_str = info.call.callee.as_deref().unwrap_or("");
         crate::labels::infer_source_kind(sink_caps, callee_str)
@@ -664,14 +664,16 @@ pub fn annotate_finding(finding: &mut Finding, verdict: FindingVerdict) {
         FindingVerdict::BudgetExhausted => NOTE_BUDGET,
         FindingVerdict::Inconclusive => return,
     };
-    let sv = finding.symbolic.get_or_insert(crate::evidence::SymbolicVerdict {
-        verdict: crate::evidence::Verdict::NotAttempted,
-        constraints_checked: 0,
-        paths_explored: 0,
-        witness: None,
-        interproc_call_chains: Vec::new(),
-        cutoff_notes: Vec::new(),
-    });
+    let sv = finding
+        .symbolic
+        .get_or_insert(crate::evidence::SymbolicVerdict {
+            verdict: crate::evidence::Verdict::NotAttempted,
+            constraints_checked: 0,
+            paths_explored: 0,
+            witness: None,
+            interproc_call_chains: Vec::new(),
+            cutoff_notes: Vec::new(),
+        });
     if !sv.cutoff_notes.iter().any(|n| n == note) {
         sv.cutoff_notes.push(note.to_string());
     }
@@ -684,8 +686,8 @@ mod tests {
     use super::*;
     use crate::cfg::{EdgeKind, NodeInfo};
     use crate::ssa::ir::{BlockId, SsaBlock, SsaInst, Terminator, ValueDef};
-    use petgraph::graph::NodeIndex;
     use petgraph::Graph;
+    use petgraph::graph::NodeIndex;
     use smallvec::smallvec;
 
     fn make_value_def(block: BlockId, cfg_node: NodeIndex) -> ValueDef {
@@ -1062,7 +1064,10 @@ mod tests {
         annotate_finding(&mut f, FindingVerdict::Confirmed);
         let sv = f.symbolic.as_ref().unwrap();
         assert_eq!(
-            sv.cutoff_notes.iter().filter(|n| *n == NOTE_CONFIRMED).count(),
+            sv.cutoff_notes
+                .iter()
+                .filter(|n| *n == NOTE_CONFIRMED)
+                .count(),
             1
         );
     }

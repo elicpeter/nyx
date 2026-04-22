@@ -425,25 +425,20 @@ fn analyse_body_with_seed(
                     let Some(sink_val) = ssa_body.cfg_node_map.get(&finding.sink).copied() else {
                         continue;
                     };
-                    let sink_caps = cfg[finding.sink]
-                        .taint
-                        .labels
-                        .iter()
-                        .fold(crate::labels::Cap::empty(), |acc, l| match l {
+                    let sink_caps = cfg[finding.sink].taint.labels.iter().fold(
+                        crate::labels::Cap::empty(),
+                        |acc, l| match l {
                             crate::labels::DataLabel::Sink(c) => acc | *c,
                             _ => acc,
-                        });
+                        },
+                    );
                     let caps = if sink_caps.is_empty() {
                         crate::labels::Cap::all()
                     } else {
                         sink_caps
                     };
-                    let flows = backwards::analyse_sink_backwards(
-                        &bctx,
-                        sink_val,
-                        finding.sink,
-                        caps,
-                    );
+                    let flows =
+                        backwards::analyse_sink_backwards(&bctx, sink_val, finding.sink, caps);
                     let verdict = backwards::aggregate_verdict(&flows);
                     backwards::annotate_finding(finding, verdict);
                 }

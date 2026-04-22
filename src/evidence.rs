@@ -633,9 +633,7 @@ pub fn compute_confidence_limiters(diag: &Diag) -> Vec<String> {
     if let Some(ref sv) = ev.symbolic {
         use crate::taint::backwards::{NOTE_BUDGET, NOTE_CONFIRMED, NOTE_INFEASIBLE};
         if sv.cutoff_notes.iter().any(|n| n == NOTE_INFEASIBLE) {
-            limiters.push(
-                "Backwards demand-driven analysis proved this flow infeasible".into(),
-            );
+            limiters.push("Backwards demand-driven analysis proved this flow infeasible".into());
         } else if sv.cutoff_notes.iter().any(|n| n == NOTE_BUDGET) {
             limiters.push(
                 "Backwards demand-driven analysis exceeded its budget (verdict not reached)".into(),

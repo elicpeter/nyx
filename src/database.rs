@@ -1920,7 +1920,7 @@ fn ssa_summaries_round_trip() {
 
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
-            points_to: Default::default(),
+                points_to: Default::default(),
             },
         ),
         (
@@ -1951,7 +1951,7 @@ fn ssa_summaries_round_trip() {
 
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
-            points_to: Default::default(),
+                points_to: Default::default(),
             },
         ),
     ];
@@ -2380,7 +2380,7 @@ fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
-            points_to: Default::default(),
+        points_to: Default::default(),
     }
 }
 
