@@ -323,7 +323,7 @@ export function ConfigPage() {
 
       {/* Sources */}
       <LabelSection
-        title="Custom Sources"
+        title="Sources"
         id="config-sources"
         kind="source"
         entries={sources || []}
@@ -339,7 +339,7 @@ export function ConfigPage() {
 
       {/* Sinks */}
       <LabelSection
-        title="Custom Sinks"
+        title="Sinks"
         id="config-sinks"
         kind="sink"
         entries={sinks || []}
@@ -351,7 +351,7 @@ export function ConfigPage() {
 
       {/* Sanitizers */}
       <LabelSection
-        title="Custom Sanitizers"
+        title="Sanitizers"
         id="config-sanitizers"
         kind="sanitizer"
         entries={sanitizers || []}

@@ -7,6 +7,7 @@ import { escapeHtml, highlightSyntax } from '../utils/syntaxHighlight';
 import { parseNoteText } from '../utils/parseNote';
 import { findingToMarkdown } from '../utils/findingMarkdown';
 import { CopyMarkdownButton } from '../components/CopyMarkdownButton';
+import { Dropdown, DropdownItem } from '../components/ui/Dropdown';
 import { CodeViewerModal } from '../modals/CodeViewerModal';
 import type {
   FindingView,
@@ -22,30 +23,56 @@ function formatTriageState(state: string): string {
   return (state || 'open').replace(/_/g, ' ');
 }
 
-const TRIAGE_STATES = [
-  'open',
-  'investigating',
-  'false_positive',
-  'accepted_risk',
-  'suppressed',
-  'fixed',
-] as const;
+interface StatusOption {
+  value: string;
+  label: string;
+}
+
+const STATUS_GROUPS: { heading: string; options: StatusOption[] }[] = [
+  {
+    heading: 'Active',
+    options: [
+      { value: 'open', label: 'Open' },
+      { value: 'investigating', label: 'Investigating' },
+    ],
+  },
+  {
+    heading: 'Resolved',
+    options: [
+      { value: 'fixed', label: 'Fixed' },
+      { value: 'false_positive', label: 'False Positive' },
+      { value: 'accepted_risk', label: 'Accepted Risk' },
+      { value: 'suppressed', label: 'Suppressed' },
+    ],
+  },
+];
 
 function isStateFinding(f: FindingView): boolean {
   return f.rule_id.startsWith('state-');
 }
 
-const STATE_REMEDIATION_HINTS: Record<string, string> = {
-  'state-use-after-close':
-    'Ensure the resource is not accessed after calling close/free. Consider restructuring to use the resource before releasing it.',
-  'state-double-close':
+const STATE_REMEDIATION_HINTS: Record<string, string[]> = {
+  'state-use-after-close': [
+    'Do not access the resource after calling close/free.',
+    'Restructure so every use happens before release.',
+    'Consider a language-native cleanup pattern (defer, with, try-with-resources, RAII).',
+  ],
+  'state-double-close': [
     'Remove the duplicate close call, or guard with a null/closed check.',
-  'state-resource-leak':
-    'Add a close/free call before the function exits, or use a language-specific cleanup pattern (defer, with, try-with-resources, RAII).',
-  'state-resource-leak-possible':
-    'Ensure the resource is closed on all code paths, including error/early-return paths.',
-  'state-unauthed-access':
-    'Add an authentication check before this operation, or move it behind an auth middleware/guard.',
+    'Centralize cleanup in a single code path to avoid repeats.',
+  ],
+  'state-resource-leak': [
+    'Add a close/free call before every function exit.',
+    'Prefer a language-native cleanup pattern (defer, with, try-with-resources, RAII).',
+  ],
+  'state-resource-leak-possible': [
+    'Ensure the resource is closed on all code paths — including error and early-return paths.',
+    'Put cleanup in a finally/defer block rather than after the happy path.',
+  ],
+  'state-unauthed-access': [
+    'Add an authentication check before the sensitive operation.',
+    'Move this handler behind an auth middleware or guard.',
+  ],
 };
 
 const STATE_RULE_DESCRIPTIONS: Record<string, string> = {
@@ -146,18 +173,6 @@ function StateTransitionCard({
           Acquired at: {acquireLocation}
         </div>
       )}
-    </div>
-  );
-}
-
-function StateRemediationHint({ ruleId }: { ruleId: string }) {
-  const hint = STATE_REMEDIATION_HINTS[ruleId];
-  if (!hint) return null;
-
-  return (
-    <div className="state-remediation">
-      <div className="state-remediation-label">Remediation</div>
-      {hint}
     </div>
   );
 }
@@ -303,6 +318,90 @@ function ConfidenceSection({ finding }: { finding: FindingView }) {
   );
 }
 
+// ── Structured Explanation ──────────────────────────────────────────────────
+
+function describeSpan(span: SpanEvidence): string {
+  const name = span.snippet?.trim() || span.kind || span.path.split('/').pop() || span.path;
+  return `${name} (line ${span.line})`;
+}
+
+function StructuredExplanation({
+  finding,
+  evidence,
+}: {
+  finding: FindingView;
+  evidence: Evidence;
+}) {
+  const rows: { label: string; value: React.ReactNode }[] = [];
+
+  if (evidence.source) {
+    rows.push({
+      label: 'From',
+      value: <code className="struct-expl-code">{describeSpan(evidence.source)}</code>,
+    });
+  }
+
+  if (evidence.sink) {
+    rows.push({
+      label: 'Into',
+      value: <code className="struct-expl-code">{describeSpan(evidence.sink)}</code>,
+    });
+  }
+
+  rows.push({
+    label: 'Risk',
+    value: riskSummary(finding, evidence),
+  });
+
+  const contextNote = buildContextNote(finding, evidence);
+  if (contextNote) {
+    rows.push({ label: 'Notes', value: contextNote });
+  }
+
+  if (rows.length === 0) return null;
+
+  return (
+    <dl className="struct-expl">
+      {rows.map((r, i) => (
+        <div className="struct-expl-row" key={i}>
+          <dt>{r.label}</dt>
+          <dd>{r.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function riskSummary(finding: FindingView, evidence: Evidence): string {
+  if (evidence.explanation) return evidence.explanation;
+  if (finding.message) return finding.message;
+  const category = finding.category?.toLowerCase() || '';
+  if (category.includes('security')) {
+    return 'Potential injection or unsafe-operation vulnerability.';
+  }
+  return `${finding.category} issue.`;
+}
+
+function buildContextNote(
+  finding: FindingView,
+  evidence: Evidence,
+): React.ReactNode {
+  const parts: string[] = [];
+  const hasCrossFile = evidence.flow_steps?.some((s) => s.is_cross_file);
+  if (hasCrossFile) {
+    parts.push('Crosses function boundaries via summary resolution.');
+  }
+  if (finding.sanitizer_status === 'none') {
+    parts.push('No sanitizer was applied to this flow.');
+  } else if (finding.sanitizer_status === 'bypassed') {
+    parts.push('A sanitizer was present but was bypassed.');
+  }
+  if (finding.guard_kind) {
+    parts.push(`Guard: ${finding.guard_kind}.`);
+  }
+  return parts.length ? parts.join(' ') : null;
+}
+
 // ── Taint Flow Timeline ─────────────────────────────────────────────────────
 
 const FLOW_KIND_COLORS: Record<string, string> = {
@@ -321,75 +420,70 @@ const FLOW_KIND_LABELS: Record<string, string> = {
   sink: 'Sink',
 };
 
+const FLOW_COLLAPSE_THRESHOLD = 5;
+
 function FlowTimeline({ steps }: { steps: FlowStep[] }) {
-  const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState(
+    steps.length <= FLOW_COLLAPSE_THRESHOLD,
+  );
 
   if (steps.length === 0) return null;
 
+  const isLong = steps.length > FLOW_COLLAPSE_THRESHOLD;
+  const visibleSteps: FlowStep[] = (() => {
+    if (!isLong || expanded) return steps;
+    const firstIdx = steps.findIndex((s) => s.kind === 'source');
+    const lastSinkIdx = [...steps]
+      .map((s, i) => ({ s, i }))
+      .reverse()
+      .find(({ s }) => s.kind === 'sink')?.i;
+    const picked = new Set<number>();
+    if (firstIdx >= 0) picked.add(firstIdx);
+    if (lastSinkIdx != null) picked.add(lastSinkIdx);
+    picked.add(0);
+    picked.add(steps.length - 1);
+    return [...picked]
+      .sort((a, b) => a - b)
+      .map((i) => steps[i]);
+  })();
+
   return (
     <div className="flow-timeline">
-      {steps.map((s, i) => {
+      {visibleSteps.map((s, i) => {
         const color = FLOW_KIND_COLORS[s.kind] || 'var(--text-secondary)';
         const label = FLOW_KIND_LABELS[s.kind] || s.kind;
-        const isLast = i === steps.length - 1;
+        const isLast = i === visibleSteps.length - 1;
+        const isEndpoint = s.kind === 'source' || s.kind === 'sink';
 
         return (
           <div
-            key={i}
-            className={`flow-step${s.is_cross_file ? ' flow-step-cross-file' : ''}${activeIdx === i ? ' active' : ''}`}
-            onClick={() => setActiveIdx(i)}
+            key={`${s.step}-${i}`}
+            className={[
+              'flow-step',
+              s.is_cross_file ? 'flow-step-cross-file' : '',
+              isEndpoint ? `flow-step-endpoint flow-step-${s.kind}` : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
           >
             <div className="flow-step-connector">
               <div className="flow-step-dot" style={{ background: color }} />
               {!isLast && <div className="flow-step-line" />}
             </div>
             <div className="flow-step-card">
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-2)',
-                  marginBottom: 2,
-                }}
-              >
+              <div className="flow-step-header">
                 <span className="flow-step-badge" style={{ color }}>
                   {label}
                 </span>
-                <span
-                  style={{
-                    fontSize: 'var(--text-xs)',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  #{s.step}
-                </span>
+                <span className="flow-step-num">#{s.step}</span>
                 {s.variable && (
-                  <span
-                    style={{
-                      fontSize: 'var(--text-sm)',
-                      fontFamily: 'var(--font-mono)',
-                    }}
-                  >
-                    {s.variable}
-                  </span>
+                  <span className="flow-step-var">{s.variable}</span>
                 )}
                 {s.callee && (
-                  <span
-                    style={{
-                      fontSize: 'var(--text-xs)',
-                      color: 'var(--text-secondary)',
-                    }}
-                  >
-                    {s.callee}
-                  </span>
+                  <span className="flow-step-callee">{s.callee}</span>
                 )}
               </div>
-              <div
-                style={{
-                  fontSize: 'var(--text-xs)',
-                  color: 'var(--text-tertiary)',
-                }}
-              >
+              <div className="flow-step-loc">
                 {s.file}:{s.line}:{s.col}
                 {s.function ? ` in ${s.function}` : ''}
               </div>
@@ -400,6 +494,17 @@ function FlowTimeline({ steps }: { steps: FlowStep[] }) {
           </div>
         );
       })}
+      {isLong && (
+        <button
+          type="button"
+          className="flow-expand-toggle"
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded
+            ? `Collapse (${steps.length} steps)`
+            : `Show all ${steps.length} steps`}
+        </button>
+      )}
     </div>
   );
 }
@@ -474,9 +579,106 @@ function CodePreview({
   );
 }
 
-// ── Triage Actions ──────────────────────────────────────────────────────────
+// ── How to Fix ──────────────────────────────────────────────────────────────
 
-function TriageActions({
+function sinkCapKey(finding: FindingView): string | null {
+  const snippet = (finding.evidence?.sink?.snippet || '').toLowerCase();
+  const rule = finding.rule_id.toLowerCase();
+
+  if (/innerhtml|outerhtml|document\.write|dangerouslysetinnerhtml/.test(snippet))
+    return 'xss';
+  if (/\beval\b|new function|settimeout\s*\(\s*["'`]/.test(snippet))
+    return 'code-exec';
+  if (/\bexec\b|\bspawn\b|\bsystem\b|\bpopen\b|shell_exec|subprocess/.test(snippet))
+    return 'cmd-inject';
+  if (/query|execute|raw|prepare.*%|select\s|insert\s|update\s|delete\s/i.test(snippet))
+    return 'sql';
+  if (/readfile|fs\.|open\s*\(|path\.join/.test(snippet))
+    return 'path';
+  if (/\bfetch\b|\baxios\b|http\.|request\.|urlopen|curl/.test(snippet))
+    return 'ssrf';
+
+  if (rule.includes('xss')) return 'xss';
+  if (rule.includes('sql')) return 'sql';
+  if (rule.includes('cmd') || rule.includes('command')) return 'cmd-inject';
+  if (rule.includes('ssrf')) return 'ssrf';
+  if (rule.includes('path') || rule.includes('traversal')) return 'path';
+  if (rule.includes('deserial')) return 'deserialize';
+  if (rule.includes('eval') || rule.includes('codeexec')) return 'code-exec';
+
+  return null;
+}
+
+const TAINT_REMEDIATION: Record<string, string[]> = {
+  xss: [
+    'Avoid writing user input into innerHTML / outerHTML / document.write.',
+    'Use textContent, or framework-native binding (React props, Vue {{ }}, etc.).',
+    'If HTML is unavoidable, run input through a well-maintained sanitizer (DOMPurify, Bleach).',
+  ],
+  sql: [
+    'Use parameterized queries or a prepared statement — never concatenate user input into SQL.',
+    'Prefer an ORM or query builder that escapes parameters automatically.',
+    'Validate input type (integer, enum, allowlist) before the query.',
+  ],
+  'cmd-inject': [
+    'Avoid passing user input to shell/exec APIs.',
+    'Use the argv-array form of exec (no shell interpretation).',
+    'Validate against a strict allowlist of commands and arguments.',
+  ],
+  ssrf: [
+    'Validate and allowlist outbound hostnames before making the request.',
+    'Resolve and check the target IP is not internal / metadata (169.254.169.254, 127.0.0.0/8, 10.0.0.0/8, RFC1918).',
+    'Use a dedicated HTTP client that disables redirects to private addresses.',
+  ],
+  path: [
+    'Normalize the path and verify it stays within an expected root directory.',
+    'Reject inputs containing "..", null bytes, or absolute paths.',
+    'Use a safe-join helper rather than string concatenation.',
+  ],
+  deserialize: [
+    'Do not deserialize untrusted input with dangerous formats (pickle, ObjectInputStream).',
+    'Use a schema-constrained format (JSON with a validator, Protobuf).',
+    'If unavoidable, run deserialization in a locked-down process and validate types post-hoc.',
+  ],
+  'code-exec': [
+    'Do not pass user input to eval / new Function / exec.',
+    'Replace dynamic code generation with a parser over an allowlisted grammar.',
+    'If scripting is required, sandbox it (VM / Web Worker with no DOM, seccomp).',
+  ],
+};
+
+const DEFAULT_TAINT_REMEDIATION: string[] = [
+  'Validate user input against an allowlist (length, character set, format).',
+  'Encode or escape data appropriately for the target sink.',
+  'Prefer parameterized / structured APIs over string concatenation.',
+];
+
+function HowToFix({ finding }: { finding: FindingView }) {
+  const isState = isStateFinding(finding);
+
+  const bullets: string[] = (() => {
+    if (isState) {
+      return STATE_REMEDIATION_HINTS[finding.rule_id] || [];
+    }
+    const key = sinkCapKey(finding);
+    if (key && TAINT_REMEDIATION[key]) return TAINT_REMEDIATION[key];
+    return DEFAULT_TAINT_REMEDIATION;
+  })();
+
+  if (bullets.length === 0) return null;
+
+  return (
+    <ul className="how-to-fix-list">
+      {bullets.map((b, i) => (
+        <li key={i}>{b}</li>
+      ))}
+    </ul>
+  );
+}
+
+// ── Status Control ──────────────────────────────────────────────────────────
+
+function StatusControl({
   finding,
   onTriage,
   isPending,
@@ -485,61 +687,103 @@ function TriageActions({
   onTriage: (state: string, note: string) => void;
   isPending: boolean;
 }) {
-  const [pendingState, setPendingState] = useState<string | null>(null);
-  const [note, setNote] = useState('');
+  const [noteDraft, setNoteDraft] = useState('');
+  const [noteOpen, setNoteOpen] = useState(false);
 
   const currentState = finding.triage_state || 'open';
-  const availableStates = TRIAGE_STATES.filter((s) => s !== currentState);
 
-  const handleConfirm = () => {
-    if (!pendingState) return;
-    onTriage(pendingState, note.trim());
-    setPendingState(null);
-    setNote('');
-  };
-
-  const handleCancel = () => {
-    setPendingState(null);
-    setNote('');
+  const chooseStatus = (state: string, close: () => void) => {
+    if (state === currentState) {
+      close();
+      return;
+    }
+    onTriage(state, noteDraft.trim());
+    setNoteDraft('');
+    setNoteOpen(false);
+    close();
   };
 
   return (
-    <div className="triage-actions" data-fingerprint={finding.fingerprint}>
-      {finding.triage_note && (
-        <div className="triage-current-note">
+    <div className="status-control" data-fingerprint={finding.fingerprint}>
+      <div className="status-control-row">
+        <label className="status-label">Status</label>
+        <Dropdown
+          trigger={({ open }) => (
+            <button
+              type="button"
+              className={`status-trigger status-trigger-${currentState}`}
+              disabled={isPending}
+            >
+              <span className={`status-dot status-dot-${currentState}`} />
+              <span className="status-value">
+                {formatTriageState(currentState)}
+              </span>
+              <span className={`status-caret${open ? ' open' : ''}`}>▾</span>
+            </button>
+          )}
+        >
+          {({ close }) => (
+            <>
+              {STATUS_GROUPS.map((group) => (
+                <div className="status-group" key={group.heading}>
+                  <div className="status-group-heading">{group.heading}</div>
+                  {group.options.map((opt) => (
+                    <DropdownItem
+                      key={opt.value}
+                      checked={opt.value === currentState}
+                      onClick={() => chooseStatus(opt.value, close)}
+                    >
+                      {opt.label}
+                    </DropdownItem>
+                  ))}
+                </div>
+              ))}
+            </>
+          )}
+        </Dropdown>
+        {!noteOpen && (
+          <button
+            type="button"
+            className="status-note-toggle"
+            onClick={() => setNoteOpen(true)}
+          >
+            {finding.triage_note ? 'Edit note' : 'Add note'}
+          </button>
+        )}
+      </div>
+      {finding.triage_note && !noteOpen && (
+        <div className="status-current-note">
           <strong>Note:</strong> {finding.triage_note}
         </div>
       )}
-      <div className="triage-buttons">
-        {availableStates.map((s) => (
-          <button
-            key={s}
-            className={`btn btn-sm btn-triage btn-triage-${s}`}
-            disabled={isPending}
-            onClick={() => setPendingState(s)}
-          >
-            {formatTriageState(s)}
-          </button>
-        ))}
-      </div>
-      {pendingState && (
-        <div className="triage-note-input">
+      {noteOpen && (
+        <div className="status-note-input">
           <textarea
-            placeholder="Add a note (optional)..."
+            placeholder="Context for the next person reading this…"
             rows={2}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
+            value={noteDraft || finding.triage_note || ''}
+            onChange={(e) => setNoteDraft(e.target.value)}
             autoFocus
           />
-          <div className="triage-note-actions">
+          <div className="status-note-actions">
             <button
               className="btn btn-sm btn-primary"
               disabled={isPending}
-              onClick={handleConfirm}
+              onClick={() => {
+                onTriage(currentState, noteDraft.trim());
+                setNoteOpen(false);
+              }}
             >
-              Confirm
+              Save note
             </button>
-            <button className="btn btn-sm" onClick={handleCancel}>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                setNoteOpen(false);
+                setNoteDraft('');
+              }}
+            >
               Cancel
             </button>
           </div>
@@ -605,42 +849,34 @@ export function FindingDetailPage() {
   const hasLabels = f.labels && f.labels.length > 0;
   const hasCode = !!f.code_context;
 
-  const sanitizerBadge =
-    f.sanitizer_status && !isState ? (
-      <span className={`badge sanitizer-badge-${f.sanitizer_status}`}>
-        {f.sanitizer_status === 'none'
-          ? 'No sanitizers'
-          : f.sanitizer_status === 'bypassed'
-            ? 'Sanitizer bypassed'
-            : 'Sanitized'}
-      </span>
-    ) : null;
+  const metaParts: string[] = [];
+  if (f.category) metaParts.push(f.category);
+  if (f.language) metaParts.push(f.language);
+  metaParts.push(formatTriageState(f.triage_state || 'open'));
+  if (f.sanitizer_status && !isState) {
+    metaParts.push(
+      f.sanitizer_status === 'none'
+        ? 'No sanitizers'
+        : f.sanitizer_status === 'bypassed'
+          ? 'Sanitizer bypassed'
+          : 'Sanitized',
+    );
+  }
 
   return (
-    <div className="detail-panel">
+    <div className="detail-panel finding-detail">
       <div className="detail-title-row">
-        <h2>{f.rule_id}</h2>
+        <h2 className="finding-heading">
+          <span className={`severity-pill severity-pill-${f.severity.toLowerCase()}`}>
+            {f.severity}
+          </span>
+          <span className="finding-rule-id">{f.rule_id}</span>
+        </h2>
         <CopyMarkdownButton
           iconOnly
           title="Copy as markdown"
           getMarkdown={() => findingToMarkdown(f)}
         />
-      </div>
-
-      <div className="badge-row">
-        <span className={`badge badge-${f.severity.toLowerCase()}`}>
-          {f.severity}
-        </span>
-        {f.confidence && (
-          <span className={`badge badge-conf-${f.confidence.toLowerCase()}`}>
-            {f.confidence}
-          </span>
-        )}
-        <span className="badge">{f.category}</span>
-        <span className={`badge badge-triage-${f.triage_state || 'open'}`}>
-          {formatTriageState(f.triage_state || 'open')}
-        </span>
-        {sanitizerBadge}
       </div>
 
       <a
@@ -654,8 +890,16 @@ export function FindingDetailPage() {
         {f.path}:{f.line}:{f.col}
       </a>
 
-      {/* Triage Actions */}
-      <TriageActions
+      <div className="finding-meta">
+        {metaParts.map((p, i) => (
+          <span key={i}>
+            {i > 0 && <span className="finding-meta-sep">•</span>}
+            <span className="finding-meta-item">{p}</span>
+          </span>
+        ))}
+      </div>
+
+      <StatusControl
         finding={f}
         onTriage={handleTriage}
         isPending={bulkTriage.isPending}
@@ -677,39 +921,9 @@ export function FindingDetailPage() {
               {evidence && (
                 <StateTransitionCard evidence={evidence} ruleId={f.rule_id} />
               )}
-              <StateRemediationHint ruleId={f.rule_id} />
             </>
           ) : (
-            <>
-              {evidence?.explanation && (
-                <p style={{ marginBottom: 'var(--space-3)', lineHeight: 1.5 }}>
-                  {evidence.explanation}
-                </p>
-              )}
-              {f.message && (
-                <p style={{ marginBottom: 'var(--space-3)' }}>{f.message}</p>
-              )}
-              {evidence?.source && (
-                <p className="evidence-note">
-                  Tainted data flows from{' '}
-                  <strong>{evidence.source.kind}</strong> at line{' '}
-                  {evidence.source.line} to a dangerous operation.
-                </p>
-              )}
-              {evidence?.sink && (
-                <p className="evidence-note">
-                  Sink at line {evidence.sink.line}
-                  {evidence.sink.snippet ? (
-                    <>
-                      : <code>{evidence.sink.snippet}</code>
-                    </>
-                  ) : null}
-                </p>
-              )}
-              {f.guard_kind && (
-                <p className="evidence-note">Guard: {f.guard_kind}</p>
-              )}
-            </>
+            evidence && <StructuredExplanation finding={f} evidence={evidence} />
           )}
         </CollapsibleSection>
       )}
@@ -721,23 +935,28 @@ export function FindingDetailPage() {
         </CollapsibleSection>
       )}
 
-      {/* Evidence */}
+      {/* How to Fix */}
+      <CollapsibleSection title="How to fix">
+        <HowToFix finding={f} />
+      </CollapsibleSection>
+
+      {/* Evidence (collapsed by default — overlaps with taint flow) */}
       {hasEvidence && (
-        <CollapsibleSection title="Evidence">
+        <CollapsibleSection title="Evidence" defaultOpen={false}>
           <EvidenceSection evidence={evidence!} skipStateCard={isState} />
         </CollapsibleSection>
       )}
 
       {/* Analysis Notes */}
       {hasNotes && (
-        <CollapsibleSection title="Analysis Notes">
+        <CollapsibleSection title="Analysis Notes" defaultOpen={false}>
           <NotesSection evidence={evidence!} />
         </CollapsibleSection>
       )}
 
       {/* Confidence Reasoning */}
       {f.confidence && (
-        <CollapsibleSection title="Confidence Reasoning">
+        <CollapsibleSection title="Confidence Reasoning" defaultOpen={false}>
           <ConfidenceSection finding={f} />
         </CollapsibleSection>
       )}
@@ -751,7 +970,7 @@ export function FindingDetailPage() {
 
       {/* Labels */}
       {hasLabels && (
-        <CollapsibleSection title="Labels">
+        <CollapsibleSection title="Labels" defaultOpen={false}>
           <div className="label-list">
             {f.labels.map(([k, v], i) => (
               <span key={i} className="label-item">
@@ -765,7 +984,7 @@ export function FindingDetailPage() {
 
       {/* Code Preview */}
       {hasCode && (
-        <CollapsibleSection title="Code Preview">
+        <CollapsibleSection title="Code Preview" defaultOpen={false}>
           <CodePreview
             lines={f.code_context!.lines}
             startLine={f.code_context!.start_line}

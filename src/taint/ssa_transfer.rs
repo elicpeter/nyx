@@ -1052,12 +1052,14 @@ pub fn extract_ssa_exit_state(
 
     // Capture source spans on all origins before the seed crosses a body
     // boundary.  At consumption time the parent's graph is not in scope,
-    // so we snapshot each origin's span now.
+    // so we snapshot each origin's span now.  Use the classification span
+    // so the recorded origin points at the labeled sub-expression (e.g.
+    // the inner `req.query.x` call) rather than the enclosing statement.
     for taint in result.values_mut() {
         for origin in taint.origins.iter_mut() {
             if origin.source_span.is_none() {
                 if let Some(info) = cfg.node_weight(origin.node) {
-                    origin.source_span = Some(info.ast.span);
+                    origin.source_span = Some(info.classification_span());
                 }
             }
         }
@@ -1805,7 +1807,7 @@ fn inline_analyse_callee(
             let populate_span = |mut o: TaintOrigin| -> TaintOrigin {
                 if o.source_span.is_none() {
                     if let Some(info) = cfg.node_weight(o.node) {
-                        o.source_span = Some(info.ast.span);
+                        o.source_span = Some(info.classification_span());
                     }
                 }
                 o
@@ -2014,7 +2016,7 @@ fn extract_inline_return_taint(
         let mut out = *o;
         if out.source_span.is_none() {
             if let Some(info) = cfg.node_weight(o.node) {
-                out.source_span = Some(info.ast.span);
+                out.source_span = Some(info.classification_span());
             }
         }
         out.node = call_site_node;
@@ -6655,7 +6657,10 @@ pub fn extract_ssa_func_summary(
                 continue;
             }
             let site = match locator {
-                Some(loc) => loc.site_for_span(cfg[event.sink_node].ast.span, event.sink_caps),
+                Some(loc) => loc.site_for_span(
+                    cfg[event.sink_node].classification_span(),
+                    event.sink_caps,
+                ),
                 None => SinkSite::cap_only(event.sink_caps),
             };
             let key = site.dedup_key();

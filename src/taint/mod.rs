@@ -79,7 +79,8 @@ pub struct Finding {
     /// Symbolic constraint analysis verdict, if attempted.
     pub symbolic: Option<crate::evidence::SymbolicVerdict>,
     /// Original source byte span, preserved when origin was remapped across
-    /// body boundaries.  `None` for intra-body findings (use `cfg[source].ast.span`).
+    /// body boundaries.  `None` for intra-body findings
+    /// (use `cfg[source].classification_span()`).
     pub source_span: Option<usize>,
     /// Source-location of the callee-internal dangerous instruction when the
     /// sink was resolved via a function summary carrying a

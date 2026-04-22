@@ -162,12 +162,17 @@ pub struct RuleDetailView {
 }
 
 /// Label entry for sources/sinks/sanitizers listing.
+///
+/// `case_sensitive` and `is_builtin` default to `false` on deserialize so POST
+/// bodies from the UI (which only supply `lang`, `matchers`, `cap`) succeed.
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct LabelEntryView {
     pub lang: String,
     pub matchers: Vec<String>,
     pub cap: String,
+    #[serde(default)]
     pub case_sensitive: bool,
+    #[serde(default)]
     pub is_builtin: bool,
 }
 

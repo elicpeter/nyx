@@ -122,7 +122,7 @@ fn build_taint_diag(
     src: &[u8],
     scan_root: Option<&Path>,
 ) -> Diag {
-    let call_site_byte = cfg_graph[finding.sink].ast.span.0;
+    let call_site_byte = cfg_graph[finding.sink].classification_span().0;
     let call_site_point = byte_offset_to_point(tree, call_site_byte);
     // `finding.source` should be a NodeIndex valid in this body's CFG, but
     // cross-body / cross-file inline analysis has historically leaked
@@ -140,9 +140,9 @@ fn build_taint_diag(
     let source_byte = finding
         .flow_steps
         .first()
-        .and_then(|s| cfg_graph.node_weight(s.cfg_node).map(|i| i.ast.span.0))
+        .and_then(|s| cfg_graph.node_weight(s.cfg_node).map(|i| i.classification_span().0))
         .or(finding.source_span)
-        .or_else(|| source_info.map(|i| i.ast.span.0))
+        .or_else(|| source_info.map(|i| i.classification_span().0))
         .unwrap_or(call_site_byte);
     let source_point = byte_offset_to_point(tree, source_byte);
 
@@ -262,8 +262,9 @@ fn build_taint_diag(
         .iter()
         .enumerate()
         .map(|(i, raw)| {
-            let point = byte_offset_to_point(tree, cfg_graph[raw.cfg_node].ast.span.0);
-            let snippet = extract_line_snippet(src, cfg_graph[raw.cfg_node].ast.span.0);
+            let step_byte = cfg_graph[raw.cfg_node].classification_span().0;
+            let point = byte_offset_to_point(tree, step_byte);
+            let snippet = extract_line_snippet(src, step_byte);
             let callee = cfg_graph[raw.cfg_node].call.callee.clone();
             let function = cfg_graph[raw.cfg_node].ast.enclosing_func.clone();
             FlowStep {
@@ -1401,7 +1402,7 @@ impl TaintSuppressionCtx {
                         _ => {}
                     }
                 }
-                let byte = info.ast.span.0;
+                let byte = info.classification_span().0;
                 let point = byte_offset_to_point(tree, byte);
                 let line = point.row + 1;
                 if has_source {

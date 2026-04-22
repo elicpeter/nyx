@@ -85,6 +85,19 @@ pub struct CallMeta {
     /// "req.getParameter"), this field preserves the original outer callee
     /// ("parts.add") so container propagation can still recognise it.
     pub outer_callee: Option<String>,
+    /// Byte span of the inner call that supplied the classification, when
+    /// `find_classifiable_inner_call` overrode the outer callee.  `None` when
+    /// the classification came from the outer AST node directly — in that
+    /// case `AstMeta.span` already points at the classified expression.
+    ///
+    /// Consumers that want the location of the *labeled* call (sink/source/
+    /// sanitizer display, flow-step rendering, taint origin attribution)
+    /// should use [`NodeInfo::classification_span`] rather than reading this
+    /// field directly.  `AstMeta.span` remains the authoritative "whole
+    /// statement" span — used by structural passes (unreachability,
+    /// resource lifecycle, guard byte scans, CFG/taint span dedup).
+    #[serde(default)]
+    pub callee_span: Option<(usize, usize)>,
     /// Per-function call ordinal (0-based, only meaningful for Call nodes).
     pub call_ordinal: u32,
     /// Per-argument identifiers for Call nodes. Each inner Vec holds the
@@ -211,6 +224,27 @@ pub struct NodeInfo {
     /// SSA value so SSRF prefix-suppression can fire for values constructed
     /// from template literals.
     pub string_prefix: Option<String>,
+}
+
+impl NodeInfo {
+    /// Byte span of the *labeled* sub-expression in this CFG node.
+    ///
+    /// When `find_classifiable_inner_call` found the source/sink/sanitizer
+    /// deep inside an enclosing statement (e.g. `escapeHtml(...)` buried in
+    /// a template literal whose outer node is the `overlay.innerHTML = ...`
+    /// assignment), `call.callee_span` pinpoints the inner call; otherwise
+    /// the whole node's span is the classification span.
+    ///
+    /// Use this for **display and source-attribution**: taint finding sink
+    /// lines, flow-step rendering, symbolic witness extraction, debug views.
+    ///
+    /// Use `ast.span` directly for **structural grain**: unreachability,
+    /// resource lifecycle, guard byte scans, CFG/taint span dedup — anywhere
+    /// the enclosing statement is the meaningful unit.
+    #[inline]
+    pub fn classification_span(&self) -> (usize, usize) {
+        self.call.callee_span.unwrap_or(self.ast.span)
+    }
 }
 
 /// Intra‑file function summary with graph‑local node indices.
@@ -550,26 +584,36 @@ fn find_constructor_type_child(n: Node) -> Option<Node> {
         .find(|c| matches!(c.kind(), "name" | "type_identifier" | "qualified_name"))
 }
 
-/// Return the callee identifier for the first call / method / macro inside `n`.
-/// Searches recursively through all descendants.
-fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
+/// Return the callee identifier and byte span for the first call / method /
+/// macro inside `n`.  Searches recursively through all descendants.
+///
+/// The span is the byte range of the call expression itself, so a caller that
+/// overrides `text` with the returned identifier can also record a
+/// `callee_span` pointing at the inner call (narrower than the enclosing
+/// statement) for accurate source-location reporting.
+fn first_call_ident_with_span<'a>(
+    n: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+) -> Option<(String, (usize, usize))> {
     let mut cursor = n.walk();
     for c in n.children(&mut cursor) {
         match lookup(lang, c.kind()) {
             Kind::CallFn | Kind::CallMethod | Kind::CallMacro => {
+                let span = (c.start_byte(), c.end_byte());
                 // C++ new/delete: normalize callee before returning.
                 if lang == "cpp" && c.kind() == "new_expression" {
-                    return Some("new".to_string());
+                    return Some(("new".to_string(), span));
                 }
                 if lang == "cpp" && c.kind() == "delete_expression" {
-                    return Some("delete".to_string());
+                    return Some(("delete".to_string(), span));
                 }
                 // Ruby backtick subshell: no `function` field, normalise to
                 // the synthetic callee so assignment-wrapped subshells classify.
                 if lang == "ruby" && c.kind() == "subshell" {
-                    return Some("subshell".to_string());
+                    return Some(("subshell".to_string(), span));
                 }
-                return match lookup(lang, c.kind()) {
+                let ident = match lookup(lang, c.kind()) {
                     Kind::CallFn => c
                         .child_by_field_name("function")
                         .or_else(|| c.child_by_field_name("method"))
@@ -608,6 +652,7 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
                         .and_then(|f| text_of(f, code)),
                     _ => None,
                 };
+                return ident.map(|s| (s, span));
             }
             Kind::Function => {
                 // Do not descend into nested function/lambda bodies —
@@ -617,7 +662,7 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
             }
             _ => {
                 // Recurse into children (handles nested declarators)
-                if let Some(found) = first_call_ident(c, lang, code) {
+                if let Some(found) = first_call_ident_with_span(c, lang, code) {
                     return Some(found);
                 }
             }
@@ -626,14 +671,27 @@ fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<Strin
     None
 }
 
+/// Convenience wrapper around [`first_call_ident_with_span`] that discards
+/// the byte-span when only the callee identifier is needed (e.g. for
+/// Python-side label lookup that does not participate in span-narrowed
+/// location reporting).
+fn first_call_ident<'a>(n: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
+    first_call_ident_with_span(n, lang, code).map(|(s, _)| s)
+}
+
 /// Search recursively for any nested call whose identifier classifies as a label.
 /// Used for cases like `str(eval(expr))` where `str` doesn't match but `eval` does.
+///
+/// Returns `(callee_text, label, span)` where `span` is the byte range of the
+/// inner call node itself — used to populate `CallMeta.callee_span` so that
+/// display sites can report the actual call location rather than the enclosing
+/// statement's span.
 fn find_classifiable_inner_call<'a>(
     n: Node<'a>,
     lang: &str,
     code: &'a [u8],
     extra: Option<&[crate::labels::RuntimeLabelRule]>,
-) -> Option<(String, DataLabel)> {
+) -> Option<(String, DataLabel, (usize, usize))> {
     let mut cursor = n.walk();
     for c in n.children(&mut cursor) {
         // Do not descend into Kind::Function nodes — they will be extracted
@@ -675,7 +733,7 @@ fn find_classifiable_inner_call<'a>(
                 if let Some(ref id) = ident
                     && let Some(lbl) = classify(lang, id, extra)
                 {
-                    return Some((id.clone(), lbl));
+                    return Some((id.clone(), lbl, (c.start_byte(), c.end_byte())));
                 }
                 // Recurse into arguments of this call
                 if let Some(found) = find_classifiable_inner_call(c, lang, code, extra) {
@@ -2916,13 +2974,19 @@ fn push_node<'a>(
 
     // If this is a declaration/expression wrapper or an assignment that
     // *contains* a call, prefer the first inner call identifier instead of
-    // the whole line.
+    // the whole line.  Track the inner call's byte span so we can populate
+    // `CallMeta.callee_span` once the labels settle — enabling narrow
+    // source-location reporting when the classified call lives several lines
+    // below the enclosing statement (e.g. call inside a multi-line template
+    // literal).
+    let mut inner_text_span: Option<(usize, usize)> = None;
     if matches!(
         lookup(lang, ast.kind()),
         Kind::CallWrapper | Kind::Assignment | Kind::Return
     ) {
-        if let Some(inner) = first_call_ident(ast, lang, code) {
+        if let Some((inner, inner_span)) = first_call_ident_with_span(ast, lang, code) {
             text = inner;
+            inner_text_span = Some(inner_span);
         } else if matches!(lookup(lang, ast.kind()), Kind::CallWrapper) {
             // Fallback for language-construct "calls" (e.g. PHP `echo_statement`,
             // `print` expression):  the first child is a keyword leaf (e.g. "echo")
@@ -2934,6 +2998,7 @@ fn push_node<'a>(
                 && kw.len() <= 16
             {
                 text = kw;
+                inner_text_span = Some((first.start_byte(), first.end_byte()));
             }
         }
     }
@@ -2949,17 +3014,19 @@ fn push_node<'a>(
     // (e.g. `parts.add(req.getParameter(...))` — callee becomes
     // "req.getParameter" but outer_callee preserves "parts.add").
     let mut outer_callee: Option<String> = None;
+    let mut inner_callee_span: Option<(usize, usize)> = None;
     if labels.is_empty()
         && matches!(
             lookup(lang, ast.kind()),
             Kind::CallWrapper | Kind::Assignment | Kind::Return
         )
-        && let Some((inner_text, inner_label)) =
+        && let Some((inner_text, inner_label, inner_span)) =
             find_classifiable_inner_call(ast, lang, code, extra)
     {
         labels.push(inner_label);
         outer_callee = Some(text.clone());
         text = inner_text;
+        inner_callee_span = Some(inner_span);
     }
 
     // For assignments like `element.innerHTML = value`, the inner-call heuristic
@@ -3038,11 +3105,14 @@ fn push_node<'a>(
         && cond.kind() == "let_condition"
         && let Some(val) = cond.child_by_field_name("value")
     {
-        if let Some(ident) = first_call_ident(val, lang, code)
+        if let Some((ident, ident_span)) = first_call_ident_with_span(val, lang, code)
             && let Some(l) = classify(lang, &ident, extra)
         {
             labels.push(l);
             text = ident;
+            if inner_text_span.is_none() {
+                inner_text_span = Some(ident_span);
+            }
         }
         if labels.is_empty()
             && let Some(ident_text) = text_of(val, code)
@@ -3333,11 +3403,21 @@ fn push_node<'a>(
     let string_prefix = extract_template_prefix(ast, lang, code)
         .or_else(|| call_ast.and_then(|cn| extract_template_prefix(cn, lang, code)));
 
+    // Prefer the span of the call found by `find_classifiable_inner_call`
+    // (deeper, classification-driven) over the one from `first_call_ident`
+    // (shallower, text-override-driven).  Only record `callee_span` when it
+    // actually narrows against `ast.span` — storing a redundant copy would
+    // just bloat every labeled Call node.
+    let callee_span = inner_callee_span
+        .or(inner_text_span)
+        .filter(|s| *s != span);
+
     let idx = g.add_node(NodeInfo {
         kind,
         call: CallMeta {
             callee,
             outer_callee,
+            callee_span,
             call_ordinal,
             arg_uses,
             receiver,
@@ -7244,6 +7324,116 @@ mod cfg_tests {
         }
     }
 
+    /// When a classifiable call (here `eval`, a built-in JS sink) is nested
+    /// inside a multi-line statement, the CFG node's `classification_span()`
+    /// should point at the inner call, not at the outer statement's start —
+    /// so finding display reports the line the dangerous call actually lives
+    /// on.  `ast.span` must still cover the whole outer statement for
+    /// structural passes that need the statement grain.
+    #[test]
+    fn inner_call_override_narrows_classification_span() {
+        // Byte offsets chosen so the outer statement spans two lines:
+        //   line 2 (row 1): `x = \``
+        //   line 3 (row 2): `  ${eval('1')}`
+        //   line 4 (row 3): `\`;`
+        let src = b"function f() {\n  x = `\n  ${eval('1')}\n  `;\n}\n";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        // Find the node whose callee was overridden to `eval`.
+        let sink = cfg
+            .node_indices()
+            .find(|&i| cfg[i].call.callee.as_deref() == Some("eval"))
+            .expect("inner-call override should produce a node with callee=eval");
+
+        let info = &cfg[sink];
+
+        // The outer `ast.span` starts at the `x = ...` expression statement
+        // on line 2; the inner eval call lives on line 3.
+        let outer_byte = info.ast.span.0;
+        let inner_byte = info.classification_span().0;
+        assert!(
+            inner_byte > outer_byte,
+            "classification span should start *inside* the outer statement (outer={outer_byte}, inner={inner_byte})"
+        );
+
+        let line_of = |b: usize| src[..b].iter().filter(|&&c| c == b'\n').count() + 1;
+        assert_eq!(line_of(outer_byte), 2, "outer ast.span on line 2");
+        assert_eq!(line_of(inner_byte), 3, "classification_span on eval's line");
+
+        // callee_span must be populated (that's the whole point).
+        assert!(
+            info.call.callee_span.is_some(),
+            "inner-call override should record callee_span"
+        );
+    }
+
+    /// `classification_span()` must fall back to `ast.span` when no narrower
+    /// sub-expression was recorded — so existing structural code paths keep
+    /// working unchanged for nodes whose classification applies to the whole
+    /// outer node.
+    #[test]
+    fn classification_span_falls_back_to_ast_span() {
+        let info = NodeInfo {
+            ast: AstMeta {
+                span: (100, 200),
+                enclosing_func: None,
+            },
+            ..Default::default()
+        };
+        assert!(info.call.callee_span.is_none());
+        assert_eq!(info.classification_span(), (100, 200));
+
+        let narrowed = NodeInfo {
+            ast: AstMeta {
+                span: (100, 200),
+                enclosing_func: None,
+            },
+            call: CallMeta {
+                callee_span: Some((150, 170)),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(narrowed.classification_span(), (150, 170));
+        assert_eq!(narrowed.ast.span, (100, 200));
+    }
+
+    /// The narrowed `callee_span` must remain strictly narrower than
+    /// `ast.span` on real-world CFG nodes.  When the classification applies
+    /// to (or degenerates to) the outer node, `callee_span` is left `None`
+    /// so we don't bloat every labeled node with a redundant span copy.
+    #[test]
+    fn callee_span_unset_when_no_narrowing_is_possible() {
+        // A bare `eval(x);` on one line: `first_call_ident` finds the
+        // call_expression whose span is nearly the whole expression_statement
+        // (different by the trailing `;`).  `classification_span` still
+        // returns a sensible line — but the exact trimming is an
+        // implementation detail.  What we assert here is the invariant:
+        // if callee_span *is* set, it must be contained in ast.span.
+        let src = b"function f() { eval(x); }";
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+        let sink = cfg
+            .node_indices()
+            .find(|&i| cfg[i].call.callee.as_deref() == Some("eval"))
+            .expect("should find eval call");
+        let info = &cfg[sink];
+        if let Some(cs) = info.call.callee_span {
+            assert!(
+                cs.0 >= info.ast.span.0 && cs.1 <= info.ast.span.1,
+                "callee_span {:?} must be contained in ast.span {:?}",
+                cs,
+                info.ast.span,
+            );
+            assert_ne!(
+                cs, info.ast.span,
+                "callee_span should only be set when it narrows ast.span"
+            );
+        }
+    }
+
     #[test]
     fn js_try_finally_no_exception_edges() {
         let src = b"function f() { try { foo(); } finally { cleanup(); } }";
@@ -8212,6 +8402,7 @@ mod cfg_tests {
             call: CallMeta {
                 callee: Some("foo".into()),
                 outer_callee: Some("bar".into()),
+                callee_span: Some((7, 17)),
                 call_ordinal: 5,
                 arg_uses: vec![vec!["a".into()]],
                 receiver: Some("obj".into()),
