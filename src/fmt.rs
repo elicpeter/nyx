@@ -258,12 +258,30 @@ fn render_diag(d: &Diag, width: usize) -> String {
         (None, Some(c)) => format!("  {}", style(format!("(Confidence: {c})")).dim()),
         (None, None) => String::new(),
     };
+    let engine_notes_count = d
+        .evidence
+        .as_ref()
+        .map(|e| e.engine_notes.len())
+        .unwrap_or(0);
+    let engine_notes_suffix = if engine_notes_count > 0 {
+        format!(
+            "  {}",
+            style(format!(
+                "[capped: {engine_notes_count} note{}]",
+                if engine_notes_count == 1 { "" } else { "s" }
+            ))
+            .yellow()
+        )
+    } else {
+        String::new()
+    };
     out.push_str(&format!(
-        "  {}  {} {}{}\n",
+        "  {}  {} {}{}{}\n",
         style(&loc).dim(),
         sev,
         style(&d.id).dim(),
         meta_suffix,
+        engine_notes_suffix,
     ));
 
     // ── Rollup body ─────────────────────────────────────────────────────

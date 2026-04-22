@@ -812,6 +812,7 @@ fn taint_and_unguarded_sink_deduped() {
         symbolic: None,
         source_span: None,
         primary_location: None,
+        engine_notes: smallvec::SmallVec::new(),
     }];
 
     let findings = parse_and_run_all_with_taint(

@@ -560,8 +560,12 @@ pub const SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX: &str = "scc_unconverged:cross-
 /// variant so downstream consumers can distinguish the two reasons an
 /// SCC might hit the cap.
 fn tag_unconverged_findings(diags: &mut [Diag], iterations: usize, cap: usize, cross_file: bool) {
+    use crate::engine_notes::{EngineNote, push_unique};
     use crate::evidence::{Confidence, Evidence};
 
+    let engine_note = EngineNote::CrossFileFixpointCapped {
+        iterations: iterations as u32,
+    };
     for d in diags.iter_mut() {
         d.confidence = match d.confidence {
             Some(c) if c < Confidence::Low => Some(c), // already-lower preserved
@@ -583,10 +587,12 @@ fn tag_unconverged_findings(diags: &mut [Diag], iterations: usize, cap: usize, c
                 if !ev.notes.iter().any(|n| n == &note) {
                     ev.notes.push(note);
                 }
+                push_unique(&mut ev.engine_notes, engine_note.clone());
             }
             None => {
                 let mut ev = Evidence::default();
                 ev.notes.push(note);
+                push_unique(&mut ev.engine_notes, engine_note.clone());
                 d.evidence = Some(ev);
             }
         }

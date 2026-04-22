@@ -65,9 +65,27 @@ fn parse_timeout_config_short_circuits_parse() {
         .expect("timeout should yield Ok(empty), not error");
     let elapsed = start.elapsed();
 
+    // Since Phase 3 of the 0.5.0 pre-release plan, a timed-out parse
+    // surfaces a synthetic informational diag carrying an
+    // `EngineNote::ParseTimeout` so downstream tooling can tell "we
+    // found nothing" from "we stopped looking".  Any other finding
+    // would imply the parser actually produced a tree — i.e. the
+    // timeout did not short-circuit.
     assert!(
-        diags.is_empty(),
-        "timed-out parse should produce no findings, got {diags:?}",
+        diags.iter().all(|d| d.id == "engine.parse_timeout"),
+        "timed-out parse should only produce the engine.parse_timeout \
+         synthetic diag, got {diags:?}",
+    );
+    assert!(
+        diags.iter().any(|d| d.id == "engine.parse_timeout"
+            && d.evidence
+                .as_ref()
+                .is_some_and(|ev| ev.engine_notes.iter().any(|n| matches!(
+                    n,
+                    nyx_scanner::engine_notes::EngineNote::ParseTimeout { .. }
+                )))),
+        "timed-out parse must emit the synthetic ParseTimeout note; \
+         got {diags:?}",
     );
     // With a 1 ms cap, tree-sitter should be cancelled and the file
     // skipped long before a cold full-analysis run would finish.  A

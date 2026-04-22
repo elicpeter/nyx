@@ -1052,6 +1052,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
         annotate_finding(&mut f, FindingVerdict::Confirmed);
         let sv = f.symbolic.as_ref().expect("symbolic verdict created");
@@ -1085,6 +1086,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
         annotate_finding(&mut f, FindingVerdict::Inconclusive);
         assert!(f.symbolic.is_none());

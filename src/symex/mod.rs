@@ -405,6 +405,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
 
         let blocks = extract_path_blocks(&finding, &ssa);
@@ -471,6 +472,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
 
         let ctx = SymexContext {
@@ -525,6 +527,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
 
         let ssa = SsaBody {
@@ -578,6 +581,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
 
         let ssa = SsaBody {

@@ -6,6 +6,7 @@ pub mod path_state;
 pub mod ssa_transfer;
 
 use crate::cfg::{BodyCfg, BodyId, Cfg, FileCfg, FuncSummaries};
+use crate::engine_notes::EngineNote;
 use crate::interop::InteropEdge;
 use crate::labels::SourceKind;
 use crate::state::engine::MAX_TRACKED_VARS;
@@ -15,6 +16,7 @@ use crate::symbol::{FuncKey, FuncKind, Lang};
 use path_state::PredicateKind;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::IntoNodeReferences;
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// A raw flow step at CFG level (before line/col resolution).
@@ -108,6 +110,26 @@ pub struct Finding {
     /// yielding `uses_summary == false` alongside a populated
     /// `primary_location`.
     pub primary_location: Option<SinkLocation>,
+    /// Engine provenance notes recorded during the analysis that produced
+    /// this finding.  Populated when an internal budget/cap was hit — see
+    /// [`crate::engine_notes::EngineNote`].  Empty for the typical
+    /// under-budget finding.
+    pub engine_notes: SmallVec<[EngineNote; 2]>,
+}
+
+impl Finding {
+    /// Append an engine provenance note, deduplicating against notes
+    /// already present.  Intended as a builder-style helper for construction
+    /// sites that want to tag a new finding inline.
+    pub fn with_note(mut self, note: EngineNote) -> Self {
+        crate::engine_notes::push_unique(&mut self.engine_notes, note);
+        self
+    }
+
+    /// Merge a note into `engine_notes`, skipping duplicates.
+    pub fn merge_note(&mut self, note: EngineNote) {
+        crate::engine_notes::push_unique(&mut self.engine_notes, note);
+    }
 }
 
 /// Pre-compute module aliases from an unoptimized SSA body for JS/TS.
@@ -322,6 +344,12 @@ fn analyse_body_with_seed(
         crate::ssa::lower_to_ssa(cfg, entry, None, true)
     };
 
+    // Clear per-body engine-note collector before the body's analysis;
+    // any WorklistCapped / OriginsTruncated notes recorded during
+    // transfer land in this bucket and are attached to every finding
+    // emitted from the body once analysis is done.
+    ssa_transfer::reset_body_engine_notes();
+
     match ssa_result {
         Ok(mut ssa_body) => {
             let opt = crate::ssa::optimize_ssa(&mut ssa_body, cfg, Some(lang));
@@ -386,8 +414,12 @@ fn analyse_body_with_seed(
             let (events, block_states) =
                 ssa_transfer::run_ssa_taint_full(&ssa_body, cfg, &transfer);
             let mut findings = ssa_transfer::ssa_events_to_findings(&events, &ssa_body, cfg);
+            let body_notes = ssa_transfer::take_body_engine_notes();
             for f in &mut findings {
                 f.body_id = body_id;
+                for note in &body_notes {
+                    f.merge_note(note.clone());
+                }
             }
             if crate::symex::is_enabled() {
                 let symex_ctx = crate::symex::SymexContext {
@@ -448,7 +480,26 @@ fn analyse_body_with_seed(
                 ssa_transfer::extract_ssa_exit_state(&block_states, &ssa_body, cfg, &transfer);
             (findings, Some(exit_state))
         }
-        Err(_) => (Vec::new(), None),
+        Err(e) => {
+            // SSA lowering produced no analyzable body.  We still surface
+            // the event so downstream tooling can tell "we tried and gave
+            // up" from "we ran clean" — a TRACE-level log records the
+            // reason (no synthetic Finding is manufactured because a
+            // diag pointing at no source location would be misleading).
+            tracing::trace!(
+                body_id = body_id.0,
+                body_name = ?body.meta.name,
+                error = %e,
+                "SSA lowering bailed; emitting engine note",
+            );
+            ssa_transfer::record_engine_note(crate::engine_notes::EngineNote::SsaLoweringBailed {
+                reason: format!("{e}"),
+            });
+            // Drain the collector so the note does not bleed into the
+            // next body (which will call reset on entry, but be explicit).
+            let _ = ssa_transfer::take_body_engine_notes();
+            (Vec::new(), None)
+        }
     }
 }
 

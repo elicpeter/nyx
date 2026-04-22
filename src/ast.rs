@@ -29,6 +29,58 @@ use tree_sitter::{Language, QueryCursor, StreamingIterator};
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
+    /// Records the timeout budget (in ms) when a tree-sitter parse is
+    /// aborted due to [`parse_timeout_ms`].  Callers that want to surface
+    /// the event as a synthetic informational [`Diag`] read this slot
+    /// immediately after [`ParsedSource::try_new`] returns `Ok(None)`
+    /// and clear it with `take_last_parse_timeout_ms`.
+    static LAST_PARSE_TIMEOUT_MS: std::cell::Cell<Option<u64>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+/// Consume and return the most recent parse-timeout event on this thread
+/// (set by [`ParsedSource::try_new`]).  Used to lift the event into a
+/// synthetic [`Diag`] carrying an [`crate::engine_notes::EngineNote::ParseTimeout`].
+pub fn take_last_parse_timeout_ms() -> Option<u64> {
+    LAST_PARSE_TIMEOUT_MS.with(|c| c.take())
+}
+
+/// Synthesize an informational diagnostic surfacing a parse-timeout event
+/// for `path`.  The diag carries an [`crate::engine_notes::EngineNote::ParseTimeout`]
+/// in its evidence so downstream tooling can distinguish "found nothing"
+/// from "parse was aborted before we could look".
+fn parse_timeout_diag(path: &Path, timeout_ms: u64) -> Diag {
+    let mut evidence = Evidence::default();
+    evidence.notes.push(format!(
+        "tree-sitter parse exceeded timeout budget ({timeout_ms} ms); file skipped"
+    ));
+    evidence
+        .engine_notes
+        .push(crate::engine_notes::EngineNote::ParseTimeout {
+            timeout_ms: timeout_ms.min(u32::MAX as u64) as u32,
+        });
+    Diag {
+        path: path.to_string_lossy().into_owned(),
+        line: 0,
+        col: 0,
+        severity: Severity::Low,
+        id: "engine.parse_timeout".into(),
+        category: FindingCategory::Quality,
+        path_validated: false,
+        guard_kind: None,
+        message: Some(format!(
+            "tree-sitter parse exceeded timeout budget ({timeout_ms} ms); file skipped"
+        )),
+        labels: vec![],
+        confidence: None,
+        evidence: Some(evidence),
+        rank_score: None,
+        rank_reason: None,
+        suppressed: false,
+        suppression: None,
+        rollup: None,
+    }
 }
 
 /// Resolve the effective parse-timeout budget in milliseconds.  Tree-sitter
@@ -386,6 +438,7 @@ fn build_taint_diag(
             flow_steps,
             symbolic: finding.symbolic.clone(),
             sink_caps: sink_caps_bits,
+            engine_notes: finding.engine_notes.clone(),
             ..Default::default()
         }),
         rank_score: None,
@@ -581,6 +634,10 @@ impl<'a> ParsedSource<'a> {
     /// against hostile inputs (pathological grammar ambiguities) that could
     /// tie up a worker indefinitely even for files within the size cap.
     fn try_new(bytes: &'a [u8], path: &'a Path) -> NyxResult<Option<Self>> {
+        // Clear any stale parse-timeout signal from a prior `try_new` on
+        // this thread that the caller did not consume.  Ensures the slot
+        // always reflects "this parse" by the time we return.
+        LAST_PARSE_TIMEOUT_MS.with(|c| c.set(None));
         if is_binary(bytes) {
             return Ok(None);
         }
@@ -618,6 +675,7 @@ impl<'a> ParsedSource<'a> {
                     timeout_ms,
                     "tree-sitter parse timed out; skipping file",
                 );
+                LAST_PARSE_TIMEOUT_MS.with(|c| c.set(Some(timeout_ms)));
                 return Ok(None);
             }
             return Err(NyxError::Other("tree-sitter failed".into()));
@@ -1488,8 +1546,14 @@ pub fn run_rules_on_bytes(
     maybe_inject_test_panic(path);
 
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
-        // Not a recognized tree-sitter language — try text-based patterns.
-        return Ok(scan_text_based_patterns(bytes, path, cfg));
+        // Not a recognized tree-sitter language — try text-based patterns,
+        // but first surface a parse-timeout synthetic diag if that's what
+        // caused try_new to return None.
+        let mut out = scan_text_based_patterns(bytes, path, cfg);
+        if let Some(timeout_ms) = take_last_parse_timeout_ms() {
+            out.push(parse_timeout_diag(path, timeout_ms));
+        }
+        return Ok(out);
     };
 
     let mut out = Vec::new();
@@ -1583,10 +1647,16 @@ pub fn analyse_file_fused(
     maybe_inject_test_panic(path);
 
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
-        // Not a recognized tree-sitter language — try text-based patterns.
+        // Not a recognized tree-sitter language — try text-based patterns,
+        // and surface a parse-timeout synthetic diag if that's what caused
+        // try_new to return None.
+        let mut diags = scan_text_based_patterns(bytes, path, cfg);
+        if let Some(timeout_ms) = take_last_parse_timeout_ms() {
+            diags.push(parse_timeout_diag(path, timeout_ms));
+        }
         return Ok(FusedResult {
             summaries: vec![],
-            diags: scan_text_based_patterns(bytes, path, cfg),
+            diags,
             ssa_summaries: vec![],
             cfg_nodes: 0,
             ssa_bodies: vec![],

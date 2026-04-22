@@ -49,6 +49,7 @@ pub mod cli;
 pub mod commands;
 pub mod constraint;
 pub mod database;
+pub mod engine_notes;
 pub mod errors;
 pub mod evidence;
 pub mod fmt;

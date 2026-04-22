@@ -575,6 +575,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
         assert_eq!(sink_cap(&finding, &cfg), Cap::SQL_QUERY);
     }
@@ -605,6 +606,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
         let cap = sink_cap(&finding, &cfg);
         assert!(cap.contains(Cap::SQL_QUERY));
@@ -792,6 +794,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -829,6 +832,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
 
         assert!(extract_witness(&state, &finding, &ssa, &cfg).is_none());
@@ -887,6 +891,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);
@@ -942,6 +947,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
 
         let witness = extract_witness(&state, &finding, &ssa, &cfg);

@@ -25,6 +25,12 @@ pub fn handle_command(
     // to the Scan arm and gate non-scan commands behind a fallback install of
     // the bare config values.
     let install_from_config = |config: &Config| {
+        if config.analysis.engine.parse_timeout_ms == 0 {
+            tracing::warn!(
+                "parse_timeout_ms = 0 disables tree-sitter parse timeout entirely; \
+                 this is unsafe for untrusted input."
+            );
+        }
         let _ = crate::utils::analysis_options::install(config.analysis.engine);
     };
 
@@ -230,6 +236,12 @@ pub fn handle_command(
                 engine.parse_timeout_ms = ms;
             }
             config.analysis.engine = engine;
+            if engine.parse_timeout_ms == 0 {
+                tracing::warn!(
+                    "parse_timeout_ms = 0 disables tree-sitter parse timeout entirely; \
+                     this is unsafe for untrusted input."
+                );
+            }
             if !crate::utils::analysis_options::install(engine) {
                 tracing::warn!(
                     "analysis-engine runtime already installed; CLI engine flags ignored"

@@ -339,6 +339,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -372,6 +373,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
         let ssa = SsaBody {
             blocks: vec![],
@@ -402,6 +404,7 @@ mod tests {
             symbolic: None,
             source_span: None,
             primary_location: None,
+            engine_notes: smallvec::SmallVec::new(),
         };
         let ssa = SsaBody {
             blocks: vec![],

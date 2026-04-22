@@ -198,6 +198,32 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                 props.insert("confidence".into(), json!(conf.to_string()));
             }
 
+            // Engine provenance notes — surface any cap-hit / lowering
+            // bail / timeout signals recorded by the analysis engine so
+            // downstream consumers can tell "nothing found" from "engine
+            // stopped looking".  `confidence_capped` is true if any note
+            // in the list corresponds to a lost-precision event.
+            if let Some(engine_notes) = d.evidence.as_ref().and_then(|ev| {
+                if ev.engine_notes.is_empty() {
+                    None
+                } else {
+                    Some(&ev.engine_notes)
+                }
+            }) {
+                props.insert(
+                    "engine_notes".into(),
+                    serde_json::to_value(engine_notes).unwrap_or(Value::Null),
+                );
+                props.insert(
+                    "confidence_capped".into(),
+                    json!(
+                        engine_notes
+                            .iter()
+                            .any(crate::engine_notes::EngineNote::lowers_confidence)
+                    ),
+                );
+            }
+
             // Add rollup data if present
             if let Some(ref rollup) = d.rollup {
                 props.insert(

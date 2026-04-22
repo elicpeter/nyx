@@ -33,6 +33,124 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// Maximum origins tracked per SSA value.
 const MAX_ORIGINS: usize = 4;
 
+/// Default safety cap on taint worklist iterations.  Deliberately large so
+/// well-formed programs never hit it; the cap exists to bound adversarial
+/// inputs that would otherwise loop forever.  Observable and override-able
+/// via [`set_worklist_cap_override`] / [`last_worklist_iterations`] for
+/// tests; production behaviour unchanged.
+const WORKLIST_SAFETY_CAP: usize = 100_000;
+
+static WORKLIST_CAP_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+/// Records the MAX iteration count observed across every
+/// `run_ssa_taint_full` call since the most recent reset.  Cheaper and
+/// more useful for regression tests than the last-call value — a cap
+/// hit anywhere in the scan is remembered.
+static MAX_WORKLIST_ITERATIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+/// Counts how many times the worklist safety cap tripped since the
+/// most recent reset.  Lets tests assert "the cap fired at least once"
+/// without depending on per-finding attribution, which can lose the
+/// signal when cap-hit analyses produce no findings.
+static WORKLIST_CAP_HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Test-only override for [`WORKLIST_SAFETY_CAP`].  `cap = 0` restores the
+/// default.  Intended exclusively for the engine-notes regression tests
+/// that need to force a worklist cap-hit on tiny fixtures.
+#[doc(hidden)]
+pub fn set_worklist_cap_override(cap: usize) {
+    WORKLIST_CAP_OVERRIDE.store(cap, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn effective_worklist_cap() -> usize {
+    let o = WORKLIST_CAP_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if o == 0 { WORKLIST_SAFETY_CAP } else { o }
+}
+
+/// Observability hook: records the max iteration count used by any
+/// `run_ssa_taint_full` call since the most recent reset.
+pub fn max_worklist_iterations() -> usize {
+    MAX_WORKLIST_ITERATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// How many times the worklist cap has tripped since the most recent
+/// reset.  Zero when the cap was never hit.
+pub fn worklist_cap_hit_count() -> usize {
+    WORKLIST_CAP_HITS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Reset the worklist observability counters.  Intended for tests that
+/// want a clean baseline before a scan.
+pub fn reset_worklist_observability() {
+    MAX_WORKLIST_ITERATIONS.store(0, std::sync::atomic::Ordering::Relaxed);
+    WORKLIST_CAP_HITS.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Test-only override for [`MAX_ORIGINS`].  `cap = 0` restores the default
+/// (4).  Used to force `OriginsTruncated` emission on small fixtures.
+static MAX_ORIGINS_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+/// Total number of origins dropped since the most recent reset — captured
+/// from `merge_origins` and the post-hoc saturation scan.  Used by tests
+/// to detect truncation events that don't propagate to a finding (e.g.
+/// when the cap is so tight no taint flow survives to emit a sink event).
+static ORIGINS_TRUNCATION_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[doc(hidden)]
+pub fn set_max_origins_override(cap: usize) {
+    MAX_ORIGINS_OVERRIDE.store(cap, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn effective_max_origins() -> usize {
+    let o = MAX_ORIGINS_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if o == 0 { MAX_ORIGINS } else { o }
+}
+
+/// Observability: total origins dropped by the engine since the most
+/// recent `reset_origins_observability` call.  Zero when no truncation
+/// happened.  Monotone-increasing across calls.
+pub fn origins_truncation_count() -> usize {
+    ORIGINS_TRUNCATION_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Reset the origins-truncation counter.  Intended for tests.
+pub fn reset_origins_observability() {
+    ORIGINS_TRUNCATION_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+thread_local! {
+    /// Per-body engine-note collector.  Cleared at the start of each
+    /// `analyse_body_with_seed` invocation and drained after
+    /// `run_ssa_taint_full` returns — notes are then attached to every
+    /// finding emitted from that body.  Living as a thread-local avoids
+    /// threading a `&RefCell` through the nearly-10-argument transfer
+    /// struct; inline analysis recursion is intentionally allowed to
+    /// bubble callee-side cap hits up into the caller's collector.
+    static BODY_ENGINE_NOTES: RefCell<SmallVec<[crate::engine_notes::EngineNote; 2]>> =
+        RefCell::new(SmallVec::new());
+}
+
+/// Record an engine note for the body currently being analysed.  Safe to
+/// call from anywhere under a `run_ssa_taint_full` call stack; duplicates
+/// against notes already present in the body collector are suppressed.
+pub(crate) fn record_engine_note(note: crate::engine_notes::EngineNote) {
+    BODY_ENGINE_NOTES.with(|c| {
+        crate::engine_notes::push_unique(&mut c.borrow_mut(), note);
+    });
+}
+
+/// Reset the per-body collector (called at start of each body analysis).
+pub(crate) fn reset_body_engine_notes() {
+    BODY_ENGINE_NOTES.with(|c| c.borrow_mut().clear());
+}
+
+/// Take the current collected notes, leaving the collector empty.  Called
+/// after `run_ssa_taint_full` to attach collected notes to findings.
+pub(crate) fn take_body_engine_notes() -> SmallVec<[crate::engine_notes::EngineNote; 2]> {
+    BODY_ENGINE_NOTES.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
 /// Stable identity for a variable binding at body boundaries.
 ///
 /// Translates between independent per-body `SymbolId` spaces.
@@ -293,13 +411,21 @@ fn merge_origins(
     b: &SmallVec<[TaintOrigin; 2]>,
 ) -> SmallVec<[TaintOrigin; 2]> {
     let mut merged = a.clone();
+    let cap = effective_max_origins();
+    let mut dropped: u32 = 0;
     for origin in b {
-        if merged.len() >= MAX_ORIGINS {
-            break;
+        if merged.iter().any(|o| o.node == origin.node) {
+            continue;
         }
-        if !merged.iter().any(|o| o.node == origin.node) {
-            merged.push(*origin);
+        if merged.len() >= cap {
+            dropped = dropped.saturating_add(1);
+            continue;
         }
+        merged.push(*origin);
+    }
+    if dropped > 0 {
+        ORIGINS_TRUNCATION_COUNT.fetch_add(dropped as usize, std::sync::atomic::Ordering::Relaxed);
+        record_engine_note(crate::engine_notes::EngineNote::OriginsTruncated { dropped });
     }
     merged
 }
@@ -909,13 +1035,15 @@ fn run_ssa_taint_internal(
         );
     }
     let mut iterations: usize = 0;
-    const BUDGET: usize = 100_000;
+    let budget = effective_worklist_cap();
+    let mut worklist_capped = false;
 
     while let Some(bid) = worklist.pop_front() {
         in_worklist.remove(&bid);
         iterations += 1;
-        if iterations > BUDGET {
+        if iterations >= budget {
             tracing::warn!("SSA taint: worklist budget exceeded");
+            worklist_capped = true;
             break;
         }
 
@@ -1009,6 +1137,36 @@ fn run_ssa_taint_internal(
         }
     }
 
+    MAX_WORKLIST_ITERATIONS.fetch_max(iterations, std::sync::atomic::Ordering::Relaxed);
+    if worklist_capped {
+        WORKLIST_CAP_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        record_engine_note(crate::engine_notes::EngineNote::WorklistCapped {
+            iterations: iterations as u32,
+        });
+    }
+
+    // Post-hoc origin-truncation detection.  If any converged block state
+    // has a `VarTaint` whose origin list reached the cap, assume at least
+    // one origin was dropped during the fixed-point iteration.  Coarse
+    // but useful signal — `merge_origins` already emits the precise-count
+    // note on the merge path; this complements push sites inside transfer.
+    let cap = effective_max_origins();
+    let mut saturated = 0u32;
+    for state in block_states.iter().flatten() {
+        for (_v, taint) in &state.values {
+            if taint.origins.len() >= cap {
+                saturated = saturated.saturating_add(1);
+            }
+        }
+    }
+    if saturated > 0 {
+        ORIGINS_TRUNCATION_COUNT
+            .fetch_add(saturated as usize, std::sync::atomic::Ordering::Relaxed);
+        record_engine_note(crate::engine_notes::EngineNote::OriginsTruncated {
+            dropped: saturated,
+        });
+    }
+
     // Single pass over converged states to collect events
     let mut events: Vec<SsaTaintEvent> = Vec::new();
 
@@ -1088,7 +1246,7 @@ pub fn extract_ssa_exit_state(
                 .and_modify(|existing| {
                     existing.caps |= taint.caps;
                     for orig in &taint.origins {
-                        if existing.origins.len() < MAX_ORIGINS
+                        if existing.origins.len() < effective_max_origins()
                             && !existing.origins.iter().any(|o| o.node == orig.node)
                         {
                             existing.origins.push(*orig);
@@ -1129,7 +1287,7 @@ pub fn join_seed_maps(
             .and_modify(|existing| {
                 existing.caps |= taint.caps;
                 for orig in &taint.origins {
-                    if existing.origins.len() < MAX_ORIGINS
+                    if existing.origins.len() < effective_max_origins()
                         && !existing.origins.iter().any(|o| o.node == orig.node)
                     {
                         existing.origins.push(*orig);
@@ -1289,7 +1447,7 @@ fn transfer_block(
                     any_tainted = true;
                     combined_caps |= taint.caps;
                     for orig in &taint.origins {
-                        if combined_origins.len() < MAX_ORIGINS
+                        if combined_origins.len() < effective_max_origins()
                             && !combined_origins.iter().any(|o| o.node == orig.node)
                         {
                             combined_origins.push(*orig);
@@ -1869,7 +2027,7 @@ fn inline_analyse_callee(
                             if let Some(taint) = state.get(*v) {
                                 combined_caps |= taint.caps;
                                 for orig in &taint.origins {
-                                    if combined_origins.len() < MAX_ORIGINS
+                                    if combined_origins.len() < effective_max_origins()
                                         && !combined_origins.iter().any(|o| o.node == orig.node)
                                     {
                                         combined_origins.push(populate_span(*orig));
@@ -1884,7 +2042,7 @@ fn inline_analyse_callee(
                         if let Some(taint) = state.get(*rv) {
                             combined_caps |= taint.caps;
                             for orig in &taint.origins {
-                                if combined_origins.len() < MAX_ORIGINS
+                                if combined_origins.len() < effective_max_origins()
                                     && !combined_origins.iter().any(|o| o.node == orig.node)
                                 {
                                     combined_origins.push(populate_span(*orig));
@@ -2074,7 +2232,7 @@ fn extract_inline_return_taint(
 
     let push_remapped = |target_origins: &mut SmallVec<[TaintOrigin; 2]>, orig: &TaintOrigin| {
         let new_orig = remap_origin(orig);
-        if target_origins.len() < MAX_ORIGINS
+        if target_origins.len() < effective_max_origins()
             && !target_origins.iter().any(|o| {
                 o.node == new_orig.node
                     && o.source_span == new_orig.source_span
@@ -2300,7 +2458,7 @@ fn transfer_inst(
                         resolved_callee = true;
                         return_bits |= ret.caps;
                         for orig in &ret.origins {
-                            if return_origins.len() < MAX_ORIGINS
+                            if return_origins.len() < effective_max_origins()
                                 && !return_origins.iter().any(|o| o.node == orig.node)
                             {
                                 return_origins.push(*orig);
@@ -2521,7 +2679,7 @@ fn transfer_inst(
                                 effective_param_sanitizer(&resolved, param_idx, state);
                             return_bits |= arg_caps & !param_sanitizer;
                             for orig in &arg_origins {
-                                if return_origins.len() < MAX_ORIGINS
+                                if return_origins.len() < effective_max_origins()
                                     && !return_origins.iter().any(|o| o.node == orig.node)
                                 {
                                     return_origins.push(*orig);
@@ -2537,7 +2695,7 @@ fn transfer_inst(
                             collect_args_taint(args, receiver, state, effective_params);
                         return_bits |= prop_caps;
                         for orig in &prop_origins {
-                            if return_origins.len() < MAX_ORIGINS
+                            if return_origins.len() < effective_max_origins()
                                 && !return_origins.iter().any(|o| o.node == orig.node)
                             {
                                 return_origins.push(*orig);
@@ -2612,7 +2770,7 @@ fn transfer_inst(
                     let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
                     return_bits |= use_caps;
                     for orig in &use_origins {
-                        if return_origins.len() < MAX_ORIGINS
+                        if return_origins.len() < effective_max_origins()
                             && !return_origins.iter().any(|o| o.node == orig.node)
                         {
                             return_origins.push(*orig);
@@ -2681,7 +2839,7 @@ fn transfer_inst(
                                     if let Some(taint) = state.get(v) {
                                         input_caps |= taint.caps;
                                         for orig in &taint.origins {
-                                            if input_origins.len() < MAX_ORIGINS
+                                            if input_origins.len() < effective_max_origins()
                                                 && !input_origins
                                                     .iter()
                                                     .any(|o| o.node == orig.node)
@@ -2795,7 +2953,7 @@ fn transfer_inst(
                             if let Some(taint) = state.get(v) {
                                 src_caps |= taint.caps;
                                 for orig in &taint.origins {
-                                    if src_origins.len() < MAX_ORIGINS
+                                    if src_origins.len() < effective_max_origins()
                                         && !src_origins.iter().any(|o| o.node == orig.node)
                                     {
                                         src_origins.push(*orig);
@@ -2910,7 +3068,7 @@ fn transfer_inst(
                             if let Some(taint) = state.get(v) {
                                 src_caps |= taint.caps;
                                 for orig in &taint.origins {
-                                    if src_origins.len() < MAX_ORIGINS
+                                    if src_origins.len() < effective_max_origins()
                                         && !src_origins.iter().any(|o| o.node == orig.node)
                                     {
                                         src_origins.push(*orig);
@@ -3071,7 +3229,7 @@ fn transfer_inst(
                         combined_caps |= taint.caps;
                         inherited_summary |= taint.uses_summary;
                         for orig in &taint.origins {
-                            if combined_origins.len() < MAX_ORIGINS
+                            if combined_origins.len() < effective_max_origins()
                                 && !combined_origins.iter().any(|o| o.node == orig.node)
                             {
                                 combined_origins.push(*orig);
@@ -3110,7 +3268,7 @@ fn transfer_inst(
                         source_kind,
                         source_span: None,
                     };
-                    if combined_origins.len() < MAX_ORIGINS
+                    if combined_origins.len() < effective_max_origins()
                         && !combined_origins.iter().any(|o| o.node == inst.cfg_node)
                     {
                         combined_origins.push(origin);
@@ -3623,7 +3781,7 @@ fn collect_block_events(
                     any_tainted = true;
                     combined_caps |= taint.caps;
                     for orig in &taint.origins {
-                        if combined_origins.len() < MAX_ORIGINS
+                        if combined_origins.len() < effective_max_origins()
                             && !combined_origins.iter().any(|o| o.node == orig.node)
                         {
                             combined_origins.push(*orig);
@@ -4261,7 +4419,7 @@ fn collect_args_taint(
             if let Some(taint) = state.get(*rv) {
                 combined_caps |= taint.caps;
                 for orig in &taint.origins {
-                    if combined_origins.len() < MAX_ORIGINS
+                    if combined_origins.len() < effective_max_origins()
                         && !combined_origins.iter().any(|o| o.node == orig.node)
                     {
                         combined_origins.push(*orig);
@@ -4274,7 +4432,7 @@ fn collect_args_taint(
                 if let Some(taint) = state.get(v) {
                     combined_caps |= taint.caps;
                     for orig in &taint.origins {
-                        if combined_origins.len() < MAX_ORIGINS
+                        if combined_origins.len() < effective_max_origins()
                             && !combined_origins.iter().any(|o| o.node == orig.node)
                         {
                             combined_origins.push(*orig);
@@ -4293,7 +4451,7 @@ fn collect_args_taint(
                     if let Some(taint) = state.get(v) {
                         combined_caps |= taint.caps;
                         for orig in &taint.origins {
-                            if combined_origins.len() < MAX_ORIGINS
+                            if combined_origins.len() < effective_max_origins()
                                 && !combined_origins.iter().any(|o| o.node == orig.node)
                             {
                                 combined_origins.push(*orig);
@@ -4348,7 +4506,7 @@ fn try_curl_url_propagation(
             if let Some(taint) = state.get(v) {
                 url_caps |= taint.caps;
                 for orig in &taint.origins {
-                    if url_origins.len() < MAX_ORIGINS
+                    if url_origins.len() < effective_max_origins()
                         && !url_origins.iter().any(|o| o.node == orig.node)
                     {
                         url_origins.push(*orig);
@@ -4369,7 +4527,7 @@ fn try_curl_url_propagation(
             if let Some(taint) = state.get(v) {
                 url_caps |= taint.caps;
                 for orig in &taint.origins {
-                    if url_origins.len() < MAX_ORIGINS
+                    if url_origins.len() < effective_max_origins()
                         && !url_origins.iter().any(|o| o.node == orig.node)
                     {
                         url_origins.push(*orig);
@@ -4387,7 +4545,7 @@ fn try_curl_url_propagation(
             let mut merged = existing.clone();
             merged.caps |= url_caps;
             for orig in &url_origins {
-                if merged.origins.len() < MAX_ORIGINS
+                if merged.origins.len() < effective_max_origins()
                     && !merged.origins.iter().any(|o| o.node == orig.node)
                 {
                     merged.origins.push(*orig);
@@ -4549,7 +4707,7 @@ fn try_container_propagation(
                         if let Some(taint) = state.get(v) {
                             val_caps |= taint.caps;
                             for orig in &taint.origins {
-                                if val_origins.len() < MAX_ORIGINS
+                                if val_origins.len() < effective_max_origins()
                                     && !val_origins.iter().any(|o| o.node == orig.node)
                                 {
                                     val_origins.push(*orig);
@@ -4691,7 +4849,7 @@ fn merge_taint_into(
             let mut merged = existing.clone();
             merged.caps |= caps;
             for orig in origins {
-                if merged.origins.len() < MAX_ORIGINS
+                if merged.origins.len() < effective_max_origins()
                     && !merged.origins.iter().any(|o| o.node == orig.node)
                 {
                     merged.origins.push(*orig);
@@ -5202,7 +5360,7 @@ fn propagate_taint_to_aliases(
             let merged_caps = existing.caps | taint_caps;
             let mut merged_origins = existing.origins.clone();
             for orig in taint_origins {
-                if merged_origins.len() < MAX_ORIGINS
+                if merged_origins.len() < effective_max_origins()
                     && !merged_origins.iter().any(|o| o.node == orig.node)
                 {
                     merged_origins.push(*orig);
@@ -6973,6 +7131,7 @@ pub fn ssa_events_to_findings(
                         symbolic: None,
                         source_span: origin.source_span.map(|(start, _)| start),
                         primary_location: primary_location.clone(),
+                        engine_notes: smallvec::SmallVec::new(),
                     });
                 }
             }

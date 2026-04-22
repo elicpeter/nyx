@@ -211,6 +211,13 @@ pub struct Evidence {
     /// resolution where the caller's sink node carries no label).
     #[serde(default, skip_serializing_if = "is_zero_u16")]
     pub sink_caps: u16,
+
+    /// Engine provenance notes attached to this finding (e.g. "worklist
+    /// iteration budget was hit before convergence"), propagated from
+    /// [`crate::taint::Finding::engine_notes`].  Empty for typical
+    /// under-budget findings and skipped during serialization in that case.
+    #[serde(default, skip_serializing_if = "smallvec::SmallVec::is_empty")]
+    pub engine_notes: smallvec::SmallVec<[crate::engine_notes::EngineNote; 2]>,
 }
 
 fn is_zero_u16(v: &u16) -> bool {
@@ -235,6 +242,7 @@ impl Evidence {
             && self.confidence_limiters.is_empty()
             && self.symbolic.is_none()
             && self.sink_caps == 0
+            && self.engine_notes.is_empty()
     }
 }
 
