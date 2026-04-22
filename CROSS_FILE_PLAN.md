@@ -20,7 +20,7 @@ document.
 | CF-3  | Abstract-domain transfer channels in summaries      | —           | 1 session         | Landed 2026-04-22            |
 | CF-4  | Per-return-path summary decomposition               | —           | 1 session         | Landed 2026-04-22            |
 | CF-5  | Cross-file SCC joint fixed-point                    | CF-1, CF-2  | 1 session         | Landed 2026-04-22            |
-| CF-6  | Parameter-granularity points-to summaries           | CF-4        | 1 session         | Not started                  |
+| CF-6  | Parameter-granularity points-to summaries           | CF-4        | 1 session         | Landed 2026-04-22            |
 | CF-7  | Demand-driven backwards analysis from sinks         | CF-1..CF-4  | 1 full session    | Not started                  |
 
 Recommended order: CF-1 → CF-2 first (the biggest immediate precision
@@ -701,7 +701,25 @@ cargo bench --bench scan_bench -- --save-baseline post-phase-cf-5
 
 ## Phase CF-6 — Parameter-granularity points-to summaries
 
-**Status:** Not started
+**Status:** Landed 2026-04-22 on `release/0.5.0`. Additive shape:
+new `PointsToSummary` on `SsaFuncSummary` carrying a bounded
+`SmallVec<[AliasEdge; 4]>` (cap `MAX_ALIAS_EDGES = 8`, overflow flag
+for the conservative all-pairs fallback); intra-procedural analysis in
+`src/ssa/param_points_to.rs` recognises field-store
+`Param(src) → Param(dst)` edges via dotted var_names and
+`Param(i) → Return` edges via return-block param traces; summary
+application at cross-file call sites unions src-arg taint into
+dst-arg heap + direct SSA taint and threads points-to sets through
+the return for param→Return edges; formal-params-indexed to match
+caller `args[i]` slots (SSA lowering can skip unused params and shift
+indices). Coverage: 5 unit tests for the analysis
+(`src/ssa/param_points_to.rs`), 7 unit tests for the data structure
+(`src/summary/points_to.rs`), 3 CF-6-specific serde / arity tests
+(`src/summary/tests.rs`), 3 cross-file integration fixtures
+(`cross_file_alias_mutating_helper/_returned_alias/_bounded_graph`)
+wired through `tests/cross_file_alias_tests.rs`. Benchmark neutral
+(F1 unchanged at 0.966) — corpus does not yet exercise the new
+channel; see `tests/benchmark/RESULTS.md`.
 **Estimated effort:** 1 session
 **Depends on:** CF-4 (summary structure already per-return-path)
 

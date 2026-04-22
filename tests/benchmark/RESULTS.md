@@ -1,6 +1,6 @@
 # Nyx Benchmark Results
 
-Current baseline (as of Phase CF-5, 2026-04-22):
+Current baseline (as of Phase CF-6, 2026-04-22):
 
 | Metric                | File-level | Rule-level | CI floor |
 |-----------------------|------------|------------|----------|
@@ -11,6 +11,97 @@ Current baseline (as of Phase CF-5, 2026-04-22):
 Corpus: 256 cases (159 vulnerable, 97 safe) across 10 languages. Scanner 0.5.0, full analysis mode.
 
 Machine-readable per-run data lives in `tests/benchmark/results/` (`latest.json` plus dated snapshots). This file is a narrative changelog — only the two most recent phases are kept in full detail; earlier phases are condensed into the history table at the end.
+
+---
+
+## Phase CF-6 — Parameter-granularity points-to summaries (2026-04-22)
+
+### Motivation
+
+Prior to CF-6, the cross-file summary channel had no way to express
+"callee mutates a shared heap object through one parameter so another
+parameter's alias sees the new taint."  Container-op patterns (`push`,
+`set`, …) were already captured through `param_to_container_store`, but
+direct field writes — `obj.x = val` — fell outside
+`classify_container_op`'s recognised-method list, so a common class of
+flow (void helper that stores through a parameter) was invisible to
+cross-file taint.  Whole-program points-to is out of scope for a
+security scanner; a minimal parameter-granularity summary closes the
+real flows at a negligible cost.
+
+### Changes
+
+1. **`PointsToSummary` data type** (`src/summary/points_to.rs`):
+   bounded `SmallVec<[AliasEdge; 4]>` of directed `(source, target,
+   kind)` edges where endpoints are `AliasPosition::Param(u32)` or
+   `AliasPosition::Return` and `AliasKind` is `MayAlias` only for CF-6.
+   Edge count is capped at `MAX_ALIAS_EDGES = 8`; overflow sets an
+   `overflow` flag that callers honour as "any param aliases any other
+   param and the return" — the conservative greatest-lower-bound over
+   the alias lattice.
+2. **Intra-procedural analysis** (`src/ssa/param_points_to.rs`): a
+   single bounded pass over the SSA body.  For each `SsaOp::Assign`
+   whose `var_name` is a dotted/indexed path, we resolve the root base
+   to a formal-parameter index via `formal_param_names` (authoritative
+   declaration-order map) and trace the RHS through Assign/Phi chains to
+   another parameter, emitting `Param(src) → Param(dst)`.  For each
+   `Terminator::Return(Some(v))` whose value traces to a parameter we
+   emit `Param(i) → Return`.  Declaration-order indexing matters: SSA
+   lowering skips formal params that are never read, so SSA-level
+   indices and caller-side positional indices can diverge.  Trusting
+   formal-order is the only way to keep the summary's edges aligned with
+   the caller's `args[i]` slots.
+3. **`SsaFuncSummary.points_to`** (`src/summary/ssa_summary.rs`): new
+   `#[serde(default, skip_serializing_if = PointsToSummary::is_empty)]`
+   field.  Legacy on-disk rows deserialise cleanly with an empty
+   summary, so no engine-version bump is required.
+4. **Summary application at cross-file call sites**
+   (`src/taint/ssa_transfer.rs`): `resolved_points_to` is captured
+   alongside the other cross-file fields before `callee_summary` is
+   moved into the main taint branch.  Each `Param(src) → Param(dst)`
+   edge unions caller-`args[src]`'s taint into the heap of caller-
+   `args[dst]`'s points-to set *and* directly taints the dst SSA
+   value — the direct channel is necessary when the caller's heap
+   analysis has no allocation site for the arg (common for plain
+   constructors in Python / JS / Java).  Each `Param(src) → Return`
+   edge threads caller-`args[src]`'s points-to set through
+   `dynamic_pts` onto the call's return value.  Overflow synthesises
+   the conservative all-pairs graph.
+5. **`ssa_summary_fits_arity`** (`src/summary/mod.rs`): arity filter
+   extended to reject points-to entries referencing parameters past the
+   key's declared arity (same guard that `param_to_return` /
+   `param_to_sink` already use).  Prevents synthetic-capture
+   mis-attributions from leaking into cross-file resolution.
+6. **Observable-effects filter** (`src/taint/mod.rs`): summary
+   filtering in `lower_all_functions` now treats a non-empty
+   `PointsToSummary` as an observable effect so void helpers whose only
+   signal is a parameter alias survive the "no effects, skip" filter.
+
+### Test coverage
+
+* **Unit tests** (`src/summary/points_to.rs`): data-structure
+  invariants (dedup, overflow promotion, serde round-trip, legacy JSON
+  decodes).
+* **Unit tests** (`src/ssa/param_points_to.rs`): 5 structural shapes
+  (field-write emits edge, return-alias emits edge, self-alias is
+  dropped, out-of-range param rejected, bounded graph terminates).
+* **Summary serde + arity** (`src/summary/tests.rs`): round-trip with
+  points_to populated, legacy JSON deserialises with empty points_to,
+  arity filter rejects out-of-range param indices.
+* **Cross-file integration** (`tests/cross_file_alias_tests.rs` + 3
+  fixtures): `cross_file_alias_mutating_helper` (Python void helper →
+  py.cmdi finding through param alias), `cross_file_alias_returned_alias`
+  (JS passthrough → shell-exec finding through return alias),
+  `cross_file_alias_bounded_graph` (Python 20-edge graph → scan
+  terminates under the overflow fallback).
+
+### Benchmark
+
+Rule-level F1 unchanged at 0.966 (P=0.940, R=0.994); file-level F1
+unchanged at 0.970 (P=0.941, R=1.000).  Neutral, as expected: the
+existing benchmark corpus does not exercise cross-file field-alias
+flows, so CF-6's precision win is latent and will surface as the corpus
+grows.  All 2173 tests pass (1687 lib + 486 integration).
 
 ---
 

@@ -9,6 +9,7 @@ pub mod invariants;
 #[allow(dead_code)]
 pub mod ir;
 pub mod lower;
+pub mod param_points_to;
 pub mod pointsto;
 pub mod static_map;
 pub mod type_facts;

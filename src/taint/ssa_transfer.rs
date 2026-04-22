@@ -2316,6 +2316,12 @@ fn transfer_inst(
             // analysis doesn't model cross-parameter container stores.
             let mut resolved_container_to_return: Vec<usize> = Vec::new();
             let mut resolved_container_store: Vec<(usize, usize)> = Vec::new();
+            // Phase CF-6: captured alongside container fields because the
+            // callee_summary gets moved when the main taint branch takes it
+            // below.  We only need the points_to summary itself — clone it
+            // out before the move so application can still read it.
+            let mut resolved_points_to: crate::summary::points_to::PointsToSummary =
+                crate::summary::points_to::PointsToSummary::empty();
 
             // Resolve callee summary (used for both taint propagation and container fields)
             // Pass arity (positional-arg count) so same-name/different-arity
@@ -2348,6 +2354,7 @@ fn transfer_inst(
             if let Some(ref resolved) = callee_summary {
                 resolved_container_to_return = resolved.param_container_to_return.clone();
                 resolved_container_store = resolved.param_to_container_store.clone();
+                resolved_points_to = resolved.points_to.clone();
 
                 // Phase 17 hardening: capture abstract return for post-transfer injection
                 callee_return_abstract = resolved.return_abstract.clone();
@@ -2812,6 +2819,170 @@ fn transfer_inst(
                             state
                                 .heap
                                 .store_set(pts, HeapSlot::Elements, src_caps, &src_origins);
+                        }
+                    }
+                }
+            }
+
+            // Phase CF-6: parameter-granularity points-to summary application.
+            //
+            // Extends the container-store channel above (which catches
+            // `arr.push(v)` / `map.set(k, v)`) to direct field writes like
+            // `obj.x = val` that `classify_container_op` does not recognise.
+            // The callee's `PointsToSummary` records May-alias edges between
+            // parameter positions and the return; at the call site we replay
+            // each edge against the caller's taint state.
+            //
+            //   * `Param(src) → Param(dst)` — union caller-arg[src]'s taint
+            //     into caller-arg[dst]'s heap slot.  Sound because the
+            //     callee *may* have stored data derived from arg[src] into
+            //     an alias of arg[dst]; the caller must assume any later
+            //     read from arg[dst] could surface that taint.
+            //   * `Param(src) → Return` — union caller-arg[src]'s points-to
+            //     set into the call's return value, giving the result the
+            //     same heap identity as its input argument.  Overlaps with
+            //     `param_container_to_return`; both channels are idempotent
+            //     so re-propagation is safe.
+            //
+            // Overflow (the callee's alias graph exceeded
+            // `MAX_ALIAS_EDGES`): conservatively treat *every* parameter
+            // as aliasing every other parameter and the return.
+            if resolved_points_to.overflow || !resolved_points_to.edges.is_empty() {
+                use crate::summary::points_to::AliasPosition;
+
+                // Effective edge set: when overflow is signalled, synthesise
+                // the conservative all-pairs graph instead of reading the
+                // possibly-truncated edge vector.
+                let (param_to_param_edges, param_to_return_edges): (
+                    SmallVec<[(usize, usize); 8]>,
+                    SmallVec<[usize; 4]>,
+                ) = if resolved_points_to.overflow {
+                    let n = args.len();
+                    let mut p2p: SmallVec<[(usize, usize); 8]> = SmallVec::new();
+                    let mut p2r: SmallVec<[usize; 4]> = SmallVec::new();
+                    for i in 0..n {
+                        p2r.push(i);
+                        for j in 0..n {
+                            if i != j {
+                                p2p.push((i, j));
+                            }
+                        }
+                    }
+                    (p2p, p2r)
+                } else {
+                    let mut p2p: SmallVec<[(usize, usize); 8]> = SmallVec::new();
+                    let mut p2r: SmallVec<[usize; 4]> = SmallVec::new();
+                    for edge in &resolved_points_to.edges {
+                        match (edge.source, edge.target) {
+                            (AliasPosition::Param(s), AliasPosition::Param(t)) => {
+                                p2p.push((s as usize, t as usize));
+                            }
+                            (AliasPosition::Param(s), AliasPosition::Return) => {
+                                p2r.push(s as usize);
+                            }
+                            // Return → Param / Return → Return are not emitted
+                            // by the CF-6 analysis; ignore defensively.
+                            _ => {}
+                        }
+                    }
+                    (p2p, p2r)
+                };
+
+                // Apply Param → Param edges: caller-arg[src] taint into
+                // caller-arg[dst]'s heap objects *and* directly onto the
+                // destination SSA value.  Store-into-heap handles later
+                // container-style reads from `dst`'s pts set; the direct
+                // taint ensures field reads expressed as `Assign uses=[dst]`
+                // (the common case when the caller's heap analysis did
+                // not register an allocation site for `dst`) still surface
+                // the aliased taint.
+                //
+                // The loop must borrow `state` mutably (for the heap
+                // store and the direct taint merge), so it is written
+                // inline instead of split across helper closures.
+                for (src, dst) in &param_to_param_edges {
+                    // Collect src arg taint.
+                    let mut src_caps = Cap::empty();
+                    let mut src_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+                    if let Some(arg_vals) = args.get(*src) {
+                        for &v in arg_vals {
+                            if let Some(taint) = state.get(v) {
+                                src_caps |= taint.caps;
+                                for orig in &taint.origins {
+                                    if src_origins.len() < MAX_ORIGINS
+                                        && !src_origins.iter().any(|o| o.node == orig.node)
+                                    {
+                                        src_origins.push(*orig);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if src_caps.is_empty() {
+                        continue;
+                    }
+                    // Collect dst arg points-to for heap-level
+                    // propagation (cloned out so the mutable
+                    // `state.heap` borrow below is independent of the
+                    // immutable PTS lookup).
+                    let mut dst_pts: SmallVec<[PointsToSet; 2]> = SmallVec::new();
+                    let mut dst_ssa_vals: SmallVec<[SsaValue; 2]> = SmallVec::new();
+                    if let Some(arg_vals) = args.get(*dst) {
+                        for &v in arg_vals {
+                            dst_ssa_vals.push(v);
+                            if let Some(pts) = lookup_pts(transfer, v) {
+                                dst_pts.push(pts);
+                            }
+                        }
+                    }
+                    for pts in &dst_pts {
+                        state
+                            .heap
+                            .store_set(pts, HeapSlot::Elements, src_caps, &src_origins);
+                    }
+                    // Direct-taint the dst SSA value(s).  Required when
+                    // the caller's heap analysis has no allocation site
+                    // for `dst` (common for plain class constructors in
+                    // Python / JS / Java without fine-grained
+                    // points-to).  Without this, later reads expressed
+                    // as Assigns over `dst` would see no taint.
+                    for dv in &dst_ssa_vals {
+                        merge_taint_into(state, *dv, src_caps, &src_origins);
+                    }
+                }
+
+                // Apply Param → Return edges: the call result inherits the
+                // source argument's points-to set.  Re-runs the same
+                // channel `resolved_container_to_return` drives a few
+                // lines above — safe (idempotent union), and catches
+                // cases where the callee returned a param through a
+                // non-identity chain (e.g. `return Box::new(x)`).
+                if !param_to_return_edges.is_empty()
+                    && let Some(dyn_ref) = transfer.dynamic_pts
+                {
+                    for src in &param_to_return_edges {
+                        let mut src_pts: SmallVec<[PointsToSet; 2]> = SmallVec::new();
+                        if let Some(arg_vals) = args.get(*src) {
+                            for &v in arg_vals {
+                                if let Some(pts) = lookup_pts(transfer, v) {
+                                    src_pts.push(pts);
+                                }
+                            }
+                        }
+                        if src_pts.is_empty() {
+                            continue;
+                        }
+                        let mut dyn_pts = dyn_ref.borrow_mut();
+                        for pts in &src_pts {
+                            match dyn_pts.get(&inst.value) {
+                                Some(existing) => {
+                                    let merged = existing.union(pts);
+                                    dyn_pts.insert(inst.value, merged);
+                                }
+                                None => {
+                                    dyn_pts.insert(inst.value, pts.clone());
+                                }
+                            }
                         }
                     }
                 }
@@ -6000,6 +6171,14 @@ struct ResolvedSummary {
         usize,
         smallvec::SmallVec<[crate::summary::ssa_summary::ReturnPathTransform; 2]>,
     )>,
+    /// Phase CF-6: parameter-granularity points-to summary.
+    ///
+    /// Populated only via `convert_ssa_to_resolved`; other resolution
+    /// paths leave it empty (they do not derive alias edges).  Empty /
+    /// default means "no aliasing beyond what param_to_container_store
+    /// already captures" — the caller treats the call as a pure
+    /// taint-through-signature edge.
+    points_to: crate::summary::points_to::PointsToSummary,
 }
 
 fn resolve_callee(
@@ -6143,6 +6322,7 @@ fn resolve_callee_full(
 
                     abstract_transfer: vec![],
                     param_return_paths: vec![],
+                    points_to: Default::default(),
                 });
             }
             // Try label classification for the bound function (by leaf name)
@@ -6182,6 +6362,7 @@ fn resolve_callee_full(
 
                     abstract_transfer: vec![],
                     param_return_paths: vec![],
+                    points_to: Default::default(),
                 });
             }
         }
@@ -6260,6 +6441,7 @@ fn resolve_callee_full(
 
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
+                points_to: Default::default(),
             });
         }
     } else {
@@ -6309,6 +6491,7 @@ fn resolve_callee_full(
 
                         abstract_transfer: vec![],
                         param_return_paths: vec![],
+                        points_to: Default::default(),
                     });
                 }
             }
@@ -6350,6 +6533,7 @@ fn resolve_callee_full(
 
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
+                points_to: Default::default(),
             });
         }
     }
@@ -6497,6 +6681,7 @@ fn convert_ssa_to_resolved(
         receiver_to_sink: ssa_sum.receiver_to_sink,
         abstract_transfer: ssa_sum.abstract_transfer.clone(),
         param_return_paths: ssa_sum.param_return_paths.clone(),
+        points_to: ssa_sum.points_to.clone(),
     }
 }
 
@@ -6858,6 +7043,7 @@ pub fn extract_ssa_func_summary(
     param_count: usize,
     module_aliases: Option<&HashMap<SsaValue, smallvec::SmallVec<[String; 2]>>>,
     locator: Option<&crate::summary::SinkSiteLocator<'_>>,
+    formal_param_names: Option<&[String]>,
 ) -> crate::summary::ssa_summary::SsaFuncSummary {
     use crate::summary::SinkSite;
     use crate::summary::ssa_summary::{SsaFuncSummary, TaintTransform};
@@ -7218,6 +7404,14 @@ pub fn extract_ssa_func_summary(
     let (param_container_to_return, param_to_container_store) =
         extract_container_flow_summary(ssa, lang, effective_params);
 
+    // Phase CF-6: parameter-granularity points-to summary.
+    let points_to = crate::ssa::param_points_to::analyse_param_points_to(
+        ssa,
+        &param_info,
+        effective_params,
+        formal_param_names,
+    );
+
     // Infer return type: scan return-reaching blocks for constructor calls.
     let return_type = infer_summary_return_type(ssa, lang);
 
@@ -7291,6 +7485,7 @@ pub fn extract_ssa_func_summary(
         receiver_to_sink: Cap::empty(),
         abstract_transfer,
         param_return_paths,
+        points_to,
     }
 }
 

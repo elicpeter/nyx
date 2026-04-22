@@ -720,15 +720,21 @@ pub(crate) fn extract_intra_file_ssa_summaries(
             param_count,
             mod_aliases_ref,
             None,
+            Some(&formal_params),
         );
 
-        // Only store if the summary has observable effects
+        // Only store if the summary has observable effects.  Phase CF-6
+        // adds `points_to`: a void helper whose only observable behaviour
+        // is a parameter-to-parameter alias (e.g. `fn set(t, v) { t.x = v; }`)
+        // must survive this filter so summary application at cross-file
+        // call sites can replay the alias edges.
         if !summary.param_to_return.is_empty()
             || !summary.param_to_sink.is_empty()
             || !summary.source_caps.is_empty()
             || !summary.param_container_to_return.is_empty()
             || !summary.param_to_container_store.is_empty()
             || summary.return_abstract.is_some()
+            || !summary.points_to.is_empty()
         {
             let key =
                 lookup_canonical_func_key(local_summaries, lang, namespace, func_name, param_count);
@@ -833,6 +839,7 @@ fn lower_all_functions_from_bodies(
                 param_count,
                 mod_aliases_ref,
                 locator,
+                Some(formal_params),
             );
 
             // Always insert the summary, even when all fields are empty/default.

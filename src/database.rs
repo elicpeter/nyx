@@ -1920,6 +1920,7 @@ fn ssa_summaries_round_trip() {
 
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
+            points_to: Default::default(),
             },
         ),
         (
@@ -1950,6 +1951,7 @@ fn ssa_summaries_round_trip() {
 
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
+            points_to: Default::default(),
             },
         ),
     ];
@@ -2025,6 +2027,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
 
             abstract_transfer: vec![],
             param_return_paths: vec![],
+            points_to: Default::default(),
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1)
@@ -2057,6 +2060,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
 
             abstract_transfer: vec![],
             param_return_paths: vec![],
+            points_to: Default::default(),
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2)
@@ -2110,6 +2114,7 @@ fn clear_drops_ssa_summaries_table() {
 
             abstract_transfer: vec![],
             param_return_paths: vec![],
+            points_to: Default::default(),
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
@@ -2375,6 +2380,7 @@ fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     }
 }
 

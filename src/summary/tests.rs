@@ -437,6 +437,7 @@ fn ssa_summary_serde_round_trip_identity() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -465,6 +466,7 @@ fn ssa_summary_serde_round_trip_strip_bits() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -490,6 +492,7 @@ fn ssa_summary_serde_round_trip_add_bits() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -522,6 +525,7 @@ fn ssa_summary_serde_round_trip_all_variants() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -556,6 +560,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     gs.insert_ssa(key.clone(), v1.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v1));
@@ -578,6 +583,7 @@ fn global_summaries_insert_ssa_exact_key_replacement() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     gs.insert_ssa(key.clone(), v2.clone());
     assert_eq!(gs.get_ssa(&key), Some(&v2));
@@ -620,6 +626,7 @@ fn global_summaries_merge_with_ssa_entries() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     let sum_b = SsaFuncSummary {
         param_to_return: vec![],
@@ -638,6 +645,7 @@ fn global_summaries_merge_with_ssa_entries() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
 
     gs1.insert_ssa(key_a.clone(), sum_a.clone());
@@ -680,6 +688,7 @@ fn global_summaries_is_empty_considers_ssa() {
 
             abstract_transfer: vec![],
             param_return_paths: vec![],
+            points_to: Default::default(),
         },
     );
 
@@ -705,6 +714,7 @@ fn ssa_summary_serde_round_trip_param_to_sink_param() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -745,6 +755,7 @@ fn ssa_summary_serde_round_trip_container_fields() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -794,6 +805,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
 
         abstract_transfer: vec![],
         param_return_paths: vec![],
+            points_to: Default::default(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -1304,6 +1316,7 @@ fn global_summaries_resolve_body_requires_body_present() {
 
             abstract_transfer: vec![],
             param_return_paths: vec![],
+            points_to: Default::default(),
         },
     );
     // Don't insert body
@@ -3354,6 +3367,7 @@ fn cf4_return_path_transform_serde_round_trip() {
                 ),
             ],
         )],
+        points_to: Default::default(),
     };
     let json = serde_json::to_string(&summary).unwrap();
     let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
@@ -3489,5 +3503,76 @@ fn cf4_ssa_summary_fits_arity_rejects_out_of_range_path_idx() {
     gs.insert_ssa(key.clone(), bad);
     // Reconciliation synthesises a disambig to keep the bad entry under a
     // different key; the original key stays empty.
+    assert!(gs.get_ssa(&key).is_none());
+}
+
+// ── Phase CF-6: parameter-granularity points-to summary ─────────────────
+
+#[test]
+fn cf6_ssa_summary_serde_round_trip_with_points_to() {
+    use crate::summary::points_to::{AliasKind, AliasPosition, PointsToSummary};
+
+    let mut pts = PointsToSummary::empty();
+    pts.insert(
+        AliasPosition::Param(0),
+        AliasPosition::Param(1),
+        AliasKind::MayAlias,
+    );
+    pts.insert(
+        AliasPosition::Param(0),
+        AliasPosition::Return,
+        AliasKind::MayAlias,
+    );
+
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        points_to: pts.clone(),
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: SsaFuncSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(summary, back);
+    assert_eq!(back.points_to, pts);
+}
+
+#[test]
+fn cf6_ssa_summary_legacy_json_without_points_to_deserialises() {
+    // Older on-disk JSON predates CF-6.  The serde(default) on
+    // `points_to` must let those rows load cleanly with an empty
+    // alias graph.
+    let legacy = r#"{
+        "param_to_return": [[0, "Identity"]],
+        "source_caps": 0,
+        "param_to_sink": []
+    }"#;
+    let back: SsaFuncSummary = serde_json::from_str(legacy).unwrap();
+    assert!(back.points_to.edges.is_empty());
+    assert!(!back.points_to.overflow);
+}
+
+#[test]
+fn cf6_ssa_summary_fits_arity_rejects_out_of_range_points_to_idx() {
+    use crate::summary::points_to::{AliasKind, AliasPosition, PointsToSummary};
+    let mut pts = PointsToSummary::empty();
+    // Index 7 exceeds arity 2 below.
+    pts.insert(
+        AliasPosition::Param(7),
+        AliasPosition::Return,
+        AliasKind::MayAlias,
+    );
+    let bad = SsaFuncSummary {
+        points_to: pts,
+        ..Default::default()
+    };
+    let key = FuncKey {
+        lang: Lang::Rust,
+        namespace: "test.rs".into(),
+        name: "helper".into(),
+        arity: Some(2),
+        ..Default::default()
+    };
+    let mut gs = GlobalSummaries::new();
+    gs.insert_ssa(key.clone(), bad);
+    // Reconciliation rekeys the bad entry; the original key is empty.
     assert!(gs.get_ssa(&key).is_none());
 }

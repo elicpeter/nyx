@@ -395,6 +395,7 @@ mod tests {
 
                         abstract_transfer: vec![],
                         param_return_paths: vec![],
+            points_to: Default::default(),
                     },
                 )],
             )
@@ -596,6 +597,7 @@ mod tests {
 
                         abstract_transfer: vec![],
                         param_return_paths: vec![],
+            points_to: Default::default(),
                     },
                 )],
             )

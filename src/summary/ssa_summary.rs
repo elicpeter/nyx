@@ -2,6 +2,7 @@ use crate::abstract_interp::{AbstractTransfer, AbstractValue};
 use crate::labels::Cap;
 use crate::ssa::type_facts::TypeKind;
 use crate::summary::SinkSite;
+use crate::summary::points_to::PointsToSummary;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
@@ -248,6 +249,15 @@ pub struct SsaFuncSummary {
     /// could not derive per-return state (e.g. early-exit probes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_return_paths: Vec<(usize, SmallVec<[ReturnPathTransform; 2]>)>,
+    /// Phase CF-6: parameter-granularity points-to summary.
+    ///
+    /// Records bounded alias edges between parameter positions and the
+    /// return value, so summary-path cross-file resolution can spread
+    /// taint through object mutations that do not flow via the return.
+    /// Empty (the default) for functions whose parameters do not alias
+    /// each other or the return value.
+    #[serde(default, skip_serializing_if = "PointsToSummary::is_empty")]
+    pub points_to: PointsToSummary,
 }
 
 /// Phase CF-4: union-merge two `param_return_paths` lists keyed by parameter

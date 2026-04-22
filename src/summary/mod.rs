@@ -1,3 +1,4 @@
+pub mod points_to;
 pub mod ssa_summary;
 
 use crate::labels::Cap;
@@ -1446,6 +1447,14 @@ fn ssa_summary_fits_arity(summary: &SsaFuncSummary, key_arity: Option<usize>) ->
             return false;
         }
     }
+    // Phase CF-6: every parameter referenced by a points-to edge must
+    // also fit the key's arity.  An overflow-flagged summary is
+    // conservative by construction and can be kept as-is.
+    if let Some(max) = summary.points_to.max_param_index()
+        && (max as usize) >= arity
+    {
+        return false;
+    }
     true
 }
 
@@ -1467,6 +1476,8 @@ fn synthesize_ssa_disambig(summary: &SsaFuncSummary) -> u32 {
     summary.source_to_callback.len().hash(&mut h);
     summary.abstract_transfer.len().hash(&mut h);
     summary.param_return_paths.len().hash(&mut h);
+    summary.points_to.edges.len().hash(&mut h);
+    summary.points_to.overflow.hash(&mut h);
     h.finish() as u32
 }
 
