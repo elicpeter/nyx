@@ -431,8 +431,94 @@ pub fn classify_condition_with_target(text: &str) -> (PredicateKind, Option<Stri
             let target = extract_validation_target(text);
             (kind, target)
         }
+        PredicateKind::Comparison => {
+            // `x === '/login'`, `x == 5`, `null != obj` — when exactly one
+            // side is a literal, extract the identifier side as the target.
+            // Downstream `apply_branch_predicates` uses this to mark the
+            // variable as `validated_may` on the true (equal) branch.
+            let target = extract_comparison_target(text);
+            (kind, target)
+        }
         _ => (kind, None),
     }
+}
+
+/// Extract the identifier side of an equality/inequality comparison where
+/// exactly one side is a scalar literal.
+///
+/// Examples:
+/// - `x === '/login'` → `Some("x")`
+/// - `x !== 5` → `Some("x")`
+/// - `null != obj` → `Some("obj")`
+/// - `x === y` → `None` (neither side is a literal)
+/// - `'a' == 'b'` → `None` (both sides are literals)
+/// - `obj.field == 3` → `None` (not a bare identifier)
+///
+/// Best-effort text analysis — kept conservative to avoid false validation.
+fn extract_comparison_target(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+
+    // Find the operator token.  Check longer forms first so `===` doesn't
+    // match as `==` with a trailing `=`.
+    for op in &["===", "!==", "==", "!="] {
+        if let Some(pos) = trimmed.find(op) {
+            let left = trimmed[..pos].trim();
+            let right = trimmed[pos + op.len()..].trim();
+            let left_is_ident = is_identifier(left);
+            let right_is_ident = is_identifier(right);
+            let left_is_lit = is_comparison_literal(left);
+            let right_is_lit = is_comparison_literal(right);
+            return match (left_is_ident, right_is_ident, left_is_lit, right_is_lit) {
+                (true, _, false, true) => Some(left.to_string()),
+                (_, true, true, false) => Some(right.to_string()),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// Test whether `s` is a scalar literal for comparison-target extraction.
+/// Accepts string literals (single/double/backtick quoted), numeric literals,
+/// and the null/undefined/nil/true/false tokens.
+fn is_comparison_literal(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+
+    // String literal: delimited by matching quotes.
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' || first == b'\'' || first == b'`') && first == last {
+            return true;
+        }
+    }
+
+    // Keyword literal tokens.
+    if matches!(s, "null" | "undefined" | "nil" | "None" | "true" | "false") {
+        return true;
+    }
+
+    // Numeric literal: optional sign + digits, optional decimal point.
+    let mut chars = s.chars();
+    let first = chars.next().unwrap();
+    let rest_start = if first == '-' || first == '+' {
+        match chars.next() {
+            Some(c) => c,
+            None => return false,
+        }
+    } else {
+        first
+    };
+    if !rest_start.is_ascii_digit() {
+        return false;
+    }
+    s.chars()
+        .skip(if first == '-' || first == '+' { 1 } else { 0 })
+        .all(|c| c.is_ascii_digit() || c == '.' || c == '_')
 }
 
 /// Count positional arguments in a call-shaped condition text.
@@ -830,8 +916,36 @@ mod tests {
     }
 
     #[test]
-    fn target_non_validation_returns_none() {
+    fn target_comparison_extracts_identifier_side() {
         let (kind, target) = classify_condition_with_target("x == 5");
+        assert_eq!(kind, PredicateKind::Comparison);
+        assert_eq!(target.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn target_comparison_strict_equality_with_string() {
+        let (kind, target) = classify_condition_with_target("x === '/login'");
+        assert_eq!(kind, PredicateKind::Comparison);
+        assert_eq!(target.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn target_comparison_literal_on_left() {
+        let (kind, target) = classify_condition_with_target("null != obj");
+        assert_eq!(kind, PredicateKind::Comparison);
+        assert_eq!(target.as_deref(), Some("obj"));
+    }
+
+    #[test]
+    fn target_comparison_both_identifiers_returns_none() {
+        let (kind, target) = classify_condition_with_target("x === y");
+        assert_eq!(kind, PredicateKind::Comparison);
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn target_comparison_both_literals_returns_none() {
+        let (kind, target) = classify_condition_with_target("'a' == 'b'");
         assert_eq!(kind, PredicateKind::Comparison);
         assert_eq!(target, None);
     }

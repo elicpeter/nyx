@@ -1,0 +1,13 @@
+{
+  "description": "Dominant production FP: user-controlled request-body content flowing into a telemetry POST body. Destination URL is fixed — this is not SSRF and must not fire.",
+  "tags": ["taint", "ssrf", "fetch", "destination-aware", "regression-fp", "telemetry"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [8, 16],
+      "notes": "req.body → fetch body with fixed URL; must be silent under the new SSRF gate."
+    }
+  ]
+}

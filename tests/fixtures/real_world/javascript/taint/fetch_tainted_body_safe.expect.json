@@ -1,0 +1,13 @@
+{
+  "description": "fetch() request body carries attacker-controlled content but the destination URL is fixed. Under the destination-aware SSRF gate, only taint reaching the URL (arg 0 / object `url` field) activates — body taint must be silenced.",
+  "tags": ["taint", "ssrf", "fetch", "destination-aware", "regression-fp"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [7, 14],
+      "notes": "fetch('/api/telemetry', {body: payload}) — arg 0 is a fixed string, body taint must not fire as SSRF."
+    }
+  ]
+}

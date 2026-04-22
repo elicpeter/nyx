@@ -694,13 +694,19 @@ impl<'a> ParsedSource<'a> {
     }
 
     /// Sort, dedup, and optionally downgrade severity for non-production paths.
+    ///
+    /// Dedup key matches the `issues` table PRIMARY KEY `(file_id, rule_id,
+    /// line, col)` — severity is NOT part of the key.  Two diags that agree
+    /// on (line, col, id) but differ in severity (e.g. a pattern-rule finding
+    /// plus a taint-pipeline finding on the same call) would otherwise survive
+    /// dedup here and crash the indexer with a UNIQUE constraint violation.
+    /// Sorting severity ascending (Severity::High < Medium < Low) means
+    /// `dedup_by` keeps the first occurrence, preserving the highest severity.
     fn finalize_diags(&self, out: &mut Vec<Diag>, cfg: &Config) {
         out.sort_by(|a, b| {
             (a.line, a.col, &a.id, a.severity).cmp(&(b.line, b.col, &b.id, b.severity))
         });
-        out.dedup_by(|a, b| {
-            a.line == b.line && a.col == b.col && a.id == b.id && a.severity == b.severity
-        });
+        out.dedup_by(|a, b| a.line == b.line && a.col == b.col && a.id == b.id);
 
         if !cfg.scanner.include_nonprod && is_nonprod_path(self.path) {
             for d in out.iter_mut() {

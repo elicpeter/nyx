@@ -1,4 +1,6 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule, SinkGate};
+use crate::labels::{
+    Cap, DataLabel, GateActivation, Kind, LabelRule, ParamConfig, RuntimeLabelRule, SinkGate,
+};
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
@@ -80,6 +82,16 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
+    // Conventional project-local HTML escapers.  Suffix word-boundary match
+    // fires on bare calls to locally defined helpers (`function escapeHtml(x)`
+    // invoked as `escapeHtml(x)`) across codebases that follow the common
+    // naming convention.  Case-insensitive so `EscapeHtml` / `escapeHTML`
+    // / `safeHTML` all qualify.
+    LabelRule {
+        matchers: &["escapeHtml", "escapeHTML", "htmlEscape", "safeHtml"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["eval"],
@@ -109,21 +121,8 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: true,
     },
-    LabelRule {
-        matchers: &[
-            "fetch",
-            "axios",
-            "axios.get",
-            "axios.post",
-            "axios.request",
-            "got",
-            "undici.request",
-            "http.request",
-            "https.request",
-        ],
-        label: DataLabel::Sink(Cap::SSRF),
-        case_sensitive: false,
-    },
+    // ── Outbound HTTP clients — modeled as destination-aware gated sinks ──
+    // See GATED_SINKS below; rationale mirrors javascript.rs.
     LabelRule {
         matchers: &[
             "location.href",
@@ -260,6 +259,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         payload_args: &[1],
         keyword_name: None,
         dangerous_kwargs: &[],
+        activation: GateActivation::ValueMatch,
     },
     SinkGate {
         callee_matcher: "parseFromString",
@@ -271,6 +271,176 @@ pub static GATED_SINKS: &[SinkGate] = &[
         payload_args: &[0],
         keyword_name: None,
         dangerous_kwargs: &[],
+        activation: GateActivation::ValueMatch,
+    },
+    // ── Outbound HTTP clients (SSRF) — see javascript.rs for rationale ────
+    SinkGate {
+        callee_matcher: "fetch",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["url"],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["url", "baseURL"],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios.request",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["url", "baseURL"],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios.get",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios.post",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios.put",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios.patch",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios.delete",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "got",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["url", "prefixUrl"],
+        },
+    },
+    SinkGate {
+        callee_matcher: "undici.request",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["origin", "path"],
+        },
+    },
+    SinkGate {
+        callee_matcher: "http.request",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
+        },
+    },
+    SinkGate {
+        callee_matcher: "https.request",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
+        },
     },
 ];
 

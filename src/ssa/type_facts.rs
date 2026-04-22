@@ -113,10 +113,12 @@ pub fn is_type_safe_for_sink(
 ) -> bool {
     use crate::labels::Cap;
     // Int-typed values cannot carry injection payloads for these caps:
-    //   SQL_QUERY   — digits can't form meta SQL tokens
-    //   FILE_IO     — digits can't form path traversal sequences
+    //   SQL_QUERY    — digits can't form meta SQL tokens
+    //   FILE_IO      — digits can't form path traversal sequences
     //   SHELL_ESCAPE — digits can't form shell metacharacters
-    let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO | Cap::SHELL_ESCAPE;
+    //   HTML_ESCAPE  — digits can't form HTML metachars (<, >, ", ', &, /, :)
+    //                  in either text or attribute context
+    let type_suppressible = Cap::SQL_QUERY | Cap::FILE_IO | Cap::SHELL_ESCAPE | Cap::HTML_ESCAPE;
     if !sink_caps.intersects(type_suppressible) {
         return false;
     }
@@ -344,6 +346,19 @@ pub fn analyze_types(
     // First pass: direct type inference from instruction kind and constant values
     for block in &body.blocks {
         for inst in block.phis.iter().chain(block.body.iter()) {
+            // A CFG-level read of a numeric-length property (`arr.length`,
+            // `map.size`, `buf.byteLength`, `list.count`, `vec.len()`) yields
+            // an integer regardless of SSA op shape: a pure property access
+            // lowers to `Assign`, a zero-arg method call lowers to `Call`.
+            // Inspect the attached CFG node first so both shapes pick up the
+            // `TypeKind::Int` fact without duplicating logic per branch.
+            if cfg
+                .node_weight(inst.cfg_node)
+                .is_some_and(|ni| ni.is_numeric_length_access)
+            {
+                facts.insert(inst.value, TypeFact::from_kind(TypeKind::Int));
+                continue;
+            }
             let fact = match &inst.op {
                 SsaOp::Const(_) => {
                     // Use constant propagation result if available
@@ -432,6 +447,15 @@ pub fn analyze_types(
                     if !is_identity_method(callee) {
                         continue;
                     }
+                    // A numeric-length accessor pinned by the first pass is
+                    // load-bearing for sink suppression — do not let identity-
+                    // method receiver propagation overwrite the Int fact.
+                    if cfg
+                        .node_weight(inst.cfg_node)
+                        .is_some_and(|ni| ni.is_numeric_length_access)
+                    {
+                        continue;
+                    }
                     let current_kind = facts
                         .get(&inst.value)
                         .map(|f| f.kind.clone())
@@ -474,6 +498,16 @@ pub fn analyze_types(
 
             // Copy assignments and binary arithmetic
             for inst in &block.body {
+                // Preserve the Int fact pinned by the numeric-length-access
+                // detector in the first pass — copy propagation would replace
+                // it with the receiver's (usually Unknown) type and defeat the
+                // whole point of the accessor rule.
+                if cfg
+                    .node_weight(inst.cfg_node)
+                    .is_some_and(|ni| ni.is_numeric_length_access)
+                {
+                    continue;
+                }
                 if let SsaOp::Assign(uses) = &inst.op {
                     if uses.len() == 1 {
                         let src_fact = facts

@@ -1,0 +1,13 @@
+{
+  "description": "got({url: fixed, json: tainted}) — destination-aware gate restricts SSRF taint checks to url/prefixUrl fields. json field taint must not fire.",
+  "tags": ["taint", "ssrf", "got", "destination-aware", "regression-fp", "object-config"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [9, 16],
+      "notes": "got() object config with fixed URL + tainted json payload — body-field taint silenced."
+    }
+  ]
+}

@@ -2717,20 +2717,26 @@ fn transfer_inst(
                 }
             }
 
-            // Collect taint from operands
+            // Collect taint from operands.  Equality-with-constant comparisons
+            // (`x === 'literal'`) produce a boolean result that carries no
+            // attacker-controlled data, so skip unioning operand caps into the
+            // result.  Source/sanitizer labels on this same node still apply
+            // normally below.
             let mut combined_caps = Cap::empty();
             let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
             let mut inherited_summary = false;
 
-            for &use_val in uses {
-                if let Some(taint) = state.get(use_val) {
-                    combined_caps |= taint.caps;
-                    inherited_summary |= taint.uses_summary;
-                    for orig in &taint.origins {
-                        if combined_origins.len() < MAX_ORIGINS
-                            && !combined_origins.iter().any(|o| o.node == orig.node)
-                        {
-                            combined_origins.push(*orig);
+            if !info.is_eq_with_const {
+                for &use_val in uses {
+                    if let Some(taint) = state.get(use_val) {
+                        combined_caps |= taint.caps;
+                        inherited_summary |= taint.uses_summary;
+                        for orig in &taint.origins {
+                            if combined_origins.len() < MAX_ORIGINS
+                                && !combined_origins.iter().any(|o| o.node == orig.node)
+                            {
+                                combined_origins.push(*orig);
+                            }
                         }
                     }
                 }
@@ -4442,11 +4448,28 @@ fn collect_tainted_sink_values(
     // Priority 1: gated sink filtering (CFG-level sink_payload_args).
     // `sink_payload_args` indexes into positional args (no receiver offset);
     // the receiver is a separate channel via `SsaOp::Call.receiver`.
+    //
+    // Destination-aware narrowing: when `destination_uses` is also set by
+    // the CFG (outbound HTTP gate with an object-literal destination arg),
+    // restrict sink-taint checks to SSA values whose `var_name` matches one
+    // of the listed destination field identifiers. This silences
+    // `fetch({url: fixed, body: tainted})` while still firing on
+    // `fetch({url: tainted, body: fixed})`.
     if let Some(ref positions) = info.call.sink_payload_args {
         if let SsaOp::Call { args, .. } = &inst.op {
+            let destination_filter = info.call.destination_uses.as_deref();
             for &pos in positions {
                 if let Some(arg_vals) = args.get(pos) {
                     for &v in arg_vals {
+                        if let Some(names) = destination_filter {
+                            // Only proceed when this SSA value corresponds to
+                            // a declared destination field identifier.
+                            let var_name = ssa.def_of(v).var_name.as_deref();
+                            let matches = var_name.is_some_and(|vn| names.iter().any(|n| n == vn));
+                            if !matches {
+                                continue;
+                            }
+                        }
                         if let Some(taint) = state.get(v) {
                             if (taint.caps & sink_caps) != Cap::empty() {
                                 result.push((v, taint.caps, taint.origins.clone()));
@@ -5180,9 +5203,24 @@ fn is_abstract_safe_for_sink(
         return true;
     }
 
+    // HTML_ESCAPE type-only gate: an integer's decimal representation is
+    // always digits (with optional leading `-`), which never contain HTML
+    // metacharacters (`<`, `>`, `"`, `'`, `&`, `/`, `:`) in either text or
+    // attribute context.  The interval bound is irrelevant here — a large
+    // magnitude doesn't introduce metachars — so HTML_ESCAPE uses a
+    // type-only leaf check rather than the SQL/FILE/SHELL dual gate below.
+    if sink_caps.intersects(Cap::HTML_ESCAPE) {
+        if let Some(tf) = type_facts {
+            let leaves = trace_tainted_leaf_values(inst, state, ssa, cfg);
+            if !leaves.is_empty() && leaves.iter().all(|v| tf.is_int(*v)) {
+                return true;
+            }
+        }
+    }
+
     // Dual gate: SQL_QUERY / FILE_IO / SHELL_ESCAPE with proven Int type AND
-    // bounded interval.  Both conditions required: type proves the value IS an
-    // integer (not a string that happened to parse), interval proves it's
+    // bounded interval.  Both conditions required: type proves the value IS
+    // an integer (not a string that happened to parse), interval proves it's
     // bounded (not arbitrary).  Traces through Assign chains so
     // "const_string + tainted_int" is caught.  SHELL_ESCAPE is included
     // because a bounded integer's decimal representation can't contain shell
@@ -5245,6 +5283,18 @@ fn is_call_abstract_safe(
         let all_values: Vec<SsaValue> = args.iter().flat_map(|g| g.iter().copied()).collect();
         if !all_values.is_empty() && is_static_map_shell_safe(&all_values, static_map) {
             return true;
+        }
+    }
+
+    // HTML_ESCAPE type-only gate (same as non-Call path): digits never
+    // contain HTML metacharacters regardless of magnitude, so an integer
+    // payload is safe for an HTML sink without requiring a bounded interval.
+    if sink_caps.intersects(Cap::HTML_ESCAPE) {
+        if let Some(tf) = type_facts {
+            let leaves = trace_tainted_leaf_values(inst, state, ssa, cfg);
+            if !leaves.is_empty() && leaves.iter().all(|v| tf.is_int(*v)) {
+                return true;
+            }
         }
     }
 
@@ -5313,6 +5363,19 @@ fn trace_single_leaf(
             return;
         }
     };
+    // Numeric-length reads (`arr.length`, `map.size`, `vec.len()`, ...) yield
+    // an integer whose decimal representation cannot contain injection
+    // metacharacters.  Treat the result as a leaf so the dual-gate / HTML-
+    // escape type check sees the Int-typed length value rather than tracing
+    // through to the underlying container (which is typically String-typed
+    // and would defeat suppression).
+    if cfg
+        .node_weight(inst.cfg_node)
+        .is_some_and(|ni| ni.is_numeric_length_access)
+    {
+        leaves.push(v);
+        return;
+    }
     match &inst.op {
         SsaOp::Assign(uses) if uses.len() >= 2 => {
             // Numeric binary operations (bitwise, arithmetic except Add, comparisons)
@@ -5370,6 +5433,55 @@ fn trace_single_leaf(
                 }
             }
             if !found {
+                leaves.push(v);
+            }
+        }
+        SsaOp::Call { args, .. } => {
+            // For a Call whose node is not itself a Source (so the Call
+            // introduces no fresh attacker-controlled taint), trace through
+            // the arguments to find the upstream tainted leaves.  The Call's
+            // return taint is a function of its args under this
+            // classification, so the leaves are the Call's inputs.  Source-
+            // labeled Calls keep the default leaf behavior — tracing past
+            // them would erase the Source and over-suppress.
+            let is_source = cfg
+                .node_weight(inst.cfg_node)
+                .map(|ni| {
+                    ni.taint
+                        .labels
+                        .iter()
+                        .any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
+                })
+                .unwrap_or(false);
+            if is_source {
+                leaves.push(v);
+            } else {
+                let mut found = false;
+                for arg in args {
+                    for &u in arg {
+                        if state.get(u).is_some() {
+                            trace_single_leaf(u, state, ssa, cfg, leaves, depth + 1);
+                            found = true;
+                        }
+                    }
+                }
+                if !found {
+                    leaves.push(v);
+                }
+            }
+        }
+        SsaOp::Assign(uses) if uses.len() == 1 => {
+            // Single-use Assign: pass through to the source value's leaf.
+            // Covers the common pattern where SSA lowering emits both a Call
+            // form carrying a sink expression and an outer Assign that binds
+            // the Call's value to the defined variable — without this, the
+            // Assign's tracing stops at the wrapped Call (String-typed by
+            // default) and loses the Int / bounded leaf already known through
+            // the Call's args.
+            let u = uses[0];
+            if state.get(u).is_some() {
+                trace_single_leaf(u, state, ssa, cfg, leaves, depth + 1);
+            } else {
                 leaves.push(v);
             }
         }

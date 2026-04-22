@@ -1,4 +1,6 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule, SinkGate};
+use crate::labels::{
+    Cap, DataLabel, GateActivation, Kind, LabelRule, ParamConfig, RuntimeLabelRule, SinkGate,
+};
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
@@ -252,6 +254,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         payload_args: &[0],
         keyword_name: Some("shell"),
         dangerous_kwargs: &[],
+        activation: GateActivation::ValueMatch,
     },
     // subprocess.run(cmd, shell=True) — multi-kwarg gate using the new
     // presence-aware mechanism.  Payload is arg 1 (after receiver offset
@@ -266,6 +269,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         payload_args: &[0],
         keyword_name: None,
         dangerous_kwargs: &[("shell", &["True", "true"])],
+        activation: GateActivation::ValueMatch,
     },
     SinkGate {
         callee_matcher: "subprocess.call",
@@ -277,6 +281,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         payload_args: &[0],
         keyword_name: None,
         dangerous_kwargs: &[("shell", &["True", "true"])],
+        activation: GateActivation::ValueMatch,
     },
     SinkGate {
         callee_matcher: "subprocess.Popen",
@@ -288,6 +293,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         payload_args: &[0],
         keyword_name: None,
         dangerous_kwargs: &[("shell", &["True", "true"])],
+        activation: GateActivation::ValueMatch,
     },
 ];
 

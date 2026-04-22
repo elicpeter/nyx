@@ -1,0 +1,13 @@
+{
+  "description": "http.request({host: taintedHost, path: fixed}) — attacker-controlled destination. Must fire SSRF.",
+  "tags": ["taint", "ssrf", "http.request", "destination-aware", "object-config"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_match": true,
+      "line_range": [7, 16],
+      "notes": "req.query.host → http.request({host: target, ...}) — tainted destination field."
+    }
+  ]
+}

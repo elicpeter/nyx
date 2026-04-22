@@ -1,0 +1,15 @@
+{
+  "description": "Negative control for equality-with-constant narrowing: the boolean result of `input === 'admin'` is not tainted, but the original `input` variable is still directly concatenated into the res.send sink. Taint MUST still flow to the sink.",
+  "tags": ["taint", "xss", "express", "equality-narrowing"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [4, 8],
+      "evidence_contains": [],
+      "notes": "req.query.name flows directly into res.send via string concat; the adjacent equality check should not narrow this path"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "description": "Locally defined `escapeHtml` follows the common naming convention; it matches the JS Sanitizer(Cap::HTML_ESCAPE) label rule via suffix word-boundary. Calling it before an innerHTML sink should strip HTML_ESCAPE so the downstream concatenation is no longer an XSS.",
+  "tags": ["taint", "xss", "sanitizer", "local-helper", "escapeHtml"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "must_not_match": true,
+      "line_range": [14, 17],
+      "notes": "escapeHtml is matched as Sanitizer(Cap::HTML_ESCAPE); innerHTML of the escaped value should not fire taint-unsanitised-flow"
+    }
+  ]
+}

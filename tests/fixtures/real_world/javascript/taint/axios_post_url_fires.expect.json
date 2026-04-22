@@ -1,0 +1,15 @@
+{
+  "description": "axios.post(taintedUrl, fixedData) — destination URL is attacker-controlled. Must fire SSRF.",
+  "tags": ["taint", "ssrf", "axios", "destination-aware"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": true,
+      "line_range": [6, 10],
+      "evidence_contains": [],
+      "notes": "req.query.target → axios.post(target, ...) — tainted destination."
+    }
+  ]
+}

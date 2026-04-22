@@ -36,14 +36,59 @@ pub struct LabelRule {
 /// rather than silently aliasing position 0.
 pub const ALL_ARGS_PAYLOAD: &[usize] = &[usize::MAX];
 
-/// Argument-sensitive sink activation.  A call only becomes a sink when the
-/// constant value at `arg_index` matches `dangerous_values` or `dangerous_prefixes`.
-/// Unknown / dynamic arguments use the conservative policy (treat as dangerous).
+/// How a gate decides to activate.
+///
+/// A gate's activation determines whether the callee is treated as a sink at
+/// a given call site. `ValueMatch` inspects a literal/kwarg for dangerous
+/// values; `Destination` fires unconditionally on taint reaching declared
+/// destination-bearing positions or fields.
+#[derive(Debug, Clone, Copy)]
+pub enum GateActivation {
+    /// Legacy literal-value activation.  The gate fires when the constant
+    /// value at `arg_index` (or keyword arg, if `keyword_name`/`dangerous_kwargs`
+    /// is set) matches `dangerous_values` / `dangerous_prefixes`, or when that
+    /// value is dynamic/unknown (conservative).
+    ///
+    /// Used for argument-role-aware sinks like `setAttribute` (activation arg
+    /// selects which attribute is being set) and `parseFromString` (activation
+    /// arg selects the MIME type).
+    ValueMatch,
+    /// Destination-bearing flow activation.  The gate fires when taint reaches
+    /// a declared destination location at the call site — no literal
+    /// inspection, no prefix heuristic.
+    ///
+    /// For callees whose destination is a positional argument (e.g. `fetch`'s
+    /// first arg, `axios.post`'s first arg), set `object_destination_fields`
+    /// to `&[]`: the whole positional argument at each index in the gate's
+    /// `payload_args` is treated as the destination.
+    ///
+    /// For callees that accept a config/options object whose fields designate
+    /// the destination (`axios({url,baseURL,...})`, `http.request({host,path,port})`,
+    /// `got({url,prefixUrl,...})`, `undici.request({origin,path,...})`), list
+    /// the destination-bearing field names here.  When the positional arg is
+    /// an object literal at call time, sink taint checks are restricted to
+    /// identifiers found under those fields; non-destination fields (`body`,
+    /// `data`, `json`, `headers`, ...) are silenced.
+    ///
+    /// When the positional arg is not an object literal (plain string / ident
+    /// / expression), the whole arg is treated as the destination (same as
+    /// the empty-field case).  This keeps `http.request(urlString, cb)` and
+    /// `http.request({host,path}, cb)` both covered by a single gate.
+    Destination {
+        object_destination_fields: &'static [&'static str],
+    },
+}
+
+/// Argument-sensitive sink activation.  Whether a call becomes a sink is
+/// determined by the gate's [`GateActivation`] mode — literal-value matching
+/// for traditional role-selector APIs, or destination-flow activation for
+/// outbound HTTP clients and other APIs where a specific location in the
+/// call carries the attacker-controlled destination.
 ///
 /// `payload_args` specifies which argument positions carry the tainted payload.
 /// When non-empty, only variables from those argument positions are checked for
 /// taint at the sink.  When empty, all arguments are considered payloads
-/// (backward-compatible default).
+/// (backward-compatible default for `ValueMatch`).
 #[derive(Debug, Clone, Copy)]
 pub struct SinkGate {
     pub callee_matcher: &'static str,
@@ -73,6 +118,10 @@ pub struct SinkGate {
     /// wins (back-compat for existing single-kwarg gates).  `&[]` is the
     /// default and disables this branch.
     pub dangerous_kwargs: &'static [(&'static str, &'static [&'static str])],
+    /// Activation mode.  [`GateActivation::ValueMatch`] is the legacy default;
+    /// [`GateActivation::Destination`] is used for destination-flow modeling
+    /// (outbound HTTP clients etc.).
+    pub activation: GateActivation,
 }
 
 bitflags! {
@@ -837,14 +886,27 @@ pub fn classify_all(
     out
 }
 
+/// Result of a gated-sink classification.
+///
+/// `label` is the sink capability the callee contributes at this site.
+/// `payload_args` identifies positional args that carry the tainted payload
+/// (or [`ALL_ARGS_PAYLOAD`] for dynamic-activation conservative fallback).
+/// `object_destination_fields`, when non-empty, restricts sink-taint checks
+/// to identifiers found under those field names within an object-literal
+/// positional argument — used by destination-aware outbound-HTTP gates so
+/// `fetch({url, body})` fires only when taint reaches `url`, not `body`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GateMatch {
+    pub label: DataLabel,
+    pub payload_args: &'static [usize],
+    pub object_destination_fields: &'static [&'static str],
+}
+
 /// Classify a call against gated sink rules.
 ///
-/// Returns `Some((label, payload_args))` if the callee matches a gated rule AND the
-/// activation argument is dangerous (or unknown).  `payload_args` specifies which
-/// argument positions carry the tainted payload (empty = all args).
-///
-/// Returns `None` if callee doesn't match any gated rule, or matches but the
-/// activation argument is a known-safe constant.
+/// Returns `Some(GateMatch)` if the callee matches a gated rule AND the
+/// activation conditions fire.  Returns `None` if the callee doesn't match
+/// any gated rule, or matches but the activation is provably safe.
 ///
 /// `const_arg_at` extracts positional argument values.
 /// `const_keyword_arg` extracts keyword argument values (for languages like Python).
@@ -854,7 +916,7 @@ pub fn classify_gated_sink(
     const_arg_at: impl Fn(usize) -> Option<String>,
     const_keyword_arg: impl Fn(&str) -> Option<String>,
     kwarg_present: impl Fn(&str) -> bool,
-) -> Option<(DataLabel, &'static [usize])> {
+) -> Option<GateMatch> {
     let gates = GATED_REGISTRY.get(lang).or_else(|| {
         let key = lang.to_ascii_lowercase();
         GATED_REGISTRY.get(key.as_str())
@@ -867,6 +929,22 @@ pub fn classify_gated_sink(
         if !match_suffix_cs(callee_bytes, matcher, gate.case_sensitive) {
             continue;
         }
+
+        // Destination-flow activation: always fires.  Downstream filters sink
+        // taint checks to `payload_args` (and, for object-literal args, further
+        // to `object_destination_fields`).
+        if let GateActivation::Destination {
+            object_destination_fields,
+        } = gate.activation
+        {
+            return Some(GateMatch {
+                label: gate.label,
+                payload_args: gate.payload_args,
+                object_destination_fields,
+            });
+        }
+
+        // ── ValueMatch activation (legacy) ───────────────────────────────
 
         // Multi-kwarg gate path.  Takes precedence over positional / single-kwarg
         // inspection when populated.  Semantics are presence-aware: an absent
@@ -894,13 +972,21 @@ pub fn classify_gated_sink(
                 }
             }
             if any_dangerous {
-                return Some((gate.label, gate.payload_args));
+                return Some(GateMatch {
+                    label: gate.label,
+                    payload_args: gate.payload_args,
+                    object_destination_fields: &[],
+                });
             }
             if any_dynamic_present {
                 // Dynamic kwarg value — we can't prove safe. Conservatively
                 // flag every positional arg so the activation pathway isn't
                 // silently narrowed to the gate's declared `payload_args`.
-                return Some((gate.label, ALL_ARGS_PAYLOAD));
+                return Some(GateMatch {
+                    label: gate.label,
+                    payload_args: ALL_ARGS_PAYLOAD,
+                    object_destination_fields: &[],
+                });
             }
             return None; // all listed kwargs absent or safe-literal → suppress
         }
@@ -924,7 +1010,11 @@ pub fn classify_gated_sink(
                         .iter()
                         .any(|p| lower.starts_with(&p.to_ascii_lowercase()));
                 if is_dangerous {
-                    return Some((gate.label, gate.payload_args));
+                    return Some(GateMatch {
+                        label: gate.label,
+                        payload_args: gate.payload_args,
+                        object_destination_fields: &[],
+                    });
                 }
                 return None; // safe constant → suppress
             }
@@ -934,7 +1024,13 @@ pub fn classify_gated_sink(
             // where `userAttr` is user-controlled) is itself a vulnerability
             // path. Return ALL_ARGS_PAYLOAD so downstream sink scanning
             // considers every positional argument.
-            None => return Some((gate.label, ALL_ARGS_PAYLOAD)),
+            None => {
+                return Some(GateMatch {
+                    label: gate.label,
+                    payload_args: ALL_ARGS_PAYLOAD,
+                    object_destination_fields: &[],
+                });
+            }
         }
     }
     None
@@ -1312,7 +1408,11 @@ mod tests {
         );
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::HTML_ESCAPE),
+                payload_args: [1usize].as_slice(),
+                object_destination_fields: &[],
+            })
         );
     }
 
@@ -1327,7 +1427,11 @@ mod tests {
         );
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::HTML_ESCAPE), [1usize].as_slice()))
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::HTML_ESCAPE),
+                payload_args: [1usize].as_slice(),
+                object_destination_fields: &[],
+            })
         );
     }
 
@@ -1353,7 +1457,11 @@ mod tests {
             classify_gated_sink("javascript", "setAttribute", |_| None, no_kw, no_kw_present);
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::HTML_ESCAPE), ALL_ARGS_PAYLOAD))
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::HTML_ESCAPE),
+                payload_args: ALL_ARGS_PAYLOAD,
+                object_destination_fields: &[],
+            })
         );
     }
 
@@ -1379,8 +1487,7 @@ mod tests {
             no_kw,
             no_kw_present,
         );
-        let (_, payload_args) = result.unwrap();
-        assert_eq!(payload_args, &[1]);
+        assert_eq!(result.unwrap().payload_args, &[1]);
 
         // parseFromString: payload is arg 0
         let result = classify_gated_sink(
@@ -1396,8 +1503,7 @@ mod tests {
             no_kw,
             no_kw_present,
         );
-        let (_, payload_args) = result.unwrap();
-        assert_eq!(payload_args, &[0]);
+        assert_eq!(result.unwrap().payload_args, &[0]);
     }
 
     #[test]
@@ -1435,7 +1541,11 @@ mod tests {
         );
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+                payload_args: [0usize].as_slice(),
+                object_destination_fields: &[],
+            })
         );
     }
 
@@ -1464,7 +1574,11 @@ mod tests {
         let result = classify_gated_sink("python", "Popen", |_| None, |_| None, no_kw_present);
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), ALL_ARGS_PAYLOAD))
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+                payload_args: ALL_ARGS_PAYLOAD,
+                object_destination_fields: &[],
+            })
         );
     }
 
@@ -1488,7 +1602,11 @@ mod tests {
         );
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), [0usize].as_slice()))
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+                payload_args: [0usize].as_slice(),
+                object_destination_fields: &[],
+            })
         );
     }
 
@@ -1539,7 +1657,56 @@ mod tests {
         );
         assert_eq!(
             result,
-            Some((DataLabel::Sink(Cap::SHELL_ESCAPE), ALL_ARGS_PAYLOAD))
+            Some(GateMatch {
+                label: DataLabel::Sink(Cap::SHELL_ESCAPE),
+                payload_args: ALL_ARGS_PAYLOAD,
+                object_destination_fields: &[],
+            })
+        );
+    }
+
+    /// Destination-flow gate always fires; returns `object_destination_fields`
+    /// verbatim for the caller to apply object-literal field filtering.
+    #[test]
+    fn gated_sink_destination_positional_always_fires() {
+        // `fetch(url)` — arg 0 is the URL (positional destination) OR an
+        // object with a `url` field. The gate fires unconditionally, with
+        // `url` declared as the object-literal destination-field for the
+        // `fetch({url, body})` shape.
+        let result = classify_gated_sink(
+            "javascript",
+            "fetch",
+            |_| None, // no literal — Destination mode doesn't inspect it
+            no_kw,
+            no_kw_present,
+        );
+        let m = result.expect("fetch gate should fire");
+        assert_eq!(m.label, DataLabel::Sink(Cap::SSRF));
+        assert_eq!(m.payload_args, &[0]);
+        assert_eq!(m.object_destination_fields, &["url"]);
+    }
+
+    /// Destination gate with `object_destination_fields` surfaces them for
+    /// the CFG caller to drive object-literal field filtering.
+    #[test]
+    fn gated_sink_destination_object_fields_surfaced() {
+        // `http.request(opts, cb)` — opts is an object with destination fields.
+        let result = classify_gated_sink(
+            "javascript",
+            "http.request",
+            |_| None,
+            no_kw,
+            no_kw_present,
+        );
+        let m = result.expect("http.request gate should fire");
+        assert_eq!(m.label, DataLabel::Sink(Cap::SSRF));
+        assert_eq!(m.payload_args, &[0]);
+        assert!(
+            m.object_destination_fields
+                .iter()
+                .any(|&f| f == "host" || f == "hostname"),
+            "expected host/hostname in destination fields, got {:?}",
+            m.object_destination_fields,
         );
     }
 

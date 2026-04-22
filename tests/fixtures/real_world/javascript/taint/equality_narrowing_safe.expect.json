@@ -1,0 +1,15 @@
+{
+  "description": "Equality-with-constant narrowing: req.query.pathname compared against string literals produces a boolean; the ternary selects between two static HTML strings, so the innerHTML/res.send receives only attacker-independent content. Should NOT fire taint-unsanitised-flow.",
+  "tags": ["taint", "xss", "express", "equality-narrowing"],
+  "modes": ["full"],
+  "expected": [
+    {
+      "rule_id": "taint-unsanitised-flow",
+      "severity": null,
+      "must_match": false,
+      "line_range": [4, 11],
+      "evidence_contains": [],
+      "notes": "boolean result of `pathname === '/login'` carries no taint; ternary branches are static literals; banner is clean at res.send"
+    }
+  ]
+}

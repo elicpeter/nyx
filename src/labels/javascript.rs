@@ -1,4 +1,6 @@
-use crate::labels::{Cap, DataLabel, Kind, LabelRule, ParamConfig, RuntimeLabelRule, SinkGate};
+use crate::labels::{
+    Cap, DataLabel, GateActivation, Kind, LabelRule, ParamConfig, RuntimeLabelRule, SinkGate,
+};
 use crate::utils::project::{DetectedFramework, FrameworkContext};
 use phf::{Map, phf_map};
 
@@ -80,6 +82,16 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
         case_sensitive: false,
     },
+    // Conventional project-local HTML escapers.  Suffix word-boundary match
+    // fires on bare calls to locally defined helpers (`function escapeHtml(x)`
+    // invoked as `escapeHtml(x)`) across codebases that follow the common
+    // naming convention.  Case-insensitive so `EscapeHtml` / `escapeHTML`
+    // / `safeHTML` all qualify.
+    LabelRule {
+        matchers: &["escapeHtml", "escapeHTML", "htmlEscape", "safeHtml"],
+        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        case_sensitive: false,
+    },
     // ─────────── Sinks ─────────────
     LabelRule {
         matchers: &["eval"],
@@ -120,21 +132,16 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sink(Cap::SHELL_ESCAPE),
         case_sensitive: true,
     },
-    LabelRule {
-        matchers: &[
-            "fetch",
-            "axios",
-            "axios.get",
-            "axios.post",
-            "axios.request",
-            "got",
-            "undici.request",
-            "http.request",
-            "https.request",
-        ],
-        label: DataLabel::Sink(Cap::SSRF),
-        case_sensitive: false,
-    },
+    // ── Outbound HTTP clients — modeled as destination-aware gated sinks ──
+    // Flat-Sink modeling of fetch/axios/got/undici/http.request was producing
+    // a dominant FP class where any tainted body/payload arg appeared as SSRF
+    // (e.g. `fetch("/api/telemetry", { body: navigator.userAgent })`). SSRF
+    // semantics require attacker control over the *destination*, not the
+    // payload. The gated entries in `GATED_SINKS` below narrow activation to
+    // URL / host / path / origin arguments or object fields. Taint flowing
+    // only to body / data / json / headers is no longer flagged as SSRF —
+    // cross-boundary data-exfiltration detection is a separate future
+    // capability (`Cap::DATA_EXFIL`, not yet introduced).
     // Express response sinks
     LabelRule {
         matchers: &["res.send", "res.json"],
@@ -270,6 +277,7 @@ pub static GATED_SINKS: &[SinkGate] = &[
         payload_args: &[1],
         keyword_name: None,
         dangerous_kwargs: &[],
+        activation: GateActivation::ValueMatch,
     },
     SinkGate {
         callee_matcher: "parseFromString",
@@ -281,6 +289,205 @@ pub static GATED_SINKS: &[SinkGate] = &[
         payload_args: &[0],
         keyword_name: None,
         dangerous_kwargs: &[],
+        activation: GateActivation::ValueMatch,
+    },
+    // ── Outbound HTTP clients (SSRF) ──────────────────────────────────────
+    //
+    // Policy: SSRF fires only when taint reaches the destination-bearing
+    // argument or object field (URL / host / path / origin). Taint flowing
+    // only to body / data / json / headers / payload is silenced. See the
+    // commentary at the top of RULES for the rationale.
+    //
+    // `fetch(input, init)` — arg 0 can be a URL string OR a Request/config
+    // object with `url`. Per WHATWG Fetch, when `input` is a dictionary, the
+    // URL field is canonically `url`. Init-object body/headers at arg 1 are
+    // *not* destination-bearing.
+    SinkGate {
+        callee_matcher: "fetch",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["url"],
+        },
+    },
+    // `axios(config)` / `axios.request(config)` — config object exposes
+    // `url` and `baseURL`. Body-ish fields (`data`, `params`, `headers`)
+    // are excluded.
+    SinkGate {
+        callee_matcher: "axios",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["url", "baseURL"],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios.request",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["url", "baseURL"],
+        },
+    },
+    // `axios.get(url[, config])` — arg 0 is URL; arg 1 is config.
+    SinkGate {
+        callee_matcher: "axios.get",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    // `axios.post(url, data[, config])` — arg 0 is URL; `data` at arg 1 is
+    // the request body and must NOT activate SSRF.
+    SinkGate {
+        callee_matcher: "axios.post",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    // `axios.put / axios.patch / axios.delete` follow the same shape —
+    // (url, data?, config?). Keep the model consistent across verbs.
+    SinkGate {
+        callee_matcher: "axios.put",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios.patch",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    SinkGate {
+        callee_matcher: "axios.delete",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &[],
+        },
+    },
+    // `got(url[, options])` / `got(options)` — options exposes `url` and
+    // `prefixUrl`. Body-ish fields (`body`, `json`, `form`, `searchParams`,
+    // `headers`) are excluded.
+    SinkGate {
+        callee_matcher: "got",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["url", "prefixUrl"],
+        },
+    },
+    // `undici.request(url | opts[, opts])` — opts exposes `origin` and
+    // `path`. Body-ish fields (`body`, `headers`) are excluded.
+    SinkGate {
+        callee_matcher: "undici.request",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["origin", "path"],
+        },
+    },
+    // Node `http.request(options[, cb])` / `https.request(options[, cb])` —
+    // options exposes `host`, `hostname`, `path`, `protocol`, `port`,
+    // `origin`. Body is sent via `.write()`/`.end()` on the returned
+    // ClientRequest, so it never appears as a positional arg here.
+    // Arg 0 may also be a URL string — the "whole arg is destination"
+    // fallback (triggered when arg 0 is not an object literal) covers that.
+    SinkGate {
+        callee_matcher: "http.request",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
+        },
+    },
+    SinkGate {
+        callee_matcher: "https.request",
+        arg_index: 0,
+        dangerous_values: &[],
+        dangerous_prefixes: &[],
+        label: DataLabel::Sink(Cap::SSRF),
+        case_sensitive: false,
+        payload_args: &[0],
+        keyword_name: None,
+        dangerous_kwargs: &[],
+        activation: GateActivation::Destination {
+            object_destination_fields: &["host", "hostname", "path", "protocol", "port", "origin"],
+        },
     },
 ];
 

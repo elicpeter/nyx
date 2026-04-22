@@ -27,9 +27,19 @@ pub fn copy_propagate(body: &mut SsaBody, cfg: &Cfg) -> (usize, HashMap<SsaValue
                     let info = &cfg[inst.cfg_node];
                     // Skip if the node has labels — sanitizers, sources, sinks
                     // have semantic meaning that must be preserved.
-                    if info.taint.labels.is_empty() {
-                        replace_map.insert(inst.value, src);
+                    if !info.taint.labels.is_empty() {
+                        continue;
                     }
+                    // Skip numeric-length reads (`arr.length`, `map.size`, etc.):
+                    // the destination is Int-typed (a derived property of the
+                    // source) while the source is typically String/Object/
+                    // Unknown.  Copy-propagating through this Assign would
+                    // erase the Int type fact and defeat HTML_ESCAPE / SQL /
+                    // FILE_IO / SHELL sink suppression.
+                    if info.is_numeric_length_access {
+                        continue;
+                    }
+                    replace_map.insert(inst.value, src);
                 }
             }
         }

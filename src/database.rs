@@ -534,6 +534,13 @@ pub mod index {
         }
 
         /// Replace all issues for `file_id` with the supplied set.
+        ///
+        /// Dedups rows by the same PRIMARY KEY the `issues` table enforces
+        /// (`file_id, rule_id, line, col`) to defend against upstream bugs
+        /// that produce same-keyed diagnostics with differing severity or
+        /// cosmetic fields. The first-seen row wins; upstream
+        /// [`crate::ast::ParsedSource::finalize_diags`] sorts so that high
+        /// severity comes first, and this fallback preserves that ordering.
         pub fn replace_issues<'a>(
             &mut self,
             file_id: i64,
@@ -547,7 +554,12 @@ pub mod index {
                     "INSERT INTO issues (file_id, rule_id, severity, line, col)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                 )?;
+                let mut seen: std::collections::HashSet<(String, i64, i64)> =
+                    std::collections::HashSet::new();
                 for iss in issues {
+                    if !seen.insert((iss.rule_id.to_string(), iss.line, iss.col)) {
+                        continue;
+                    }
                     stmt.execute(params![
                         file_id,
                         iss.rule_id,

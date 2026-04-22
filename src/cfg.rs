@@ -128,6 +128,23 @@ pub struct CallMeta {
     /// analysis (and future literal-aware passes) so they don't need the
     /// source bytes.
     pub arg_string_literals: Vec<Option<String>>,
+    /// Destination-aware sink filter for outbound-HTTP gates.
+    ///
+    /// When `Some(names)`, the SSA sink scan restricts taint checks to
+    /// identifiers whose `var_name` matches one of `names`.  Populated by
+    /// gated sinks whose activation is [`crate::labels::GateActivation::Destination`]
+    /// with `object_destination_fields` set and whose positional destination
+    /// arg is an object literal: CFG walks the object literal, collects
+    /// identifiers from the named destination fields (url, host, path, …),
+    /// and stores them here so `fetch({url: taintedUrl, body: fixed})` fires
+    /// while `fetch({url: fixed, body: taintedData})` does not.
+    ///
+    /// Takes priority over `sink_payload_args` in the SSA sink scan: when a
+    /// call has an object-literal destination arg, only idents under the
+    /// listed fields may contribute sink findings — not every ident in the
+    /// positional slot.
+    #[serde(default)]
+    pub destination_uses: Option<Vec<String>>,
 }
 
 /// Taint-classification and variable-flow metadata.
@@ -224,6 +241,23 @@ pub struct NodeInfo {
     /// SSA value so SSRF prefix-suppression can fire for values constructed
     /// from template literals.
     pub string_prefix: Option<String>,
+    /// True when this node is a binary equality/inequality expression whose
+    /// operator is `==` / `!=` / `===` / `!==` and exactly one operand is a
+    /// syntactic literal (string / number / null / boolean). The SSA taint
+    /// transfer uses this to suppress boolean-result taint propagation: the
+    /// boolean outcome of `x === 'literal'` carries no attacker-controlled
+    /// data, so downstream branches on it should not inherit x's caps.
+    pub is_eq_with_const: bool,
+    /// True when this node reads a numeric-length property on a container:
+    /// `arr.length`, `map.size`, `buf.byteLength`, `items.count`, `vec.len()`
+    /// — either as a pure property access or as a zero-arg method call.
+    /// Populated by inspecting the AST in `push_node` across JS/TS, Python,
+    /// Ruby, Java, Rust, PHP, and C/C++ idioms where these accessors return
+    /// an integer.  Consumed by the type-fact analysis (`ssa::type_facts`)
+    /// to infer `TypeKind::Int`, which drives HTML_ESCAPE / SQL_QUERY /
+    /// FILE_IO / SHELL_ESCAPE sink suppression for provably numeric
+    /// payloads.
+    pub is_numeric_length_access: bool,
 }
 
 impl NodeInfo {
@@ -1410,6 +1444,103 @@ fn find_call_node<'a>(n: Node<'a>, lang: &str) -> Option<Node<'a>> {
             None
         }
     }
+}
+
+/// Extract identifiers from specified fields of an object-literal argument.
+///
+/// Returns:
+/// * `Some(names)` if the positional argument at `index` IS an object literal
+///   (JS `object`, TS `object`, Python `dictionary`). `names` contains
+///   identifiers lifted from pair values whose key matches any entry in
+///   `fields` (case-sensitive; JS/TS identifiers). When no destination-field
+///   pairs are present, returns `Some(vec![])` — the sink is effectively
+///   silenced because no destination identifier exists.
+/// * `None` if the arg is absent, is not an object literal (plain string
+///   / ident / expression), or has splat/spread children that break static
+///   per-field reasoning. Callers fall back to the whole-arg positional
+///   filter in this case.
+fn extract_destination_field_idents(
+    call_node: Node,
+    arg_index: usize,
+    fields: &[&str],
+    code: &[u8],
+) -> Option<Vec<String>> {
+    if fields.is_empty() {
+        return None;
+    }
+    let args = call_node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let arg = args.named_children(&mut cursor).nth(arg_index)?;
+
+    // Only object / dict literal forms carry per-field destination semantics.
+    // For anything else (identifier, member expression, string, call), return
+    // None so the caller treats the whole arg as destination.
+    if !matches!(arg.kind(), "object" | "dictionary") {
+        return None;
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let mut c = arg.walk();
+    for child in arg.named_children(&mut c) {
+        match child.kind() {
+            // `spread_element` (JS/TS) / `dictionary_splat` (Python): we can't
+            // statically attribute spread contents to specific fields, so
+            // bail out — caller falls back to the whole-arg filter, matching
+            // the conservative posture used by arg_uses for splats.
+            "spread_element" | "dictionary_splat" => {
+                return None;
+            }
+            // Shorthand property `{ url }` binds the `url` field to a binding
+            // also named `url`. Treat as destination iff the name matches.
+            "shorthand_property_identifier" | "shorthand_property_identifier_pattern" => {
+                let Some(name) = text_of(child, code) else {
+                    continue;
+                };
+                if fields.iter().any(|&f| f == name) && !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+            "pair" => {
+                let Some(key_node) = child.child_by_field_name("key") else {
+                    continue;
+                };
+                let key_text = match key_node.kind() {
+                    // Strip quotes from string-literal keys so `"url"` and `url`
+                    // both match the configured field list.
+                    "string" | "string_literal" => text_of(key_node, code).map(|raw| {
+                        if raw.len() >= 2 {
+                            raw[1..raw.len() - 1].to_string()
+                        } else {
+                            raw
+                        }
+                    }),
+                    // Computed keys like `[someVar]` can't be statically
+                    // resolved — skip (conservative: not a destination field).
+                    "computed_property_name" => continue,
+                    _ => text_of(key_node, code),
+                };
+                let Some(key) = key_text else {
+                    continue;
+                };
+                if !fields.iter().any(|&f| f == key) {
+                    continue;
+                }
+                let Some(val_node) = child.child_by_field_name("value") else {
+                    continue;
+                };
+                let mut idents: Vec<String> = Vec::new();
+                let mut paths: Vec<String> = Vec::new();
+                collect_idents_with_paths(val_node, code, &mut idents, &mut paths);
+                for name in paths.into_iter().chain(idents.into_iter()) {
+                    if !out.contains(&name) {
+                        out.push(name);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(out)
 }
 
 /// Extract the string-literal content at argument position `index` (0-based).
@@ -2775,6 +2906,229 @@ fn extract_bin_op_const(ast: Node, lang: &str, code: &[u8]) -> Option<i64> {
     try_parse_number(left, code).or_else(|| try_parse_number(right, code))
 }
 
+/// Detect whether the expression(s) in `ast` produce a boolean-only result
+/// rooted in equality/inequality comparisons against literals.
+///
+/// True when `ast` is (or wraps) either:
+/// - a direct equality comparison (`==` / `!=` / `===` / `!==`) with exactly
+///   one literal operand, or
+/// - a compound boolean expression (`&&`, `||`, `!`, `and`, `or`, `not`)
+///   whose every leaf is a qualifying equality comparison.
+///
+/// Covers JS/TS `binary_expression`, Python `comparison_operator`, Ruby
+/// `binary`, and languages that share the `binary_expression` kind (Java, Go,
+/// PHP, C/C++, Rust). Compound chains like `a === 'x' || b === 'y'` qualify
+/// because their result is provably a boolean even though the taint engine
+/// sees all leaf operands on a single CFG Assign node.
+///
+/// The SSA taint transfer uses this flag to suppress propagation of operand
+/// taint into the boolean result: the outcome carries no attacker-controlled
+/// data, so downstream ternaries/branches should not inherit operand caps.
+fn detect_eq_with_const(ast: Node, lang: &str) -> bool {
+    // Prefer inspecting the RHS of assignment-like wrappers, so flags on e.g.
+    // `var ok = a === 'x' || b === 'y'` examine the full right-hand side.
+    let target = assignment_rhs(ast).unwrap_or(ast);
+    is_boolean_eq_const_tree(target, lang)
+}
+
+/// Recursive predicate: does `node` evaluate to a boolean whose value is
+/// determined solely by equality comparisons against literals, joined by
+/// boolean operators? Parentheses, `!`/`not`, and `&&`/`||`/`and`/`or` are
+/// transparent; every leaf must be a direct equality-with-constant.
+fn is_boolean_eq_const_tree(node: Node, lang: &str) -> bool {
+    match node.kind() {
+        "parenthesized_expression" => node
+            .named_child(0)
+            .is_some_and(|c| is_boolean_eq_const_tree(c, lang)),
+        "unary_expression" | "not_operator" => {
+            // `!` / `not` — operator is an anonymous child; operand is the
+            // single named child.
+            let mut w = node.walk();
+            let mut op_is_not = false;
+            for child in node.children(&mut w) {
+                if !child.is_named() && matches!(child.kind(), "!" | "not") {
+                    op_is_not = true;
+                    break;
+                }
+            }
+            if !op_is_not {
+                return false;
+            }
+            node.named_child(0)
+                .is_some_and(|c| is_boolean_eq_const_tree(c, lang))
+        }
+        "boolean_operator" => {
+            // Python `and`/`or` — operands are named children.
+            let l = node.named_child(0);
+            let r = node.named_child(1);
+            l.is_some_and(|n| is_boolean_eq_const_tree(n, lang))
+                && r.is_some_and(|n| is_boolean_eq_const_tree(n, lang))
+        }
+        _ => {
+            if !is_binary_expr_kind(node.kind(), lang) {
+                return false;
+            }
+            let op = binary_operator_token(node);
+            match op.as_deref() {
+                Some("&&") | Some("||") | Some("and") | Some("or") => node
+                    .named_child(0)
+                    .is_some_and(|l| is_boolean_eq_const_tree(l, lang))
+                    && node
+                        .named_child(1)
+                        .is_some_and(|r| is_boolean_eq_const_tree(r, lang)),
+                Some("==") | Some("===") | Some("!=") | Some("!==") => {
+                    let Some(left) = node.named_child(0) else {
+                        return false;
+                    };
+                    let Some(right) = node.named_child(1) else {
+                        return false;
+                    };
+                    let left_lit = is_equality_literal_kind(left.kind());
+                    let right_lit = is_equality_literal_kind(right.kind());
+                    // Exactly one side literal. Both-literal is constant-fold
+                    // territory; neither-literal is a generic identity check
+                    // whose operands may both be tainted.
+                    left_lit ^ right_lit
+                }
+                _ => false,
+            }
+        }
+    }
+}
+
+/// Return the anonymous operator token text of a binary expression node.
+fn binary_operator_token(node: Node) -> Option<String> {
+    let mut w = node.walk();
+    for child in node.children(&mut w) {
+        if !child.is_named() {
+            return Some(child.kind().to_string());
+        }
+    }
+    None
+}
+
+/// Property names whose value is provably an integer across the supported
+/// languages: JS/TS `arr.length` (Array/String/TypedArray), `map.size`
+/// (Map/Set), `buffer.byteLength` (ArrayBuffer/TypedArray); Python `.count`
+/// (`str.count`, `list.count`, `tuple.count` — all return int); Ruby `.length`
+/// / `.size` / `.count`; Java `.size()` / `.length()`; Rust `.len()`.  This
+/// list is intentionally narrow — only properties whose semantics across every
+/// host we scan return an integer, so the `TypeKind::Int` fact is sound.
+fn is_numeric_length_property(name: &str) -> bool {
+    matches!(name, "length" | "size" | "byteLength" | "count" | "len")
+}
+
+/// Detect whether this CFG node is a read of a numeric-length property on a
+/// container.  Covers both pure property access (`arr.length` as the RHS of
+/// an assignment or declaration) and zero-argument method calls
+/// (`list.size()`, `vec.len()`).  Returns `true` when the relevant value
+/// expression is a `member_expression` / `attribute` / `selector_expression`
+/// / `field_expression` whose property leaf matches
+/// [`is_numeric_length_property`], or a zero-arg call around such an
+/// expression.
+///
+/// Consumed by the type-fact analysis (`ssa::type_facts::analyze_types`) to
+/// infer `TypeKind::Int` on the defined value so sink-cap suppression can
+/// treat `"row " + arr.length` as a non-injectable payload.
+fn detect_numeric_length_access(ast: Node, _lang: &str, code: &[u8]) -> bool {
+    // Pull the value expression for variable declarations / assignments.
+    // Other node shapes (e.g. plain member-expression reads) are checked
+    // as-is.
+    let target = ast
+        .child_by_field_name("value")
+        .or_else(|| ast.child_by_field_name("right"))
+        .or_else(|| {
+            let mut cursor = ast.walk();
+            ast.named_children(&mut cursor)
+                .find(|c| matches!(c.kind(), "variable_declarator" | "init_declarator"))
+                .and_then(|d| {
+                    d.child_by_field_name("value")
+                        .or_else(|| d.child_by_field_name("initializer"))
+                })
+        })
+        .unwrap_or(ast);
+    is_numeric_length_access_expr(target, code)
+}
+
+fn is_numeric_length_access_expr(node: Node, code: &[u8]) -> bool {
+    match node.kind() {
+        "member_expression"
+        | "attribute"
+        | "selector_expression"
+        | "field_expression"
+        | "member_access_expression" => {
+            let prop = node
+                .child_by_field_name("property")
+                .or_else(|| node.child_by_field_name("attribute"))
+                .or_else(|| node.child_by_field_name("field"))
+                .or_else(|| node.child_by_field_name("name"));
+            prop.and_then(|p| text_of(p, code))
+                .is_some_and(|t| is_numeric_length_property(&t))
+        }
+        // Zero-arg method call: `list.size()` / `vec.len()` / `str.length()`.
+        "call_expression" | "method_invocation" | "method_call_expression" | "call" => {
+            let args = node
+                .child_by_field_name("arguments")
+                .or_else(|| node.child_by_field_name("argument_list"));
+            let arity = args
+                .map(|a| {
+                    let mut c = a.walk();
+                    a.named_children(&mut c).count()
+                })
+                .unwrap_or(0);
+            if arity != 0 {
+                return false;
+            }
+            let callee = node
+                .child_by_field_name("function")
+                .or_else(|| node.child_by_field_name("name"))
+                .or_else(|| node.child_by_field_name("method"));
+            match callee {
+                Some(c) => is_numeric_length_access_expr(c, code),
+                None => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Literal kinds accepted for equality-with-constant detection. Conservatively
+/// limited to scalar literals across the supported tree-sitter grammars.
+fn is_equality_literal_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        // Strings
+        "string"
+            | "string_literal"
+            | "interpreted_string_literal"
+            | "raw_string_literal"
+            | "encapsed_string"
+            // Numbers
+            | "number"
+            | "integer"
+            | "float"
+            | "integer_literal"
+            | "float_literal"
+            | "number_literal"
+            | "decimal_integer_literal"
+            | "hex_integer_literal"
+            | "octal_integer_literal"
+            | "binary_integer_literal"
+            | "decimal_floating_point_literal"
+            | "hex_floating_point_literal"
+            // Null / nil / none / undefined
+            | "null"
+            | "null_literal"
+            | "nil"
+            | "none"
+            | "undefined"
+            // Booleans
+            | "true"
+            | "false"
+            | "boolean_literal"
+    )
+}
+
 /// Find a single binary expression node at or directly under `ast`.
 ///
 /// Returns `None` if there are zero or multiple binary expressions
@@ -3128,17 +3482,41 @@ fn push_node<'a>(
 
     // Gated sinks: argument-sensitive classification (e.g., setAttribute).
     // Runs for any node containing a classifiable call, regardless of StmtKind.
+    //
+    // Prefer the shallow `call_ast` from `find_call_node` when available, but
+    // fall back to a deeper walk (up to 4 levels) so wrapped calls still reach
+    // the gate. This is necessary for forms like `var r = await fetch(url)`
+    // (variable_declaration > variable_declarator > await_expression >
+    // call_expression) where the call sits at depth 3. When using the deeper
+    // walker we must also derive the callee text from the inner call node, not
+    // the outer statement `text`, so gate matcher names like `"fetch"` hit.
     let mut sink_payload_args: Option<Vec<usize>> = None;
+    let mut destination_uses: Option<Vec<String>> = None;
     if labels.is_empty() {
-        if let Some(cn) = call_ast {
-            if let Some((gated_label, payload)) = classify_gated_sink(
+        let gate_call = call_ast.or_else(|| find_call_node_deep(ast, lang, 4));
+        if let Some(cn) = gate_call {
+            let gate_callee_text = if call_ast.is_some() {
+                text.clone()
+            } else {
+                // Inner call reached via wrapper — use the call-expression's
+                // function name directly. Falls back to `text` so non-call-
+                // expression kinds (method calls, Ruby `call` nodes, macros)
+                // still have a usable callee string.
+                cn.child_by_field_name("function")
+                    .or_else(|| cn.child_by_field_name("method"))
+                    .or_else(|| cn.child_by_field_name("name"))
+                    .and_then(|f| text_of(f, code))
+                    .unwrap_or_else(|| text.clone())
+            };
+            if let Some(gm) = classify_gated_sink(
                 lang,
-                &text,
+                &gate_callee_text,
                 |idx| extract_const_string_arg(cn, idx, code),
                 |kw| extract_const_keyword_arg(cn, kw, code),
                 |kw| has_keyword_arg(cn, kw, code),
             ) {
-                labels.push(gated_label);
+                labels.push(gm.label);
+                let payload = gm.payload_args;
                 if payload == crate::labels::ALL_ARGS_PAYLOAD {
                     // Dynamic-activation sentinel: every positional arg is
                     // conservatively a payload. Expand using the actual call
@@ -3149,6 +3527,32 @@ fn push_node<'a>(
                     }
                 } else if !payload.is_empty() {
                     sink_payload_args = Some(payload.to_vec());
+                }
+
+                // Destination-aware gates (outbound HTTP clients): when the
+                // gate declares destination-bearing object fields and the
+                // positional destination arg at call time is an object
+                // literal, narrow sink-taint checks to identifiers under
+                // those fields. Non-object arg forms (string / ident /
+                // expression) return `None` from the extractor and fall
+                // through to whole-arg positional filtering.
+                //
+                // We only populate destination_uses for the FIRST payload
+                // position that is an object literal. For outbound HTTP
+                // gates `payload_args` is always a single position (arg 0)
+                // so this is exact.
+                if !gm.object_destination_fields.is_empty() {
+                    for &pos in gm.payload_args {
+                        if let Some(names) = extract_destination_field_idents(
+                            cn,
+                            pos,
+                            gm.object_destination_fields,
+                            code,
+                        ) {
+                            destination_uses = Some(names);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -3424,6 +3828,7 @@ fn push_node<'a>(
             sink_payload_args,
             kwargs,
             arg_string_literals,
+            destination_uses,
         },
         taint: TaintMeta {
             labels,
@@ -3449,6 +3854,8 @@ fn push_node<'a>(
         in_defer: false,
         parameterized_query,
         string_prefix,
+        is_eq_with_const: detect_eq_with_const(ast, lang),
+        is_numeric_length_access: detect_numeric_length_access(ast, lang, code),
     });
 
     debug!(
@@ -4919,6 +5326,7 @@ fn build_switch<'a>(
             g[header].taint.labels.clear();
             g[header].call.callee = None;
             g[header].call.sink_payload_args = None;
+            g[header].call.destination_uses = None;
             connect_all(g, &chain_preds, header, EdgeKind::Seq);
             // If there was a previous header in the chain, that header's
             // False edge needs to land on this header.
@@ -8258,6 +8666,7 @@ mod cfg_tests {
         assert!(n.bin_op_const.is_none());
         assert!(!n.managed_resource);
         assert!(!n.in_defer);
+        assert!(!n.is_eq_with_const);
     }
 
     #[test]
@@ -8409,6 +8818,7 @@ mod cfg_tests {
                 sink_payload_args: Some(vec![1, 2]),
                 kwargs: vec![("shell".into(), vec!["True".into()])],
                 arg_string_literals: vec![Some("lit".into())],
+                destination_uses: None,
             },
             taint: TaintMeta {
                 labels: {
@@ -9256,6 +9666,83 @@ fn base_is_call() -> String {
             caps.is_empty(),
             "Non-identifier chain base must not earn credit; got {:?}",
             caps
+        );
+    }
+
+    // ── is_numeric_length_access detector ─────────────────────────────────
+
+    fn find_node_defining<'a>(cfg: &'a Cfg, var: &str) -> Option<&'a NodeInfo> {
+        cfg.node_indices()
+            .map(|i| &cfg[i])
+            .find(|n| n.taint.defines.as_deref() == Some(var))
+    }
+
+    #[test]
+    fn numeric_length_access_detected_on_js_property_read() {
+        // `var count = items.length` — property access on a member expression
+        // should mark the CFG node as a numeric-length access so the
+        // type-fact analysis infers TypeKind::Int for `count`.
+        let src = br#"function f(items) {
+            var count = items.length;
+            return count;
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        let node = find_node_defining(&cfg, "count").expect("defines count");
+        assert!(
+            node.is_numeric_length_access,
+            "Expected is_numeric_length_access=true for `count = items.length`"
+        );
+    }
+
+    #[test]
+    fn numeric_length_access_detected_on_js_zero_arg_method_call() {
+        // `var n = str.length()` — zero-arg method call form (uncommon in JS
+        // but present in other languages).  Detector should unwrap a
+        // zero-arg call around a member expression.
+        let src = br#"function f(list) {
+            var n = list.size();
+            return n;
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        let node = find_node_defining(&cfg, "n").expect("defines n");
+        assert!(
+            node.is_numeric_length_access,
+            "Expected is_numeric_length_access=true for `n = list.size()`"
+        );
+    }
+
+    #[test]
+    fn numeric_length_access_ignores_unrelated_properties() {
+        // `var v = arr.foo` — arbitrary property reads must not be flagged.
+        let src = br#"function f(arr) {
+            var v = arr.foo;
+            return v;
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        let node = find_node_defining(&cfg, "v").expect("defines v");
+        assert!(
+            !node.is_numeric_length_access,
+            "is_numeric_length_access must stay false for unrelated property `arr.foo`"
+        );
+    }
+
+    #[test]
+    fn numeric_length_access_ignores_method_calls_with_args() {
+        // `var r = s.indexOf('x')` — the detector must reject any call with
+        // positional arguments because those aren't pure length reads.
+        let src = br#"function f(s) {
+            var r = s.indexOf('x');
+            return r;
+        }"#;
+        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+        let node = find_node_defining(&cfg, "r").expect("defines r");
+        assert!(
+            !node.is_numeric_length_access,
+            "is_numeric_length_access must stay false for arg-bearing calls"
         );
     }
 }
