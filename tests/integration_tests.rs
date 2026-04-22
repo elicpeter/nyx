@@ -722,3 +722,189 @@ fn python_subprocess_shell_default_safe() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
+
+// ── FP guard fixtures (Phase 4b.2) ────────────────────────────────────────
+//
+// Each fixture below is a small source file exercising a pattern where
+// the analyser must NOT emit a taint-unsanitised-flow (with the single
+// exception of `fp_guard_call_site_specialization_py`, which requires
+// one finding only on the tainted call-site).  The fixtures are grouped
+// into five categories so a single regression cannot silently erase a
+// whole category's coverage.
+
+/// FP guard — sanitizer edge case: hand-rolled HTML escape covers
+/// document.write sink.
+#[test]
+fn fp_guard_sanitizer_html_escape_js() {
+    let dir = fixture_path("fp_guards/sanitizer_html_escape_js");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — sanitizer edge case: shlex.quote with shell metacharacters.
+#[test]
+fn fp_guard_sanitizer_shlex_quote_py() {
+    let dir = fixture_path("fp_guards/sanitizer_shlex_quote_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — sanitizer edge case: encodeURIComponent on a URL argument.
+#[test]
+fn fp_guard_sanitizer_url_encode_js() {
+    let dir = fixture_path("fp_guards/sanitizer_url_encode_js");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — sanitizer edge case: multi-step chain (`.strip()` then
+/// `shlex.quote`) preserves the final SHELL_ESCAPE cap.
+#[test]
+fn fp_guard_sanitizer_multi_step_py() {
+    let dir = fixture_path("fp_guards/sanitizer_multi_step_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — type-driven suppression: `int()` parse of env port
+/// before `socket.bind`.
+#[test]
+fn fp_guard_types_int_port_py() {
+    let dir = fixture_path("fp_guards/types_int_port_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — type-driven suppression: `int()` parse guarantees SQL
+/// concat is decimal-only.
+#[test]
+fn fp_guard_types_int_id_sql_py() {
+    let dir = fixture_path("fp_guards/types_int_id_sql_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — type-driven suppression: Go `strconv.Atoi` covers
+/// Cap::all on the resulting int.
+#[test]
+fn fp_guard_types_parse_int_go() {
+    let dir = fixture_path("fp_guards/types_parse_int_go");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — type-driven suppression: bool comparison never reaches
+/// a string-context sink.
+#[test]
+fn fp_guard_types_bool_flag_py() {
+    let dir = fixture_path("fp_guards/types_bool_flag_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — struct-field isolation: JS object `safeField` used at
+/// sink, tainted `unsafeField` unused.
+#[test]
+fn fp_guard_fields_object_isolation_js() {
+    let dir = fixture_path("fp_guards/fields_object_isolation_js");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — struct-field isolation: Python class attributes — only
+/// the hardcoded attribute flows to the sink.
+#[test]
+fn fp_guard_fields_class_attr_py() {
+    let dir = fixture_path("fp_guards/fields_class_attr_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — struct-field isolation: Python dict keys — only the
+/// constant key flows to the sink.
+#[test]
+fn fp_guard_fields_dict_key_py() {
+    let dir = fixture_path("fp_guards/fields_dict_key_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — struct-field isolation: nested JS objects — sibling path
+/// isolation at `cfg.auth.*`.
+#[test]
+fn fp_guard_fields_nested_object_js() {
+    let dir = fixture_path("fp_guards/fields_nested_object_js");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — cross-call-site specialization: same callee, two callers
+/// (one tainted, one constant).  Required finding only from the
+/// tainted caller.
+#[test]
+fn fp_guard_call_site_specialization_py() {
+    let dir = fixture_path("fp_guards/call_site_specialization_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — cross-call-site specialization: JS helper called with a
+/// literal SQL string must not inherit taint.
+#[test]
+fn fp_guard_call_site_specialization_js() {
+    let dir = fixture_path("fp_guards/call_site_specialization_js");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — cross-call-site specialization: helper called with a
+/// shlex.quote-sanitised value, inline analysis sees SHELL_ESCAPE cap.
+#[test]
+fn fp_guard_call_site_sanitized_caller_py() {
+    let dir = fixture_path("fp_guards/call_site_sanitized_caller_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — cross-call-site specialization: polymorphic caller
+/// (int branch and constant branch) — neither carries a payload.
+#[test]
+fn fp_guard_call_site_polymorphic_py() {
+    let dir = fixture_path("fp_guards/call_site_polymorphic_py");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — framework-safe pattern: Rails `sanitize` before render.
+#[test]
+fn fp_guard_framework_rails_sanitize() {
+    let dir = fixture_path("fp_guards/framework_rails_sanitize");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — framework-safe pattern: Flask + MarkupSafe `escape`.
+#[test]
+fn fp_guard_framework_flask_escape() {
+    let dir = fixture_path("fp_guards/framework_flask_escape");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — framework-safe pattern: Express `res.json` with a
+/// constant payload is not an XSS sink.
+#[test]
+fn fp_guard_framework_express_res_json() {
+    let dir = fixture_path("fp_guards/framework_express_res_json");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// FP guard — framework-safe pattern: JDBC PreparedStatement.setString
+/// covers SQL_QUERY on the bound parameter.
+#[test]
+fn fp_guard_framework_prepared_stmt_java() {
+    let dir = fixture_path("fp_guards/framework_prepared_stmt_java");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}

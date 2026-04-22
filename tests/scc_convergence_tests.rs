@@ -63,22 +63,20 @@ fn scc_deep_cycle_requires_multi_iter_convergence() {
     // Observability assertion: prove the SCC actually exercised more
     // than three iterations — otherwise this fixture would pass even
     // under the old bound and give false confidence.
+    //
+    // The exact bound is tight: a 4-cycle needs at least 4 iterations
+    // to propagate a transitive fact end-to-end, and monotone summary
+    // refinement should converge in a small multiple of that. A drop
+    // below 4 means the 3-bound regression is unguarded; a rise above
+    // 8 means summary refinement is no longer monotone or is churning.
     let iters = last_scc_max_iterations();
     assert!(
-        iters >= 4,
-        "Expected >= 4 SCC fix-point iterations for the 4-cycle fixture \
-         to prove the pre-fix bound of 3 was unsafe; got {iters}. \
-         If this drops to <= 3, either the analyser started resolving \
-         cross-file summaries without iteration (great — but update this \
-         test), or the fixture has stopped forming a real 4-cycle.",
-    );
-
-    // Sanity: the safety cap is large but finite. We should never come
-    // anywhere near it on this tiny fixture.
-    assert!(
-        iters < 32,
-        "4-cycle fixture should converge quickly; taking {iters} \
-         iterations suggests non-monotone summary refinement.",
+        (4..=8).contains(&iters),
+        "Expected 4..=8 SCC fix-point iterations for the 4-cycle fixture; \
+         got {iters}. Lower bound guards against the pre-fix cap of 3; \
+         upper bound guards against summary-refinement regressions that \
+         would churn near the safety cap. If this fires, audit \
+         resolve_callee / summary merging in taint/mod.rs.",
     );
 }
 
@@ -94,9 +92,18 @@ fn scc_small_cycle_converges_quickly() {
     validate_expectations(&diags, &dir);
 
     let iters = last_scc_max_iterations();
+    // Upper bound is tight: even if the call graph ever grows mutual
+    // recursion edges here, summary refinement should still converge in
+    // a small multiple of the chain depth. Current behaviour is iters=0
+    // because the call graph topo-order resolves these files without
+    // needing an SCC fix-point loop at all — allow that too so this
+    // test does not become load-bearing on SCC detection.
     assert!(
-        iters <= 8,
-        "Small 3-file SCC should converge in under 8 iterations; got {iters}",
+        iters <= 4,
+        "Small 3-file SCC should converge in <= 4 iterations (including \
+         the `no-SCC-needed` case of 0); got {iters}. A jump suggests \
+         summary widening regressed or mutual-recursion detection started \
+         spuriously grouping these files into a large SCC."
     );
 }
 
