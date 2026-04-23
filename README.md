@@ -69,7 +69,7 @@ nyx scan --mode ast
 nyx scan --engine-profile deep
 ```
 
-Forward cross-file taint runs in every profile. Symex and the demand-driven backwards walk are opt-in — either via `--engine-profile deep`, or individually (`--symex`, `--backwards-analysis`). See [`docs/cli.md`](docs/cli.md#engine-depth-profile) for the full toggle matrix.
+Forward cross-file taint runs in every profile. Symex and the demand-driven backwards walk are opt-in. Turn them on either via `--engine-profile deep`, or individually (`--symex`, `--backwards-analysis`). See [`docs/cli.md`](docs/cli.md#engine-depth-profile) for the full toggle matrix.
 
 ### GitHub Action
 
@@ -128,7 +128,7 @@ Per-dimension detail and known blind spots live in [`docs/language-maturity.md`]
 
 ### Validated against real CVEs
 
-The corpus also holds a small set of vulnerable/patched pairs extracted from published advisories, so the benchmark floor is defended by regression protection on demonstrably real bugs — not just synthetic analogues. Nyx fires on the vulnerable file and emits zero findings on the patched file for each pair.
+The corpus also holds a small set of vulnerable/patched pairs extracted from published advisories, so the benchmark floor is defended by regression protection on demonstrably real bugs rather than just synthetic analogues. Nyx fires on the vulnerable file and emits zero findings on the patched file for each pair.
 
 | CVE | Project | Language | Class |
 |---|---|---|---|

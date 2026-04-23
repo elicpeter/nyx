@@ -47,7 +47,7 @@ use smallvec::SmallVec;
 ///
 /// Serialized as a nested snake_case tagged enum so SARIF/JSON consumers
 /// can pattern-match without depending on Rust layout.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CapHitReason {
     /// The change-set size was still decreasing when the cap fired.
@@ -73,13 +73,8 @@ pub enum CapHitReason {
     /// cap fired after only one iteration so there is nothing to
     /// classify).  Preserves backwards compatibility for old notes
     /// deserialized from disk.
+    #[default]
     Unknown,
-}
-
-impl Default for CapHitReason {
-    fn default() -> Self {
-        CapHitReason::Unknown
-    }
 }
 
 impl CapHitReason {
