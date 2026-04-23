@@ -42,6 +42,7 @@ accepted = [
 
     # --- GPL family ---
     "GPL-3.0",
+    "GPL-3.0-or-later",
     "GPL-2.0",
 
     # --- Python / PSF ---
