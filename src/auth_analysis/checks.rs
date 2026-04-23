@@ -77,7 +77,7 @@ fn check_ownership_gaps(model: &AuthorizationModel, rules: &AuthAnalysisRules) -
             let relevant_subjects: Vec<&ValueRef> = op
                 .subjects
                 .iter()
-                .filter(|s| is_relevant_target_subject(s))
+                .filter(|s| is_relevant_target_subject(s, unit))
                 .collect();
             if relevant_subjects.is_empty() {
                 continue;
@@ -378,13 +378,30 @@ fn related_subject_base(subject: &ValueRef) -> Option<String> {
     }
 }
 
-fn is_relevant_target_subject(subject: &ValueRef) -> bool {
-    is_id_like(subject) && !is_actor_context_subject(subject)
+fn is_relevant_target_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
+    is_id_like(subject) && !is_actor_context_subject(subject, unit)
 }
 
-fn is_actor_context_subject(subject: &ValueRef) -> bool {
+fn is_actor_context_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     if is_self_scoped_session_subject(subject) {
         return true;
+    }
+
+    // A3: `V.id`-shape subjects where `V` is bound from a login-guard /
+    // auth-check call (or from a typed self-actor extractor parameter)
+    // are the caller's own id. `V.group_id` / `V.workspace_id` stay
+    // relevant — only self-identifier fields trip this branch, so
+    // foreign scoped ids on the same actor binding still flag.
+    if let Some(base) = subject.base.as_deref() {
+        let root = base.split('.').next().unwrap_or(base);
+        if unit.self_actor_vars.contains(root)
+            && subject
+                .field
+                .as_deref()
+                .is_some_and(is_self_actor_id_field)
+        {
+            return true;
+        }
     }
 
     matches!(
@@ -399,6 +416,11 @@ fn is_actor_context_subject(subject: &ValueRef) -> bool {
                 | "updatedby"
         )
     )
+}
+
+fn is_self_actor_id_field(field: &str) -> bool {
+    let lower = field.to_ascii_lowercase();
+    matches!(lower.as_str(), "id" | "user_id" | "userid" | "uid")
 }
 
 fn subject_identity_key(subject: &ValueRef) -> Option<String> {
@@ -513,4 +535,84 @@ fn is_id_like(subject: &ValueRef) -> bool {
 fn is_batch_collection(subject: &ValueRef) -> bool {
     subject.source_kind == ValueSourceKind::Identifier
         && subject.name.to_ascii_lowercase().ends_with("ids")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_actor_context_subject, is_relevant_target_subject};
+    use crate::auth_analysis::model::{
+        AnalysisUnit, AnalysisUnitKind, ValueRef, ValueSourceKind,
+    };
+    use std::collections::{HashMap, HashSet};
+
+    fn empty_unit() -> AnalysisUnit {
+        AnalysisUnit {
+            kind: AnalysisUnitKind::Function,
+            name: Some("handle".into()),
+            span: (0, 0),
+            params: Vec::new(),
+            context_inputs: Vec::new(),
+            call_sites: Vec::new(),
+            auth_checks: Vec::new(),
+            operations: Vec::new(),
+            value_refs: Vec::new(),
+            condition_texts: Vec::new(),
+            line: 1,
+            row_field_vars: HashMap::new(),
+            self_actor_vars: HashSet::new(),
+        }
+    }
+
+    fn member(base: &str, field: &str) -> ValueRef {
+        ValueRef {
+            source_kind: ValueSourceKind::MemberField,
+            name: format!("{base}.{field}"),
+            base: Some(base.to_string()),
+            field: Some(field.to_string()),
+            index: None,
+            span: (0, 0),
+        }
+    }
+
+    #[test]
+    fn self_actor_var_widens_actor_context_for_self_id_fields() {
+        let mut unit = empty_unit();
+        unit.self_actor_vars.insert("user".into());
+
+        // `user.id`-shape subjects count as actor context now.
+        assert!(is_actor_context_subject(&member("user", "id"), &unit));
+        assert!(is_actor_context_subject(
+            &member("user", "user_id"),
+            &unit
+        ));
+        assert!(is_actor_context_subject(&member("user", "uid"), &unit));
+
+        // Pitfall guard: `user.group_id` / `user.workspace_id` stay
+        // relevant — only self-identifier fields trip the widening.
+        assert!(!is_actor_context_subject(
+            &member("user", "group_id"),
+            &unit
+        ));
+        assert!(!is_actor_context_subject(
+            &member("user", "workspace_id"),
+            &unit
+        ));
+
+        // Variables not in self_actor_vars fall back to the existing
+        // identity-key match — `target.id` still flags.
+        assert!(!is_actor_context_subject(&member("target", "id"), &unit));
+    }
+
+    #[test]
+    fn self_actor_var_suppresses_relevant_subject_for_self_id() {
+        let mut unit = empty_unit();
+        unit.self_actor_vars.insert("user".into());
+
+        assert!(!is_relevant_target_subject(&member("user", "id"), &unit));
+        // Foreign id on the same actor binding still matters.
+        assert!(is_relevant_target_subject(
+            &member("user", "group_id"),
+            &unit
+        ));
+    }
 }

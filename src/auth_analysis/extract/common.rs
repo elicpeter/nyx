@@ -344,6 +344,7 @@ pub fn build_function_unit(
         condition_texts: state.condition_texts,
         line,
         row_field_vars: state.row_field_vars,
+        self_actor_vars: state.self_actor_vars,
     }
 }
 
@@ -374,6 +375,14 @@ struct UnitState {
     /// argument value-refs into its subjects so the original fetch
     /// (e.g. `db.query_one(..., &[doc_id])`) is also covered.
     row_population_data: HashMap<String, (usize, Vec<ValueRef>)>,
+    /// A3: local variables bound to the authenticated actor.
+    /// Populated from `let V = require_auth(..).await?` (or any call
+    /// matching `rules.is_login_guard` / `rules.is_authorization_check`)
+    /// and from typed route-handler parameters whose type names the
+    /// authenticated user (`CurrentUser`, `AuthUser`, …). Copied onto
+    /// `AnalysisUnit.self_actor_vars` so `checks.rs` can recognize
+    /// `V.id` as actor context rather than a foreign scoped id.
+    self_actor_vars: HashSet<String>,
 }
 
 fn collect_unit_state(
@@ -404,6 +413,10 @@ fn collect_unit_state(
             collect_non_sink_binding(node, bytes, rules, state);
             collect_row_field_binding(node, bytes, state);
             collect_row_population(node, bytes, state);
+            collect_self_actor_binding(node, bytes, rules, state);
+        }
+        "parameter" => {
+            collect_typed_extractor_self_actor(node, bytes, state);
         }
         _ => {}
     }
@@ -674,6 +687,106 @@ fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
     state
         .row_population_data
         .insert(var_name, (line, arg_refs));
+}
+
+/// A3: record `let V = CALL(..)` (or `.await?` / `?` / reference
+/// chains wrapping such a call) where `CALL` matches a configured
+/// login-guard or authorization-check name. `V` is then treated as the
+/// authenticated actor — `V.id`-shaped subjects are actor context and
+/// shouldn't be flagged as foreign scoped IDs.
+fn collect_self_actor_binding(
+    node: Node<'_>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+    state: &mut UnitState,
+) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    if value_is_self_actor_call(value, bytes, rules) {
+        state.self_actor_vars.insert(var_name);
+    }
+}
+
+/// Does `node` (possibly wrapped in `?`/`.await`/`&`) resolve to a
+/// call whose callee matches `is_login_guard` or
+/// `is_authorization_check`? Used to detect `let user =
+/// auth::require_auth(..).await?`-style bindings.
+fn value_is_self_actor_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules) -> bool {
+    match node.kind() {
+        "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
+            let callee = call_name(node, bytes);
+            !callee.is_empty()
+                && (rules.is_login_guard(&callee) || rules.is_authorization_check(&callee))
+        }
+        "try_expression" | "await_expression" | "reference_expression"
+        | "parenthesized_expression" => {
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if value_is_self_actor_call(child, bytes, rules) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// A3: typed route-handler parameters whose declared type names the
+/// authenticated user (e.g. `user: CurrentUser`, `admin: AdminUser`)
+/// count as self-actor bindings. Recognized type last-segments:
+/// `CurrentUser`, `SessionUser`, `AuthUser`, `AdminUser`,
+/// `AuthenticatedUser`, `RequireAuth`, `RequireLogin`, `Authenticated`.
+fn collect_typed_extractor_self_actor(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(ty_node) = node.child_by_field_name("type") else {
+        return;
+    };
+    let ty_text = text(ty_node, bytes);
+    if is_self_actor_type_text(&ty_text) {
+        state.self_actor_vars.insert(var_name);
+    }
+}
+
+fn is_self_actor_type_text(ty: &str) -> bool {
+    let trimmed = ty
+        .trim()
+        .trim_start_matches('&')
+        .trim_start_matches("mut ")
+        .trim();
+    let after_colons = trimmed.rsplit("::").next().unwrap_or(trimmed);
+    let base = after_colons.split('<').next().unwrap_or(after_colons).trim();
+    matches!(
+        base,
+        "CurrentUser"
+            | "SessionUser"
+            | "AuthUser"
+            | "AdminUser"
+            | "AuthenticatedUser"
+            | "RequireAuth"
+            | "RequireLogin"
+            | "Authenticated"
+    )
 }
 
 /// Extract a single-segment receiver name for a value node of the shape
@@ -1791,8 +1904,31 @@ fn accessor_call_value_ref(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_owner_field_subject, is_self_actor_subject};
+    use super::{is_owner_field_subject, is_self_actor_subject, is_self_actor_type_text};
     use crate::auth_analysis::model::{ValueRef, ValueSourceKind};
+
+    #[test]
+    fn is_self_actor_type_text_matches_known_wrappers() {
+        assert!(is_self_actor_type_text("CurrentUser"));
+        assert!(is_self_actor_type_text("SessionUser"));
+        assert!(is_self_actor_type_text("AuthUser"));
+        assert!(is_self_actor_type_text("AdminUser"));
+        assert!(is_self_actor_type_text("AuthenticatedUser"));
+        assert!(is_self_actor_type_text("RequireAuth"));
+        assert!(is_self_actor_type_text("RequireLogin"));
+        assert!(is_self_actor_type_text("Authenticated"));
+        // Qualified paths resolve to last segment.
+        assert!(is_self_actor_type_text("crate::auth::CurrentUser"));
+        assert!(is_self_actor_type_text("&CurrentUser"));
+        assert!(is_self_actor_type_text("&mut AuthUser"));
+        // Generic wrappers: match on the base segment.
+        assert!(is_self_actor_type_text("CurrentUser<Admin>"));
+        // Non-matches.
+        assert!(!is_self_actor_type_text("Db"));
+        assert!(!is_self_actor_type_text("Path<(i64,)>"));
+        assert!(!is_self_actor_type_text("User"));
+        assert!(!is_self_actor_type_text("Json<Body>"));
+    }
 
     fn ident(name: &str) -> ValueRef {
         ValueRef {

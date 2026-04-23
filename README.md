@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/nyx-logo-text.png" alt="nyx logo" width="500"/>
+  <img src="assets/nyx-wordmark.svg" alt="nyx" height="110"/>
 
 **A local-first security scanner with a browser UI. Scan your repo and triage in your browser, with no cloud and no account.**
 

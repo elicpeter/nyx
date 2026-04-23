@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +122,13 @@ pub struct AnalysisUnit {
     /// row-level ownership-equality check (A2) on the row implicitly
     /// covers downstream uses of fields read from the same row.
     pub row_field_vars: HashMap<String, String>,
+    /// A3: variables bound to an authenticated-user value. Populated
+    /// from `let V = require_auth(..).await?` (or any call matching the
+    /// configured login-guard / authorization-check names) and from
+    /// typed route-handler parameters (`CurrentUser`, `AuthUser`, …).
+    /// Consulted by `is_actor_context_subject` so `V.id`-shaped subjects
+    /// are treated as the caller's own id, not as a scoped foreign id.
+    pub self_actor_vars: HashSet<String>,
 }
 
 #[derive(Debug, Clone)]

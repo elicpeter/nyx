@@ -680,6 +680,28 @@ fn helper_scoped_params_is_clean() {
 }
 
 #[test]
+fn self_scoped_user_is_clean() {
+    // Phase A3: `let user = auth::require_auth(..).await?` binds the
+    // authenticated caller, so `user.id` passed to a helper is self-
+    // referential rather than a foreign scoped id.
+    assert_absent(
+        "self_scoped_user.rs",
+        "rs.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn true_positive_missing_check_flags() {
+    // Positive control: an authenticated handler that deletes a doc
+    // and publishes against a group without any ownership/membership
+    // check — must still flag after Phase A lands.
+    assert_has(
+        "true_positive_missing_check.rs",
+        "rs.auth.missing_ownership_check",
+    );
+}
+
+#[test]
 fn actix_admin_route_with_admin_guard_is_clean() {
     assert_absent(
         "actix_admin_route_clean.rs",
