@@ -17,14 +17,28 @@ if (!acceptedBlock) {
   process.exit(1);
 }
 
-const acceptedLicenses = [...acceptedBlock[1].matchAll(/"([^"]+)"/g)].map(
+const rawAcceptedLicenses = [...acceptedBlock[1].matchAll(/"([^"]+)"/g)].map(
   ([, license]) => license,
 );
 
-if (acceptedLicenses.length === 0) {
+if (rawAcceptedLicenses.length === 0) {
   console.error(`No accepted licenses found in ${aboutToml}`);
   process.exit(1);
 }
+
+// cargo-about rejects modern SPDX `-only` / `-or-later` forms in its allow
+// list, so about.toml uses the deprecated bare identifiers (e.g. "GPL-3.0").
+// npm ecosystems standardize on the modern forms, so accept both here.
+const deprecatedSpdxFamily = /^(?:L?GPL|AGPL|GFDL)-\d+\.\d+$/;
+const acceptedLicenses = [
+  ...new Set(
+    rawAcceptedLicenses.flatMap((license) =>
+      deprecatedSpdxFamily.test(license)
+        ? [license, `${license}-only`, `${license}-or-later`]
+        : [license],
+    ),
+  ),
+];
 
 const frontendPackage = JSON.parse(readFileSync(frontendPackageJson, 'utf8'));
 const frontendLicense = frontendPackage.license;
