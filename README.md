@@ -428,34 +428,38 @@ Incremental indexing significantly reduces scan time for subsequent runs on unch
 
 ### Detection Accuracy
 
-Measured on our 262-case benchmark corpus (155 vulnerable, 107 safe) at
+Measured on our 273-case benchmark corpus at
 [`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json) across
 10 languages (C, C++, Go, Java, JavaScript, PHP, Python, Ruby, Rust,
-TypeScript) covering 14 vulnerability classes. These numbers are specific to
+TypeScript) covering 15 vulnerability classes. These numbers are specific to
 that corpus and are not a general-purpose accuracy claim — real-world results
 depend on the language mix, rule coverage for your stack, and the
 vulnerability classes that matter to you. Full historical results live in
-[`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
+[`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md). The corpus also
+includes 3 real historical CVEs across 3 languages (Python, JavaScript,
+TypeScript); per-CVE results are tracked in
+[`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md) under "Real-CVE
+Corpus."
 
-Current rule-level baseline on the 262-case corpus:
+Current rule-level baseline on the 273-case corpus:
 
 | Metric | Score |
 |---|---|
-| Precision | 91.1% |
+| Precision | 94.2% |
 | Recall | 99.4% |
-| F1 | 95.1% |
+| F1 | 96.7% |
 
-**What these numbers mean.** The benchmark corpus is 264 synthetic mini-fixtures (20–120 LOC each), curated for known-good and known-bad cases. F1 numbers are reported per language in the Language Maturity matrix; the aggregate hides per-tier variance (Rust ≈ 76%, C/C++ ≈ 80–86%, Python/TS ≈ 100%). The benchmark uses `allowed_alternative_rule_ids` to credit findings under any of several semantically equivalent rule IDs, which softens precision compared to a strict-rule-only scoring. Real-world repositories with framework-specific idioms (Django middleware, Spring DI, async runtimes, ORMs) will produce different numbers; treat 95.1% as a regression-protection floor on this corpus, not a general accuracy claim.
+**What these numbers mean.** The bulk of the benchmark is 267 synthetic mini-fixtures (20–120 LOC each) curated for known-good and known-bad cases, supplemented by 6 real-CVE cases (vulnerable + patched pairs for each CVE). F1 numbers are reported per language in the Language Maturity matrix; the aggregate hides per-tier variance. The benchmark uses `allowed_alternative_rule_ids` to credit findings under any of several semantically equivalent rule IDs, which softens precision compared to a strict-rule-only scoring. Real-world repositories with framework-specific idioms (Django middleware, Spring DI, async runtimes, ORMs) will produce different numbers; treat 96.7% as a regression-protection floor on this corpus, not a general accuracy claim.
 
 The benchmark is wired as a CI regression gate. Every pull request runs `tests/benchmark_test.rs::benchmark_evaluation` in release mode under the `benchmark-gate` job and fails if rule-level Precision, Recall, or F1 drops below the thresholds encoded in the test:
 
 | Metric | Floor | Current baseline |
 |---|---|---|
-| Precision | ≥ 86.1% | 91.1% |
+| Precision | ≥ 86.1% | 94.2% |
 | Recall | ≥ 94.4% | 99.4% |
-| F1 | ≥ 90.1% | 95.1% |
+| F1 | ≥ 90.1% | 96.7% |
 
-Floors sit ~5 pp below the measured 262-case baseline. Tighten them when an improvement lands; never relax them to accommodate a regression.
+Floors sit ~8 pp below the measured 273-case baseline. Tighten them when an improvement lands; never relax them to accommodate a regression.
 
 The same job also runs `tests/perf_tests.rs` with `NYX_CI_BENCH=1` and enforces per-fixture wall-clock budgets (see each fixture's `expectations.json`).
 

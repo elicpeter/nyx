@@ -2,7 +2,7 @@
 
 ## Corpus philosophy
 
-The benchmark corpus is a curated set of ~262 minimal synthetic files (8-20 lines each) across 10 languages: JavaScript, TypeScript, Python, Java, Go, PHP, Ruby, Rust, C, and C++. Each file contains exactly one vulnerability (positive case) or demonstrates a specific safe pattern (negative case).
+The benchmark corpus is a curated set of ~267 minimal synthetic files (8-20 lines each) across 10 languages: JavaScript, TypeScript, Python, Java, Go, PHP, Ruby, Rust, C, and C++. Each file contains exactly one vulnerability (positive case) or demonstrates a specific safe pattern (negative case). The corpus additionally carries a small set of real-CVE replay cases (see `cve_corpus/` and the "Real-CVE Corpus" section in `RESULTS.md`).
 
 Design principles:
 - **One vuln per file**: isolates the detection signal from noise.
@@ -48,7 +48,7 @@ Caveats:
 ## How to run
 
 ```bash
-# Full benchmark (all 246 cases)
+# Full benchmark (all 273 cases)
 cargo test benchmark_evaluation -- --ignored --nocapture
 
 # Filter by language (python, typescript, javascript, java, go, php, ruby, rust, c, cpp)
@@ -105,14 +105,14 @@ cargo test --release --all-features --test benchmark_test -- --ignored --nocaptu
 and fails if the corpus rule-level metrics fall below the thresholds encoded
 at the bottom of `tests/benchmark_test.rs`:
 
-| Metric | Floor | Current baseline (262 cases) |
+| Metric | Floor | Current baseline (273 cases) |
 |---|---|---|
-| Precision | ≥ 0.861 | 0.911 |
+| Precision | ≥ 0.861 | 0.942 |
 | Recall | ≥ 0.944 | 0.994 |
-| F1 | ≥ 0.901 | 0.951 |
+| F1 | ≥ 0.901 | 0.967 |
 
-The floors sit ~5 pp below the current 262-case baseline — a single-case
-flip is ~0.6 pp on this corpus, so 5 pp absorbs honest FP↔TN trades while
+The floors sit ~8 pp below the current 273-case baseline — a single-case
+flip is ~0.6 pp on this corpus, so the headroom absorbs honest FP↔TN trades while
 still tripping on a real regression in a whole vulnerability class. The `results/latest.json` artifact is
 uploaded from the CI job for comparison across runs. The Rust job cache is
 warm, so the gate typically adds only a few seconds on top of the build.

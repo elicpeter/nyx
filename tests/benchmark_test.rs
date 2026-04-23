@@ -191,7 +191,16 @@ struct BenchmarkResults {
 // ── Scanning ─────────────────────────────────────────────────────────
 
 fn scan_corpus_file(corpus_root: &Path, relative_path: &str) -> Vec<Diag> {
-    let source = corpus_root.join(relative_path);
+    // `cve_corpus/*` cases live in a sibling of `corpus/` — see
+    // `tests/benchmark/cve_corpus/` and Phase 13 of the pre-release plan.
+    let source = if relative_path.starts_with("cve_corpus/") {
+        corpus_root
+            .parent()
+            .expect("corpus_root has a parent")
+            .join(relative_path)
+    } else {
+        corpus_root.join(relative_path)
+    };
     assert!(
         source.exists(),
         "Corpus path not found: {}",

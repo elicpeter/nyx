@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 264
+    "corpus_size": 273
   },
   "cases": [
     {
@@ -8223,6 +8223,152 @@
       "tags": ["tsx", "jsx", "auto-escape"],
       "disabled": false,
       "notes": "TSX fixture: user bio rendered as JSX text child. React auto-escapes JSX text so this is semantically safe. Guards against over-flagging JSX expressions now that TSX grammar is wired"
+    },
+    {
+      "case_id": "cve-py-2023-48022-vulnerable",
+      "file": "cve_corpus/python/CVE-2023-48022/vulnerable.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.cmdi.os_system"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[31, 31]],
+      "expected_source_lines": [[26, 27]],
+      "tags": ["cve", "ray", "rce", "flask"],
+      "disabled": false,
+      "notes": "CVE-2023-48022: Ray dashboard job-submission RCE via shell-interpreted entrypoint in os.system. Apache-2.0"
+    },
+    {
+      "case_id": "cve-py-2023-48022-patched",
+      "file": "cve_corpus/python/CVE-2023-48022/patched.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.cmdi.os_system",
+        "py.cmdi.subprocess_shell",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["cve", "ray", "patched", "negative"],
+      "disabled": false,
+      "notes": "CVE-2023-48022 patched counterpart: shlex.split + subprocess.Popen(shell=False); regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-js-2019-14939-vulnerable",
+      "file": "cve_corpus/javascript/CVE-2019-14939/vulnerable.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "code_exec",
+      "cwe": "CWE-94",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "js.code_exec.eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[30, 30]],
+      "expected_source_lines": [[23, 25]],
+      "tags": ["cve", "mongo-express", "rce", "express", "eval"],
+      "disabled": false,
+      "notes": "CVE-2019-14939: mongo-express /checkValid evaluated req.body.document with eval(); RCE on the admin interface. MIT"
+    },
+    {
+      "case_id": "cve-js-2019-14939-patched",
+      "file": "cve_corpus/javascript/CVE-2019-14939/patched.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "js.code_exec.eval",
+        "js.code_exec.new_function",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["cve", "mongo-express", "patched", "negative"],
+      "disabled": false,
+      "notes": "CVE-2019-14939 patched counterpart: EJSON.parse replaces eval; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-ts-2023-26159-vulnerable",
+      "file": "cve_corpus/typescript/CVE-2023-26159/vulnerable.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "ssrf",
+      "cwe": "CWE-918",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [[32, 32]],
+      "expected_source_lines": [[27, 28]],
+      "tags": ["cve", "follow-redirects", "ssrf", "express", "axios"],
+      "disabled": false,
+      "notes": "CVE-2023-26159: follow-redirects leaked Authorization across cross-origin redirects; caller-side pattern is SSRF via unvalidated user URL into HTTP client. MIT"
+    },
+    {
+      "case_id": "cve-ts-2023-26159-patched",
+      "file": "cve_corpus/typescript/CVE-2023-26159/patched.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": ["cve", "follow-redirects", "patched", "negative"],
+      "disabled": false,
+      "notes": "CVE-2023-26159 patched counterpart: URL allowlist check guards axios.get; regression guard that Nyx does not refire on the fix"
     }
   ]
 }
