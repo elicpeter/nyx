@@ -1242,15 +1242,9 @@ fn rename_variables(
             // consumers that care about the scrutinee (abstract interp,
             // symex per-case constraints) treat a missing/degenerate
             // scrutinee as "unknown" rather than panicking.
-            let scrutinee = cfg_node_map
-                .get(&last_node)
-                .copied()
-                .unwrap_or(SsaValue(0));
-            let targets: SmallVec<[BlockId; 4]> = succs
-                .iter()
-                .skip(1)
-                .map(|&s| BlockId(s as u32))
-                .collect();
+            let scrutinee = cfg_node_map.get(&last_node).copied().unwrap_or(SsaValue(0));
+            let targets: SmallVec<[BlockId; 4]> =
+                succs.iter().skip(1).map(|&s| BlockId(s as u32)).collect();
             let default = BlockId(succs[0] as u32);
             tracing::debug!(
                 block = block_idx,

@@ -345,12 +345,8 @@ pub fn handle(
             "{}: Nyx is in Preview for C/C++. Pointer aliasing, function pointers,",
             style("warning").yellow().bold()
         );
-        eprintln!(
-            "array-element taint, and STL container flows are not modeled. Findings are"
-        );
-        eprintln!(
-            "a starting point for review; pair with clang-tidy or Clang Static Analyzer"
-        );
+        eprintln!("array-element taint, and STL container flows are not modeled. Findings are");
+        eprintln!("a starting point for review; pair with clang-tidy or Clang Static Analyzer");
         eprintln!("for production gates.\n");
     }
 

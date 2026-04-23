@@ -229,7 +229,8 @@ fn cross_file_anon_callback_stable_across_comment_insert() {
             .count()
     }
 
-    let before_count = taint_count_in(&before_diags, "a.js") + taint_count_in(&before_diags, "b.js");
+    let before_count =
+        taint_count_in(&before_diags, "a.js") + taint_count_in(&before_diags, "b.js");
     assert!(
         before_count > 0,
         "baseline must emit a cross-file taint finding through the exported anon callback; \

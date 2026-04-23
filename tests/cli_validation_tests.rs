@@ -202,12 +202,14 @@ fn scan_with_unknown_engine_profile_exits_nonzero() {
     let (mut cmd, _) = scan_cmd(home.path(), target.path());
     cmd.arg("--engine-profile").arg("bogus-profile-xyz");
 
-    cmd.assert().failure().stderr(
-        predicate::str::contains("engine-profile").and(
-            predicate::str::contains("possible values")
-                .or(predicate::str::contains("invalid value")),
-        ),
-    );
+    cmd.assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("engine-profile").and(
+                predicate::str::contains("possible values")
+                    .or(predicate::str::contains("invalid value")),
+            ),
+        );
 }
 
 /// Engine-profile + individual flag layering: `--engine-profile fast` turns
@@ -241,12 +243,11 @@ fn scan_c_file_emits_preview_tier_banner() {
     .unwrap();
 
     let (mut cmd, _) = scan_cmd(home.path(), dir.path());
-    cmd.assert().success().stderr(
-        predicate::str::contains("Preview for C/C++").and(
-            predicate::str::contains("Pointer aliasing")
-                .or(predicate::str::contains("clang-tidy")),
-        ),
-    );
+    cmd.assert()
+        .success()
+        .stderr(predicate::str::contains("Preview for C/C++").and(
+            predicate::str::contains("Pointer aliasing").or(predicate::str::contains("clang-tidy")),
+        ));
 }
 
 /// `--quiet` must suppress the Preview-tier banner along with the rest of

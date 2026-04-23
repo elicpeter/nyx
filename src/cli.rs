@@ -101,7 +101,10 @@ impl EngineProfile {
     /// Apply this profile to an `AnalysisOptions` struct, returning the
     /// new options.  Individual CLI flags are layered on top by the
     /// caller after this runs.
-    pub fn apply(&self, mut opts: crate::utils::analysis_options::AnalysisOptions) -> crate::utils::analysis_options::AnalysisOptions {
+    pub fn apply(
+        &self,
+        mut opts: crate::utils::analysis_options::AnalysisOptions,
+    ) -> crate::utils::analysis_options::AnalysisOptions {
         use crate::utils::analysis_options::SymexOptions;
         match self {
             EngineProfile::Fast => {

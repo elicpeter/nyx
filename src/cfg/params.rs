@@ -11,7 +11,11 @@ use tree_sitter::Node;
 ///
 /// Uses the language's `ParamConfig` to find the parameter list field
 /// and extract identifiers from each parameter child.
-pub(super) fn extract_param_names<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> Vec<String> {
+pub(super) fn extract_param_names<'a>(
+    func_node: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+) -> Vec<String> {
     let cfg = param_config(lang);
     let mut names = Vec::new();
     // Try the params_field directly on the function node first.
@@ -373,7 +377,10 @@ pub(super) fn inject_framework_param_sources(
 }
 
 /// Check if a callee name matches any configured terminator.
-pub(super) fn is_configured_terminator(callee: &str, analysis_rules: Option<&LangAnalysisRules>) -> bool {
+pub(super) fn is_configured_terminator(
+    callee: &str,
+    analysis_rules: Option<&LangAnalysisRules>,
+) -> bool {
     if let Some(rules) = analysis_rules {
         let callee_lower = callee.to_ascii_lowercase();
         rules

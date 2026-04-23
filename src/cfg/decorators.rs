@@ -129,7 +129,11 @@ fn decorator_arg_names(decorator_ast: Node<'_>, code: &[u8]) -> Vec<String> {
 ///   filter is only recorded for the current method when the scope matches.
 ///   Conditional filters (`if:` / `unless:`) are not honored — those require
 ///   predicate evaluation and are deferred.
-pub(super) fn extract_auth_decorators<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> Vec<String> {
+pub(super) fn extract_auth_decorators<'a>(
+    func_node: Node<'a>,
+    lang: &str,
+    code: &'a [u8],
+) -> Vec<String> {
     let mut out = Vec::new();
     let mut push = |raw: &str| {
         let norm = normalize_decorator_name(raw);

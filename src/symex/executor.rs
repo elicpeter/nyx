@@ -680,11 +680,7 @@ fn run_path(
                 // the exploration deterministic. A follow-up can add
                 // per-target path constraints of the form `scrutinee ==
                 // case_value` once case literals are threaded through.
-                let next = block
-                    .succs
-                    .iter()
-                    .find(|s| reachable.contains(s))
-                    .copied();
+                let next = block.succs.iter().find(|s| reachable.contains(s)).copied();
                 match next {
                     Some(target) => {
                         state.predecessor = Some(block_id);

@@ -640,8 +640,9 @@ mod tests {
         );
         // But the Param(0) → Return edge must still be emitted.
         assert!(
-            s.edges.iter().any(|e| e.source == AliasPosition::Param(0)
-                && e.target == AliasPosition::Return),
+            s.edges
+                .iter()
+                .any(|e| e.source == AliasPosition::Param(0) && e.target == AliasPosition::Return),
             "expected Param(0) → Return edge, got {s:?}"
         );
     }

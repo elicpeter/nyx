@@ -724,7 +724,9 @@ fn build_and_lower_all(path: &Path, cfg: &Config) -> usize {
 #[test]
 fn orphan_catch_block_triggers_reachability_invariant() {
     use nyx_scanner::ssa::invariants::check_catch_block_reachability;
-    use nyx_scanner::ssa::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator, ValueDef};
+    use nyx_scanner::ssa::{
+        BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator, ValueDef,
+    };
     use petgraph::graph::NodeIndex;
     use smallvec::smallvec;
 
@@ -770,7 +772,9 @@ fn orphan_catch_block_triggers_reachability_invariant() {
     let err = check_catch_block_reachability(&body)
         .expect_err("orphan catch block must fail the reachability invariant");
     assert!(
-        err.messages.iter().any(|m| m.contains("catch-block orphan")),
+        err.messages
+            .iter()
+            .any(|m| m.contains("catch-block orphan")),
         "expected orphan-catch message, got: {:?}",
         err.messages,
     );
@@ -781,7 +785,9 @@ fn normally_reachable_catch_block_passes_invariant() {
     // Regression guard: CatchParam in a block reached from entry via normal
     // flow (not an exception edge) satisfies the invariant.
     use nyx_scanner::ssa::invariants::check_catch_block_reachability;
-    use nyx_scanner::ssa::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator, ValueDef};
+    use nyx_scanner::ssa::{
+        BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator, ValueDef,
+    };
     use petgraph::graph::NodeIndex;
     use smallvec::smallvec;
 
@@ -830,7 +836,9 @@ fn exception_edge_catch_block_passes_invariant() {
     // A CatchParam-carrying block reached only via an exception edge
     // (the typical try/catch shape) must pass the invariant.
     use nyx_scanner::ssa::invariants::check_catch_block_reachability;
-    use nyx_scanner::ssa::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator, ValueDef};
+    use nyx_scanner::ssa::{
+        BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator, ValueDef,
+    };
     use petgraph::graph::NodeIndex;
     use smallvec::smallvec;
 

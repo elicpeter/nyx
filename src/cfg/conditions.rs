@@ -107,7 +107,10 @@ pub(super) fn push_condition_node<'a>(
 ///
 /// The guard lives on the tree-sitter `match_pattern` node as the field
 /// `condition` (present whenever the pattern is followed by `if <expr>`).
-pub(super) fn detect_rust_let_match_guard<'a>(ast: Node<'a>, code: &[u8]) -> Option<(Node<'a>, String)> {
+pub(super) fn detect_rust_let_match_guard<'a>(
+    ast: Node<'a>,
+    code: &[u8],
+) -> Option<(Node<'a>, String)> {
     if ast.kind() != "let_declaration" {
         return None;
     }

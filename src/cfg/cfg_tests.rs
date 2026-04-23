@@ -1,2056 +1,2044 @@
-    use super::*;
-    use petgraph::visit::EdgeRef;
-    use tree_sitter::Language;
 
-    fn parse_and_build(src: &[u8], lang_str: &str, ts_lang: Language) -> (Cfg, NodeIndex) {
-        let file_cfg = parse_to_file_cfg(src, lang_str, ts_lang);
-        // If there's a function body, return it (most tests wrap code in a function).
-        // Otherwise return the top-level body.
-        let body = if file_cfg.bodies.len() > 1 {
-            &file_cfg.bodies[1]
-        } else {
-            &file_cfg.bodies[0]
-        };
-        (body.graph.clone(), body.entry)
+use super::*;
+use petgraph::visit::EdgeRef;
+use tree_sitter::Language;
+
+fn parse_and_build(src: &[u8], lang_str: &str, ts_lang: Language) -> (Cfg, NodeIndex) {
+    let file_cfg = parse_to_file_cfg(src, lang_str, ts_lang);
+    // If there's a function body, return it (most tests wrap code in a function).
+    // Otherwise return the top-level body.
+    let body = if file_cfg.bodies.len() > 1 {
+        &file_cfg.bodies[1]
+    } else {
+        &file_cfg.bodies[0]
+    };
+    (body.graph.clone(), body.entry)
+}
+
+fn parse_to_file_cfg(src: &[u8], lang_str: &str, ts_lang: Language) -> FileCfg {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    let tree = parser.parse(src, None).unwrap();
+    build_cfg(&tree, src, lang_str, "test.js", None)
+}
+
+#[test]
+fn js_try_catch_has_exception_edges() {
+    let src = b"function f() { try { foo(); } catch (e) { bar(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let exception_edges: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .collect();
+    assert!(
+        !exception_edges.is_empty(),
+        "Expected at least one Exception edge"
+    );
+    // Verify source is a Call node
+    for e in &exception_edges {
+        assert_eq!(cfg[e.source()].kind, StmtKind::Call);
     }
+}
 
-    fn parse_to_file_cfg(src: &[u8], lang_str: &str, ts_lang: Language) -> FileCfg {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&ts_lang).unwrap();
-        let tree = parser.parse(src, None).unwrap();
-        build_cfg(&tree, src, lang_str, "test.js", None)
-    }
+/// When a classifiable call (here `eval`, a built-in JS sink) is nested
+/// inside a multi-line statement, the CFG node's `classification_span()`
+/// should point at the inner call, not at the outer statement's start —
+/// so finding display reports the line the dangerous call actually lives
+/// on.  `ast.span` must still cover the whole outer statement for
+/// structural passes that need the statement grain.
+#[test]
+fn inner_call_override_narrows_classification_span() {
+    // Byte offsets chosen so the outer statement spans two lines:
+    //   line 2 (row 1): `x = \``
+    //   line 3 (row 2): `  ${eval('1')}`
+    //   line 4 (row 3): `\`;`
+    let src = b"function f() {\n  x = `\n  ${eval('1')}\n  `;\n}\n";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
-    #[test]
-    fn js_try_catch_has_exception_edges() {
-        let src = b"function f() { try { foo(); } catch (e) { bar(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+    // Find the node whose callee was overridden to `eval`.
+    let sink = cfg
+        .node_indices()
+        .find(|&i| cfg[i].call.callee.as_deref() == Some("eval"))
+        .expect("inner-call override should produce a node with callee=eval");
 
-        let exception_edges: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .collect();
-        assert!(
-            !exception_edges.is_empty(),
-            "Expected at least one Exception edge"
-        );
-        // Verify source is a Call node
-        for e in &exception_edges {
-            assert_eq!(cfg[e.source()].kind, StmtKind::Call);
-        }
-    }
+    let info = &cfg[sink];
 
-    /// When a classifiable call (here `eval`, a built-in JS sink) is nested
-    /// inside a multi-line statement, the CFG node's `classification_span()`
-    /// should point at the inner call, not at the outer statement's start —
-    /// so finding display reports the line the dangerous call actually lives
-    /// on.  `ast.span` must still cover the whole outer statement for
-    /// structural passes that need the statement grain.
-    #[test]
-    fn inner_call_override_narrows_classification_span() {
-        // Byte offsets chosen so the outer statement spans two lines:
-        //   line 2 (row 1): `x = \``
-        //   line 3 (row 2): `  ${eval('1')}`
-        //   line 4 (row 3): `\`;`
-        let src = b"function f() {\n  x = `\n  ${eval('1')}\n  `;\n}\n";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+    // The outer `ast.span` starts at the `x = ...` expression statement
+    // on line 2; the inner eval call lives on line 3.
+    let outer_byte = info.ast.span.0;
+    let inner_byte = info.classification_span().0;
+    assert!(
+        inner_byte > outer_byte,
+        "classification span should start *inside* the outer statement (outer={outer_byte}, inner={inner_byte})"
+    );
 
-        // Find the node whose callee was overridden to `eval`.
-        let sink = cfg
-            .node_indices()
-            .find(|&i| cfg[i].call.callee.as_deref() == Some("eval"))
-            .expect("inner-call override should produce a node with callee=eval");
+    let line_of = |b: usize| src[..b].iter().filter(|&&c| c == b'\n').count() + 1;
+    assert_eq!(line_of(outer_byte), 2, "outer ast.span on line 2");
+    assert_eq!(line_of(inner_byte), 3, "classification_span on eval's line");
 
-        let info = &cfg[sink];
+    // callee_span must be populated (that's the whole point).
+    assert!(
+        info.call.callee_span.is_some(),
+        "inner-call override should record callee_span"
+    );
+}
 
-        // The outer `ast.span` starts at the `x = ...` expression statement
-        // on line 2; the inner eval call lives on line 3.
-        let outer_byte = info.ast.span.0;
-        let inner_byte = info.classification_span().0;
-        assert!(
-            inner_byte > outer_byte,
-            "classification span should start *inside* the outer statement (outer={outer_byte}, inner={inner_byte})"
-        );
+/// `classification_span()` must fall back to `ast.span` when no narrower
+/// sub-expression was recorded — so existing structural code paths keep
+/// working unchanged for nodes whose classification applies to the whole
+/// outer node.
+#[test]
+fn classification_span_falls_back_to_ast_span() {
+    let info = NodeInfo {
+        ast: AstMeta {
+            span: (100, 200),
+            enclosing_func: None,
+        },
+        ..Default::default()
+    };
+    assert!(info.call.callee_span.is_none());
+    assert_eq!(info.classification_span(), (100, 200));
 
-        let line_of = |b: usize| src[..b].iter().filter(|&&c| c == b'\n').count() + 1;
-        assert_eq!(line_of(outer_byte), 2, "outer ast.span on line 2");
-        assert_eq!(line_of(inner_byte), 3, "classification_span on eval's line");
-
-        // callee_span must be populated (that's the whole point).
-        assert!(
-            info.call.callee_span.is_some(),
-            "inner-call override should record callee_span"
-        );
-    }
-
-    /// `classification_span()` must fall back to `ast.span` when no narrower
-    /// sub-expression was recorded — so existing structural code paths keep
-    /// working unchanged for nodes whose classification applies to the whole
-    /// outer node.
-    #[test]
-    fn classification_span_falls_back_to_ast_span() {
-        let info = NodeInfo {
-            ast: AstMeta {
-                span: (100, 200),
-                enclosing_func: None,
-            },
+    let narrowed = NodeInfo {
+        ast: AstMeta {
+            span: (100, 200),
+            enclosing_func: None,
+        },
+        call: CallMeta {
+            callee_span: Some((150, 170)),
             ..Default::default()
-        };
-        assert!(info.call.callee_span.is_none());
-        assert_eq!(info.classification_span(), (100, 200));
+        },
+        ..Default::default()
+    };
+    assert_eq!(narrowed.classification_span(), (150, 170));
+    assert_eq!(narrowed.ast.span, (100, 200));
+}
 
-        let narrowed = NodeInfo {
-            ast: AstMeta {
-                span: (100, 200),
-                enclosing_func: None,
-            },
-            call: CallMeta {
-                callee_span: Some((150, 170)),
-                ..Default::default()
-            },
+/// The narrowed `callee_span` must remain strictly narrower than
+/// `ast.span` on real-world CFG nodes.  When the classification applies
+/// to (or degenerates to) the outer node, `callee_span` is left `None`
+/// so we don't bloat every labeled node with a redundant span copy.
+#[test]
+fn callee_span_unset_when_no_narrowing_is_possible() {
+    // A bare `eval(x);` on one line: `first_call_ident` finds the
+    // call_expression whose span is nearly the whole expression_statement
+    // (different by the trailing `;`).  `classification_span` still
+    // returns a sensible line — but the exact trimming is an
+    // implementation detail.  What we assert here is the invariant:
+    // if callee_span *is* set, it must be contained in ast.span.
+    let src = b"function f() { eval(x); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let sink = cfg
+        .node_indices()
+        .find(|&i| cfg[i].call.callee.as_deref() == Some("eval"))
+        .expect("should find eval call");
+    let info = &cfg[sink];
+    if let Some(cs) = info.call.callee_span {
+        assert!(
+            cs.0 >= info.ast.span.0 && cs.1 <= info.ast.span.1,
+            "callee_span {:?} must be contained in ast.span {:?}",
+            cs,
+            info.ast.span,
+        );
+        assert_ne!(
+            cs, info.ast.span,
+            "callee_span should only be set when it narrows ast.span"
+        );
+    }
+}
+
+#[test]
+fn js_try_finally_no_exception_edges() {
+    let src = b"function f() { try { foo(); } finally { cleanup(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let exception_edges: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .collect();
+    // No catch clause → no exception edges
+    assert!(
+        exception_edges.is_empty(),
+        "Expected no Exception edges for try/finally without catch"
+    );
+
+    // Verify finally nodes are reachable from entry
+    let mut reachable = HashSet::new();
+    let mut bfs = petgraph::visit::Bfs::new(&cfg, _entry);
+    while let Some(nx) = bfs.next(&cfg) {
+        reachable.insert(nx);
+    }
+    assert_eq!(
+        reachable.len(),
+        cfg.node_count(),
+        "All nodes should be reachable (finally connected to try body)"
+    );
+}
+
+#[test]
+fn java_try_catch_has_exception_edges() {
+    let src = b"class Foo { void bar() { try { baz(); } catch (Exception e) { qux(); } } }";
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
+
+    let exception_edges: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .collect();
+    assert!(
+        !exception_edges.is_empty(),
+        "Expected at least one Exception edge in Java try/catch"
+    );
+    for e in &exception_edges {
+        assert_eq!(cfg[e.source()].kind, StmtKind::Call);
+    }
+}
+
+#[test]
+fn js_try_catch_finally_all_reachable() {
+    let src = b"function f() { try { foo(); } catch (e) { bar(); } finally { baz(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, entry) = parse_and_build(src, "javascript", ts_lang);
+
+    // All nodes should be reachable
+    let mut reachable = HashSet::new();
+    let mut bfs = petgraph::visit::Bfs::new(&cfg, entry);
+    while let Some(nx) = bfs.next(&cfg) {
+        reachable.insert(nx);
+    }
+    assert_eq!(
+        reachable.len(),
+        cfg.node_count(),
+        "All nodes should be reachable in try/catch/finally"
+    );
+
+    // Should have exception edges
+    let exception_edges: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .collect();
+    assert!(!exception_edges.is_empty());
+}
+
+#[test]
+fn js_throw_in_try_catch_has_exception_edge() {
+    let src = b"function f() { try { throw new Error('bad'); } catch (e) { handle(e); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let exception_edges: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .collect();
+    assert!(
+        !exception_edges.is_empty(),
+        "throw inside try should create exception edge to catch"
+    );
+}
+
+#[test]
+fn java_multiple_catch_clauses() {
+    let src = b"class Foo { void bar() { try { baz(); } catch (IOException e) { a(); } catch (Exception e) { b(); } } }";
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
+
+    let exception_edges: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .collect();
+    // Should have exception edges to both catch clauses
+    assert!(
+        exception_edges.len() >= 2,
+        "Expected exception edges to multiple catch clauses, got {}",
+        exception_edges.len()
+    );
+}
+
+#[test]
+fn js_catch_param_defines_variable() {
+    let src = b"function f() { try { foo(); } catch (e) { bar(e); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    // Find the synthetic catch-param node
+    let catch_param_nodes: Vec<_> = cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
+    assert_eq!(
+        catch_param_nodes.len(),
+        1,
+        "Expected exactly one catch_param node"
+    );
+    let cp = &cfg[catch_param_nodes[0]];
+    assert_eq!(cp.taint.defines.as_deref(), Some("e"));
+    assert_eq!(cp.kind, StmtKind::Seq);
+
+    // Exception edges should target the synthetic node
+    let exception_targets: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .map(|e| e.target())
+        .collect();
+    assert!(exception_targets.iter().all(|&t| t == catch_param_nodes[0]));
+}
+
+#[test]
+fn java_catch_param_extracted() {
+    let src = b"class Foo { void bar() { try { baz(); } catch (Exception e) { qux(e); } } }";
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
+
+    let catch_param_nodes: Vec<_> = cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
+    assert_eq!(
+        catch_param_nodes.len(),
+        1,
+        "Expected exactly one catch_param node in Java"
+    );
+    assert_eq!(
+        cfg[catch_param_nodes[0]].taint.defines.as_deref(),
+        Some("e")
+    );
+}
+
+#[test]
+fn js_catch_no_param_no_synthetic() {
+    // catch {} with no parameter should not create a catch_param node
+    let src = b"function f() { try { foo(); } catch { bar(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let catch_param_nodes: Vec<_> = cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
+    assert!(
+        catch_param_nodes.is_empty(),
+        "catch without parameter should not create a catch_param node"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  Ruby begin/rescue/ensure tests
+// ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn ruby_begin_rescue_has_exception_edges() {
+    let src = b"def f()\n  begin\n    foo()\n  rescue => e\n    bar(e)\n  end\nend";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+    let exception_edges: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .collect();
+    assert!(
+        !exception_edges.is_empty(),
+        "begin/rescue should produce exception edges"
+    );
+}
+
+#[test]
+fn ruby_rescue_catch_param_defines_variable() {
+    let src = b"def f()\n  begin\n    foo()\n  rescue StandardError => e\n    bar(e)\n  end\nend";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+    let catch_param_nodes: Vec<_> = cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
+    assert_eq!(
+        catch_param_nodes.len(),
+        1,
+        "Expected exactly one catch_param node in Ruby rescue"
+    );
+    let cp = &cfg[catch_param_nodes[0]];
+    assert_eq!(cp.taint.defines.as_deref(), Some("e"));
+    assert_eq!(cp.kind, StmtKind::Seq);
+
+    // Exception edges should target the synthetic node
+    let exception_targets: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .map(|e| e.target())
+        .collect();
+    assert!(exception_targets.iter().all(|&t| t == catch_param_nodes[0]));
+}
+
+#[test]
+fn ruby_begin_rescue_ensure_complete() {
+    let src =
+        b"def f()\n  begin\n    foo()\n  rescue => e\n    bar(e)\n  ensure\n    baz()\n  end\nend";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+    // Should have exception edges
+    let exception_count = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .count();
+    assert!(
+        exception_count > 0,
+        "begin/rescue/ensure should have exception edges"
+    );
+
+    // All nodes should be reachable (no orphaned nodes beyond entry/exit)
+    let node_count = cfg.node_count();
+    assert!(node_count > 3, "CFG should have multiple nodes");
+}
+
+#[test]
+fn ruby_rescue_no_variable() {
+    // bare rescue without => e
+    let src = b"def f()\n  begin\n    foo()\n  rescue\n    bar()\n  end\nend";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+    // No catch_param node should be created
+    let catch_param_nodes: Vec<_> = cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
+    assert!(
+        catch_param_nodes.is_empty(),
+        "rescue without variable should not create a catch_param node"
+    );
+
+    // But exception edges should still exist
+    let exception_count = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .count();
+    assert!(
+        exception_count > 0,
+        "rescue without variable should still have exception edges"
+    );
+}
+
+#[test]
+fn ruby_body_statement_implicit_begin() {
+    // def method body with inline rescue (no explicit begin)
+    let src = b"def f()\n  foo()\nrescue => e\n  bar(e)\nend";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+    let exception_count = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .count();
+    assert!(
+        exception_count > 0,
+        "implicit begin via body_statement should produce exception edges"
+    );
+
+    let catch_param_nodes: Vec<_> = cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
+    assert_eq!(
+        catch_param_nodes.len(),
+        1,
+        "implicit begin rescue should have one catch_param node"
+    );
+    assert_eq!(
+        cfg[catch_param_nodes[0]].taint.defines.as_deref(),
+        Some("e")
+    );
+}
+
+#[test]
+fn ruby_multiple_rescue_clauses() {
+    let src = b"def f()\n  begin\n    foo()\n  rescue IOError => e\n    handle_io(e)\n  rescue => e\n    handle_other(e)\n  end\nend";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+    let catch_param_nodes: Vec<_> = cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
+    assert_eq!(
+        catch_param_nodes.len(),
+        2,
+        "Two rescue clauses should produce two catch_param nodes"
+    );
+
+    // Both should define "e"
+    for &cp in &catch_param_nodes {
+        assert_eq!(cfg[cp].taint.defines.as_deref(), Some("e"));
+    }
+
+    // Exception edges should target both synthetic nodes
+    let exception_targets: std::collections::HashSet<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Exception))
+        .map(|e| e.target())
+        .collect();
+    for &cp in &catch_param_nodes {
+        assert!(
+            exception_targets.contains(&cp),
+            "Exception edges should target each catch_param node"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────
+//  Short-circuit evaluation tests
+// ─────────────────────────────────────────────────────────────────
+
+/// Helper: collect all If nodes from the CFG.
+fn if_nodes(cfg: &Cfg) -> Vec<NodeIndex> {
+    cfg.node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::If)
+        .collect()
+}
+
+/// Helper: check if an edge of the given kind exists from `src` to `dst`.
+fn has_edge(cfg: &Cfg, src: NodeIndex, dst: NodeIndex, kind_match: fn(&EdgeKind) -> bool) -> bool {
+    cfg.edges(src)
+        .any(|e| e.target() == dst && kind_match(e.weight()))
+}
+
+#[test]
+fn js_if_and_short_circuit() {
+    // `if (a && b) { then(); }`
+    // Should produce 2 If nodes: [a] --True--> [b]
+    // False from a → else-path, False from b → else-path
+    let src = b"function f() { if (a && b) { then(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(
+        ifs.len(),
+        2,
+        "Expected 2 If nodes for `a && b`, got {}",
+        ifs.len()
+    );
+
+    // Find which is `a` and which is `b` by condition_vars
+    let a_node = ifs
+        .iter()
+        .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
+        .copied()
+        .unwrap();
+    let b_node = ifs
+        .iter()
+        .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
+        .copied()
+        .unwrap();
+
+    // True edge from a to b
+    assert!(
+        has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
+        "Expected True edge from a to b"
+    );
+
+    // Both a and b should have False edges going somewhere (else-path)
+    let a_false: Vec<_> = cfg
+        .edges(a_node)
+        .filter(|e| matches!(e.weight(), EdgeKind::False))
+        .collect();
+    let b_false: Vec<_> = cfg
+        .edges(b_node)
+        .filter(|e| matches!(e.weight(), EdgeKind::False))
+        .collect();
+    assert!(!a_false.is_empty(), "Expected False edge from a");
+    assert!(!b_false.is_empty(), "Expected False edge from b");
+}
+
+#[test]
+fn js_if_or_short_circuit() {
+    // `if (a || b) { then(); }`
+    // Should produce 2 If nodes: [a] --False--> [b]
+    // True from a → then-path, True from b → then-path
+    let src = b"function f() { if (a || b) { then(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(
+        ifs.len(),
+        2,
+        "Expected 2 If nodes for `a || b`, got {}",
+        ifs.len()
+    );
+
+    let a_node = ifs
+        .iter()
+        .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
+        .copied()
+        .unwrap();
+    let b_node = ifs
+        .iter()
+        .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
+        .copied()
+        .unwrap();
+
+    // False edge from a to b
+    assert!(
+        has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::False)),
+        "Expected False edge from a to b"
+    );
+
+    // Both a and b should have True edges
+    let a_true: Vec<_> = cfg
+        .edges(a_node)
+        .filter(|e| matches!(e.weight(), EdgeKind::True))
+        .collect();
+    let b_true: Vec<_> = cfg
+        .edges(b_node)
+        .filter(|e| matches!(e.weight(), EdgeKind::True))
+        .collect();
+    assert!(!a_true.is_empty(), "Expected True edge from a");
+    assert!(!b_true.is_empty(), "Expected True edge from b");
+}
+
+#[test]
+fn js_if_nested_and_or() {
+    // `if (a && (b || c)) { then(); }`
+    // 3 If nodes: [a] --True--> [b], [b] --False--> [c]
+    // True from b or c → then; False from a or c → else
+    let src = b"function f() { if (a && (b || c)) { then(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(
+        ifs.len(),
+        3,
+        "Expected 3 If nodes for `a && (b || c)`, got {}",
+        ifs.len()
+    );
+
+    let a_node = ifs
+        .iter()
+        .find(|&&n| {
+            let vars = &cfg[n].condition_vars;
+            vars.contains(&"a".to_string()) && vars.len() == 1
+        })
+        .copied()
+        .unwrap();
+    let b_node = ifs
+        .iter()
+        .find(|&&n| {
+            let vars = &cfg[n].condition_vars;
+            vars.contains(&"b".to_string()) && vars.len() == 1
+        })
+        .copied()
+        .unwrap();
+    let c_node = ifs
+        .iter()
+        .find(|&&n| {
+            let vars = &cfg[n].condition_vars;
+            vars.contains(&"c".to_string()) && vars.len() == 1
+        })
+        .copied()
+        .unwrap();
+
+    // a --True--> b
+    assert!(has_edge(&cfg, a_node, b_node, |e| matches!(
+        e,
+        EdgeKind::True
+    )));
+    // b --False--> c
+    assert!(has_edge(&cfg, b_node, c_node, |e| matches!(
+        e,
+        EdgeKind::False
+    )));
+}
+
+#[test]
+fn js_while_and_short_circuit() {
+    // `while (a && b) { body(); }`
+    // Loop header + 2 If nodes, back-edge goes to header
+    let src = b"function f() { while (a && b) { body(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(
+        ifs.len(),
+        2,
+        "Expected 2 If nodes in while condition, got {}",
+        ifs.len()
+    );
+
+    // There should be a Loop header
+    let loop_headers: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect();
+    assert_eq!(loop_headers.len(), 1, "Expected 1 Loop header");
+    let header = loop_headers[0];
+
+    // Back-edges should go to header
+    let back_edges: Vec<_> = cfg
+        .edge_references()
+        .filter(|e| matches!(e.weight(), EdgeKind::Back))
+        .collect();
+    assert!(!back_edges.is_empty(), "Expected back edges");
+    for e in &back_edges {
+        assert_eq!(
+            e.target(),
+            header,
+            "Back edge should go to loop header, not into condition chain"
+        );
+    }
+}
+
+#[test]
+fn python_if_and() {
+    // Python uses `boolean_operator` with `and` token
+    let src = b"def f():\n    if a and b:\n        pass\n";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(
+        ifs.len(),
+        2,
+        "Expected 2 If nodes for Python `a and b`, got {}",
+        ifs.len()
+    );
+
+    let a_node = ifs
+        .iter()
+        .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
+        .copied()
+        .unwrap();
+    let b_node = ifs
+        .iter()
+        .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
+        .copied()
+        .unwrap();
+
+    assert!(
+        has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
+        "Expected True edge from a to b in Python and"
+    );
+}
+
+#[test]
+fn ruby_unless_and() {
+    // `unless a && b` — chain built, branches swapped
+    // Body should run when condition is false
+    let src = b"def f\n  unless a && b\n    x\n  end\nend\n";
+    let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(
+        ifs.len(),
+        2,
+        "Expected 2 If nodes for Ruby `unless a && b`, got {}",
+        ifs.len()
+    );
+
+    let a_node = ifs
+        .iter()
+        .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
+        .copied()
+        .unwrap();
+    let b_node = ifs
+        .iter()
+        .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
+        .copied()
+        .unwrap();
+
+    // Still has True edge from a to b (the chain is the same)
+    assert!(
+        has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
+        "Expected True edge from a to b in unless"
+    );
+
+    // For `unless`, the False exits should connect to the body with False edge
+    // (since body runs when condition is false)
+    let a_false_targets: Vec<_> = cfg
+        .edges(a_node)
+        .filter(|e| matches!(e.weight(), EdgeKind::False))
+        .map(|e| e.target())
+        .collect();
+    // a's false exit should connect to the body (not to a pass-through)
+    // because for `unless (a && b)`, when a is false the full condition is false,
+    // meaning the body should execute
+    assert!(
+        !a_false_targets.is_empty(),
+        "a should have False edges in unless"
+    );
+}
+
+#[test]
+fn while_short_circuit_continue() {
+    // `while (a && b) { if (cond) { continue; } body(); }`
+    // Verify continue goes to loop header
+    let src = b"function f() { while (a && b) { if (cond) { continue; } body(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let loop_headers: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Loop)
+        .collect();
+    assert_eq!(loop_headers.len(), 1);
+    let header = loop_headers[0];
+
+    // Continue nodes should have back-edge to header
+    let continue_nodes: Vec<_> = cfg
+        .node_indices()
+        .filter(|&n| cfg[n].kind == StmtKind::Continue)
+        .collect();
+    assert!(!continue_nodes.is_empty(), "Expected continue node");
+    for &cont in &continue_nodes {
+        assert!(
+            has_edge(&cfg, cont, header, |e| matches!(e, EdgeKind::Back)),
+            "Continue should have back-edge to loop header"
+        );
+    }
+}
+
+#[test]
+fn negated_boolean_no_decomposition() {
+    // `!(a && b)` should NOT be decomposed (De Morgan out of scope)
+    let src = b"function f() { if (!(a && b)) { then(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    // Should be exactly 1 If node (no decomposition)
+    assert_eq!(
+        ifs.len(),
+        1,
+        "Negated boolean should NOT be decomposed, got {} If nodes",
+        ifs.len()
+    );
+}
+
+#[test]
+fn js_triple_and_chain() {
+    // `if (a && b && c) { then(); }`
+    // Tree-sitter parses as `(a && b) && c` → left-to-right chain
+    let src = b"function f() { if (a && b && c) { then(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(
+        ifs.len(),
+        3,
+        "Expected 3 If nodes for `a && b && c`, got {}",
+        ifs.len()
+    );
+}
+
+#[test]
+fn js_or_precedence_with_and() {
+    // `if (a || b && c) { then(); }`
+    // Tree-sitter respects precedence: `a || (b && c)`
+    // → [a] --False--> [b] --True--> [c]
+    // True from a or c → then; False from c (and b) → else
+    let src = b"function f() { if (a || b && c) { then(); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+
+    let ifs = if_nodes(&cfg);
+    assert_eq!(
+        ifs.len(),
+        3,
+        "Expected 3 If nodes for `a || b && c`, got {}",
+        ifs.len()
+    );
+}
+
+// ── first_call_ident tests ──────────────────────────────────────────
+
+/// Helper: parse source with a given language, return the root tree-sitter node.
+fn parse_tree(src: &[u8], ts_lang: Language) -> tree_sitter::Tree {
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_lang).unwrap();
+    parser.parse(src, None).unwrap()
+}
+
+#[test]
+fn first_call_ident_skips_lambda_body() {
+    // `process(lambda: eval(dangerous))` — Python-style.
+    // first_call_ident should return "process", not "eval".
+    let src = b"process(lambda: eval(dangerous))";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let tree = parse_tree(src, ts_lang);
+    let root = tree.root_node();
+    let result = first_call_ident(root, "python", src);
+    assert_eq!(result.as_deref(), Some("process"));
+}
+
+#[test]
+fn first_call_ident_skips_arrow_function_body() {
+    // `process(() => eval(dangerous))` — JS arrow function in argument.
+    let src = b"process(() => eval(dangerous))";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let tree = parse_tree(src, ts_lang);
+    let root = tree.root_node();
+    let result = first_call_ident(root, "javascript", src);
+    assert_eq!(result.as_deref(), Some("process"));
+}
+
+#[test]
+fn first_call_ident_skips_named_function_in_arg() {
+    // `process(function inner() { eval(dangerous); })` — named function expression in arg.
+    let src = b"process(function inner() { eval(dangerous); })";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let tree = parse_tree(src, ts_lang);
+    let root = tree.root_node();
+    let result = first_call_ident(root, "javascript", src);
+    assert_eq!(result.as_deref(), Some("process"));
+}
+
+#[test]
+fn first_call_ident_normal_nested_call() {
+    // `outer(inner(x))` — inner is NOT behind a function boundary, should be reachable.
+    let src = b"outer(inner(x))";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let tree = parse_tree(src, ts_lang);
+    let root = tree.root_node();
+    let result = first_call_ident(root, "javascript", src);
+    // first_call_ident returns the first call it encounters (outer)
+    assert_eq!(result.as_deref(), Some("outer"));
+}
+
+#[test]
+fn first_call_ident_finds_call_not_blocked_by_function() {
+    // Ensure a call at the same level as a function literal is still found.
+    // `[function() {}, actual_call()]` — array with function and call.
+    let src = b"[function() {}, actual_call()]";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let tree = parse_tree(src, ts_lang);
+    let root = tree.root_node();
+    let result = first_call_ident(root, "javascript", src);
+    assert_eq!(result.as_deref(), Some("actual_call"));
+}
+
+// ── Callee classification with nested function regression ───────────
+
+#[test]
+fn callee_not_resolved_from_nested_function_arg() {
+    // `safe_wrapper(function() { eval(user_input); })` — the CFG for the
+    // outer call should resolve the callee as "safe_wrapper", never "eval".
+    let src = b"function f() { safe_wrapper(function() { eval(user_input); }); }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+
+    // Find the node whose callee is "safe_wrapper"
+    let body = &file_cfg.bodies[1]; // function body
+    let has_safe = body
+        .graph
+        .node_weights()
+        .any(|info| info.call.callee.as_deref() == Some("safe_wrapper"));
+    assert!(has_safe, "expected a node with callee 'safe_wrapper'");
+
+    // The outer body should NOT have a node with callee "eval" attributed
+    // to the outer expression — eval lives inside the nested function body.
+    let outer_eval = body.graph.node_weights().any(|info| {
+        info.call.callee.as_deref() == Some("eval") && info.ast.enclosing_func.is_none()
+    });
+    assert!(
+        !outer_eval,
+        "eval should not appear as a callee in the outer scope from a nested function"
+    );
+}
+
+// ── NodeInfo sub-struct refactor tests ──────────────────────────────
+
+#[test]
+fn nodeinfo_default_is_valid() {
+    let n = NodeInfo::default();
+    assert_eq!(n.kind, StmtKind::Seq);
+    assert!(n.call.callee.is_none());
+    assert!(n.call.outer_callee.is_none());
+    assert_eq!(n.call.call_ordinal, 0);
+    assert!(n.call.arg_uses.is_empty());
+    assert!(n.call.receiver.is_none());
+    assert!(n.call.sink_payload_args.is_none());
+    assert!(n.taint.labels.is_empty());
+    assert!(n.taint.const_text.is_none());
+    assert!(n.taint.defines.is_none());
+    assert!(n.taint.uses.is_empty());
+    assert!(n.taint.extra_defines.is_empty());
+    assert_eq!(n.ast.span, (0, 0));
+    assert!(n.ast.enclosing_func.is_none());
+    assert!(!n.all_args_literal);
+    assert!(!n.catch_param);
+    assert!(n.condition_text.is_none());
+    assert!(n.condition_vars.is_empty());
+    assert!(!n.condition_negated);
+    assert!(n.arg_callees.is_empty());
+    assert!(n.cast_target_type.is_none());
+    assert!(n.bin_op.is_none());
+    assert!(n.bin_op_const.is_none());
+    assert!(!n.managed_resource);
+    assert!(!n.in_defer);
+    assert!(!n.is_eq_with_const);
+}
+
+#[test]
+fn callmeta_default() {
+    let c = CallMeta::default();
+    assert!(c.callee.is_none());
+    assert!(c.outer_callee.is_none());
+    assert_eq!(c.call_ordinal, 0);
+    assert!(c.arg_uses.is_empty());
+    assert!(c.receiver.is_none());
+    assert!(c.sink_payload_args.is_none());
+}
+
+#[test]
+fn taintmeta_default() {
+    let t = TaintMeta::default();
+    assert!(t.labels.is_empty());
+    assert!(t.const_text.is_none());
+    assert!(t.defines.is_none());
+    assert!(t.uses.is_empty());
+    assert!(t.extra_defines.is_empty());
+}
+
+#[test]
+fn astmeta_default() {
+    let a = AstMeta::default();
+    assert_eq!(a.span, (0, 0));
+    assert!(a.enclosing_func.is_none());
+}
+
+#[test]
+fn synthetic_catch_param_node_structure() {
+    let n = NodeInfo {
+        kind: StmtKind::Seq,
+        ast: AstMeta {
+            span: (100, 100),
+            enclosing_func: Some("handle_request".into()),
+        },
+        taint: TaintMeta {
+            defines: Some("e".into()),
             ..Default::default()
-        };
-        assert_eq!(narrowed.classification_span(), (150, 170));
-        assert_eq!(narrowed.ast.span, (100, 200));
-    }
-
-    /// The narrowed `callee_span` must remain strictly narrower than
-    /// `ast.span` on real-world CFG nodes.  When the classification applies
-    /// to (or degenerates to) the outer node, `callee_span` is left `None`
-    /// so we don't bloat every labeled node with a redundant span copy.
-    #[test]
-    fn callee_span_unset_when_no_narrowing_is_possible() {
-        // A bare `eval(x);` on one line: `first_call_ident` finds the
-        // call_expression whose span is nearly the whole expression_statement
-        // (different by the trailing `;`).  `classification_span` still
-        // returns a sensible line — but the exact trimming is an
-        // implementation detail.  What we assert here is the invariant:
-        // if callee_span *is* set, it must be contained in ast.span.
-        let src = b"function f() { eval(x); }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let sink = cfg
-            .node_indices()
-            .find(|&i| cfg[i].call.callee.as_deref() == Some("eval"))
-            .expect("should find eval call");
-        let info = &cfg[sink];
-        if let Some(cs) = info.call.callee_span {
-            assert!(
-                cs.0 >= info.ast.span.0 && cs.1 <= info.ast.span.1,
-                "callee_span {:?} must be contained in ast.span {:?}",
-                cs,
-                info.ast.span,
-            );
-            assert_ne!(
-                cs, info.ast.span,
-                "callee_span should only be set when it narrows ast.span"
-            );
-        }
-    }
-
-    #[test]
-    fn js_try_finally_no_exception_edges() {
-        let src = b"function f() { try { foo(); } finally { cleanup(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let exception_edges: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .collect();
-        // No catch clause → no exception edges
-        assert!(
-            exception_edges.is_empty(),
-            "Expected no Exception edges for try/finally without catch"
-        );
-
-        // Verify finally nodes are reachable from entry
-        let mut reachable = HashSet::new();
-        let mut bfs = petgraph::visit::Bfs::new(&cfg, _entry);
-        while let Some(nx) = bfs.next(&cfg) {
-            reachable.insert(nx);
-        }
-        assert_eq!(
-            reachable.len(),
-            cfg.node_count(),
-            "All nodes should be reachable (finally connected to try body)"
-        );
-    }
-
-    #[test]
-    fn java_try_catch_has_exception_edges() {
-        let src = b"class Foo { void bar() { try { baz(); } catch (Exception e) { qux(); } } }";
-        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
-
-        let exception_edges: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .collect();
-        assert!(
-            !exception_edges.is_empty(),
-            "Expected at least one Exception edge in Java try/catch"
-        );
-        for e in &exception_edges {
-            assert_eq!(cfg[e.source()].kind, StmtKind::Call);
-        }
-    }
-
-    #[test]
-    fn js_try_catch_finally_all_reachable() {
-        let src = b"function f() { try { foo(); } catch (e) { bar(); } finally { baz(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, entry) = parse_and_build(src, "javascript", ts_lang);
-
-        // All nodes should be reachable
-        let mut reachable = HashSet::new();
-        let mut bfs = petgraph::visit::Bfs::new(&cfg, entry);
-        while let Some(nx) = bfs.next(&cfg) {
-            reachable.insert(nx);
-        }
-        assert_eq!(
-            reachable.len(),
-            cfg.node_count(),
-            "All nodes should be reachable in try/catch/finally"
-        );
-
-        // Should have exception edges
-        let exception_edges: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .collect();
-        assert!(!exception_edges.is_empty());
-    }
-
-    #[test]
-    fn js_throw_in_try_catch_has_exception_edge() {
-        let src = b"function f() { try { throw new Error('bad'); } catch (e) { handle(e); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let exception_edges: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .collect();
-        assert!(
-            !exception_edges.is_empty(),
-            "throw inside try should create exception edge to catch"
-        );
-    }
-
-    #[test]
-    fn java_multiple_catch_clauses() {
-        let src = b"class Foo { void bar() { try { baz(); } catch (IOException e) { a(); } catch (Exception e) { b(); } } }";
-        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
-
-        let exception_edges: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .collect();
-        // Should have exception edges to both catch clauses
-        assert!(
-            exception_edges.len() >= 2,
-            "Expected exception edges to multiple catch clauses, got {}",
-            exception_edges.len()
-        );
-    }
-
-    #[test]
-    fn js_catch_param_defines_variable() {
-        let src = b"function f() { try { foo(); } catch (e) { bar(e); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        // Find the synthetic catch-param node
-        let catch_param_nodes: Vec<_> =
-            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
-        assert_eq!(
-            catch_param_nodes.len(),
-            1,
-            "Expected exactly one catch_param node"
-        );
-        let cp = &cfg[catch_param_nodes[0]];
-        assert_eq!(cp.taint.defines.as_deref(), Some("e"));
-        assert_eq!(cp.kind, StmtKind::Seq);
-
-        // Exception edges should target the synthetic node
-        let exception_targets: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .map(|e| e.target())
-            .collect();
-        assert!(exception_targets.iter().all(|&t| t == catch_param_nodes[0]));
-    }
-
-    #[test]
-    fn java_catch_param_extracted() {
-        let src = b"class Foo { void bar() { try { baz(); } catch (Exception e) { qux(e); } } }";
-        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "java", ts_lang);
-
-        let catch_param_nodes: Vec<_> =
-            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
-        assert_eq!(
-            catch_param_nodes.len(),
-            1,
-            "Expected exactly one catch_param node in Java"
-        );
-        assert_eq!(
-            cfg[catch_param_nodes[0]].taint.defines.as_deref(),
-            Some("e")
-        );
-    }
-
-    #[test]
-    fn js_catch_no_param_no_synthetic() {
-        // catch {} with no parameter should not create a catch_param node
-        let src = b"function f() { try { foo(); } catch { bar(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let catch_param_nodes: Vec<_> =
-            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
-        assert!(
-            catch_param_nodes.is_empty(),
-            "catch without parameter should not create a catch_param node"
-        );
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    //  Ruby begin/rescue/ensure tests
-    // ─────────────────────────────────────────────────────────────────
-
-    #[test]
-    fn ruby_begin_rescue_has_exception_edges() {
-        let src = b"def f()\n  begin\n    foo()\n  rescue => e\n    bar(e)\n  end\nend";
-        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
-
-        let exception_edges: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .collect();
-        assert!(
-            !exception_edges.is_empty(),
-            "begin/rescue should produce exception edges"
-        );
-    }
-
-    #[test]
-    fn ruby_rescue_catch_param_defines_variable() {
-        let src =
-            b"def f()\n  begin\n    foo()\n  rescue StandardError => e\n    bar(e)\n  end\nend";
-        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
-
-        let catch_param_nodes: Vec<_> =
-            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
-        assert_eq!(
-            catch_param_nodes.len(),
-            1,
-            "Expected exactly one catch_param node in Ruby rescue"
-        );
-        let cp = &cfg[catch_param_nodes[0]];
-        assert_eq!(cp.taint.defines.as_deref(), Some("e"));
-        assert_eq!(cp.kind, StmtKind::Seq);
-
-        // Exception edges should target the synthetic node
-        let exception_targets: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .map(|e| e.target())
-            .collect();
-        assert!(exception_targets.iter().all(|&t| t == catch_param_nodes[0]));
-    }
-
-    #[test]
-    fn ruby_begin_rescue_ensure_complete() {
-        let src = b"def f()\n  begin\n    foo()\n  rescue => e\n    bar(e)\n  ensure\n    baz()\n  end\nend";
-        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
-
-        // Should have exception edges
-        let exception_count = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .count();
-        assert!(
-            exception_count > 0,
-            "begin/rescue/ensure should have exception edges"
-        );
-
-        // All nodes should be reachable (no orphaned nodes beyond entry/exit)
-        let node_count = cfg.node_count();
-        assert!(node_count > 3, "CFG should have multiple nodes");
-    }
-
-    #[test]
-    fn ruby_rescue_no_variable() {
-        // bare rescue without => e
-        let src = b"def f()\n  begin\n    foo()\n  rescue\n    bar()\n  end\nend";
-        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
-
-        // No catch_param node should be created
-        let catch_param_nodes: Vec<_> =
-            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
-        assert!(
-            catch_param_nodes.is_empty(),
-            "rescue without variable should not create a catch_param node"
-        );
-
-        // But exception edges should still exist
-        let exception_count = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .count();
-        assert!(
-            exception_count > 0,
-            "rescue without variable should still have exception edges"
-        );
-    }
-
-    #[test]
-    fn ruby_body_statement_implicit_begin() {
-        // def method body with inline rescue (no explicit begin)
-        let src = b"def f()\n  foo()\nrescue => e\n  bar(e)\nend";
-        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
-
-        let exception_count = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .count();
-        assert!(
-            exception_count > 0,
-            "implicit begin via body_statement should produce exception edges"
-        );
-
-        let catch_param_nodes: Vec<_> =
-            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
-        assert_eq!(
-            catch_param_nodes.len(),
-            1,
-            "implicit begin rescue should have one catch_param node"
-        );
-        assert_eq!(
-            cfg[catch_param_nodes[0]].taint.defines.as_deref(),
-            Some("e")
-        );
-    }
-
-    #[test]
-    fn ruby_multiple_rescue_clauses() {
-        let src = b"def f()\n  begin\n    foo()\n  rescue IOError => e\n    handle_io(e)\n  rescue => e\n    handle_other(e)\n  end\nend";
-        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
-
-        let catch_param_nodes: Vec<_> =
-            cfg.node_indices().filter(|&n| cfg[n].catch_param).collect();
-        assert_eq!(
-            catch_param_nodes.len(),
-            2,
-            "Two rescue clauses should produce two catch_param nodes"
-        );
-
-        // Both should define "e"
-        for &cp in &catch_param_nodes {
-            assert_eq!(cfg[cp].taint.defines.as_deref(), Some("e"));
-        }
-
-        // Exception edges should target both synthetic nodes
-        let exception_targets: std::collections::HashSet<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Exception))
-            .map(|e| e.target())
-            .collect();
-        for &cp in &catch_param_nodes {
-            assert!(
-                exception_targets.contains(&cp),
-                "Exception edges should target each catch_param node"
-            );
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    //  Short-circuit evaluation tests
-    // ─────────────────────────────────────────────────────────────────
-
-    /// Helper: collect all If nodes from the CFG.
-    fn if_nodes(cfg: &Cfg) -> Vec<NodeIndex> {
-        cfg.node_indices()
-            .filter(|&n| cfg[n].kind == StmtKind::If)
-            .collect()
-    }
-
-    /// Helper: check if an edge of the given kind exists from `src` to `dst`.
-    fn has_edge(
-        cfg: &Cfg,
-        src: NodeIndex,
-        dst: NodeIndex,
-        kind_match: fn(&EdgeKind) -> bool,
-    ) -> bool {
-        cfg.edges(src)
-            .any(|e| e.target() == dst && kind_match(e.weight()))
-    }
-
-    #[test]
-    fn js_if_and_short_circuit() {
-        // `if (a && b) { then(); }`
-        // Should produce 2 If nodes: [a] --True--> [b]
-        // False from a → else-path, False from b → else-path
-        let src = b"function f() { if (a && b) { then(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let ifs = if_nodes(&cfg);
-        assert_eq!(
-            ifs.len(),
-            2,
-            "Expected 2 If nodes for `a && b`, got {}",
-            ifs.len()
-        );
-
-        // Find which is `a` and which is `b` by condition_vars
-        let a_node = ifs
-            .iter()
-            .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
-            .copied()
-            .unwrap();
-        let b_node = ifs
-            .iter()
-            .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
-            .copied()
-            .unwrap();
-
-        // True edge from a to b
-        assert!(
-            has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
-            "Expected True edge from a to b"
-        );
-
-        // Both a and b should have False edges going somewhere (else-path)
-        let a_false: Vec<_> = cfg
-            .edges(a_node)
-            .filter(|e| matches!(e.weight(), EdgeKind::False))
-            .collect();
-        let b_false: Vec<_> = cfg
-            .edges(b_node)
-            .filter(|e| matches!(e.weight(), EdgeKind::False))
-            .collect();
-        assert!(!a_false.is_empty(), "Expected False edge from a");
-        assert!(!b_false.is_empty(), "Expected False edge from b");
-    }
-
-    #[test]
-    fn js_if_or_short_circuit() {
-        // `if (a || b) { then(); }`
-        // Should produce 2 If nodes: [a] --False--> [b]
-        // True from a → then-path, True from b → then-path
-        let src = b"function f() { if (a || b) { then(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let ifs = if_nodes(&cfg);
-        assert_eq!(
-            ifs.len(),
-            2,
-            "Expected 2 If nodes for `a || b`, got {}",
-            ifs.len()
-        );
-
-        let a_node = ifs
-            .iter()
-            .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
-            .copied()
-            .unwrap();
-        let b_node = ifs
-            .iter()
-            .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
-            .copied()
-            .unwrap();
-
-        // False edge from a to b
-        assert!(
-            has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::False)),
-            "Expected False edge from a to b"
-        );
-
-        // Both a and b should have True edges
-        let a_true: Vec<_> = cfg
-            .edges(a_node)
-            .filter(|e| matches!(e.weight(), EdgeKind::True))
-            .collect();
-        let b_true: Vec<_> = cfg
-            .edges(b_node)
-            .filter(|e| matches!(e.weight(), EdgeKind::True))
-            .collect();
-        assert!(!a_true.is_empty(), "Expected True edge from a");
-        assert!(!b_true.is_empty(), "Expected True edge from b");
-    }
-
-    #[test]
-    fn js_if_nested_and_or() {
-        // `if (a && (b || c)) { then(); }`
-        // 3 If nodes: [a] --True--> [b], [b] --False--> [c]
-        // True from b or c → then; False from a or c → else
-        let src = b"function f() { if (a && (b || c)) { then(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let ifs = if_nodes(&cfg);
-        assert_eq!(
-            ifs.len(),
-            3,
-            "Expected 3 If nodes for `a && (b || c)`, got {}",
-            ifs.len()
-        );
-
-        let a_node = ifs
-            .iter()
-            .find(|&&n| {
-                let vars = &cfg[n].condition_vars;
-                vars.contains(&"a".to_string()) && vars.len() == 1
-            })
-            .copied()
-            .unwrap();
-        let b_node = ifs
-            .iter()
-            .find(|&&n| {
-                let vars = &cfg[n].condition_vars;
-                vars.contains(&"b".to_string()) && vars.len() == 1
-            })
-            .copied()
-            .unwrap();
-        let c_node = ifs
-            .iter()
-            .find(|&&n| {
-                let vars = &cfg[n].condition_vars;
-                vars.contains(&"c".to_string()) && vars.len() == 1
-            })
-            .copied()
-            .unwrap();
-
-        // a --True--> b
-        assert!(has_edge(&cfg, a_node, b_node, |e| matches!(
-            e,
-            EdgeKind::True
-        )));
-        // b --False--> c
-        assert!(has_edge(&cfg, b_node, c_node, |e| matches!(
-            e,
-            EdgeKind::False
-        )));
-    }
-
-    #[test]
-    fn js_while_and_short_circuit() {
-        // `while (a && b) { body(); }`
-        // Loop header + 2 If nodes, back-edge goes to header
-        let src = b"function f() { while (a && b) { body(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let ifs = if_nodes(&cfg);
-        assert_eq!(
-            ifs.len(),
-            2,
-            "Expected 2 If nodes in while condition, got {}",
-            ifs.len()
-        );
-
-        // There should be a Loop header
-        let loop_headers: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].kind == StmtKind::Loop)
-            .collect();
-        assert_eq!(loop_headers.len(), 1, "Expected 1 Loop header");
-        let header = loop_headers[0];
-
-        // Back-edges should go to header
-        let back_edges: Vec<_> = cfg
-            .edge_references()
-            .filter(|e| matches!(e.weight(), EdgeKind::Back))
-            .collect();
-        assert!(!back_edges.is_empty(), "Expected back edges");
-        for e in &back_edges {
-            assert_eq!(
-                e.target(),
-                header,
-                "Back edge should go to loop header, not into condition chain"
-            );
-        }
-    }
-
-    #[test]
-    fn python_if_and() {
-        // Python uses `boolean_operator` with `and` token
-        let src = b"def f():\n    if a and b:\n        pass\n";
-        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
-
-        let ifs = if_nodes(&cfg);
-        assert_eq!(
-            ifs.len(),
-            2,
-            "Expected 2 If nodes for Python `a and b`, got {}",
-            ifs.len()
-        );
-
-        let a_node = ifs
-            .iter()
-            .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
-            .copied()
-            .unwrap();
-        let b_node = ifs
-            .iter()
-            .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
-            .copied()
-            .unwrap();
-
-        assert!(
-            has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
-            "Expected True edge from a to b in Python and"
-        );
-    }
-
-    #[test]
-    fn ruby_unless_and() {
-        // `unless a && b` — chain built, branches swapped
-        // Body should run when condition is false
-        let src = b"def f\n  unless a && b\n    x\n  end\nend\n";
-        let ts_lang = Language::from(tree_sitter_ruby::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "ruby", ts_lang);
-
-        let ifs = if_nodes(&cfg);
-        assert_eq!(
-            ifs.len(),
-            2,
-            "Expected 2 If nodes for Ruby `unless a && b`, got {}",
-            ifs.len()
-        );
-
-        let a_node = ifs
-            .iter()
-            .find(|&&n| cfg[n].condition_vars.contains(&"a".to_string()))
-            .copied()
-            .unwrap();
-        let b_node = ifs
-            .iter()
-            .find(|&&n| cfg[n].condition_vars.contains(&"b".to_string()))
-            .copied()
-            .unwrap();
-
-        // Still has True edge from a to b (the chain is the same)
-        assert!(
-            has_edge(&cfg, a_node, b_node, |e| matches!(e, EdgeKind::True)),
-            "Expected True edge from a to b in unless"
-        );
-
-        // For `unless`, the False exits should connect to the body with False edge
-        // (since body runs when condition is false)
-        let a_false_targets: Vec<_> = cfg
-            .edges(a_node)
-            .filter(|e| matches!(e.weight(), EdgeKind::False))
-            .map(|e| e.target())
-            .collect();
-        // a's false exit should connect to the body (not to a pass-through)
-        // because for `unless (a && b)`, when a is false the full condition is false,
-        // meaning the body should execute
-        assert!(
-            !a_false_targets.is_empty(),
-            "a should have False edges in unless"
-        );
-    }
-
-    #[test]
-    fn while_short_circuit_continue() {
-        // `while (a && b) { if (cond) { continue; } body(); }`
-        // Verify continue goes to loop header
-        let src = b"function f() { while (a && b) { if (cond) { continue; } body(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let loop_headers: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].kind == StmtKind::Loop)
-            .collect();
-        assert_eq!(loop_headers.len(), 1);
-        let header = loop_headers[0];
-
-        // Continue nodes should have back-edge to header
-        let continue_nodes: Vec<_> = cfg
-            .node_indices()
-            .filter(|&n| cfg[n].kind == StmtKind::Continue)
-            .collect();
-        assert!(!continue_nodes.is_empty(), "Expected continue node");
-        for &cont in &continue_nodes {
-            assert!(
-                has_edge(&cfg, cont, header, |e| matches!(e, EdgeKind::Back)),
-                "Continue should have back-edge to loop header"
-            );
-        }
-    }
-
-    #[test]
-    fn negated_boolean_no_decomposition() {
-        // `!(a && b)` should NOT be decomposed (De Morgan out of scope)
-        let src = b"function f() { if (!(a && b)) { then(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let ifs = if_nodes(&cfg);
-        // Should be exactly 1 If node (no decomposition)
-        assert_eq!(
-            ifs.len(),
-            1,
-            "Negated boolean should NOT be decomposed, got {} If nodes",
-            ifs.len()
-        );
-    }
-
-    #[test]
-    fn js_triple_and_chain() {
-        // `if (a && b && c) { then(); }`
-        // Tree-sitter parses as `(a && b) && c` → left-to-right chain
-        let src = b"function f() { if (a && b && c) { then(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let ifs = if_nodes(&cfg);
-        assert_eq!(
-            ifs.len(),
-            3,
-            "Expected 3 If nodes for `a && b && c`, got {}",
-            ifs.len()
-        );
-    }
-
-    #[test]
-    fn js_or_precedence_with_and() {
-        // `if (a || b && c) { then(); }`
-        // Tree-sitter respects precedence: `a || (b && c)`
-        // → [a] --False--> [b] --True--> [c]
-        // True from a or c → then; False from c (and b) → else
-        let src = b"function f() { if (a || b && c) { then(); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-
-        let ifs = if_nodes(&cfg);
-        assert_eq!(
-            ifs.len(),
-            3,
-            "Expected 3 If nodes for `a || b && c`, got {}",
-            ifs.len()
-        );
-    }
-
-    // ── first_call_ident tests ──────────────────────────────────────────
-
-    /// Helper: parse source with a given language, return the root tree-sitter node.
-    fn parse_tree(src: &[u8], ts_lang: Language) -> tree_sitter::Tree {
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&ts_lang).unwrap();
-        parser.parse(src, None).unwrap()
-    }
-
-    #[test]
-    fn first_call_ident_skips_lambda_body() {
-        // `process(lambda: eval(dangerous))` — Python-style.
-        // first_call_ident should return "process", not "eval".
-        let src = b"process(lambda: eval(dangerous))";
-        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
-        let tree = parse_tree(src, ts_lang);
-        let root = tree.root_node();
-        let result = first_call_ident(root, "python", src);
-        assert_eq!(result.as_deref(), Some("process"));
-    }
-
-    #[test]
-    fn first_call_ident_skips_arrow_function_body() {
-        // `process(() => eval(dangerous))` — JS arrow function in argument.
-        let src = b"process(() => eval(dangerous))";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let tree = parse_tree(src, ts_lang);
-        let root = tree.root_node();
-        let result = first_call_ident(root, "javascript", src);
-        assert_eq!(result.as_deref(), Some("process"));
-    }
-
-    #[test]
-    fn first_call_ident_skips_named_function_in_arg() {
-        // `process(function inner() { eval(dangerous); })` — named function expression in arg.
-        let src = b"process(function inner() { eval(dangerous); })";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let tree = parse_tree(src, ts_lang);
-        let root = tree.root_node();
-        let result = first_call_ident(root, "javascript", src);
-        assert_eq!(result.as_deref(), Some("process"));
-    }
-
-    #[test]
-    fn first_call_ident_normal_nested_call() {
-        // `outer(inner(x))` — inner is NOT behind a function boundary, should be reachable.
-        let src = b"outer(inner(x))";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let tree = parse_tree(src, ts_lang);
-        let root = tree.root_node();
-        let result = first_call_ident(root, "javascript", src);
-        // first_call_ident returns the first call it encounters (outer)
-        assert_eq!(result.as_deref(), Some("outer"));
-    }
-
-    #[test]
-    fn first_call_ident_finds_call_not_blocked_by_function() {
-        // Ensure a call at the same level as a function literal is still found.
-        // `[function() {}, actual_call()]` — array with function and call.
-        let src = b"[function() {}, actual_call()]";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let tree = parse_tree(src, ts_lang);
-        let root = tree.root_node();
-        let result = first_call_ident(root, "javascript", src);
-        assert_eq!(result.as_deref(), Some("actual_call"));
-    }
-
-    // ── Callee classification with nested function regression ───────────
-
-    #[test]
-    fn callee_not_resolved_from_nested_function_arg() {
-        // `safe_wrapper(function() { eval(user_input); })` — the CFG for the
-        // outer call should resolve the callee as "safe_wrapper", never "eval".
-        let src = b"function f() { safe_wrapper(function() { eval(user_input); }); }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-
-        // Find the node whose callee is "safe_wrapper"
-        let body = &file_cfg.bodies[1]; // function body
-        let has_safe = body
-            .graph
-            .node_weights()
-            .any(|info| info.call.callee.as_deref() == Some("safe_wrapper"));
-        assert!(has_safe, "expected a node with callee 'safe_wrapper'");
-
-        // The outer body should NOT have a node with callee "eval" attributed
-        // to the outer expression — eval lives inside the nested function body.
-        let outer_eval = body.graph.node_weights().any(|info| {
-            info.call.callee.as_deref() == Some("eval") && info.ast.enclosing_func.is_none()
-        });
-        assert!(
-            !outer_eval,
-            "eval should not appear as a callee in the outer scope from a nested function"
-        );
-    }
-
-    // ── NodeInfo sub-struct refactor tests ──────────────────────────────
-
-    #[test]
-    fn nodeinfo_default_is_valid() {
-        let n = NodeInfo::default();
-        assert_eq!(n.kind, StmtKind::Seq);
-        assert!(n.call.callee.is_none());
-        assert!(n.call.outer_callee.is_none());
-        assert_eq!(n.call.call_ordinal, 0);
-        assert!(n.call.arg_uses.is_empty());
-        assert!(n.call.receiver.is_none());
-        assert!(n.call.sink_payload_args.is_none());
-        assert!(n.taint.labels.is_empty());
-        assert!(n.taint.const_text.is_none());
-        assert!(n.taint.defines.is_none());
-        assert!(n.taint.uses.is_empty());
-        assert!(n.taint.extra_defines.is_empty());
-        assert_eq!(n.ast.span, (0, 0));
-        assert!(n.ast.enclosing_func.is_none());
-        assert!(!n.all_args_literal);
-        assert!(!n.catch_param);
-        assert!(n.condition_text.is_none());
-        assert!(n.condition_vars.is_empty());
-        assert!(!n.condition_negated);
-        assert!(n.arg_callees.is_empty());
-        assert!(n.cast_target_type.is_none());
-        assert!(n.bin_op.is_none());
-        assert!(n.bin_op_const.is_none());
-        assert!(!n.managed_resource);
-        assert!(!n.in_defer);
-        assert!(!n.is_eq_with_const);
-    }
-
-    #[test]
-    fn callmeta_default() {
-        let c = CallMeta::default();
-        assert!(c.callee.is_none());
-        assert!(c.outer_callee.is_none());
-        assert_eq!(c.call_ordinal, 0);
-        assert!(c.arg_uses.is_empty());
-        assert!(c.receiver.is_none());
-        assert!(c.sink_payload_args.is_none());
-    }
-
-    #[test]
-    fn taintmeta_default() {
-        let t = TaintMeta::default();
-        assert!(t.labels.is_empty());
-        assert!(t.const_text.is_none());
-        assert!(t.defines.is_none());
-        assert!(t.uses.is_empty());
-        assert!(t.extra_defines.is_empty());
-    }
-
-    #[test]
-    fn astmeta_default() {
-        let a = AstMeta::default();
-        assert_eq!(a.span, (0, 0));
-        assert!(a.enclosing_func.is_none());
-    }
-
-    #[test]
-    fn synthetic_catch_param_node_structure() {
-        let n = NodeInfo {
-            kind: StmtKind::Seq,
-            ast: AstMeta {
-                span: (100, 100),
-                enclosing_func: Some("handle_request".into()),
-            },
-            taint: TaintMeta {
-                defines: Some("e".into()),
-                ..Default::default()
-            },
-            call: CallMeta {
-                callee: Some("catch(e)".into()),
-                ..Default::default()
-            },
-            catch_param: true,
+        },
+        call: CallMeta {
+            callee: Some("catch(e)".into()),
             ..Default::default()
-        };
-        assert_eq!(n.kind, StmtKind::Seq);
-        assert_eq!(n.ast.span, (100, 100));
-        assert_eq!(n.ast.enclosing_func.as_deref(), Some("handle_request"));
-        assert_eq!(n.taint.defines.as_deref(), Some("e"));
-        assert_eq!(n.call.callee.as_deref(), Some("catch(e)"));
-        assert!(n.catch_param);
-        assert!(n.taint.labels.is_empty());
-        assert!(n.call.arg_uses.is_empty());
-    }
+        },
+        catch_param: true,
+        ..Default::default()
+    };
+    assert_eq!(n.kind, StmtKind::Seq);
+    assert_eq!(n.ast.span, (100, 100));
+    assert_eq!(n.ast.enclosing_func.as_deref(), Some("handle_request"));
+    assert_eq!(n.taint.defines.as_deref(), Some("e"));
+    assert_eq!(n.call.callee.as_deref(), Some("catch(e)"));
+    assert!(n.catch_param);
+    assert!(n.taint.labels.is_empty());
+    assert!(n.call.arg_uses.is_empty());
+}
 
-    #[test]
-    fn synthetic_passthrough_node_structure() {
-        let n = NodeInfo {
-            kind: StmtKind::Seq,
-            ast: AstMeta {
-                span: (50, 50),
-                enclosing_func: Some("main".into()),
-            },
+#[test]
+fn synthetic_passthrough_node_structure() {
+    let n = NodeInfo {
+        kind: StmtKind::Seq,
+        ast: AstMeta {
+            span: (50, 50),
+            enclosing_func: Some("main".into()),
+        },
+        ..Default::default()
+    };
+    assert_eq!(n.kind, StmtKind::Seq);
+    assert_eq!(n.ast.span, (50, 50));
+    assert!(n.taint.defines.is_none());
+    assert!(n.call.callee.is_none());
+    assert!(!n.catch_param);
+}
+
+#[test]
+fn normal_call_node_structure() {
+    let n = NodeInfo {
+        kind: StmtKind::Call,
+        call: CallMeta {
+            callee: Some("eval".into()),
+            receiver: Some("window".into()),
+            call_ordinal: 3,
+            arg_uses: vec![vec!["x".into()], vec!["y".into()]],
+            sink_payload_args: Some(vec![0]),
             ..Default::default()
-        };
-        assert_eq!(n.kind, StmtKind::Seq);
-        assert_eq!(n.ast.span, (50, 50));
-        assert!(n.taint.defines.is_none());
-        assert!(n.call.callee.is_none());
-        assert!(!n.catch_param);
-    }
-
-    #[test]
-    fn normal_call_node_structure() {
-        let n = NodeInfo {
-            kind: StmtKind::Call,
-            call: CallMeta {
-                callee: Some("eval".into()),
-                receiver: Some("window".into()),
-                call_ordinal: 3,
-                arg_uses: vec![vec!["x".into()], vec!["y".into()]],
-                sink_payload_args: Some(vec![0]),
-                ..Default::default()
+        },
+        taint: TaintMeta {
+            labels: {
+                let mut v = SmallVec::new();
+                v.push(crate::labels::DataLabel::Sink(
+                    crate::labels::Cap::CODE_EXEC,
+                ));
+                v
             },
-            taint: TaintMeta {
-                labels: {
-                    let mut v = SmallVec::new();
-                    v.push(crate::labels::DataLabel::Sink(
-                        crate::labels::Cap::CODE_EXEC,
-                    ));
-                    v
-                },
-                defines: Some("result".into()),
-                uses: vec!["x".into(), "y".into()],
-                ..Default::default()
-            },
-            ast: AstMeta {
-                span: (10, 50),
-                enclosing_func: Some("handler".into()),
-            },
+            defines: Some("result".into()),
+            uses: vec!["x".into(), "y".into()],
             ..Default::default()
-        };
-        assert_eq!(n.call.callee.as_deref(), Some("eval"));
-        assert_eq!(n.call.receiver.as_deref(), Some("window"));
-        assert_eq!(n.call.call_ordinal, 3);
-        assert_eq!(n.call.arg_uses.len(), 2);
-        assert_eq!(n.call.sink_payload_args.as_deref(), Some(&[0usize][..]));
-        assert_eq!(n.taint.labels.len(), 1);
-        assert_eq!(n.taint.defines.as_deref(), Some("result"));
-        assert_eq!(n.taint.uses, vec!["x", "y"]);
-        assert_eq!(n.ast.span, (10, 50));
-        assert_eq!(n.ast.enclosing_func.as_deref(), Some("handler"));
-    }
+        },
+        ast: AstMeta {
+            span: (10, 50),
+            enclosing_func: Some("handler".into()),
+        },
+        ..Default::default()
+    };
+    assert_eq!(n.call.callee.as_deref(), Some("eval"));
+    assert_eq!(n.call.receiver.as_deref(), Some("window"));
+    assert_eq!(n.call.call_ordinal, 3);
+    assert_eq!(n.call.arg_uses.len(), 2);
+    assert_eq!(n.call.sink_payload_args.as_deref(), Some(&[0usize][..]));
+    assert_eq!(n.taint.labels.len(), 1);
+    assert_eq!(n.taint.defines.as_deref(), Some("result"));
+    assert_eq!(n.taint.uses, vec!["x", "y"]);
+    assert_eq!(n.ast.span, (10, 50));
+    assert_eq!(n.ast.enclosing_func.as_deref(), Some("handler"));
+}
 
-    #[test]
-    fn condition_node_preserves_fields() {
-        let n = NodeInfo {
-            kind: StmtKind::If,
-            ast: AstMeta {
-                span: (0, 20),
-                enclosing_func: None,
+#[test]
+fn condition_node_preserves_fields() {
+    let n = NodeInfo {
+        kind: StmtKind::If,
+        ast: AstMeta {
+            span: (0, 20),
+            enclosing_func: None,
+        },
+        condition_text: Some("x > 0".into()),
+        condition_vars: vec!["x".into()],
+        condition_negated: true,
+        ..Default::default()
+    };
+    assert_eq!(n.kind, StmtKind::If);
+    assert_eq!(n.condition_text.as_deref(), Some("x > 0"));
+    assert_eq!(n.condition_vars, vec!["x"]);
+    assert!(n.condition_negated);
+}
+
+#[test]
+fn clone_preserves_all_sub_structs() {
+    let original = NodeInfo {
+        kind: StmtKind::Call,
+        call: CallMeta {
+            callee: Some("foo".into()),
+            outer_callee: Some("bar".into()),
+            callee_span: Some((7, 17)),
+            call_ordinal: 5,
+            arg_uses: vec![vec!["a".into()]],
+            receiver: Some("obj".into()),
+            sink_payload_args: Some(vec![1, 2]),
+            kwargs: vec![("shell".into(), vec!["True".into()])],
+            arg_string_literals: vec![Some("lit".into())],
+            destination_uses: None,
+        },
+        taint: TaintMeta {
+            labels: {
+                let mut v = SmallVec::new();
+                v.push(crate::labels::DataLabel::Source(crate::labels::Cap::all()));
+                v
             },
-            condition_text: Some("x > 0".into()),
-            condition_vars: vec!["x".into()],
-            condition_negated: true,
-            ..Default::default()
-        };
-        assert_eq!(n.kind, StmtKind::If);
-        assert_eq!(n.condition_text.as_deref(), Some("x > 0"));
-        assert_eq!(n.condition_vars, vec!["x"]);
-        assert!(n.condition_negated);
-    }
+            const_text: Some("42".into()),
+            defines: Some("r".into()),
+            uses: vec!["a".into(), "b".into()],
+            extra_defines: vec!["c".into()],
+        },
+        ast: AstMeta {
+            span: (10, 100),
+            enclosing_func: Some("main".into()),
+        },
+        all_args_literal: true,
+        catch_param: true,
+        ..Default::default()
+    };
+    let cloned = original.clone();
+    assert_eq!(cloned.call.callee, original.call.callee);
+    assert_eq!(cloned.call.outer_callee, original.call.outer_callee);
+    assert_eq!(cloned.call.call_ordinal, original.call.call_ordinal);
+    assert_eq!(cloned.call.arg_uses, original.call.arg_uses);
+    assert_eq!(cloned.call.receiver, original.call.receiver);
+    assert_eq!(
+        cloned.call.sink_payload_args,
+        original.call.sink_payload_args
+    );
+    assert_eq!(cloned.call.kwargs, original.call.kwargs);
+    assert_eq!(cloned.taint.labels.len(), original.taint.labels.len());
+    assert_eq!(cloned.taint.const_text, original.taint.const_text);
+    assert_eq!(cloned.taint.defines, original.taint.defines);
+    assert_eq!(cloned.taint.uses, original.taint.uses);
+    assert_eq!(cloned.taint.extra_defines, original.taint.extra_defines);
+    assert_eq!(cloned.ast.span, original.ast.span);
+    assert_eq!(cloned.ast.enclosing_func, original.ast.enclosing_func);
+    assert_eq!(cloned.all_args_literal, original.all_args_literal);
+    assert_eq!(cloned.catch_param, original.catch_param);
+}
 
-    #[test]
-    fn clone_preserves_all_sub_structs() {
-        let original = NodeInfo {
-            kind: StmtKind::Call,
-            call: CallMeta {
-                callee: Some("foo".into()),
-                outer_callee: Some("bar".into()),
-                callee_span: Some((7, 17)),
-                call_ordinal: 5,
-                arg_uses: vec![vec!["a".into()]],
-                receiver: Some("obj".into()),
-                sink_payload_args: Some(vec![1, 2]),
-                kwargs: vec![("shell".into(), vec!["True".into()])],
-                arg_string_literals: vec![Some("lit".into())],
-                destination_uses: None,
-            },
-            taint: TaintMeta {
-                labels: {
-                    let mut v = SmallVec::new();
-                    v.push(crate::labels::DataLabel::Source(crate::labels::Cap::all()));
-                    v
-                },
-                const_text: Some("42".into()),
-                defines: Some("r".into()),
-                uses: vec!["a".into(), "b".into()],
-                extra_defines: vec!["c".into()],
-            },
-            ast: AstMeta {
-                span: (10, 100),
-                enclosing_func: Some("main".into()),
-            },
-            all_args_literal: true,
-            catch_param: true,
-            ..Default::default()
-        };
-        let cloned = original.clone();
-        assert_eq!(cloned.call.callee, original.call.callee);
-        assert_eq!(cloned.call.outer_callee, original.call.outer_callee);
-        assert_eq!(cloned.call.call_ordinal, original.call.call_ordinal);
-        assert_eq!(cloned.call.arg_uses, original.call.arg_uses);
-        assert_eq!(cloned.call.receiver, original.call.receiver);
-        assert_eq!(
-            cloned.call.sink_payload_args,
-            original.call.sink_payload_args
-        );
-        assert_eq!(cloned.call.kwargs, original.call.kwargs);
-        assert_eq!(cloned.taint.labels.len(), original.taint.labels.len());
-        assert_eq!(cloned.taint.const_text, original.taint.const_text);
-        assert_eq!(cloned.taint.defines, original.taint.defines);
-        assert_eq!(cloned.taint.uses, original.taint.uses);
-        assert_eq!(cloned.taint.extra_defines, original.taint.extra_defines);
-        assert_eq!(cloned.ast.span, original.ast.span);
-        assert_eq!(cloned.ast.enclosing_func, original.ast.enclosing_func);
-        assert_eq!(cloned.all_args_literal, original.all_args_literal);
-        assert_eq!(cloned.catch_param, original.catch_param);
-    }
+#[test]
+fn cfg_output_equivalence_js_catch() {
+    // This test verifies that the refactored NodeInfo produces the same
+    // CFG structure as before for a JS try/catch.
+    let src = b"function f() { try { foo(x); } catch(e) { bar(e); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    let body = file_cfg.first_body();
 
-    #[test]
-    fn cfg_output_equivalence_js_catch() {
-        // This test verifies that the refactored NodeInfo produces the same
-        // CFG structure as before for a JS try/catch.
-        let src = b"function f() { try { foo(x); } catch(e) { bar(e); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        let body = file_cfg.first_body();
+    // Verify catch-param node exists with correct nested field access
+    let catch_params: Vec<_> = body
+        .graph
+        .node_weights()
+        .filter(|n| n.catch_param)
+        .collect();
+    assert_eq!(catch_params.len(), 1);
+    assert_eq!(catch_params[0].taint.defines.as_deref(), Some("e"));
+    assert!(
+        catch_params[0]
+            .call
+            .callee
+            .as_deref()
+            .unwrap()
+            .starts_with("catch(")
+    );
+}
 
-        // Verify catch-param node exists with correct nested field access
-        let catch_params: Vec<_> = body
-            .graph
-            .node_weights()
-            .filter(|n| n.catch_param)
-            .collect();
-        assert_eq!(catch_params.len(), 1);
-        assert_eq!(catch_params[0].taint.defines.as_deref(), Some("e"));
-        assert!(
-            catch_params[0]
-                .call
-                .callee
-                .as_deref()
-                .unwrap()
-                .starts_with("catch(")
-        );
-    }
+#[test]
+fn cfg_output_equivalence_condition_chain() {
+    // Verify If nodes use the correct sub-struct paths
+    let src = b"function f(x) { if (x > 0) { sink(x); } }";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
 
-    #[test]
-    fn cfg_output_equivalence_condition_chain() {
-        // Verify If nodes use the correct sub-struct paths
-        let src = b"function f(x) { if (x > 0) { sink(x); } }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+    let if_nodes: Vec<_> = cfg
+        .node_weights()
+        .filter(|n| n.kind == StmtKind::If)
+        .collect();
+    assert!(!if_nodes.is_empty());
+    // Condition text and vars should be on the If node directly
+    let if_node = if_nodes[0];
+    assert!(if_node.condition_text.is_some() || !if_node.condition_vars.is_empty());
+    // Labels should be empty on If nodes (they're structural)
+    assert!(if_node.taint.labels.is_empty());
+}
 
-        let if_nodes: Vec<_> = cfg
-            .node_weights()
-            .filter(|n| n.kind == StmtKind::If)
-            .collect();
-        assert!(!if_nodes.is_empty());
-        // Condition text and vars should be on the If node directly
-        let if_node = if_nodes[0];
-        assert!(if_node.condition_text.is_some() || !if_node.condition_vars.is_empty());
-        // Labels should be empty on If nodes (they're structural)
-        assert!(if_node.taint.labels.is_empty());
-    }
+#[test]
+fn make_empty_node_info_uses_sub_structs() {
+    let n = make_empty_node_info(StmtKind::Entry, (0, 100), Some("test_func"));
+    assert_eq!(n.kind, StmtKind::Entry);
+    assert_eq!(n.ast.span, (0, 100));
+    assert_eq!(n.ast.enclosing_func.as_deref(), Some("test_func"));
+    assert!(n.call.callee.is_none());
+    assert!(n.taint.defines.is_none());
+    assert!(n.taint.uses.is_empty());
+}
 
-    #[test]
-    fn make_empty_node_info_uses_sub_structs() {
-        let n = make_empty_node_info(StmtKind::Entry, (0, 100), Some("test_func"));
-        assert_eq!(n.kind, StmtKind::Entry);
-        assert_eq!(n.ast.span, (0, 100));
-        assert_eq!(n.ast.enclosing_func.as_deref(), Some("test_func"));
-        assert!(n.call.callee.is_none());
-        assert!(n.taint.defines.is_none());
-        assert!(n.taint.uses.is_empty());
-    }
+// ── Import alias binding tests ──────────────────────────────────
 
-    // ── Import alias binding tests ──────────────────────────────────
+#[test]
+fn js_import_alias_bindings() {
+    let src = b"import { getInput as fetchInput } from './source';";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    assert_eq!(file_cfg.import_bindings.len(), 1);
+    let b = &file_cfg.import_bindings["fetchInput"];
+    assert_eq!(b.original, "getInput");
+    assert_eq!(b.module_path.as_deref(), Some("./source"));
+}
 
-    #[test]
-    fn js_import_alias_bindings() {
-        let src = b"import { getInput as fetchInput } from './source';";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        assert_eq!(file_cfg.import_bindings.len(), 1);
-        let b = &file_cfg.import_bindings["fetchInput"];
-        assert_eq!(b.original, "getInput");
-        assert_eq!(b.module_path.as_deref(), Some("./source"));
-    }
+#[test]
+fn js_same_name_import_not_recorded() {
+    let src = b"import { exec } from 'child_process';";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    assert!(file_cfg.import_bindings.is_empty());
+}
 
-    #[test]
-    fn js_same_name_import_not_recorded() {
-        let src = b"import { exec } from 'child_process';";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        assert!(file_cfg.import_bindings.is_empty());
-    }
+#[test]
+fn python_import_alias_bindings() {
+    let src = b"from os import getenv as fetch_env";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+    assert_eq!(file_cfg.import_bindings.len(), 1);
+    let b = &file_cfg.import_bindings["fetch_env"];
+    assert_eq!(b.original, "getenv");
+    assert_eq!(b.module_path.as_deref(), Some("os"));
+}
 
-    #[test]
-    fn python_import_alias_bindings() {
-        let src = b"from os import getenv as fetch_env";
-        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
-        assert_eq!(file_cfg.import_bindings.len(), 1);
-        let b = &file_cfg.import_bindings["fetch_env"];
-        assert_eq!(b.original, "getenv");
-        assert_eq!(b.module_path.as_deref(), Some("os"));
-    }
+#[test]
+fn python_multiple_aliased_imports() {
+    let src = b"from source import get_input as fetch_input, run_query as exec_query";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+    assert_eq!(file_cfg.import_bindings.len(), 2);
+    assert_eq!(
+        file_cfg.import_bindings["fetch_input"].original,
+        "get_input"
+    );
+    assert_eq!(file_cfg.import_bindings["exec_query"].original, "run_query");
+}
 
-    #[test]
-    fn python_multiple_aliased_imports() {
-        let src = b"from source import get_input as fetch_input, run_query as exec_query";
-        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
-        assert_eq!(file_cfg.import_bindings.len(), 2);
-        assert_eq!(
-            file_cfg.import_bindings["fetch_input"].original,
-            "get_input"
-        );
-        assert_eq!(file_cfg.import_bindings["exec_query"].original, "run_query");
-    }
+#[test]
+fn python_same_name_import_not_recorded() {
+    let src = b"from os import getenv";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+    assert!(file_cfg.import_bindings.is_empty());
+}
 
-    #[test]
-    fn python_same_name_import_not_recorded() {
-        let src = b"from os import getenv";
-        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
-        assert!(file_cfg.import_bindings.is_empty());
-    }
+#[test]
+fn php_namespace_alias_bindings() {
+    let src = b"<?php\nuse App\\Security\\Sanitizer as Clean;\n";
+    let ts_lang = Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let file_cfg = parse_to_file_cfg(src, "php", ts_lang);
+    assert_eq!(file_cfg.import_bindings.len(), 1);
+    let b = &file_cfg.import_bindings["Clean"];
+    assert_eq!(b.original, "Sanitizer");
+    assert_eq!(b.module_path.as_deref(), Some("App\\Security\\Sanitizer"));
+}
 
-    #[test]
-    fn php_namespace_alias_bindings() {
-        let src = b"<?php\nuse App\\Security\\Sanitizer as Clean;\n";
-        let ts_lang = Language::from(tree_sitter_php::LANGUAGE_PHP);
-        let file_cfg = parse_to_file_cfg(src, "php", ts_lang);
-        assert_eq!(file_cfg.import_bindings.len(), 1);
-        let b = &file_cfg.import_bindings["Clean"];
-        assert_eq!(b.original, "Sanitizer");
-        assert_eq!(b.module_path.as_deref(), Some("App\\Security\\Sanitizer"));
-    }
+#[test]
+fn php_no_alias_not_recorded() {
+    let src = b"<?php\nuse App\\Security\\Sanitizer;\n";
+    let ts_lang = Language::from(tree_sitter_php::LANGUAGE_PHP);
+    let file_cfg = parse_to_file_cfg(src, "php", ts_lang);
+    assert!(file_cfg.import_bindings.is_empty());
+}
 
-    #[test]
-    fn php_no_alias_not_recorded() {
-        let src = b"<?php\nuse App\\Security\\Sanitizer;\n";
-        let ts_lang = Language::from(tree_sitter_php::LANGUAGE_PHP);
-        let file_cfg = parse_to_file_cfg(src, "php", ts_lang);
-        assert!(file_cfg.import_bindings.is_empty());
-    }
+#[test]
+fn rust_use_as_alias_bindings() {
+    let src = b"use std::collections::HashMap as Map;";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "rust", ts_lang);
+    assert_eq!(file_cfg.import_bindings.len(), 1);
+    let b = &file_cfg.import_bindings["Map"];
+    assert_eq!(b.original, "HashMap");
+    assert_eq!(b.module_path.as_deref(), Some("std::collections::HashMap"));
+}
 
-    #[test]
-    fn rust_use_as_alias_bindings() {
-        let src = b"use std::collections::HashMap as Map;";
-        let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "rust", ts_lang);
-        assert_eq!(file_cfg.import_bindings.len(), 1);
-        let b = &file_cfg.import_bindings["Map"];
-        assert_eq!(b.original, "HashMap");
-        assert_eq!(b.module_path.as_deref(), Some("std::collections::HashMap"));
-    }
+#[test]
+fn rust_no_alias_not_recorded() {
+    let src = b"use std::collections::HashMap;";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "rust", ts_lang);
+    assert!(file_cfg.import_bindings.is_empty());
+}
 
-    #[test]
-    fn rust_no_alias_not_recorded() {
-        let src = b"use std::collections::HashMap;";
-        let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "rust", ts_lang);
-        assert!(file_cfg.import_bindings.is_empty());
-    }
+#[test]
+fn rust_nested_use_as_alias() {
+    let src = b"use std::io::{Read as IoRead, Write};";
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "rust", ts_lang);
+    assert_eq!(file_cfg.import_bindings.len(), 1);
+    let b = &file_cfg.import_bindings["IoRead"];
+    assert_eq!(b.original, "Read");
+}
 
-    #[test]
-    fn rust_nested_use_as_alias() {
-        let src = b"use std::io::{Read as IoRead, Write};";
-        let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "rust", ts_lang);
-        assert_eq!(file_cfg.import_bindings.len(), 1);
-        let b = &file_cfg.import_bindings["IoRead"];
-        assert_eq!(b.original, "Read");
-    }
+#[test]
+fn go_no_import_bindings() {
+    let src = b"package main\nimport alias \"fmt\"\n";
+    let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "go", ts_lang);
+    assert!(file_cfg.import_bindings.is_empty());
+}
 
-    #[test]
-    fn go_no_import_bindings() {
-        let src = b"package main\nimport alias \"fmt\"\n";
-        let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "go", ts_lang);
-        assert!(file_cfg.import_bindings.is_empty());
-    }
+#[test]
+fn java_no_import_bindings() {
+    let src = b"import java.util.List;";
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "java", ts_lang);
+    assert!(file_cfg.import_bindings.is_empty());
+}
 
-    #[test]
-    fn java_no_import_bindings() {
-        let src = b"import java.util.List;";
-        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "java", ts_lang);
-        assert!(file_cfg.import_bindings.is_empty());
-    }
+// ── Promisify alias binding tests ───────────────────────────────
 
-    // ── Promisify alias binding tests ───────────────────────────────
+#[test]
+fn js_promisify_alias_member_expression() {
+    let src = b"const execAsync = util.promisify(child_process.exec);";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    let alias = file_cfg
+        .promisify_aliases
+        .get("execAsync")
+        .expect("execAsync should be recorded");
+    assert_eq!(alias.wrapped, "child_process.exec");
+}
 
-    #[test]
-    fn js_promisify_alias_member_expression() {
-        let src = b"const execAsync = util.promisify(child_process.exec);";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        let alias = file_cfg
+#[test]
+fn js_promisify_alias_bare_identifier() {
+    // `promisify` imported directly from util (destructured).
+    let src = b"const run = promisify(foo);";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    assert_eq!(
+        file_cfg
             .promisify_aliases
-            .get("execAsync")
-            .expect("execAsync should be recorded");
-        assert_eq!(alias.wrapped, "child_process.exec");
-    }
+            .get("run")
+            .map(|a| a.wrapped.as_str()),
+        Some("foo")
+    );
+}
 
-    #[test]
-    fn js_promisify_alias_bare_identifier() {
-        // `promisify` imported directly from util (destructured).
-        let src = b"const run = promisify(foo);";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        assert_eq!(
-            file_cfg
-                .promisify_aliases
-                .get("run")
-                .map(|a| a.wrapped.as_str()),
-            Some("foo")
-        );
-    }
-
-    #[test]
-    fn js_promisify_labels_carry_to_alias_call() {
-        // The post-pass should union `child_process.exec`'s Sink(SHELL_ESCAPE)
-        // into every call site of the alias.
-        let src = b"const runAsync = util.promisify(child_process.exec);\n\
+#[test]
+fn js_promisify_labels_carry_to_alias_call() {
+    // The post-pass should union `child_process.exec`'s Sink(SHELL_ESCAPE)
+    // into every call site of the alias.
+    let src = b"const runAsync = util.promisify(child_process.exec);\n\
                     function f(userCmd) { runAsync(userCmd); }";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        assert!(file_cfg.promisify_aliases.contains_key("runAsync"));
-        let any_runasync_sink = file_cfg.bodies.iter().any(|b| {
-            b.graph.node_weights().any(|n| {
-                n.call.callee.as_deref() == Some("runAsync")
-                    && n.taint.labels.iter().any(|lbl| {
-                        matches!(
-                            lbl,
-                            crate::labels::DataLabel::Sink(c)
-                                if c.intersects(crate::labels::Cap::SHELL_ESCAPE)
-                        )
-                    })
-            })
-        });
-        assert!(
-            any_runasync_sink,
-            "runAsync call site should inherit child_process.exec's SHELL_ESCAPE sink"
-        );
-    }
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    assert!(file_cfg.promisify_aliases.contains_key("runAsync"));
+    let any_runasync_sink = file_cfg.bodies.iter().any(|b| {
+        b.graph.node_weights().any(|n| {
+            n.call.callee.as_deref() == Some("runAsync")
+                && n.taint.labels.iter().any(|lbl| {
+                    matches!(
+                        lbl,
+                        crate::labels::DataLabel::Sink(c)
+                            if c.intersects(crate::labels::Cap::SHELL_ESCAPE)
+                    )
+                })
+        })
+    });
+    assert!(
+        any_runasync_sink,
+        "runAsync call site should inherit child_process.exec's SHELL_ESCAPE sink"
+    );
+}
 
-    #[test]
-    fn js_promisify_ignored_for_non_js_langs() {
-        let src = b"const x = util.promisify(exec)";
-        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
-        assert!(file_cfg.promisify_aliases.is_empty());
-    }
+#[test]
+fn js_promisify_ignored_for_non_js_langs() {
+    let src = b"const x = util.promisify(exec)";
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+    assert!(file_cfg.promisify_aliases.is_empty());
+}
 
-    #[test]
-    fn js_promisify_non_call_value_ignored() {
-        // RHS is not a promisify call — no binding should be captured.
-        let src = b"const execAsync = child_process.exec;";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        assert!(file_cfg.promisify_aliases.is_empty());
-    }
+#[test]
+fn js_promisify_non_call_value_ignored() {
+    // RHS is not a promisify call — no binding should be captured.
+    let src = b"const execAsync = child_process.exec;";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    assert!(file_cfg.promisify_aliases.is_empty());
+}
 
-    #[test]
-    fn sql_placeholder_detection() {
-        // Positive cases
-        assert!(has_sql_placeholders("SELECT * FROM users WHERE id = $1"));
-        assert!(has_sql_placeholders("SELECT * FROM users WHERE id = ?"));
-        assert!(has_sql_placeholders("SELECT * FROM users WHERE id = %s"));
-        assert!(has_sql_placeholders("INSERT INTO t (a, b) VALUES ($1, $2)"));
-        assert!(has_sql_placeholders("SELECT * FROM t WHERE x = :name"));
-        assert!(has_sql_placeholders("WHERE id = ? AND name = ?"));
+#[test]
+fn sql_placeholder_detection() {
+    // Positive cases
+    assert!(has_sql_placeholders("SELECT * FROM users WHERE id = $1"));
+    assert!(has_sql_placeholders("SELECT * FROM users WHERE id = ?"));
+    assert!(has_sql_placeholders("SELECT * FROM users WHERE id = %s"));
+    assert!(has_sql_placeholders("INSERT INTO t (a, b) VALUES ($1, $2)"));
+    assert!(has_sql_placeholders("SELECT * FROM t WHERE x = :name"));
+    assert!(has_sql_placeholders("WHERE id = ? AND name = ?"));
 
-        // Negative cases
-        assert!(!has_sql_placeholders("SELECT * FROM users"));
-        assert!(!has_sql_placeholders("SELECT * FROM users WHERE id = 1"));
-        assert!(!has_sql_placeholders("SELECT $dollar FROM t")); // $d not $N
-        assert!(!has_sql_placeholders("SELECT * FROM t WHERE x = $0")); // $0 not valid
-        assert!(!has_sql_placeholders("ratio = 50%")); // %<not s>
-    }
+    // Negative cases
+    assert!(!has_sql_placeholders("SELECT * FROM users"));
+    assert!(!has_sql_placeholders("SELECT * FROM users WHERE id = 1"));
+    assert!(!has_sql_placeholders("SELECT $dollar FROM t")); // $d not $N
+    assert!(!has_sql_placeholders("SELECT * FROM t WHERE x = $0")); // $0 not valid
+    assert!(!has_sql_placeholders("ratio = 50%")); // %<not s>
+}
 
-    #[test]
-    fn c_function_extracts_param_names() {
-        let src = b"void handle_command(int cmd, char *arg) { }";
-        let ts_lang = Language::from(tree_sitter_c::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "c", ts_lang);
-        let params: Vec<_> = file_cfg
-            .summaries
-            .values()
-            .flat_map(|s| s.param_names.iter().cloned())
-            .collect();
-        assert!(
-            params.contains(&"cmd".to_string()),
-            "expected 'cmd' in params, got: {:?}",
-            params
-        );
-        assert!(
-            params.contains(&"arg".to_string()),
-            "expected 'arg' in params, got: {:?}",
-            params
-        );
-    }
+#[test]
+fn c_function_extracts_param_names() {
+    let src = b"void handle_command(int cmd, char *arg) { }";
+    let ts_lang = Language::from(tree_sitter_c::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "c", ts_lang);
+    let params: Vec<_> = file_cfg
+        .summaries
+        .values()
+        .flat_map(|s| s.param_names.iter().cloned())
+        .collect();
+    assert!(
+        params.contains(&"cmd".to_string()),
+        "expected 'cmd' in params, got: {:?}",
+        params
+    );
+    assert!(
+        params.contains(&"arg".to_string()),
+        "expected 'arg' in params, got: {:?}",
+        params
+    );
+}
 
-    #[test]
-    fn cpp_function_extracts_param_names() {
-        let src = b"void process(int x, std::string name) { }";
-        let ts_lang = Language::from(tree_sitter_cpp::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "cpp", ts_lang);
-        let params: Vec<_> = file_cfg
-            .summaries
-            .values()
-            .flat_map(|s| s.param_names.iter().cloned())
-            .collect();
-        assert!(
-            params.contains(&"x".to_string()),
-            "expected 'x' in params, got: {:?}",
-            params
-        );
-        assert!(
-            params.contains(&"name".to_string()),
-            "expected 'name' in params, got: {:?}",
-            params
-        );
-    }
+#[test]
+fn cpp_function_extracts_param_names() {
+    let src = b"void process(int x, std::string name) { }";
+    let ts_lang = Language::from(tree_sitter_cpp::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "cpp", ts_lang);
+    let params: Vec<_> = file_cfg
+        .summaries
+        .values()
+        .flat_map(|s| s.param_names.iter().cloned())
+        .collect();
+    assert!(
+        params.contains(&"x".to_string()),
+        "expected 'x' in params, got: {:?}",
+        params
+    );
+    assert!(
+        params.contains(&"name".to_string()),
+        "expected 'name' in params, got: {:?}",
+        params
+    );
+}
 
-    // ── callee-site metadata extraction ──────────────────────────────────
+// ── callee-site metadata extraction ──────────────────────────────────
 
-    /// Callees collected into `LocalFuncSummary` should now carry structured
-    /// arity, receiver, and qualifier fields — not just a bare name.
-    #[test]
-    fn local_summary_callees_carry_arity_and_receiver() {
-        // Two calls: one is a plain function call with 2 args, the other is
-        // a method call on an explicit receiver.
-        let src = br"
+/// Callees collected into `LocalFuncSummary` should now carry structured
+/// arity, receiver, and qualifier fields — not just a bare name.
+#[test]
+fn local_summary_callees_carry_arity_and_receiver() {
+    // Two calls: one is a plain function call with 2 args, the other is
+    // a method call on an explicit receiver.
+    let src = br"
             function outer(x, y) {
                 helper(x, y);
                 obj.method(x);
             }
         ";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        let summaries = &file_cfg.summaries;
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    let summaries = &file_cfg.summaries;
 
-        // Pull the outer function's summary.
-        let (_key, outer) = summaries
-            .iter()
-            .find(|(k, _)| k.name == "outer")
-            .expect("outer summary should exist");
+    // Pull the outer function's summary.
+    let (_key, outer) = summaries
+        .iter()
+        .find(|(k, _)| k.name == "outer")
+        .expect("outer summary should exist");
 
-        // Both calls should be recorded.
-        let helper_site = outer
-            .callees
-            .iter()
-            .find(|c| c.name == "helper")
-            .expect("helper call should be recorded with structured metadata");
-        assert_eq!(
-            helper_site.arity,
-            Some(2),
-            "helper has 2 positional args at the call site"
-        );
-        assert_eq!(
-            helper_site.receiver, None,
-            "helper is not a method call — no receiver"
-        );
+    // Both calls should be recorded.
+    let helper_site = outer
+        .callees
+        .iter()
+        .find(|c| c.name == "helper")
+        .expect("helper call should be recorded with structured metadata");
+    assert_eq!(
+        helper_site.arity,
+        Some(2),
+        "helper has 2 positional args at the call site"
+    );
+    assert_eq!(
+        helper_site.receiver, None,
+        "helper is not a method call — no receiver"
+    );
 
-        // JS `obj.method(x)` is a CallFn in tree-sitter-javascript whose
-        // `function` child is a `member_expression`.  push_node now unwraps
-        // that member expression and populates the structured `receiver`
-        // field directly, so `qualifier` stays `None`.
-        let method_site = outer
-            .callees
-            .iter()
-            .find(|c| c.name.ends_with("method"))
-            .expect("method call should be recorded");
-        assert_eq!(method_site.arity, Some(1), "method has 1 positional arg");
-        assert_eq!(
-            method_site.receiver.as_deref(),
-            Some("obj"),
-            "js CallFn over member_expression should populate structured receiver"
-        );
-        assert_eq!(
-            method_site.qualifier, None,
-            "qualifier is suppressed once receiver is populated"
-        );
-    }
+    // JS `obj.method(x)` is a CallFn in tree-sitter-javascript whose
+    // `function` child is a `member_expression`.  push_node now unwraps
+    // that member expression and populates the structured `receiver`
+    // field directly, so `qualifier` stays `None`.
+    let method_site = outer
+        .callees
+        .iter()
+        .find(|c| c.name.ends_with("method"))
+        .expect("method call should be recorded");
+    assert_eq!(method_site.arity, Some(1), "method has 1 positional arg");
+    assert_eq!(
+        method_site.receiver.as_deref(),
+        Some("obj"),
+        "js CallFn over member_expression should populate structured receiver"
+    );
+    assert_eq!(
+        method_site.qualifier, None,
+        "qualifier is suppressed once receiver is populated"
+    );
+}
 
-    /// JS `obj.method(x)` is modeled as `call_expression` whose `function`
-    /// child is a `member_expression`.  Kind::CallFn push_node must surface
-    /// the receiver identifier through `CallMeta.receiver`.
-    #[test]
-    fn local_summary_callees_js_method_receiver() {
-        let src = br"
+/// JS `obj.method(x)` is modeled as `call_expression` whose `function`
+/// child is a `member_expression`.  Kind::CallFn push_node must surface
+/// the receiver identifier through `CallMeta.receiver`.
+#[test]
+fn local_summary_callees_js_method_receiver() {
+    let src = br"
             function outer(obj, x) {
                 obj.method(x);
             }
         ";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        let (_key, outer) = file_cfg
-            .summaries
-            .iter()
-            .find(|(k, _)| k.name == "outer")
-            .expect("js outer summary should exist");
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    let (_key, outer) = file_cfg
+        .summaries
+        .iter()
+        .find(|(k, _)| k.name == "outer")
+        .expect("js outer summary should exist");
 
-        let method_site = outer
-            .callees
-            .iter()
-            .find(|c| c.name.ends_with("method"))
-            .expect("js method call should be recorded");
-        assert_eq!(method_site.arity, Some(1));
-        assert_eq!(
-            method_site.receiver.as_deref(),
-            Some("obj"),
-            "js CallFn over member_expression should populate structured receiver"
-        );
-    }
+    let method_site = outer
+        .callees
+        .iter()
+        .find(|c| c.name.ends_with("method"))
+        .expect("js method call should be recorded");
+    assert_eq!(method_site.arity, Some(1));
+    assert_eq!(
+        method_site.receiver.as_deref(),
+        Some("obj"),
+        "js CallFn over member_expression should populate structured receiver"
+    );
+}
 
-    /// Python `obj.method(x)` is modeled as `call` whose `function` child is
-    /// an `attribute`.  Kind::CallFn push_node must surface the receiver
-    /// identifier through `CallMeta.receiver`.
-    #[test]
-    fn local_summary_callees_python_method_receiver() {
-        let src = b"
+/// Python `obj.method(x)` is modeled as `call` whose `function` child is
+/// an `attribute`.  Kind::CallFn push_node must surface the receiver
+/// identifier through `CallMeta.receiver`.
+#[test]
+fn local_summary_callees_python_method_receiver() {
+    let src = b"
 def outer(obj, x):
     obj.method(x)
 ";
-        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
-        let (_key, outer) = file_cfg
-            .summaries
-            .iter()
-            .find(|(k, _)| k.name == "outer")
-            .expect("python outer summary should exist");
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "python", ts_lang);
+    let (_key, outer) = file_cfg
+        .summaries
+        .iter()
+        .find(|(k, _)| k.name == "outer")
+        .expect("python outer summary should exist");
 
-        let method_site = outer
-            .callees
-            .iter()
-            .find(|c| c.name.ends_with("method"))
-            .expect("python method call should be recorded");
-        assert_eq!(method_site.arity, Some(1));
-        assert_eq!(
-            method_site.receiver.as_deref(),
-            Some("obj"),
-            "python CallFn over attribute should populate structured receiver"
-        );
-    }
+    let method_site = outer
+        .callees
+        .iter()
+        .find(|c| c.name.ends_with("method"))
+        .expect("python method call should be recorded");
+    assert_eq!(method_site.arity, Some(1));
+    assert_eq!(
+        method_site.receiver.as_deref(),
+        Some("obj"),
+        "python CallFn over attribute should populate structured receiver"
+    );
+}
 
-    /// Java `obj.method(x)` IS classified as CallMethod (via
-    /// `method_invocation`), so the structured `receiver` field
-    /// should be populated directly rather than falling through to
-    /// the `qualifier` dotted-name fallback.
-    #[test]
-    fn local_summary_callees_java_method_receiver() {
-        let src = br"
+/// Java `obj.method(x)` IS classified as CallMethod (via
+/// `method_invocation`), so the structured `receiver` field
+/// should be populated directly rather than falling through to
+/// the `qualifier` dotted-name fallback.
+#[test]
+fn local_summary_callees_java_method_receiver() {
+    let src = br"
 class Outer {
     void outer(Bar obj, int x) {
         obj.method(x);
     }
 }
 ";
-        let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "java", ts_lang);
-        let (_key, outer) = file_cfg
-            .summaries
-            .iter()
-            .find(|(k, _)| k.name == "outer")
-            .expect("java outer summary should exist");
+    let ts_lang = Language::from(tree_sitter_java::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "java", ts_lang);
+    let (_key, outer) = file_cfg
+        .summaries
+        .iter()
+        .find(|(k, _)| k.name == "outer")
+        .expect("java outer summary should exist");
 
-        let method_site = outer
-            .callees
-            .iter()
-            .find(|c| c.name.ends_with("method"))
-            .expect("java method call should be recorded");
-        assert_eq!(method_site.arity, Some(1));
-        assert_eq!(
-            method_site.receiver.as_deref(),
-            Some("obj"),
-            "java CallMethod should populate the structured receiver field"
-        );
-    }
+    let method_site = outer
+        .callees
+        .iter()
+        .find(|c| c.name.ends_with("method"))
+        .expect("java method call should be recorded");
+    assert_eq!(method_site.arity, Some(1));
+    assert_eq!(
+        method_site.receiver.as_deref(),
+        Some("obj"),
+        "java CallMethod should populate the structured receiver field"
+    );
+}
 
-    /// Python keyword arguments should be captured separately from positional
-    /// `arg_uses` and surfaced through `CallMeta.kwargs` as `(name, uses)`.
-    #[test]
-    fn call_node_kwargs_populated_for_python() {
-        let src = b"
+/// Python keyword arguments should be captured separately from positional
+/// `arg_uses` and surfaced through `CallMeta.kwargs` as `(name, uses)`.
+#[test]
+fn call_node_kwargs_populated_for_python() {
+    let src = b"
 def outer(cmd):
     subprocess.run(cmd, shell=True, check=False)
 ";
-        let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
-        let call_node = cfg
-            .node_weights()
-            .find(|n| {
-                n.kind == StmtKind::Call
-                    && n.call.callee.as_deref().is_some_and(|c| c.ends_with("run"))
-            })
-            .expect("subprocess.run call node should exist");
+    let ts_lang = Language::from(tree_sitter_python::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "python", ts_lang);
+    let call_node = cfg
+        .node_weights()
+        .find(|n| {
+            n.kind == StmtKind::Call && n.call.callee.as_deref().is_some_and(|c| c.ends_with("run"))
+        })
+        .expect("subprocess.run call node should exist");
 
-        // Receiver (`subprocess`) is a separate channel on `CallMeta.receiver`;
-        // `arg_uses` holds positional arguments only. Keyword args must not
-        // appear in positional slots.
-        assert_eq!(
-            call_node.call.arg_uses.len(),
-            1,
-            "arg_uses should be [cmd] — receiver is separate, kwargs are not positional"
-        );
-        assert_eq!(call_node.call.arg_uses[0], vec!["cmd".to_string()]);
-        assert_eq!(call_node.call.receiver.as_deref(), Some("subprocess"));
+    // Receiver (`subprocess`) is a separate channel on `CallMeta.receiver`;
+    // `arg_uses` holds positional arguments only. Keyword args must not
+    // appear in positional slots.
+    assert_eq!(
+        call_node.call.arg_uses.len(),
+        1,
+        "arg_uses should be [cmd] — receiver is separate, kwargs are not positional"
+    );
+    assert_eq!(call_node.call.arg_uses[0], vec!["cmd".to_string()]);
+    assert_eq!(call_node.call.receiver.as_deref(), Some("subprocess"));
 
-        let kwargs = &call_node.call.kwargs;
-        assert_eq!(kwargs.len(), 2, "two keyword arguments expected");
-        assert_eq!(kwargs[0].0, "shell");
-        assert_eq!(kwargs[1].0, "check");
-    }
+    let kwargs = &call_node.call.kwargs;
+    assert_eq!(kwargs.len(), 2, "two keyword arguments expected");
+    assert_eq!(kwargs[0].0, "shell");
+    assert_eq!(kwargs[1].0, "check");
+}
 
-    /// Languages without keyword-argument grammar should leave `kwargs` empty.
-    #[test]
-    fn call_node_kwargs_empty_for_javascript() {
-        let src = br"
+/// Languages without keyword-argument grammar should leave `kwargs` empty.
+#[test]
+fn call_node_kwargs_empty_for_javascript() {
+    let src = br"
             function outer(cmd) {
                 child_process.exec(cmd, { shell: true });
             }
         ";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-        let call_node = cfg
-            .node_weights()
-            .find(|n| {
-                n.kind == StmtKind::Call
-                    && n.call
-                        .callee
-                        .as_deref()
-                        .is_some_and(|c| c.ends_with("exec"))
-            })
-            .expect("child_process.exec call node should exist");
-        assert!(
-            call_node.call.kwargs.is_empty(),
-            "JS object-literal arg is not a keyword_argument — kwargs should stay empty"
-        );
-    }
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+    let call_node = cfg
+        .node_weights()
+        .find(|n| {
+            n.kind == StmtKind::Call
+                && n.call
+                    .callee
+                    .as_deref()
+                    .is_some_and(|c| c.ends_with("exec"))
+        })
+        .expect("child_process.exec call node should exist");
+    assert!(
+        call_node.call.kwargs.is_empty(),
+        "JS object-literal arg is not a keyword_argument — kwargs should stay empty"
+    );
+}
 
-    /// Ordinals on callees should match `CallMeta.call_ordinal` so
-    /// downstream consumers can address a specific call site.
-    #[test]
-    fn local_summary_callees_have_distinct_ordinals() {
-        let src = br"
+/// Ordinals on callees should match `CallMeta.call_ordinal` so
+/// downstream consumers can address a specific call site.
+#[test]
+fn local_summary_callees_have_distinct_ordinals() {
+    let src = br"
             function outer() {
                 a();
                 a();
                 b();
             }
         ";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        let (_key, outer) = file_cfg
-            .summaries
-            .iter()
-            .find(|(k, _)| k.name == "outer")
-            .unwrap();
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    let (_key, outer) = file_cfg
+        .summaries
+        .iter()
+        .find(|(k, _)| k.name == "outer")
+        .unwrap();
 
-        // Dedup key is (name, arity, receiver, qualifier, ordinal) — the two
-        // `a()` sites have different ordinals, so both must appear.
-        let a_sites: Vec<_> = outer.callees.iter().filter(|c| c.name == "a").collect();
-        assert_eq!(
-            a_sites.len(),
-            2,
-            "two a() calls should produce two entries with distinct ordinals, got: {:?}",
-            a_sites
-        );
-        let ord0 = a_sites[0].ordinal;
-        let ord1 = a_sites[1].ordinal;
-        assert_ne!(ord0, ord1, "ordinals must differ across sites");
-    }
+    // Dedup key is (name, arity, receiver, qualifier, ordinal) — the two
+    // `a()` sites have different ordinals, so both must appear.
+    let a_sites: Vec<_> = outer.callees.iter().filter(|c| c.name == "a").collect();
+    assert_eq!(
+        a_sites.len(),
+        2,
+        "two a() calls should produce two entries with distinct ordinals, got: {:?}",
+        a_sites
+    );
+    let ord0 = a_sites[0].ordinal;
+    let ord1 = a_sites[1].ordinal;
+    assert_ne!(ord0, ord1, "ordinals must differ across sites");
+}
 
-    // ─────────────────────────────────────────────────────────────────────
-    //  Anonymous function body naming via syntactic context
-    //  (derive_anon_fn_name_from_context coverage)
-    // ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────
+//  Anonymous function body naming via syntactic context
+//  (derive_anon_fn_name_from_context coverage)
+// ─────────────────────────────────────────────────────────────────────
 
-    fn js_body_names(src: &[u8]) -> Vec<String> {
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        file_cfg
-            .bodies
-            .iter()
-            .filter_map(|b| b.meta.func_key.as_ref().map(|k| k.name.clone()))
-            .collect()
-    }
+fn js_body_names(src: &[u8]) -> Vec<String> {
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    file_cfg
+        .bodies
+        .iter()
+        .filter_map(|b| b.meta.func_key.as_ref().map(|k| k.name.clone()))
+        .collect()
+}
 
-    fn js_body_kinds(src: &[u8]) -> Vec<BodyKind> {
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        file_cfg.bodies.iter().map(|b| b.meta.kind).collect()
-    }
+fn js_body_kinds(src: &[u8]) -> Vec<BodyKind> {
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    file_cfg.bodies.iter().map(|b| b.meta.kind).collect()
+}
 
-    #[test]
-    fn anon_fn_named_from_var_declarator_js() {
-        let src = b"var handler = function(x) { child_process.exec(x); };";
-        let names = js_body_names(src);
-        assert!(
-            names.iter().any(|n| n == "handler"),
-            "expected body named `handler` from var declarator, got: {:?}",
-            names
-        );
-    }
+#[test]
+fn anon_fn_named_from_var_declarator_js() {
+    let src = b"var handler = function(x) { child_process.exec(x); };";
+    let names = js_body_names(src);
+    assert!(
+        names.iter().any(|n| n == "handler"),
+        "expected body named `handler` from var declarator, got: {:?}",
+        names
+    );
+}
 
-    #[test]
-    fn anon_arrow_named_from_const_declarator_js() {
-        let src = b"const run = (x) => { eval(x); };";
-        let names = js_body_names(src);
-        assert!(
-            names.iter().any(|n| n == "run"),
-            "expected body named `run` from const arrow declarator, got: {:?}",
-            names
-        );
-    }
+#[test]
+fn anon_arrow_named_from_const_declarator_js() {
+    let src = b"const run = (x) => { eval(x); };";
+    let names = js_body_names(src);
+    assert!(
+        names.iter().any(|n| n == "run"),
+        "expected body named `run` from const arrow declarator, got: {:?}",
+        names
+    );
+}
 
-    #[test]
-    fn anon_fn_named_from_member_assignment_js() {
-        let src = b"this.run = function(x) { eval(x); };";
-        let names = js_body_names(src);
-        assert!(
-            names.iter().any(|n| n == "run"),
-            "expected body named `run` from member assignment, got: {:?}",
-            names
-        );
-    }
+#[test]
+fn anon_fn_named_from_member_assignment_js() {
+    let src = b"this.run = function(x) { eval(x); };";
+    let names = js_body_names(src);
+    assert!(
+        names.iter().any(|n| n == "run"),
+        "expected body named `run` from member assignment, got: {:?}",
+        names
+    );
+}
 
-    #[test]
-    fn anon_fn_passed_as_arg_stays_anonymous_js() {
-        // Function literal passed directly as argument has no stable
-        // syntactic binding → must remain a synthetic anon name.
-        let src = b"apply(function(x) { eval(x); });";
-        let names = js_body_names(src);
-        let kinds = js_body_kinds(src);
-        assert!(
-            kinds.contains(&BodyKind::AnonymousFunction),
-            "expected at least one AnonymousFunction body, got: {:?}",
-            kinds
-        );
-        assert!(
-            names.iter().any(|n| is_anon_fn_name(n)),
-            "expected synthetic anon name on FuncKey for call-argument fn literal, got: {:?}",
-            names
-        );
-        assert!(
-            !names.iter().any(|n| n == "apply"),
-            "must not leak callee name onto its argument function, got: {:?}",
-            names
-        );
-    }
+#[test]
+fn anon_fn_passed_as_arg_stays_anonymous_js() {
+    // Function literal passed directly as argument has no stable
+    // syntactic binding → must remain a synthetic anon name.
+    let src = b"apply(function(x) { eval(x); });";
+    let names = js_body_names(src);
+    let kinds = js_body_kinds(src);
+    assert!(
+        kinds.contains(&BodyKind::AnonymousFunction),
+        "expected at least one AnonymousFunction body, got: {:?}",
+        kinds
+    );
+    assert!(
+        names.iter().any(|n| is_anon_fn_name(n)),
+        "expected synthetic anon name on FuncKey for call-argument fn literal, got: {:?}",
+        names
+    );
+    assert!(
+        !names.iter().any(|n| n == "apply"),
+        "must not leak callee name onto its argument function, got: {:?}",
+        names
+    );
+}
 
-    #[test]
-    fn named_fn_declaration_unchanged_js() {
-        let src = b"function real_name(x) { eval(x); }";
-        let names = js_body_names(src);
-        assert!(
-            names.iter().any(|n| n == "real_name"),
-            "named declaration must retain its name, got: {:?}",
-            names
-        );
-    }
+#[test]
+fn named_fn_declaration_unchanged_js() {
+    let src = b"function real_name(x) { eval(x); }";
+    let names = js_body_names(src);
+    assert!(
+        names.iter().any(|n| n == "real_name"),
+        "named declaration must retain its name, got: {:?}",
+        names
+    );
+}
 
-    #[test]
-    fn anon_fn_named_from_short_var_decl_go() {
-        let src = b"package main\nfunc main() { run := func(x string) { exec(x) }; run(\"hi\") }";
-        let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "go", ts_lang);
-        let names: Vec<String> = file_cfg
-            .bodies
-            .iter()
-            .filter_map(|b| b.meta.func_key.as_ref().map(|k| k.name.clone()))
-            .collect();
-        assert!(
-            names.iter().any(|n| n == "run"),
-            "expected func literal body keyed as `run` via Go short-var decl, got: {:?}",
-            names
-        );
-    }
+#[test]
+fn anon_fn_named_from_short_var_decl_go() {
+    let src = b"package main\nfunc main() { run := func(x string) { exec(x) }; run(\"hi\") }";
+    let ts_lang = Language::from(tree_sitter_go::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "go", ts_lang);
+    let names: Vec<String> = file_cfg
+        .bodies
+        .iter()
+        .filter_map(|b| b.meta.func_key.as_ref().map(|k| k.name.clone()))
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "run"),
+        "expected func literal body keyed as `run` via Go short-var decl, got: {:?}",
+        names
+    );
+}
 
-    #[test]
-    fn iife_callee_resolves_to_anon_body_js() {
-        // `(function(arg){eval(arg);})(q)` — the CallFn arm must produce
-        // a synthetic anon callee name so that taint can match the
-        // inline body's FuncKey.
-        let src = b"(function(arg){ eval(arg); })(q);";
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
-        let top = &file_cfg.bodies[0];
-        let callee_names: Vec<String> = top
-            .graph
-            .node_indices()
-            .filter_map(|i| top.graph[i].call.callee.clone())
-            .collect();
-        assert!(
-            callee_names.iter().any(|c| is_anon_fn_name(c)),
-            "IIFE call site should record synthetic anon callee, got: {:?}",
-            callee_names
-        );
-    }
+#[test]
+fn iife_callee_resolves_to_anon_body_js() {
+    // `(function(arg){eval(arg);})(q)` — the CallFn arm must produce
+    // a synthetic anon callee name so that taint can match the
+    // inline body's FuncKey.
+    let src = b"(function(arg){ eval(arg); })(q);";
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let file_cfg = parse_to_file_cfg(src, "javascript", ts_lang);
+    let top = &file_cfg.bodies[0];
+    let callee_names: Vec<String> = top
+        .graph
+        .node_indices()
+        .filter_map(|i| top.graph[i].call.callee.clone())
+        .collect();
+    assert!(
+        callee_names.iter().any(|c| is_anon_fn_name(c)),
+        "IIFE call site should record synthetic anon callee, got: {:?}",
+        callee_names
+    );
+}
 
-    /// Helper: collect every Sanitizer cap set that landed on any CFG node in
-    /// the function body for a Rust snippet.  Used by the replace-chain
-    /// detector tests.
-    fn rust_body_sanitizer_caps(src: &[u8]) -> Vec<Cap> {
-        let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
-        cfg.node_indices()
-            .flat_map(|i| cfg[i].taint.labels.clone())
-            .filter_map(|l| match l {
-                DataLabel::Sanitizer(c) => Some(c),
-                _ => None,
-            })
-            .collect()
-    }
+/// Helper: collect every Sanitizer cap set that landed on any CFG node in
+/// the function body for a Rust snippet.  Used by the replace-chain
+/// detector tests.
+fn rust_body_sanitizer_caps(src: &[u8]) -> Vec<Cap> {
+    let ts_lang = Language::from(tree_sitter_rust::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "rust", ts_lang);
+    cfg.node_indices()
+        .flat_map(|i| cfg[i].taint.labels.clone())
+        .filter_map(|l| match l {
+            DataLabel::Sanitizer(c) => Some(c),
+            _ => None,
+        })
+        .collect()
+}
 
-    #[test]
-    fn replace_chain_strips_file_io_for_path_traversal_literals() {
-        // `.replace("..", "").replace("/", "_")` should earn FILE_IO stripping.
-        let src = br#"
+#[test]
+fn replace_chain_strips_file_io_for_path_traversal_literals() {
+    // `.replace("..", "").replace("/", "_")` should earn FILE_IO stripping.
+    let src = br#"
 fn sanitize_input(s: &str) -> String {
     s.replace("..", "").replace("/", "_")
 }
 "#;
-        let caps = rust_body_sanitizer_caps(src);
-        assert!(
-            caps.iter().any(|c| c.contains(Cap::FILE_IO)),
-            "Expected a Sanitizer(FILE_IO) on the replace chain; got {:?}",
-            caps
-        );
-    }
+    let caps = rust_body_sanitizer_caps(src);
+    assert!(
+        caps.iter().any(|c| c.contains(Cap::FILE_IO)),
+        "Expected a Sanitizer(FILE_IO) on the replace chain; got {:?}",
+        caps
+    );
+}
 
-    #[test]
-    fn replace_chain_strips_html_escape_for_angle_brackets() {
-        // Stripping `<` and `>` earns HTML_ESCAPE, not FILE_IO.
-        let src = br#"
+#[test]
+fn replace_chain_strips_html_escape_for_angle_brackets() {
+    // Stripping `<` and `>` earns HTML_ESCAPE, not FILE_IO.
+    let src = br#"
 fn strip_tags(s: &str) -> String {
     s.replace("<", "").replace(">", "")
 }
 "#;
-        let caps = rust_body_sanitizer_caps(src);
-        assert!(
-            caps.iter().any(|c| c.contains(Cap::HTML_ESCAPE)),
-            "Expected a Sanitizer(HTML_ESCAPE) on angle-bracket strip; got {:?}",
-            caps
-        );
-        assert!(
-            !caps.iter().any(|c| c.contains(Cap::FILE_IO)),
-            "Angle-bracket strip should NOT earn FILE_IO credit; got {:?}",
-            caps
-        );
-    }
+    let caps = rust_body_sanitizer_caps(src);
+    assert!(
+        caps.iter().any(|c| c.contains(Cap::HTML_ESCAPE)),
+        "Expected a Sanitizer(HTML_ESCAPE) on angle-bracket strip; got {:?}",
+        caps
+    );
+    assert!(
+        !caps.iter().any(|c| c.contains(Cap::FILE_IO)),
+        "Angle-bracket strip should NOT earn FILE_IO credit; got {:?}",
+        caps
+    );
+}
 
-    #[test]
-    fn replace_chain_rejects_unrecognised_literals() {
-        // `.replace("foo", "bar")` contains no dangerous pattern — must NOT be
-        // credited as a sanitizer.  Preserves the FP→TN guard: replace calls
-        // that don't strip anything dangerous must stay transparent to taint.
-        let src = br#"
+#[test]
+fn replace_chain_rejects_unrecognised_literals() {
+    // `.replace("foo", "bar")` contains no dangerous pattern — must NOT be
+    // credited as a sanitizer.  Preserves the FP→TN guard: replace calls
+    // that don't strip anything dangerous must stay transparent to taint.
+    let src = br#"
 fn rewrite(s: &str) -> String {
     s.replace("foo", "bar").replace("baz", "qux")
 }
 "#;
-        let caps = rust_body_sanitizer_caps(src);
-        assert!(
-            caps.is_empty(),
-            "Generic replace chain should not earn sanitizer credit; got {:?}",
-            caps
-        );
-    }
+    let caps = rust_body_sanitizer_caps(src);
+    assert!(
+        caps.is_empty(),
+        "Generic replace chain should not earn sanitizer credit; got {:?}",
+        caps
+    );
+}
 
-    #[test]
-    fn replace_chain_rejects_when_replacement_reintroduces_pattern() {
-        // `.replace("x", "..")` strips `x` but *reintroduces* `..` — be
-        // maximally conservative and abandon all credit for this chain.
-        let src = br#"
+#[test]
+fn replace_chain_rejects_when_replacement_reintroduces_pattern() {
+    // `.replace("x", "..")` strips `x` but *reintroduces* `..` — be
+    // maximally conservative and abandon all credit for this chain.
+    let src = br#"
 fn evil(s: &str) -> String {
     s.replace("x", "..")
 }
 "#;
-        let caps = rust_body_sanitizer_caps(src);
-        assert!(
-            caps.is_empty(),
-            "Replacement reintroducing dangerous pattern must kill credit; got {:?}",
-            caps
-        );
-    }
+    let caps = rust_body_sanitizer_caps(src);
+    assert!(
+        caps.is_empty(),
+        "Replacement reintroducing dangerous pattern must kill credit; got {:?}",
+        caps
+    );
+}
 
-    #[test]
-    fn replace_chain_rejects_dynamic_arg() {
-        // `.replace(var, "")` — search is not a literal; pattern analysis can
-        // say nothing about what was stripped.  Must not earn credit.
-        let src = br#"
+#[test]
+fn replace_chain_rejects_dynamic_arg() {
+    // `.replace(var, "")` — search is not a literal; pattern analysis can
+    // say nothing about what was stripped.  Must not earn credit.
+    let src = br#"
 fn dynamic(s: &str, needle: &str) -> String {
     s.replace(needle, "")
 }
 "#;
-        let caps = rust_body_sanitizer_caps(src);
-        assert!(
-            caps.is_empty(),
-            "Dynamic replace arg must not earn credit; got {:?}",
-            caps
-        );
-    }
+    let caps = rust_body_sanitizer_caps(src);
+    assert!(
+        caps.is_empty(),
+        "Dynamic replace arg must not earn credit; got {:?}",
+        caps
+    );
+}
 
-    #[test]
-    fn replace_chain_rejects_non_identifier_base() {
-        // `get_s().replace("..", "")` — innermost receiver is a call, not a
-        // parameter.  We have no reason to believe `get_s()` returns a value
-        // that benefits the caller; refuse credit.
-        let src = br#"
+#[test]
+fn replace_chain_rejects_non_identifier_base() {
+    // `get_s().replace("..", "")` — innermost receiver is a call, not a
+    // parameter.  We have no reason to believe `get_s()` returns a value
+    // that benefits the caller; refuse credit.
+    let src = br#"
 fn base_is_call() -> String {
     get_s().replace("..", "")
 }
 "#;
-        let caps = rust_body_sanitizer_caps(src);
-        assert!(
-            caps.is_empty(),
-            "Non-identifier chain base must not earn credit; got {:?}",
-            caps
-        );
-    }
+    let caps = rust_body_sanitizer_caps(src);
+    assert!(
+        caps.is_empty(),
+        "Non-identifier chain base must not earn credit; got {:?}",
+        caps
+    );
+}
 
-    // ── is_numeric_length_access detector ─────────────────────────────────
+// ── is_numeric_length_access detector ─────────────────────────────────
 
-    fn find_node_defining<'a>(cfg: &'a Cfg, var: &str) -> Option<&'a NodeInfo> {
-        cfg.node_indices()
-            .map(|i| &cfg[i])
-            .find(|n| n.taint.defines.as_deref() == Some(var))
-    }
+fn find_node_defining<'a>(cfg: &'a Cfg, var: &str) -> Option<&'a NodeInfo> {
+    cfg.node_indices()
+        .map(|i| &cfg[i])
+        .find(|n| n.taint.defines.as_deref() == Some(var))
+}
 
-    #[test]
-    fn numeric_length_access_detected_on_js_property_read() {
-        // `var count = items.length` — property access on a member expression
-        // should mark the CFG node as a numeric-length access so the
-        // type-fact analysis infers TypeKind::Int for `count`.
-        let src = br#"function f(items) {
+#[test]
+fn numeric_length_access_detected_on_js_property_read() {
+    // `var count = items.length` — property access on a member expression
+    // should mark the CFG node as a numeric-length access so the
+    // type-fact analysis infers TypeKind::Int for `count`.
+    let src = br#"function f(items) {
             var count = items.length;
             return count;
         }"#;
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-        let node = find_node_defining(&cfg, "count").expect("defines count");
-        assert!(
-            node.is_numeric_length_access,
-            "Expected is_numeric_length_access=true for `count = items.length`"
-        );
-    }
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+    let node = find_node_defining(&cfg, "count").expect("defines count");
+    assert!(
+        node.is_numeric_length_access,
+        "Expected is_numeric_length_access=true for `count = items.length`"
+    );
+}
 
-    #[test]
-    fn numeric_length_access_detected_on_js_zero_arg_method_call() {
-        // `var n = str.length()` — zero-arg method call form (uncommon in JS
-        // but present in other languages).  Detector should unwrap a
-        // zero-arg call around a member expression.
-        let src = br#"function f(list) {
+#[test]
+fn numeric_length_access_detected_on_js_zero_arg_method_call() {
+    // `var n = str.length()` — zero-arg method call form (uncommon in JS
+    // but present in other languages).  Detector should unwrap a
+    // zero-arg call around a member expression.
+    let src = br#"function f(list) {
             var n = list.size();
             return n;
         }"#;
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-        let node = find_node_defining(&cfg, "n").expect("defines n");
-        assert!(
-            node.is_numeric_length_access,
-            "Expected is_numeric_length_access=true for `n = list.size()`"
-        );
-    }
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+    let node = find_node_defining(&cfg, "n").expect("defines n");
+    assert!(
+        node.is_numeric_length_access,
+        "Expected is_numeric_length_access=true for `n = list.size()`"
+    );
+}
 
-    #[test]
-    fn numeric_length_access_ignores_unrelated_properties() {
-        // `var v = arr.foo` — arbitrary property reads must not be flagged.
-        let src = br#"function f(arr) {
+#[test]
+fn numeric_length_access_ignores_unrelated_properties() {
+    // `var v = arr.foo` — arbitrary property reads must not be flagged.
+    let src = br#"function f(arr) {
             var v = arr.foo;
             return v;
         }"#;
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-        let node = find_node_defining(&cfg, "v").expect("defines v");
-        assert!(
-            !node.is_numeric_length_access,
-            "is_numeric_length_access must stay false for unrelated property `arr.foo`"
-        );
-    }
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+    let node = find_node_defining(&cfg, "v").expect("defines v");
+    assert!(
+        !node.is_numeric_length_access,
+        "is_numeric_length_access must stay false for unrelated property `arr.foo`"
+    );
+}
 
-    #[test]
-    fn numeric_length_access_ignores_method_calls_with_args() {
-        // `var r = s.indexOf('x')` — the detector must reject any call with
-        // positional arguments because those aren't pure length reads.
-        let src = br#"function f(s) {
+#[test]
+fn numeric_length_access_ignores_method_calls_with_args() {
+    // `var r = s.indexOf('x')` — the detector must reject any call with
+    // positional arguments because those aren't pure length reads.
+    let src = br#"function f(s) {
             var r = s.indexOf('x');
             return r;
         }"#;
-        let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
-        let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
-        let node = find_node_defining(&cfg, "r").expect("defines r");
-        assert!(
-            !node.is_numeric_length_access,
-            "is_numeric_length_access must stay false for arg-bearing calls"
-        );
-    }
+    let ts_lang = Language::from(tree_sitter_javascript::LANGUAGE);
+    let (cfg, _entry) = parse_and_build(src, "javascript", ts_lang);
+    let node = find_node_defining(&cfg, "r").expect("defines r");
+    assert!(
+        !node.is_numeric_length_access,
+        "is_numeric_length_access must stay false for arg-bearing calls"
+    );
+}

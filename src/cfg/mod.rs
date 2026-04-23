@@ -27,27 +27,25 @@ mod literals;
 mod params;
 use blocks::{build_begin_rescue, build_switch, build_try};
 use helpers::{
-    collect_nested_function_nodes, derive_anon_fn_name_from_context,
-    find_classifiable_inner_call, first_call_ident_with_span, first_member_label,
-    first_member_text, is_raii_factory, root_member_receiver,
+    collect_nested_function_nodes, derive_anon_fn_name_from_context, find_classifiable_inner_call,
+    first_call_ident_with_span, first_member_label, first_member_text, is_raii_factory,
+    root_member_receiver,
 };
 // Re-exports so sibling submodules can keep using `super::name` for
 // helpers that physically live in `helpers.rs`.
-pub(crate) use helpers::{
-    collect_idents, collect_idents_with_paths, find_constructor_type_child, first_call_ident,
-    has_call_descendant, member_expr_text, root_receiver_text, text_of,
-};
-use params::{
-    compute_container_and_kind, extract_param_names, inject_framework_param_sources,
-    is_configured_terminator,
-};
 use conditions::{
     build_condition_chain, build_ternary_diamond, classify_ternary_lhs,
     detect_rust_let_match_guard, emit_rust_match_guard_if, find_ternary_rhs_wrapper,
     is_boolean_operator, unwrap_parens,
 };
 use decorators::extract_auth_decorators;
+pub(crate) use helpers::{
+    collect_idents, collect_idents_with_paths, find_constructor_type_child, first_call_ident,
+    has_call_descendant, member_expr_text, root_receiver_text, text_of,
+};
 use imports::{extract_import_bindings, extract_promisify_aliases};
+#[cfg(test)]
+use literals::has_sql_placeholders;
 use literals::{
     call_ident_of, def_use, detect_rust_replace_chain_sanitizer, extract_arg_callees,
     extract_arg_string_literals, extract_arg_uses, extract_const_keyword_arg,
@@ -55,8 +53,10 @@ use literals::{
     extract_literal_rhs, find_call_node, find_call_node_deep, has_keyword_arg,
     has_only_literal_args, is_parameterized_query_call,
 };
-#[cfg(test)]
-use literals::has_sql_placeholders;
+use params::{
+    compute_container_and_kind, extract_param_names, inject_framework_param_sources,
+    is_configured_terminator,
+};
 
 // -------------------------------------------------------------------------
 // Structural DFS index for function bodies (Phase 6)
@@ -586,8 +586,6 @@ fn create_body_graph(
     ));
     (g, entry, exit)
 }
-
-
 
 /// Extract raw condition metadata from an If AST node.
 ///
@@ -1925,8 +1923,6 @@ pub(super) fn push_node<'a>(
     idx
 }
 
-
-
 /// Add the same edge (of the same kind) from every node in `froms` to `to`.
 #[inline]
 pub(super) fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind: EdgeKind) {
@@ -1935,7 +1931,6 @@ pub(super) fn connect_all(g: &mut Cfg, froms: &[NodeIndex], to: NodeIndex, kind:
         g.add_edge(f, to, kind);
     }
 }
-
 
 /// Pre-emit dedicated Source CFG nodes for call arguments that contain source
 /// member expressions.
@@ -3356,7 +3351,6 @@ pub(super) fn build_sub<'a>(
         }
     }
 }
-
 
 /// Build an intraprocedural CFG and return (graph, entry_node).
 ///

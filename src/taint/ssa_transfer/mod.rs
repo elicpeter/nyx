@@ -15,22 +15,22 @@ mod state;
 mod summary_extract;
 
 pub use events::{SsaTaintEvent, ssa_events_to_findings};
+pub(crate) use inline::{ArgTaintSig, InlineCache};
+use inline::{CachedInlineShape, InlineResult, MAX_INLINE_BLOCKS, ReturnShape};
 pub use inline::{CalleeSsaBody, CrossFileNodeMeta, populate_node_meta, rebuild_body_graph};
+#[allow(unused_imports)] // retained for future shared-cache refactor / tests
+pub(crate) use inline::{inline_cache_clear_epoch, inline_cache_fingerprint};
 pub use state::{
     BindingKey, SsaTaintState, max_worklist_iterations, origins_truncation_count,
     reset_origins_observability, reset_worklist_observability, seed_lookup,
     set_max_origins_override, set_worklist_cap_override, worklist_cap_hit_count,
 };
-pub use summary_extract::extract_ssa_func_summary;
-pub(crate) use inline::{ArgTaintSig, InlineCache};
-pub(crate) use state::{record_engine_note, reset_body_engine_notes, take_body_engine_notes};
-#[allow(unused_imports)] // retained for future shared-cache refactor / tests
-pub(crate) use inline::{inline_cache_clear_epoch, inline_cache_fingerprint};
-use inline::{CachedInlineShape, InlineResult, MAX_INLINE_BLOCKS, ReturnShape};
 use state::{
     MAX_WORKLIST_ITERATIONS, ORIGINS_TRUNCATION_COUNT, WORKLIST_CAP_HITS, effective_max_origins,
     effective_worklist_cap,
 };
+pub(crate) use state::{record_engine_note, reset_body_engine_notes, take_body_engine_notes};
+pub use summary_extract::extract_ssa_func_summary;
 
 use crate::abstract_interp::AbstractState;
 use crate::callgraph::{callee_container_hint, callee_leaf_name};
@@ -44,17 +44,12 @@ use crate::state::lattice::Lattice;
 use crate::state::symbol::SymbolInterner;
 use crate::summary::{CalleeQuery, CalleeResolution, GlobalSummaries, SinkSite};
 use crate::symbol::{FuncKey, Lang};
-use crate::taint::domain::{
-    PredicateSummary, TaintOrigin, VarTaint, predicate_kind_bit,
-};
+use crate::taint::domain::{PredicateSummary, TaintOrigin, VarTaint, predicate_kind_bit};
 use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
-
-
-
 
 // ── SSA Taint Transfer ──────────────────────────────────────────────────
 
@@ -6357,5 +6352,3 @@ fn convert_ssa_to_resolved(
         points_to: ssa_sum.points_to.clone(),
     }
 }
-
-

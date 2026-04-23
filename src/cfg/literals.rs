@@ -137,7 +137,11 @@ pub(super) fn extract_destination_field_idents(
 
 /// Extract the string-literal content at argument position `index` (0-based).
 /// Returns `None` if the argument is not a string literal or the index is out of range.
-pub(super) fn extract_const_string_arg(call_node: Node, index: usize, code: &[u8]) -> Option<String> {
+pub(super) fn extract_const_string_arg(
+    call_node: Node,
+    index: usize,
+    code: &[u8],
+) -> Option<String> {
     let args = call_node.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
     let arg = args.named_children(&mut cursor).nth(index)?;
@@ -173,7 +177,11 @@ pub(super) fn extract_const_string_arg(call_node: Node, index: usize, code: &[u8
 /// Extract the value of a keyword argument from a call node (e.g. Python `shell=True`).
 /// Walks argument children looking for `keyword_argument` nodes, matches the keyword
 /// name, and extracts the value node text for literals.
-pub(super) fn extract_const_keyword_arg(call_node: Node, keyword_name: &str, code: &[u8]) -> Option<String> {
+pub(super) fn extract_const_keyword_arg(
+    call_node: Node,
+    keyword_name: &str,
+    code: &[u8],
+) -> Option<String> {
     let args = call_node.child_by_field_name("arguments")?;
     let mut cursor = args.walk();
     for child in args.named_children(&mut cursor) {
@@ -970,7 +978,11 @@ pub(super) fn extract_arg_callees(call_node: Node, lang: &str, code: &[u8]) -> V
 /// Return `(defines, uses)` for the AST fragment `ast`.
 /// Returns (defines, uses, extra_defines) where extra_defines captures additional
 /// bindings from destructuring patterns beyond the primary define.
-pub(super) fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Vec<String>, Vec<String>) {
+pub(super) fn def_use(
+    ast: Node,
+    lang: &str,
+    code: &[u8],
+) -> (Option<String>, Vec<String>, Vec<String>) {
     match lookup(lang, ast.kind()) {
         // Declaration wrappers (let, var, short_var_declaration, etc.)
         Kind::CallWrapper => {
@@ -1148,4 +1160,3 @@ pub(super) fn def_use(ast: Node, lang: &str, code: &[u8]) -> (Option<String>, Ve
         }
     }
 }
-
