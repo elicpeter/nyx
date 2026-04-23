@@ -124,6 +124,45 @@ fn sink_class_for_type(
     }
 }
 
+fn auth_finding_to_diag(finding: &checks::AuthFinding, tree: &Tree, file_path: &Path) -> Diag {
+    let point = byte_offset_to_point(tree, finding.span.0);
+    Diag {
+        path: file_path.to_string_lossy().into_owned(),
+        line: point.row + 1,
+        col: point.column + 1,
+        severity: finding.severity,
+        id: finding.rule_id.clone(),
+        category: FindingCategory::Security,
+        path_validated: false,
+        guard_kind: None,
+        message: Some(finding.message.clone()),
+        labels: vec![],
+        confidence: Some(Confidence::Medium),
+        evidence: Some(Evidence {
+            source: None,
+            sink: Some(SpanEvidence {
+                path: file_path.to_string_lossy().into_owned(),
+                line: (point.row + 1) as u32,
+                col: (point.column + 1) as u32,
+                kind: "sink".into(),
+                snippet: None,
+            }),
+            guards: vec![],
+            sanitizers: vec![],
+            state: None,
+            notes: vec![],
+            ..Default::default()
+        }),
+        rank_score: None,
+        rank_reason: None,
+        suppressed: false,
+        suppression: None,
+        rollup: None,
+        finding_id: String::new(),
+        alternative_finding_ids: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{VarTypes, apply_var_types_to_model, receiver_root, sink_class_for_type};
@@ -260,44 +299,5 @@ mod tests {
             model.units[0].operations[0].sink_class,
             Some(SinkClass::DbMutation)
         );
-    }
-}
-
-fn auth_finding_to_diag(finding: &checks::AuthFinding, tree: &Tree, file_path: &Path) -> Diag {
-    let point = byte_offset_to_point(tree, finding.span.0);
-    Diag {
-        path: file_path.to_string_lossy().into_owned(),
-        line: point.row + 1,
-        col: point.column + 1,
-        severity: finding.severity,
-        id: finding.rule_id.clone(),
-        category: FindingCategory::Security,
-        path_validated: false,
-        guard_kind: None,
-        message: Some(finding.message.clone()),
-        labels: vec![],
-        confidence: Some(Confidence::Medium),
-        evidence: Some(Evidence {
-            source: None,
-            sink: Some(SpanEvidence {
-                path: file_path.to_string_lossy().into_owned(),
-                line: (point.row + 1) as u32,
-                col: (point.column + 1) as u32,
-                kind: "sink".into(),
-                snippet: None,
-            }),
-            guards: vec![],
-            sanitizers: vec![],
-            state: None,
-            notes: vec![],
-            ..Default::default()
-        }),
-        rank_score: None,
-        rank_reason: None,
-        suppressed: false,
-        suppression: None,
-        rollup: None,
-        finding_id: String::new(),
-        alternative_finding_ids: Vec::new(),
     }
 }
