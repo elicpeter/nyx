@@ -696,6 +696,47 @@ fn true_positive_missing_check_flags() {
 }
 
 #[test]
+fn helper_no_auth_lift_still_flags() {
+    // Phase B4 regression guard: a helper that doesn't auth-check
+    // its parameter must NOT have a synthetic AuthCheck synthesised
+    // at its call site.
+    assert_has("helper_no_auth_lift.rs", "rs.auth.missing_ownership_check");
+}
+
+#[test]
+fn transitive_helper_is_clean() {
+    // Phase B4: `validate_target(&db, group_id, user.id)` is a helper
+    // that internally calls `authz::require_group_member` against
+    // `group_id`. Helper-summary lifting should synthesise an
+    // AuthCheck at the handler's call site covering `group_id`, so
+    // the subsequent `db.exec("INSERT INTO comments …", &[group_id])`
+    // MUST NOT flag.
+    assert_absent("transitive_helper.rs", "rs.auth.missing_ownership_check");
+}
+
+#[test]
+fn sql_no_acl_join_flags() {
+    // Phase B3 regression guard: a JOIN against a non-ACL table
+    // (`audit_log`, not in the configured ACL list) does NOT prove
+    // caller ownership even when the WHERE clause names `user_id`.
+    // The downstream realtime publish must still flag.
+    assert_has(
+        "sql_no_acl_join_flags.rs",
+        "rs.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn sql_join_acl_is_clean() {
+    // Phase B3: a SELECT that JOINs through the configured `group_members`
+    // ACL table and pins rows via `WHERE gm.user_id = ?1` is auth-gated.
+    // Downstream uses of the returned columns (`group_id` here) are
+    // covered by the synthesised SQL `AuthCheck`, so the realtime
+    // publish call MUST NOT flag.
+    assert_absent("sql_join_acl.rs", "rs.auth.missing_ownership_check");
+}
+
+#[test]
 fn db_connection_type_inferred_is_clean() {
     // Phase B2: `let conn = rusqlite::Connection::open(..).unwrap();`
     // is inferred as a `DatabaseConnection` via SSA `constructor_type`

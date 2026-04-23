@@ -25,7 +25,7 @@ pub enum TypeKind {
     FileHandle,
     Url,
     HttpClient,
-    /// Phase B2: a local, in-memory collection (HashMap, HashSet, Vec,
+    /// A local, in-memory collection (HashMap, HashSet, Vec,
     /// BTreeMap, …).  Consumed by the auth analysis sink gate so method
     /// calls on variables of this type (`map.insert(...)`) are treated
     /// as in-memory bookkeeping rather than cross-tenant sinks.  Has no
@@ -251,7 +251,7 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
             {
                 Some(TypeKind::DatabaseConnection)
             } else if is_rust_local_collection_constructor(base) {
-                // Phase B2: Rust std/indexmap/smallvec/dashmap collection
+                // Rust std/indexmap/smallvec/dashmap collection
                 // constructors map to a generic "local collection" type so
                 // the auth analysis sink gate can recognise
                 // `let x = factory_fn(); x.insert(..)` even when the RHS
@@ -318,7 +318,7 @@ pub fn peel_identity_suffix(callee: &str) -> String {
     cur
 }
 
-/// Phase B2: does the peeled callee match a known Rust constructor for a
+/// Does the peeled callee match a known Rust constructor for a
 /// local/in-memory collection type?  Covers std collections plus common
 /// third-party crates (indexmap, smallvec, dashmap).  Matches tail
 /// segments only so `crate::Foo::HashMap::new` also resolves.

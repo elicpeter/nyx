@@ -16,15 +16,19 @@ pub struct AuthAnalysisRules {
     pub token_recipient_fields: Vec<String>,
     pub non_sink_receiver_types: Vec<String>,
     pub non_sink_receiver_name_prefixes: Vec<String>,
-    /// Phase B1: receiver-chain first-segment prefixes that classify a
-    /// call as a realtime publish (pub/sub, websocket, event stream).
+    /// Receiver-chain first-segment prefixes that classify a call as a
+    /// realtime publish (pub/sub, websocket, event stream).
     pub realtime_receiver_prefixes: Vec<String>,
-    /// Phase B1: receiver-chain prefixes that classify a call as an
-    /// outbound network sink (HTTP client, RPC caller).
+    /// Receiver-chain prefixes that classify a call as an outbound
+    /// network sink (HTTP client, RPC caller).
     pub outbound_network_receiver_prefixes: Vec<String>,
-    /// Phase B1: receiver-chain prefixes that classify a call as a
-    /// cross-tenant cache access.
+    /// Receiver-chain prefixes that classify a call as a cross-tenant
+    /// cache access.
     pub cache_receiver_prefixes: Vec<String>,
+    /// ACL tables that, when JOIN-ed in a SELECT and pinned via
+    /// `WHERE <ACL>.user_id = ?N`, make every returned row
+    /// membership-gated.  See `sql_semantics::classify_sql_query`.
+    pub acl_tables: Vec<String>,
 }
 
 impl AuthAnalysisRules {
@@ -46,6 +50,7 @@ impl AuthAnalysisRules {
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
+            acl_tables: Vec::new(),
         }
     }
 
@@ -146,12 +151,12 @@ impl AuthAnalysisRules {
         })
     }
 
-    /// Phase B1: classify a call into a [`SinkClass`].
+    /// Classify a call into a [`SinkClass`].
     ///
     /// Dispatch order (first match wins):
     ///   1. `InMemoryLocal` — receiver is a known non-sink collection
     ///      (tracked in `non_sink_vars` or matches a configured
-    ///      non-sink prefix).  Subsumes the A1 gate.
+    ///      non-sink prefix).
     ///   2. `RealtimePublish` — receiver first-segment matches a
     ///      configured realtime prefix (e.g. `realtime`, `pubsub`).
     ///   3. `OutboundNetwork` — receiver first-segment matches a
@@ -460,6 +465,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
+            acl_tables: Vec::new(),
         }
     } else if matches!(lang_slug, "ruby") {
         AuthAnalysisRules {
@@ -599,6 +605,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
+            acl_tables: Vec::new(),
         }
     } else if matches!(lang_slug, "go") {
         AuthAnalysisRules {
@@ -691,6 +698,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
+            acl_tables: Vec::new(),
         }
     } else if matches!(lang_slug, "java") {
         AuthAnalysisRules {
@@ -779,6 +787,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
+            acl_tables: Vec::new(),
         }
     } else if matches!(lang_slug, "rust") {
         AuthAnalysisRules {
@@ -821,6 +830,15 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "has_permission".into(),
                 "can_access".into(),
                 "can_manage".into(),
+                // Common project-specific helpers seen in real Axum/Rocket
+                // codebases — kept as defaults so user code that names
+                // its membership helper after the resource still gets
+                // recognised.  Users can extend via `nyx.toml`.
+                "require_group_member".into(),
+                "require_org_member".into(),
+                "require_workspace_member".into(),
+                "require_tenant_member".into(),
+                "require_team_member".into(),
             ],
             mutation_indicator_names: vec![
                 "update".into(),
@@ -931,6 +949,14 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "fetcher".into(),
             ],
             cache_receiver_prefixes: vec!["redis".into(), "memcache".into(), "memcached".into()],
+            acl_tables: vec![
+                "group_members".into(),
+                "org_memberships".into(),
+                "workspace_members".into(),
+                "tenant_members".into(),
+                "members".into(),
+                "share_grants".into(),
+            ],
         }
     } else {
         AuthAnalysisRules {
@@ -1002,6 +1028,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
+            acl_tables: Vec::new(),
         }
     };
 
@@ -1066,6 +1093,7 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             &mut rules.cache_receiver_prefixes,
             &lang_cfg.auth.cache_receiver_prefixes,
         );
+        extend_unique(&mut rules.acl_tables, &lang_cfg.auth.acl_tables);
     }
 
     rules

@@ -1,16 +1,57 @@
 # Nyx Benchmark Results
 
-Current baseline (as of Phase 15 real-CVE language-gap expansion, 2026-04-23):
+Current baseline (as of Auth Rule FP-Remediation Phase B5 corpus add, 2026-04-23):
 
 | Metric                | File-level | Rule-level | CI floor |
 |-----------------------|------------|------------|----------|
-| Precision             | 0.945      | 0.945      | 0.861    |
+| Precision             | 0.946      | 0.946      | 0.861    |
 | Recall                | 1.000      | 0.994      | 0.944    |
-| F1                    | 0.972      | 0.969      | 0.901    |
+| F1                    | 0.972      | 0.970      | 0.901    |
 
-Corpus: 295 cases across 10 languages — 267 synthetic + 28 real-CVE cases (14 vulnerable/patched pairs). Scanner 0.5.0, full analysis mode. CI floors are unchanged from Phase CF-7; the Phase 15 delta is within 1 pp and does not warrant tightening.
+Corpus: 305 cases across 10 languages — 267 synthetic + 28 real-CVE cases (14 vulnerable/patched pairs) + 10 auth-rule cases (3 positive + 7 negative). Scanner 0.5.0, full analysis mode. CI floors are unchanged from Phase CF-7; the Auth-B5 delta is within 1 pp and does not warrant tightening.
 
 Machine-readable per-run data lives in `tests/benchmark/results/` (`latest.json` plus dated snapshots). This file is a narrative changelog — only the two most recent phases are kept in full detail; earlier phases are condensed into the history table at the end.
+
+---
+
+## Auth Rule FP Remediation — Phase B5 (2026-04-23)
+
+### Motivation
+
+Until B5, the `rs.auth.missing_ownership_check` rule (introduced as part of `auth_analysis`) was defended only by `cargo test --test auth_analysis_tests` integration assertions; it had **zero** entries in the benchmark corpus. So precision/recall regressions on auth fixtures wouldn't show up in the headline P/R/F1 numbers, and the Phase A1–A3 / B1–B4 fixture work in `tests/fixtures/auth_analysis/` was invisible to anyone reading `RESULTS.md`. This phase mirrors the relevant Rust auth fixtures into `tests/benchmark/corpus/rust/auth/`, adds ground-truth cases for each, and surfaces the resulting `auth` vuln-class metrics in the by-class breakdown.
+
+### What changed
+
+- **10 new fixtures** copied to `tests/benchmark/corpus/rust/auth/` (mirrors of the integration fixtures — keep both in sync when fixtures evolve).
+- **Ground truth**: 10 new cases (`rs-auth-001` … `rs-auth-003` positive, `rs-auth-101` … `rs-auth-107` negative); `corpus_size` bumped 295 → 305.
+- **Positive cases** assert `expected_rule_ids: ["rs.auth.missing_ownership_check"]` and `expected_sink_lines` pinned to the specific call line; one of them (`rs-auth-002`) is the Phase-A "true positive control" mandated by the FP-remediation plan.
+- **Negative cases** assert `is_vulnerable: false` + `forbidden_rule_ids: ["rs.auth.missing_ownership_check"]` (the schema's noise-budget-zero shape), one per Phase A1/A2/A3/B2/B3/B4 fixture so each regression has a dedicated wire.
+- **Regression thresholds unchanged**: floors stay at `P≥0.861 R≥0.944 F1≥0.901`.
+
+### Auth Corpus
+
+| Case ID      | Fixture                                      | Phase covered | Vulnerable | Why it's in the corpus |
+|--------------|----------------------------------------------|---------------|------------|------------------------|
+| rs-auth-001  | actix_scoped_write_missing.rs                | regression    | yes        | Original positive baseline — must keep flagging |
+| rs-auth-002  | true_positive_missing_check.rs               | A control     | yes        | Phase A's positive control — must still flag after every FP fix |
+| rs-auth-003  | row_ownership_no_early_exit.rs               | A2 guard      | yes        | Equality without early exit — A2 must NOT silence this |
+| rs-auth-101  | hashmap_local_noise.rs                       | A1            | no         | std::collections noise — A1 receiver-type/var gate suppresses |
+| rs-auth-102  | helper_scoped_params.rs                      | A1            | no         | Library helper with locally-bound HashSet — A1 suppresses |
+| rs-auth-103  | row_ownership_equality.rs                    | A2            | no         | `if owner_id != user.id { return … }` covers downstream column reads |
+| rs-auth-104  | self_scoped_user.rs                          | A3            | no         | `let user = require_auth(..).await?` — `user.id` is self, not a foreign id |
+| rs-auth-105  | db_connection_type_inferred.rs               | B2            | no         | SSA-derived `DatabaseConnection` type drives sink classification |
+| rs-auth-106  | sql_join_acl.rs                              | B3            | no         | `JOIN group_members WHERE gm.user_id = ?1` makes returned rows membership-gated |
+| rs-auth-107  | transitive_helper.rs                         | B4            | no         | Helper-summary lifting recognises `validate_target(group_id, user.id)` as an auth check |
+
+### Delta
+
+Aggregate rule-level metrics on the 305-case corpus: **P = 0.946, R = 0.994, F1 = 0.970** (vs Phase 15's `P = 0.945, R = 0.994, F1 = 0.969` on 295 cases — auth cases all hit P=1.0 R=1.0 and net to 3 TP + 7 TN, lifting precision by 1 pp via dilution). The new `by_vuln_class` row is `auth: TP=3 FP=0 FN=0 TN=0 P=1.000 R=1.000 F1=1.000`; the seven negatives roll into the existing `safe` class. The Rust per-language line moves from **TP=22 FP=0 FN=0 TN=13** (before) to **TP=25 FP=0 FN=0 TN=20** (after).
+
+### Notes
+
+- Fixture mirroring is an explicit choice over a symlink: `scan_corpus_file` copies the case into a tempdir before scanning, and absolute symlinks would break that path. When the integration fixture changes, copy the new file into the corpus mirror as well.
+- The negative cases are the regression wires for the FP-remediation work. Each one corresponds to a phase landed in the project memory tracker; if a future change reintroduces the FP, the matching `rs-auth-1xx` case flips to FP and the Rust precision drops below the floor.
+- `actix_scoped_write_missing.rs` is the only auth fixture that overlaps the "generic_ownership_check_is_consistent_across_languages" integration test — keep both wires alive (the integration test exercises the multi-language consistency, the bench wire defends the precision number).
 
 ---
 

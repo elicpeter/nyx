@@ -237,6 +237,7 @@ fn filter_calls_from_arg(node: Node<'_>, bytes: &[u8]) -> Vec<CallSite> {
                 .to_string(),
             args: Vec::new(),
             span: span(node),
+            args_value_refs: Vec::new(),
         }],
         "array" => named_children(node)
             .into_iter()

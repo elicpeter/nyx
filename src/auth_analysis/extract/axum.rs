@@ -312,12 +312,14 @@ pub(crate) fn guard_calls_for_handler(
                 name,
                 args: Vec::new(),
                 span,
+                args_value_refs: Vec::new(),
             });
             if matches!(kind, AuthCheckKind::AdminGuard) {
                 calls.push(CallSite {
                     name: "require_admin".to_string(),
                     args: Vec::new(),
                     span,
+                    args_value_refs: Vec::new(),
                 });
             }
         }

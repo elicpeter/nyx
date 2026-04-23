@@ -486,19 +486,25 @@ pub struct AuthAnalysisConfig {
     /// resolved (e.g. `visited`, `seen`, `counts`).  Matched against
     /// the first segment of the callee receiver chain.
     pub non_sink_receiver_name_prefixes: Vec<String>,
-    /// Phase B1: receiver-chain first-segment prefixes that classify
-    /// a call as a realtime publish / broadcast sink (pub/sub bus,
-    /// websocket channel, event stream).  Treated as cross-tenant by
-    /// default and gated by the ownership check.
+    /// Receiver-chain first-segment prefixes that classify a call as
+    /// a realtime publish / broadcast sink (pub/sub bus, websocket
+    /// channel, event stream).  Treated as cross-tenant by default
+    /// and gated by the ownership check.
     pub realtime_receiver_prefixes: Vec<String>,
-    /// Phase B1: receiver-chain first-segment prefixes that classify
-    /// a call as an outbound network sink (HTTP client, RPC caller,
-    /// webhook dispatcher).
+    /// Receiver-chain first-segment prefixes that classify a call as
+    /// an outbound network sink (HTTP client, RPC caller, webhook
+    /// dispatcher).
     pub outbound_network_receiver_prefixes: Vec<String>,
-    /// Phase B1: receiver-chain first-segment prefixes that classify
-    /// a call as a cross-tenant cache access (Redis / memcache /
-    /// distributed KV client).
+    /// Receiver-chain first-segment prefixes that classify a call as
+    /// a cross-tenant cache access (Redis / memcache / distributed
+    /// KV client).
     pub cache_receiver_prefixes: Vec<String>,
+    /// SQL ACL tables.  When a literal `SELECT … FROM <T> JOIN <ACL>`
+    /// query pins rows via `WHERE <ACL>.user_id = ?N`, every returned
+    /// row is membership-gated and downstream uses of its columns do
+    /// not need an ownership check.  Defaults are set per-language in
+    /// `auth_analysis::config::build_auth_rules`.
+    pub acl_tables: Vec<String>,
 }
 
 impl Default for AuthAnalysisConfig {
@@ -519,6 +525,7 @@ impl Default for AuthAnalysisConfig {
             realtime_receiver_prefixes: Vec::new(),
             outbound_network_receiver_prefixes: Vec::new(),
             cache_receiver_prefixes: Vec::new(),
+            acl_tables: Vec::new(),
         }
     }
 }
@@ -1052,6 +1059,19 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
             &mut entry.auth.non_sink_receiver_name_prefixes,
             user_lang_cfg.auth.non_sink_receiver_name_prefixes,
         );
+        extend_dedup(
+            &mut entry.auth.realtime_receiver_prefixes,
+            user_lang_cfg.auth.realtime_receiver_prefixes,
+        );
+        extend_dedup(
+            &mut entry.auth.outbound_network_receiver_prefixes,
+            user_lang_cfg.auth.outbound_network_receiver_prefixes,
+        );
+        extend_dedup(
+            &mut entry.auth.cache_receiver_prefixes,
+            user_lang_cfg.auth.cache_receiver_prefixes,
+        );
+        extend_dedup(&mut entry.auth.acl_tables, user_lang_cfg.auth.acl_tables);
     }
 
     default

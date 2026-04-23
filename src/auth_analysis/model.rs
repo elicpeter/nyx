@@ -35,7 +35,7 @@ pub enum AnalysisUnitKind {
     Function,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthCheckKind {
     LoginGuard,
     AdminGuard,
@@ -53,11 +53,9 @@ pub enum OperationKind {
     TokenLookup,
 }
 
-/// Classification of a sensitive operation by the resource it targets,
-/// introduced in Phase B1 to replace ad-hoc stringly-typed mutation/read
-/// matching.  `check_ownership_gaps` only fires on the first five
-/// classes — `InMemoryLocal` is never authorization-relevant and
-/// subsumes the A1 non-sink-receiver gate.
+/// Classification of a sensitive operation by the resource it targets.
+/// `check_ownership_gaps` only fires on the first five classes —
+/// `InMemoryLocal` is never authorization-relevant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SinkClass {
     /// A write against a persistent datastore (SQL, ORM, or KV that
@@ -117,6 +115,12 @@ pub struct CallSite {
     pub name: String,
     pub args: Vec<String>,
     pub span: (usize, usize),
+    /// Per-positional-argument value-refs.  Populated only by the
+    /// structured `collect_call` path (the auxiliary
+    /// `call_site_from_node` constructor leaves this empty); used to
+    /// attribute synthesised helper-call auth checks to the concrete
+    /// subjects passed by the caller.
+    pub args_value_refs: Vec<Vec<ValueRef>>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,9 +137,9 @@ pub struct AuthCheck {
 #[derive(Debug, Clone)]
 pub struct SensitiveOperation {
     pub kind: OperationKind,
-    /// Phase B1 sink classification.  `None` means the operation was
-    /// recorded for taxonomy completeness but does not match any known
-    /// resource class — defensive, and currently unused.
+    /// Sink classification.  `None` means the operation was recorded
+    /// for taxonomy completeness but does not match any known resource
+    /// class — defensive, and currently unused.
     pub sink_class: Option<SinkClass>,
     pub callee: String,
     pub subjects: Vec<ValueRef>,
@@ -160,16 +164,38 @@ pub struct AnalysisUnit {
     /// Map from local variable name to the row binding it was read from.
     /// Populated when the extractor sees `let V = ROW.method(..)` or
     /// `let V = ROW.field`.  Used by `auth_check_covers_subject` so a
-    /// row-level ownership-equality check (A2) on the row implicitly
-    /// covers downstream uses of fields read from the same row.
+    /// row-level ownership-equality check on the row implicitly covers
+    /// downstream uses of fields read from the same row.
     pub row_field_vars: HashMap<String, String>,
-    /// A3: variables bound to an authenticated-user value. Populated
-    /// from `let V = require_auth(..).await?` (or any call matching the
+    /// Variables bound to an authenticated-user value. Populated from
+    /// `let V = require_auth(..).await?` (or any call matching the
     /// configured login-guard / authorization-check names) and from
     /// typed route-handler parameters (`CurrentUser`, `AuthUser`, …).
     /// Consulted by `is_actor_context_subject` so `V.id`-shaped subjects
     /// are treated as the caller's own id, not as a scoped foreign id.
     pub self_actor_vars: HashSet<String>,
+    /// Local variables bound (directly or transitively) to a SQL query
+    /// whose literal text classifies as authorization-gated by
+    /// `sql_semantics::classify_sql_query`. Includes:
+    ///   * the `let X = db.prepare(LIT)…` result var,
+    ///   * the loop var of `for ROW in X`,
+    ///   * column-binding vars `let Y = ROW.get(..)` whose receiver is
+    ///     itself in this set.
+    ///
+    /// `auth_check_covers_subject` walks `row_field_vars` transitively
+    /// and treats a subject as covered when the chain terminates in
+    /// one of these names.
+    pub authorized_sql_vars: HashSet<String>,
+}
+
+/// Per-function summary of which positional parameters are
+/// auth-checked inside the function body.  When a caller invokes this
+/// function with `subject` at position K, and the summary says param
+/// K has an auth check of kind `kind`, the caller's subject is
+/// considered covered as if it were checked at the call site.
+#[derive(Debug, Clone, Default)]
+pub struct AuthCheckSummary {
+    pub param_auth_kinds: HashMap<usize, AuthCheckKind>,
 }
 
 #[derive(Debug, Clone)]

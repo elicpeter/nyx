@@ -219,12 +219,14 @@ fn parse_security_annotations(annotations: &[String], span: (usize, usize)) -> V
                 name: "RolesAllowed".to_string(),
                 args: quoted_strings(annotation),
                 span,
+                args_value_refs: Vec::new(),
             });
         } else if annotation.starts_with("@Secured") {
             calls.push(CallSite {
                 name: "Secured".to_string(),
                 args: quoted_strings(annotation),
                 span,
+                args_value_refs: Vec::new(),
             });
         } else if annotation.starts_with("@PreAuthorize")
             || annotation.starts_with("@PostAuthorize")
@@ -237,10 +239,16 @@ fn parse_security_annotations(annotations: &[String], span: (usize, usize)) -> V
                     name: "isAuthenticated".to_string(),
                     args: vec![expression.clone()],
                     span,
+                    args_value_refs: Vec::new(),
                 });
             }
             if let Some((name, args)) = parse_expression_call(&expression) {
-                calls.push(CallSite { name, args, span });
+                calls.push(CallSite {
+                    name,
+                    args,
+                    span,
+                    args_value_refs: Vec::new(),
+                });
             }
         }
     }

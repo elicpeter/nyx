@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 295
+    "corpus_size": 305
   },
   "cases": [
     {
@@ -9649,6 +9649,307 @@
       ],
       "disabled": false,
       "notes": "CVE-2017-12629 patched counterpart: transformer name allowlist + in-process secure TransformerFactory removes the Runtime.exec path; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "rs-auth-001",
+      "file": "rust/auth/actix_scoped_write_missing.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          17,
+          17
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "tags": [
+        "auth",
+        "actix",
+        "scoped-id",
+        "positive"
+      ],
+      "disabled": false,
+      "notes": "Actix handler mutates `project_service::update(project_id, …)` with a path-bound scoped id, no ownership check"
+    },
+    {
+      "case_id": "rs-auth-002",
+      "file": "rust/auth/true_positive_missing_check.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          13,
+          13
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "realtime",
+        "scoped-id",
+        "positive",
+        "phase-a-control"
+      ],
+      "disabled": false,
+      "notes": "Authenticated handler that publishes against a group_id with no membership check — the positive control for the auth-rule FP-remediation work"
+    },
+    {
+      "case_id": "rs-auth-003",
+      "file": "rust/auth/row_ownership_no_early_exit.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          28,
+          28
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "row-ownership",
+        "regression-guard",
+        "positive"
+      ],
+      "disabled": false,
+      "notes": "Equality compared but no early exit — the check is ineffective so the downstream read on doc_id must still flag (A2 regression guard)"
+    },
+    {
+      "case_id": "rs-auth-101",
+      "file": "rust/auth/hashmap_local_noise.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "phase-a1",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "P0: HashMap/HashSet method calls on locally-constructed bindings — never an authorization decision (Phase A1 fix)"
+    },
+    {
+      "case_id": "rs-auth-102",
+      "file": "rust/auth/helper_scoped_params.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "phase-a1",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "P4 (partial): library helper whose internal work is `result.insert(..)` on a locally-constructed HashSet — never a sink (Phase A1 fix)"
+    },
+    {
+      "case_id": "rs-auth-103",
+      "file": "rust/auth/row_ownership_equality.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "phase-a2",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "P3: row-level ownership equality (`if owner_id != user.id { return ... }`) covers downstream column reads on the same row (Phase A2 fix)"
+    },
+    {
+      "case_id": "rs-auth-104",
+      "file": "rust/auth/self_scoped_user.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "phase-a3",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "P5: `let user = require_auth(..).await?` binds the actor — `user.id` is self, not a scoped foreign id (Phase A3 fix)"
+    },
+    {
+      "case_id": "rs-auth-105",
+      "file": "rust/auth/db_connection_type_inferred.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "phase-b2",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Phase B2: `rusqlite::Connection::open` infers `DatabaseConnection` type via SSA constructor_type; the handler logs only the caller's own id"
+    },
+    {
+      "case_id": "rs-auth-106",
+      "file": "rust/auth/sql_join_acl.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "phase-b3",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Phase B3: SELECT through `group_members` ACL JOIN with `WHERE gm.user_id = ?1` makes every returned row membership-gated"
+    },
+    {
+      "case_id": "rs-auth-107",
+      "file": "rust/auth/transitive_helper.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "auth",
+        "negative",
+        "phase-b4",
+        "noise-budget-zero"
+      ],
+      "disabled": false,
+      "notes": "Phase B4: `validate_target` helper internally calls `require_membership(group_id, user.id)` — handler-level call lifts the auth check transparently"
     }
   ]
 }

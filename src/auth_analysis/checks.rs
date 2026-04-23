@@ -71,9 +71,8 @@ fn check_ownership_gaps(model: &AuthorizationModel, rules: &AuthAnalysisRules) -
             if op.kind == OperationKind::TokenLookup {
                 continue;
             }
-            // Phase B1: `InMemoryLocal` sinks (HashMap/HashSet/Vec/…
-            // local bookkeeping) are never authorization-relevant.
-            // Subsumes the A1 non-sink-receiver gate.
+            // `InMemoryLocal` sinks (HashMap/HashSet/Vec/… local
+            // bookkeeping) are never authorization-relevant.
             if op.sink_class.is_some_and(|c| !c.is_auth_relevant()) {
                 continue;
             }
@@ -118,7 +117,7 @@ fn check_partial_batch_authorization(
 
     for unit in &model.units {
         for op in &unit.operations {
-            // Phase B1: in-memory bookkeeping is never a batch sink.
+            // In-memory bookkeeping is never a batch sink.
             if op.sink_class.is_some_and(|c| !c.is_auth_relevant()) {
                 continue;
             }
@@ -339,10 +338,19 @@ fn has_prior_collection_auth(
 fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     let subject_key = canonical_subject_name(subject);
     let subject_related_base = related_subject_base(subject);
-    // A2: if the op subject is a variable read from a known row
-    // (`let group_id = existing.get("group_id")`), treat any check
-    // subject naming/based-on that row as covering.
-    let subject_row_binding = unit.row_field_vars.get(&subject.name).cloned();
+    // A2 + B3: walk the row-binding chain from this subject so a
+    // check subject naming any ancestor row covers downstream column
+    // reads.  E.g. `group_id → row → rows`: a check on `rows` (the
+    // SQL-authorized result var) covers the subject `group_id`.
+    let subject_row_chain = row_binding_chain(unit, &subject.name);
+    // B3: if any ancestor row is in the SQL-authorized set, every
+    // ownership check materially covers this subject.  We model this
+    // by treating the SQL synth check as covering whatever subject
+    // names share an ancestor in `authorized_sql_vars`.
+    let subject_anchor_authorized = subject_row_chain
+        .iter()
+        .any(|name| unit.authorized_sql_vars.contains(name));
+
     check.subjects.iter().any(|check_subject| {
         let check_key = canonical_subject_name(check_subject);
         let check_related_base = related_subject_base(check_subject);
@@ -353,13 +361,43 @@ fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &Analy
         {
             return true;
         }
-        if let Some(row) = subject_row_binding.as_deref()
-            && (check_key == row || check_related_base.as_deref() == Some(row))
-        {
+        for row in &subject_row_chain {
+            if check_key == *row || check_related_base.as_deref() == Some(row.as_str()) {
+                return true;
+            }
+        }
+        // B3: SQL synth checks name the auth-gated row var directly.
+        // If our subject's row chain leads into the same authorized
+        // var family this check anchors to, accept the coverage.
+        if subject_anchor_authorized && unit.authorized_sql_vars.contains(&check_key) {
             return true;
         }
         false
     })
+}
+
+/// Walk `unit.row_field_vars` transitively from `start` (inclusive)
+/// to recover every ancestor row binding name.  Cycle-safe via a
+/// visited set; depth-bounded at 16 hops to keep the worst case
+/// trivial.  Returns a vec containing `start` followed by each
+/// ancestor — empty when `start` is empty.
+fn row_binding_chain(unit: &AnalysisUnit, start: &str) -> Vec<String> {
+    let mut chain: Vec<String> = Vec::new();
+    if start.is_empty() {
+        return chain;
+    }
+    let mut cur = start.to_string();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut hops = 0;
+    while hops < 16 && seen.insert(cur.clone()) {
+        chain.push(cur.clone());
+        let Some(next) = unit.row_field_vars.get(&cur) else {
+            break;
+        };
+        cur = next.clone();
+        hops += 1;
+    }
+    chain
 }
 
 fn canonical_subject_name(subject: &ValueRef) -> String {
@@ -564,6 +602,7 @@ mod tests {
             line: 1,
             row_field_vars: HashMap::new(),
             self_actor_vars: HashSet::new(),
+            authorized_sql_vars: HashSet::new(),
         }
     }
 

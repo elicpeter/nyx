@@ -2,6 +2,7 @@ pub mod checks;
 pub mod config;
 pub mod extract;
 pub mod model;
+pub mod sql_semantics;
 
 use crate::commands::scan::Diag;
 use crate::evidence::{Confidence, Evidence, SpanEvidence};
@@ -19,7 +20,7 @@ fn byte_offset_to_point(tree: &Tree, byte: usize) -> tree_sitter::Point {
         .unwrap_or(tree_sitter::Point { row: 0, column: 0 })
 }
 
-/// Phase B2: per-file snapshot of SSA-derived variable types, keyed by
+/// Per-file snapshot of SSA-derived variable types, keyed by
 /// source-level variable name.  Built at `run_auth_analysis` call sites
 /// by merging type facts across all bodies in the file; a variable name
 /// with conflicting types in different bodies is dropped (absence is
@@ -48,12 +49,19 @@ pub fn run_auth_analysis(
         &rules,
     );
 
-    // Phase B2: refine `SensitiveOperation::sink_class` using
-    // SSA-derived variable types.  Runs only when the caller supplied
-    // `var_types` (skipped for slug-lookup / unit-test call sites).
+    // Refine `SensitiveOperation::sink_class` using SSA-derived
+    // variable types.  Runs only when the caller supplied `var_types`
+    // (skipped for slug-lookup / unit-test call sites).
     if let Some(types) = var_types {
         apply_var_types_to_model(&mut model, &rules, types);
     }
+
+    // Lift per-function auth-check summaries and synthesise call-site
+    // `AuthCheck`s in callers, so a handler that delegates to a helper
+    // which internally validates ownership is recognised as
+    // auth-checked.  Single-file scope: only units present in this
+    // model are considered; cross-file lifting is future work.
+    apply_helper_lifting(&mut model);
 
     if model.routes.is_empty() && model.units.is_empty() {
         return Vec::new();
@@ -65,11 +73,11 @@ pub fn run_auth_analysis(
         .collect()
 }
 
-/// Phase B2: walk every `SensitiveOperation` in the model and, when the
-/// call's receiver root variable has a known SSA type, override
-/// `sink_class` to the type-implied class.  Strictly additive — only
-/// overrides when the type map produces a definite class, otherwise
-/// leaves the name/prefix-derived classification from B1 intact.
+/// Walk every `SensitiveOperation` in the model and, when the call's
+/// receiver root variable has a known SSA type, override `sink_class`
+/// to the type-implied class.  Strictly additive — only overrides
+/// when the type map produces a definite class, otherwise leaves the
+/// name/prefix-derived classification intact.
 fn apply_var_types_to_model(
     model: &mut model::AuthorizationModel,
     rules: &config::AuthAnalysisRules,
@@ -122,6 +130,240 @@ fn sink_class_for_type(
         }
         _ => None,
     }
+}
+
+/// Build per-function `AuthCheckSummary` and synthesise `AuthCheck`s
+/// at every call site that targets a known helper whose summary names
+/// auth-checked params.  Iterated to a small fixpoint
+/// so transitive helper chains (`handler → validate → require_member`)
+/// are also covered.
+///
+/// The synthesised AuthCheck inherits the helper-param's check kind
+/// and is anchored at the call site's line, with subjects = the
+/// caller's value-refs from the corresponding positional argument.
+/// `auth_check_covers_subject` then matches them against downstream
+/// sensitive operations exactly like a real prior auth check.
+fn apply_helper_lifting(model: &mut model::AuthorizationModel) {
+    use std::collections::HashSet;
+
+    const MAX_ROUNDS: usize = 4;
+    for _ in 0..MAX_ROUNDS {
+        let summaries = build_helper_summaries(model);
+        if summaries.is_empty() {
+            return;
+        }
+        let mut added = false;
+        // For each unit, compute synthetic checks BEFORE mutating, so
+        // a helper-call inside one unit doesn't see synthetic checks
+        // we add to a sibling in the same round (those land in the
+        // next iteration via the rebuilt summaries).
+        let synth: Vec<(usize, Vec<model::AuthCheck>)> = model
+            .units
+            .iter()
+            .enumerate()
+            .map(|(idx, unit)| (idx, synthesise_checks_for_unit(unit, &summaries)))
+            .collect();
+        let mut existing_keys_per_unit: Vec<HashSet<((usize, usize), model::AuthCheckKind)>> =
+            model
+                .units
+                .iter()
+                .map(|u| {
+                    u.auth_checks
+                        .iter()
+                        .map(|c| (c.span, c.kind))
+                        .collect::<HashSet<_>>()
+                })
+                .collect();
+        for (idx, checks) in synth {
+            for check in checks {
+                let key = (check.span, check.kind);
+                if existing_keys_per_unit[idx].insert(key) {
+                    model.units[idx].auth_checks.push(check);
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            return;
+        }
+    }
+}
+
+/// Build a `name → AuthCheckSummary` map by walking each unit's auth
+/// checks and recording, for every check subject whose value-ref name
+/// matches a positional parameter name of the unit, that param index
+/// → check kind.  Same key with different kinds collapses to the most
+/// specific (Ownership/Membership wins over Other).
+fn build_helper_summaries(
+    model: &model::AuthorizationModel,
+) -> std::collections::HashMap<String, model::AuthCheckSummary> {
+    use model::{AuthCheckKind, AuthCheckSummary};
+    use std::collections::HashMap;
+
+    let mut summaries: HashMap<String, AuthCheckSummary> = HashMap::new();
+    for unit in &model.units {
+        let Some(name) = unit.name.as_deref() else {
+            continue;
+        };
+        if name.is_empty() || unit.params.is_empty() {
+            continue;
+        }
+        let mut summary = AuthCheckSummary::default();
+        for check in &unit.auth_checks {
+            // We only lift checks that actively prove ownership /
+            // membership / admin-rights / authorize-helper — login
+            // and token-validity checks don't justify foreign-id
+            // mutations and we want to keep parity with
+            // `has_prior_subject_auth`'s filter.
+            if matches!(
+                check.kind,
+                AuthCheckKind::LoginGuard
+                    | AuthCheckKind::TokenExpiry
+                    | AuthCheckKind::TokenRecipient
+            ) {
+                continue;
+            }
+            for subject in &check.subjects {
+                let candidate = subject_lift_key(subject);
+                let Some(candidate) = candidate else { continue };
+                if let Some(idx) = unit.params.iter().position(|p| p == &candidate) {
+                    summary
+                        .param_auth_kinds
+                        .entry(idx)
+                        .and_modify(|existing| {
+                            *existing = stronger_check_kind(*existing, check.kind);
+                        })
+                        .or_insert(check.kind);
+                }
+            }
+        }
+        if !summary.param_auth_kinds.is_empty() {
+            // Deduplicate by last segment of the function name — the
+            // lifting site matches the call's last segment too.
+            let last = name.rsplit('.').next().unwrap_or(name).to_string();
+            summaries
+                .entry(last)
+                .or_default()
+                .param_auth_kinds
+                .extend(summary.param_auth_kinds);
+        }
+    }
+    summaries
+}
+
+/// Pick the identifier name for a check subject for purposes of
+/// matching to the enclosing function's parameters.  We prefer the
+/// `base` segment of a member-chain subject (`row.user_id` → `row`)
+/// because helpers usually receive the full struct, not the field;
+/// fall back to the raw `name` for plain identifiers.
+fn subject_lift_key(subject: &model::ValueRef) -> Option<String> {
+    if let Some(base) = subject.base.as_deref() {
+        let first = base.split('.').next().unwrap_or(base).trim();
+        if !first.is_empty() {
+            return Some(first.to_string());
+        }
+    }
+    if subject.name.is_empty() {
+        None
+    } else {
+        Some(
+            subject
+                .name
+                .split('.')
+                .next()
+                .unwrap_or(&subject.name)
+                .to_string(),
+        )
+    }
+}
+
+fn stronger_check_kind(a: model::AuthCheckKind, b: model::AuthCheckKind) -> model::AuthCheckKind {
+    use model::AuthCheckKind::*;
+    fn rank(k: model::AuthCheckKind) -> u8 {
+        match k {
+            Ownership => 5,
+            Membership => 4,
+            AdminGuard => 3,
+            Other => 2,
+            LoginGuard => 1,
+            TokenExpiry | TokenRecipient => 0,
+        }
+    }
+    if rank(a) >= rank(b) { a } else { b }
+}
+
+/// For one unit, synthesise an `AuthCheck` at every call site that
+/// targets a helper with a non-trivial summary.  Subjects are taken
+/// from `call_site.args_value_refs[K]` for each auth-checked param
+/// position K — these are the caller's concrete subjects passed at
+/// that arg slot, exactly what `auth_check_covers_subject` needs.
+fn synthesise_checks_for_unit(
+    unit: &model::AnalysisUnit,
+    summaries: &std::collections::HashMap<String, model::AuthCheckSummary>,
+) -> Vec<model::AuthCheck> {
+    let line_of = |span: (usize, usize)| -> usize {
+        // Span is byte offsets; we don't have direct access to a Tree
+        // here. Caller assigns line via `line` field on call_site
+        // through CallSite metadata absence — fall back to the unit's
+        // line since covers_subject uses `check.line <= op.line` and
+        // helper calls are typically near the unit start.
+        let _ = span;
+        unit.line
+    };
+
+    let mut out = Vec::new();
+    for call in &unit.call_sites {
+        let last = call.name.rsplit('.').next().unwrap_or(&call.name);
+        let Some(summary) = summaries.get(last) else {
+            continue;
+        };
+        // A call to the unit itself shouldn't lift anything (would
+        // produce a tautological self-cover).
+        if unit.name.as_deref() == Some(last) {
+            continue;
+        }
+        // Build subjects from the auth-checked param positions.
+        let mut subjects: Vec<model::ValueRef> = Vec::new();
+        let mut effective_kind = model::AuthCheckKind::Other;
+        for (param_idx, kind) in &summary.param_auth_kinds {
+            let Some(arg_refs) = call.args_value_refs.get(*param_idx) else {
+                continue;
+            };
+            subjects.extend(arg_refs.iter().cloned());
+            effective_kind = stronger_check_kind(effective_kind, *kind);
+        }
+        if subjects.is_empty() {
+            continue;
+        }
+        let line = call_site_line(unit, call).unwrap_or_else(|| line_of(call.span));
+        out.push(model::AuthCheck {
+            kind: effective_kind,
+            callee: format!("(lifted {})", call.name),
+            subjects,
+            span: call.span,
+            line,
+            args: call.args.clone(),
+            condition_text: None,
+        });
+    }
+    out
+}
+
+/// Approximate the call site's line.  We don't have tree access here,
+/// so we walk the unit's existing operations / call_sites to find one
+/// whose span starts at the same byte offset and reuse its line; if
+/// nothing matches we conservatively report the unit's start line so
+/// the synthetic check still satisfies `check.line <= op.line` for
+/// operations declared after it.  In practice, helper calls always
+/// resolve via the operations match because handlers register their
+/// own call_site too.
+fn call_site_line(unit: &model::AnalysisUnit, call: &model::CallSite) -> Option<usize> {
+    for op in &unit.operations {
+        if op.span.0 == call.span.0 {
+            return Some(op.line);
+        }
+    }
+    None
 }
 
 fn auth_finding_to_diag(finding: &checks::AuthFinding, tree: &Tree, file_path: &Path) -> Diag {
@@ -202,6 +444,7 @@ mod tests {
             line: 1,
             row_field_vars: HashMap::new(),
             self_actor_vars: HashSet::new(),
+            authorized_sql_vars: HashSet::new(),
         }
     }
 

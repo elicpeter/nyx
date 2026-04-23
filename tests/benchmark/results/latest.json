@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-23T17:28:20Z",
+  "timestamp": "2026-04-23T19:24:56Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:463b967914e789fb3310a03fb23c055dbad9ea5d5b4a84dca14f6e70e2599bb3",
-  "corpus_size": 295,
-  "cases_run": 294,
+  "ground_truth_hash": "sha256:0f212cf10b5191c2f0d7a57a1db16d704e63494544e1fb1ae2087bb671c2a322",
+  "corpus_size": 305,
+  "cases_run": 304,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -3748,6 +3748,170 @@
       "non_security_finding_count": 0
     },
     {
+      "case_id": "rs-auth-001",
+      "file": "rust/auth/actix_scoped_write_missing.rs",
+      "language": "rust",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-002",
+      "file": "rust/auth/true_positive_missing_check.rs",
+      "language": "rust",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-003",
+      "file": "rust/auth/row_ownership_no_early_exit.rs",
+      "language": "rust",
+      "vuln_class": "auth",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": "TP",
+      "matched_rule_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.auth.missing_ownership_check"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-101",
+      "file": "rust/auth/hashmap_local_noise.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-102",
+      "file": "rust/auth/helper_scoped_params.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-103",
+      "file": "rust/auth/row_ownership_equality.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-104",
+      "file": "rust/auth/self_scoped_user.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-105",
+      "file": "rust/auth/db_connection_type_inferred.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-auth-106",
+      "file": "rust/auth/sql_join_acl.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
+      "case_id": "rs-auth-107",
+      "file": "rust/auth/transitive_helper.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [],
+      "security_finding_count": 0,
+      "non_security_finding_count": 0
+    },
+    {
       "case_id": "rs-cmdi-001",
       "file": "rust/cmdi/cmdi_command.rs",
       "language": "rust",
@@ -5485,22 +5649,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 173,
+    "tp": 176,
     "fp": 10,
     "fn_": 0,
-    "tn": 111,
-    "precision": 0.9453551912568307,
+    "tn": 118,
+    "precision": 0.946236559139785,
     "recall": 1.0,
-    "f1": 0.9719101123595506
+    "f1": 0.9723756906077349
   },
   "aggregate_rule_level": {
-    "tp": 172,
+    "tp": 175,
     "fp": 10,
     "fn_": 1,
-    "tn": 111,
-    "precision": 0.945054945054945,
-    "recall": 0.9942196531791907,
-    "f1": 0.9690140845070423
+    "tn": 118,
+    "precision": 0.9459459459459459,
+    "recall": 0.9943181818181818,
+    "f1": 0.9695290858725761
   },
   "by_language": {
     "c": {
@@ -5576,10 +5740,10 @@
       "f1": 0.962962962962963
     },
     "rust": {
-      "tp": 22,
+      "tp": 25,
       "fp": 0,
       "fn_": 0,
-      "tn": 13,
+      "tn": 20,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -5595,6 +5759,15 @@
     }
   },
   "by_vuln_class": {
+    "auth": {
+      "tp": 3,
+      "fp": 0,
+      "fn_": 0,
+      "tn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
     "buffer_overflow": {
       "tp": 5,
       "fp": 0,
@@ -5707,7 +5880,7 @@
       "tp": 0,
       "fp": 10,
       "fn_": 0,
-      "tn": 111,
+      "tn": 118,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -5751,31 +5924,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 105,
-      "fp": 65,
-      "fn_": 68,
-      "tn": 56,
-      "precision": 0.6176470588235294,
-      "recall": 0.6069364161849711,
-      "f1": 0.6122448979591837
+      "tp": 91,
+      "fp": 71,
+      "fn_": 85,
+      "tn": 57,
+      "precision": 0.5617283950617284,
+      "recall": 0.5170454545454546,
+      "f1": 0.5384615384615385
     },
     ">=Low": {
-      "tp": 105,
-      "fp": 69,
-      "fn_": 68,
-      "tn": 52,
-      "precision": 0.603448275862069,
-      "recall": 0.6069364161849711,
-      "f1": 0.6051873198847262
+      "tp": 91,
+      "fp": 75,
+      "fn_": 85,
+      "tn": 53,
+      "precision": 0.5481927710843374,
+      "recall": 0.5170454545454546,
+      "f1": 0.5321637426900585
     },
     ">=Medium": {
-      "tp": 105,
-      "fp": 69,
-      "fn_": 68,
-      "tn": 52,
-      "precision": 0.603448275862069,
-      "recall": 0.6069364161849711,
-      "f1": 0.6051873198847262
+      "tp": 91,
+      "fp": 75,
+      "fn_": 85,
+      "tn": 53,
+      "precision": 0.5481927710843374,
+      "recall": 0.5170454545454546,
+      "f1": 0.5321637426900585
     }
   }
 }

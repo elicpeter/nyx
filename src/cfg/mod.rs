@@ -59,7 +59,7 @@ use params::{
 };
 
 // -------------------------------------------------------------------------
-// Structural DFS index for function bodies (Phase 6)
+// Structural DFS index for function bodies
 // -------------------------------------------------------------------------
 //
 // Per-file map of function-node start_byte → depth-first preorder index.
@@ -2775,8 +2775,8 @@ pub(super) fn build_sub<'a>(
             // container definitions never collide (e.g. duplicate defs in a
             // file, overload-like patterns, nested defs with identical names
             // in sibling scopes).  Stable against unrelated edits above the
-            // function (Phase 6).  Falls back to the start byte when the
-            // DFS-index map is absent (tests bypassing build_cfg).
+            // function.  Falls back to the start byte when the DFS-index
+            // map is absent (tests bypassing build_cfg).
             let fn_disambig: Option<u32> =
                 Some(fn_dfs_index(ast.start_byte()).unwrap_or(ast.start_byte() as u32));
 
@@ -3369,8 +3369,8 @@ pub(crate) fn build_cfg<'a>(
     debug!(target: "cfg", "Building CFG for {:?}", tree.root_node());
 
     // Populate the per-file structural DFS-index map before any build_sub
-    // call reads from it (Phase 6).  Cleared unconditionally at the end
-    // of this function so thread-local state never leaks between files.
+    // call reads from it.  Cleared unconditionally at the end of this
+    // function so thread-local state never leaks between files.
     populate_fn_dfs_indices(tree, lang);
 
     // Create the top-level body graph (BodyId(0)).
@@ -3495,7 +3495,7 @@ pub(crate) fn build_cfg<'a>(
     }
 
     // Clear the per-file DFS-index map so it does not leak to the next
-    // file built on this thread (Phase 6).
+    // file built on this thread.
     clear_fn_dfs_indices();
 
     FileCfg {

@@ -207,7 +207,7 @@ fn lower_to_ssa_inner(
         exception_edges,
     };
 
-    // 9. Catch-block reachability invariant (Phase 12.1).
+    // 9. Catch-block reachability invariant.
     //
     // A CatchParam-carrying block that is neither reachable from entry nor
     // listed as an exception target indicates a CFG construction bug. Debug
@@ -2386,9 +2386,9 @@ mod tests {
 
     #[test]
     fn three_successor_collapse_produces_switch() {
-        // Build a CFG where a single node has 3 successors. Phase 12.4
-        // promotes the old `Goto(first)` collapse to a structured
-        // `Terminator::Switch` so every target is visible on the
+        // Build a CFG where a single node has 3 successors. The
+        // structured `Terminator::Switch` replaced the old
+        // `Goto(first)` collapse so every target is visible on the
         // terminator shape (not only on `block.succs`).
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));

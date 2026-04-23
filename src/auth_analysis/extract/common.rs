@@ -345,6 +345,7 @@ pub fn build_function_unit(
         line,
         row_field_vars: state.row_field_vars,
         self_actor_vars: state.self_actor_vars,
+        authorized_sql_vars: state.authorized_sql_vars,
     }
 }
 
@@ -383,6 +384,12 @@ struct UnitState {
     /// `AnalysisUnit.self_actor_vars` so `checks.rs` can recognize
     /// `V.id` as actor context rather than a foreign scoped id.
     self_actor_vars: HashSet<String>,
+    /// B3: local variables bound (directly or transitively) to a
+    /// SQL query whose literal text is auth-gated.  Populated by
+    /// `collect_sql_authorized_binding` and the `for ROW in X` /
+    /// `let Y = ROW.method(..)` propagation paths inside
+    /// `collect_row_field_binding` and `collect_for_row_binding`.
+    authorized_sql_vars: HashSet<String>,
 }
 
 fn collect_unit_state(
@@ -414,6 +421,11 @@ fn collect_unit_state(
             collect_row_field_binding(node, bytes, state);
             collect_row_population(node, bytes, state);
             collect_self_actor_binding(node, bytes, rules, state);
+            collect_sql_authorized_binding(node, bytes, rules, state);
+            propagate_sql_authorized_through_field_read(node, bytes, state);
+        }
+        "for_expression" => {
+            collect_for_row_binding(node, bytes, state);
         }
         "parameter" => {
             collect_typed_extractor_self_actor(node, bytes, state);
@@ -451,11 +463,16 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
     );
     let line = node.start_position().row + 1;
     let string_args: Vec<String> = args.iter().map(|arg| text(*arg, bytes)).collect();
+    let args_value_refs: Vec<Vec<ValueRef>> = args
+        .iter()
+        .map(|arg| extract_value_refs(*arg, bytes))
+        .collect();
     let node_text = text(node, bytes);
     state.call_sites.push(CallSite {
         name: callee.clone(),
         args: string_args.clone(),
         span: span(node),
+        args_value_refs,
     });
 
     if rules.is_authorization_check(&callee) {
@@ -470,8 +487,8 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
         });
     }
 
-    // Phase B1: split classification into OperationKind (what verb?)
-    // and SinkClass (what resource?).  The sink class drives the
+    // Split classification into OperationKind (what verb?) and
+    // SinkClass (what resource?).  The sink class drives the
     // ownership gate; OperationKind is kept for partial-batch / stale-
     // session checks that care about read-vs-mutation semantics.
     let (op_kind, sink_class) = if rules.is_token_lookup_call(&callee, &node_text) {
@@ -784,6 +801,313 @@ fn collect_typed_extractor_self_actor(node: Node<'_>, bytes: &[u8], state: &mut 
     let ty_text = text(ty_node, bytes);
     if is_self_actor_type_text(&ty_text) {
         state.self_actor_vars.insert(var_name);
+    }
+}
+
+/// B3: detect `let X = …prepare(LIT)…` / `let X = …query(LIT)…`
+/// where the SQL literal classifies as authorization-gated.  When
+/// matched: insert `X` into `state.authorized_sql_vars` and synthesise
+/// a `Membership` `AuthCheck` at the `let`'s line whose subjects
+/// include `X` and the value-refs from the SQL call's bind args
+/// (e.g. `user.id` in `.bind(user.id)`).  Downstream uses of `X`'s
+/// columns are then transitively covered through `row_field_vars`.
+fn collect_sql_authorized_binding(
+    node: Node<'_>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+    state: &mut UnitState,
+) {
+    if rules.acl_tables.is_empty() && !sql_direct_user_id_enabled() {
+        return;
+    }
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    let Some((sql_call, bind_arg_refs)) = find_authorized_sql_call_in_chain(value, bytes, rules)
+    else {
+        return;
+    };
+
+    state.authorized_sql_vars.insert(var_name.clone());
+
+    let mut subjects = bind_arg_refs;
+    subjects.push(ValueRef {
+        source_kind: ValueSourceKind::Identifier,
+        name: var_name,
+        base: None,
+        field: None,
+        index: None,
+        span: span(node),
+    });
+    let line = node.start_position().row + 1;
+    state.auth_checks.push(AuthCheck {
+        kind: AuthCheckKind::Membership,
+        callee: "(sql ACL)".into(),
+        subjects,
+        span: span(sql_call),
+        line,
+        args: Vec::new(),
+        condition_text: None,
+    });
+}
+
+/// Always true — the direct-user-id-predicate path in
+/// `sql_semantics::classify_sql_query` doesn't depend on the ACL
+/// table list, so we still want to walk `let X = …query(LIT)…`
+/// chains even when the user hasn't configured any ACL tables.
+/// Kept as a function so future tuning can disable this path.
+fn sql_direct_user_id_enabled() -> bool {
+    true
+}
+
+/// Walk down a chain of method calls (`a.b().c().d()`) looking for a
+/// call whose method matches a SQL prepare/query verb and whose first
+/// argument is a string literal classifying as auth-gated.  Returns
+/// the matching call node along with the value-refs collected from
+/// the *outer* chain's argument list (the call that bound the user
+/// id, e.g. `.bind(user.id)`).
+fn find_authorized_sql_call_in_chain<'tree>(
+    value: Node<'tree>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+) -> Option<(Node<'tree>, Vec<ValueRef>)> {
+    let mut bind_arg_refs: Vec<ValueRef> = Vec::new();
+    let mut cur = unwrap_try_like(value);
+    let mut steps = 0;
+    while steps < 16 {
+        steps += 1;
+        if !matches!(
+            cur.kind(),
+            "call_expression" | "call" | "method_invocation" | "method_call_expression"
+        ) {
+            return None;
+        }
+        // Collect any non-literal arg value-refs from this call —
+        // these typically include the bound user id (e.g.
+        // `.bind(user.id)` → adds `user.id` as a subject).
+        if let Some(args_node) = cur.child_by_field_name("arguments") {
+            for arg in named_children(args_node) {
+                if matches!(
+                    arg.kind(),
+                    "string_literal" | "raw_string_literal" | "string"
+                ) {
+                    continue;
+                }
+                bind_arg_refs.extend(extract_value_refs(arg, bytes));
+            }
+        }
+
+        let callee = call_name(cur, bytes);
+        let last_segment = callee.rsplit('.').next().unwrap_or(callee.as_str());
+        if is_sql_prepare_method(last_segment) {
+            // Check first arg is a string literal that classifies
+            // as authorized.
+            let args = cur
+                .child_by_field_name("arguments")
+                .map(named_children)
+                .unwrap_or_default();
+            if let Some(first_arg) = args.first().copied()
+                && let Some(literal) = collect_string_literal_text(first_arg, bytes)
+                && crate::auth_analysis::sql_semantics::classify_sql_query(
+                    &literal,
+                    &rules.acl_tables,
+                )
+                .is_some()
+            {
+                return Some((cur, bind_arg_refs));
+            }
+            // Method matched but arg isn't a literal we recognise
+            // as authorized — bail.
+            return None;
+        }
+
+        // Descend through the receiver/object of this call to look
+        // for an inner SQL prepare.
+        let next = cur
+            .child_by_field_name("receiver")
+            .or_else(|| {
+                cur.child_by_field_name("function").and_then(|fun| {
+                    fun.child_by_field_name("object")
+                        .or_else(|| fun.child_by_field_name("operand"))
+                        .or_else(|| fun.child_by_field_name("argument"))
+                        .or_else(|| fun.child_by_field_name("value"))
+                })
+            })
+            .or_else(|| cur.child_by_field_name("object"));
+        let next = next?;
+        cur = unwrap_try_like(next);
+    }
+    None
+}
+
+/// Recognised SQL prepare/query method names. Matched against the
+/// last segment of the callee.  String comparison only — we don't
+/// constrain the receiver to a specific type; known DB connection
+/// receivers are classified by the sink-class type gate, and this
+/// list is the orthogonal verb axis.
+fn is_sql_prepare_method(method: &str) -> bool {
+    matches!(
+        method,
+        "prepare"
+            | "query"
+            | "query_one"
+            | "query_all"
+            | "query_as"
+            | "query_map"
+            | "query_row"
+            | "query_scalar"
+            | "fetch"
+            | "fetch_one"
+            | "fetch_all"
+            | "fetch_optional"
+            | "fetch_scalar"
+            | "execute"
+            | "exec"
+    )
+}
+
+/// Extract the string content from a Rust string literal node, joining
+/// adjacent fragments (e.g. `"a" "b"` becomes `"ab"`).  Returns `None`
+/// when the node isn't a string literal at all.
+fn collect_string_literal_text(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    match node.kind() {
+        "string_literal" | "raw_string_literal" => {
+            let mut buf = String::new();
+            let mut found = false;
+            for child in named_children(node) {
+                if child.kind() == "string_content" {
+                    buf.push_str(&text(child, bytes));
+                    found = true;
+                }
+            }
+            if found {
+                Some(buf)
+            } else {
+                Some(strip_quotes(&text(node, bytes)))
+            }
+        }
+        "string" | "template_string" | "interpreted_string_literal" => {
+            Some(strip_quotes(&text(node, bytes)))
+        }
+        _ => None,
+    }
+}
+
+/// B3: `for ROW in X { … }` — when `X` (the iterator value) names a
+/// SQL-authorized variable, mark `ROW` authorized too AND record
+/// `row_field_vars[ROW] = X` so transitive subject coverage works
+/// for column reads inside the loop body.
+fn collect_for_row_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    // The iterated expression is often `&X`, `X.iter()`, `X.into_iter()`,
+    // etc.  Walk through reference / common iterator-method wrappers
+    // to recover the underlying var name.
+    let Some(source_var) = single_iter_source_name(value, bytes) else {
+        return;
+    };
+    state
+        .row_field_vars
+        .insert(var_name.clone(), source_var.clone());
+    if state.authorized_sql_vars.contains(&source_var) {
+        state.authorized_sql_vars.insert(var_name);
+    }
+}
+
+/// Recover the source identifier under common iteration-shape
+/// wrappers: `X`, `&X`, `&mut X`, `X.iter()`, `X.iter_mut()`,
+/// `X.into_iter()`, `X.values()`, `X.keys()`.  Returns `None` for
+/// arbitrary expressions (`fetch_rows()`, `make_iter() + 1`, …).
+fn single_iter_source_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    match node.kind() {
+        "identifier" => {
+            let value = text(node, bytes);
+            if value.is_empty() { None } else { Some(value) }
+        }
+        "reference_expression" | "parenthesized_expression" => {
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if let Some(name) = single_iter_source_name(child, bytes) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
+            let callee = call_name(node, bytes);
+            let last = callee.rsplit('.').next().unwrap_or(callee.as_str());
+            if !matches!(
+                last,
+                "iter" | "iter_mut" | "into_iter" | "values" | "keys" | "drain"
+            ) {
+                return None;
+            }
+            let receiver = node
+                .child_by_field_name("receiver")
+                .or_else(|| {
+                    node.child_by_field_name("function").and_then(|fun| {
+                        fun.child_by_field_name("object")
+                            .or_else(|| fun.child_by_field_name("operand"))
+                            .or_else(|| fun.child_by_field_name("argument"))
+                            .or_else(|| fun.child_by_field_name("value"))
+                    })
+                })
+                .or_else(|| node.child_by_field_name("object"))?;
+            single_iter_source_name(receiver, bytes)
+        }
+        _ => None,
+    }
+}
+
+/// B3: `let Y = ROW.method(..)` / `let Y = ROW.field` where `ROW` is
+/// SQL-authorized — propagate authorized status to `Y` so any
+/// downstream use (e.g. as a sink subject) is treated as covered.
+/// `row_field_vars[Y] = ROW` is already populated by
+/// `collect_row_field_binding`; this helper just propagates the
+/// authorized-vars set along that edge.
+fn propagate_sql_authorized_through_field_read(
+    node: Node<'_>,
+    bytes: &[u8],
+    state: &mut UnitState,
+) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    let Some(source) = extract_row_receiver_name(value, bytes) else {
+        return;
+    };
+    if state.authorized_sql_vars.contains(&source) {
+        state.authorized_sql_vars.insert(var_name);
     }
 }
 
@@ -1257,23 +1581,27 @@ pub fn call_site_from_node(node: Node<'_>, bytes: &[u8]) -> CallSite {
         "call_expression" | "call" | "method_invocation" | "method_call_expression"
     ) {
         let name = call_name(node, bytes);
-        let args = node
+        let arg_nodes = node
             .child_by_field_name("arguments")
             .map(named_children)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|arg| text(arg, bytes))
+            .unwrap_or_default();
+        let args = arg_nodes.iter().map(|arg| text(*arg, bytes)).collect();
+        let args_value_refs = arg_nodes
+            .iter()
+            .map(|arg| extract_value_refs(*arg, bytes))
             .collect();
         CallSite {
             name,
             args,
             span: span(node),
+            args_value_refs,
         }
     } else {
         CallSite {
             name: text(node, bytes),
             args: Vec::new(),
             span: span(node),
+            args_value_refs: Vec::new(),
         }
     }
 }

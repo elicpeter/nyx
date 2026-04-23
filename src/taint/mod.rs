@@ -393,8 +393,7 @@ pub fn analyse_file(
     //    which silently collapsed an *unguarded* flow reaching the same
     //    `(sink, source)` as a guarded flow — the `!path_validated` sort
     //    ordered `path_validated == true` first, so the exploitable
-    //    branch was the one that got dropped.  See Phase 7 of
-    //    `PRE_RELEASE_PLAN.md`.
+    //    branch was the one that got dropped.
     //
     //    New behaviour: the dedup key is
     //        (body_id, sink, source, path_validated, path_hash).
@@ -1036,11 +1035,10 @@ fn analyse_multi_body(
     let reported_iters = if iters_used == 0 { 1 } else { iters_used };
     LAST_JS_TS_PASS2_ITERATIONS.store(reported_iters, Ordering::Relaxed);
 
-    // Phase A1 convergence telemetry: record this file's pass-2
-    // outcome.  No-op unless `NYX_CONVERGENCE_TELEMETRY=1`.  Only
-    // emitted for JS/TS (`max_iterations > 1`) where a pass-2 loop
-    // actually ran; single-iteration languages do not produce a
-    // convergence event.
+    // Convergence telemetry: record this file's pass-2 outcome.
+    // No-op unless `NYX_CONVERGENCE_TELEMETRY=1`.  Only emitted for
+    // JS/TS (`max_iterations > 1`) where a pass-2 loop actually ran;
+    // single-iteration languages do not produce a convergence event.
     if max_iterations > 1 {
         let non_toplevel_bodies = file_cfg
             .bodies
