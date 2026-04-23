@@ -85,7 +85,9 @@ export function NewScanModal({ open, onClose }: NewScanModalProps) {
             <label>Engine Profile</label>
             <select
               value={engineProfile}
-              onChange={(e) => setEngineProfile(e.target.value as EngineProfile)}
+              onChange={(e) =>
+                setEngineProfile(e.target.value as EngineProfile)
+              }
             >
               <option value="fast">Fast</option>
               <option value="balanced">Balanced (default)</option>

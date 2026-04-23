@@ -14,8 +14,7 @@ export interface StartScanBody {
 export function useStartScan() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body?: StartScanBody) =>
-      apiPost<ScanView>('/scans', body),
+    mutationFn: (body?: StartScanBody) => apiPost<ScanView>('/scans', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['scans'] });
     },
