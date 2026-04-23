@@ -13,6 +13,8 @@ pub struct AuthAnalysisRules {
     pub token_lookup_names: Vec<String>,
     pub token_expiry_fields: Vec<String>,
     pub token_recipient_fields: Vec<String>,
+    pub non_sink_receiver_types: Vec<String>,
+    pub non_sink_receiver_name_prefixes: Vec<String>,
 }
 
 impl AuthAnalysisRules {
@@ -29,7 +31,93 @@ impl AuthAnalysisRules {
             token_lookup_names: Vec::new(),
             token_expiry_fields: Vec::new(),
             token_recipient_fields: Vec::new(),
+            non_sink_receiver_types: Vec::new(),
+            non_sink_receiver_name_prefixes: Vec::new(),
         }
+    }
+
+    /// Last path segment of a type name (e.g. `std::collections::HashMap` → `HashMap`).
+    /// Accepts either `::` or `.` as the path separator.
+    fn type_last_segment(ty: &str) -> &str {
+        let trimmed = ty
+            .trim()
+            .trim_start_matches('&')
+            .trim_start_matches("mut ")
+            .trim();
+        let after_colons = trimmed.rsplit("::").next().unwrap_or(trimmed);
+        after_colons.rsplit('.').next().unwrap_or(after_colons)
+    }
+
+    /// Does `ty` (last path segment, case-sensitive) match a
+    /// non-sink receiver type?  The angle-bracket generic suffix is
+    /// stripped first: `HashMap<i64, String>` → `HashMap`.
+    pub fn is_non_sink_receiver_type(&self, ty: &str) -> bool {
+        let base = Self::type_last_segment(ty);
+        let base = base.split('<').next().unwrap_or(base).trim();
+        self.non_sink_receiver_types
+            .iter()
+            .any(|allowed| allowed == base)
+    }
+
+    /// Does the callee of a constructor expression (e.g. `HashMap::new`,
+    /// `SmallVec::from`, `Vec::with_capacity`) produce a non-sink
+    /// receiver?  Matches when the type prefix is in
+    /// `non_sink_receiver_types` AND the method is a known
+    /// constructor verb.
+    ///
+    /// The callee string may use either `::` or `.` as the path
+    /// separator (nyx's `callee_name` normalizes both via
+    /// `member_chain`).
+    pub fn is_non_sink_constructor_callee(&self, callee: &str) -> bool {
+        let normalized = callee.replace("::", ".");
+        let Some((ty, method)) = normalized.rsplit_once('.') else {
+            return false;
+        };
+        if !self.is_non_sink_receiver_type(ty) {
+            return false;
+        }
+        matches!(
+            method,
+            "new"
+                | "with_capacity"
+                | "with_capacity_and_hasher"
+                | "with_hasher"
+                | "from"
+                | "from_iter"
+                | "new_in"
+                | "default"
+        )
+    }
+
+    /// Does the first segment of a callee receiver chain look like a
+    /// non-sink local variable, based on configured name prefixes?
+    /// Used as a fallback when the type/binding cannot be resolved.
+    pub fn receiver_matches_non_sink_prefix(&self, first_segment: &str) -> bool {
+        if first_segment.is_empty() {
+            return false;
+        }
+        self.non_sink_receiver_name_prefixes
+            .iter()
+            .any(|prefix| !prefix.is_empty() && first_segment.starts_with(prefix.as_str()))
+    }
+
+    /// Should a call on `callee` be skipped for Read/Mutation
+    /// classification because its receiver is a local non-sink
+    /// collection?  The `non_sink_vars` set lists variable names
+    /// flagged during the unit walk (e.g. `let mut counts = HashMap::new()`).
+    pub fn callee_has_non_sink_receiver(
+        &self,
+        callee: &str,
+        non_sink_vars: &std::collections::HashSet<String>,
+    ) -> bool {
+        let first = first_receiver_segment(callee);
+        if first.is_empty() {
+            return false;
+        }
+        if non_sink_vars.contains(first) {
+            return true;
+        }
+        self.receiver_matches_non_sink_prefix(first)
     }
 
     pub fn requires_admin_path(&self, path: &str) -> bool {
@@ -297,6 +385,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "invitedemail".into(),
                 "recipient".into(),
             ],
+            non_sink_receiver_types: Vec::new(),
+            non_sink_receiver_name_prefixes: Vec::new(),
         }
     } else if matches!(lang_slug, "ruby") {
         AuthAnalysisRules {
@@ -431,6 +521,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "invitee_email".into(),
                 "user_email".into(),
             ],
+            non_sink_receiver_types: Vec::new(),
+            non_sink_receiver_name_prefixes: Vec::new(),
         }
     } else if matches!(lang_slug, "go") {
         AuthAnalysisRules {
@@ -518,6 +610,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "inviteeEmail".into(),
                 "recipient".into(),
             ],
+            non_sink_receiver_types: Vec::new(),
+            non_sink_receiver_name_prefixes: Vec::new(),
         }
     } else if matches!(lang_slug, "java") {
         AuthAnalysisRules {
@@ -601,6 +695,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "inviteeEmail".into(),
                 "recipient".into(),
             ],
+            non_sink_receiver_types: Vec::new(),
+            non_sink_receiver_name_prefixes: Vec::new(),
         }
     } else if matches!(lang_slug, "rust") {
         AuthAnalysisRules {
@@ -703,6 +799,39 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "inviteeEmail".into(),
                 "recipient".into(),
             ],
+            non_sink_receiver_types: vec![
+                "HashMap".into(),
+                "HashSet".into(),
+                "BTreeMap".into(),
+                "BTreeSet".into(),
+                "Vec".into(),
+                "VecDeque".into(),
+                "BinaryHeap".into(),
+                "IndexMap".into(),
+                "IndexSet".into(),
+                "LinkedList".into(),
+                "SmallVec".into(),
+                "FxHashMap".into(),
+                "FxHashSet".into(),
+                "DashMap".into(),
+                "DashSet".into(),
+            ],
+            non_sink_receiver_name_prefixes: vec![
+                "local_map".into(),
+                "local_set".into(),
+                "local_cache".into(),
+                "visited".into(),
+                "seen".into(),
+                "idx_".into(),
+                "index_".into(),
+                "lookup_".into(),
+                "_tmp_map".into(),
+                "counts".into(),
+                "buckets".into(),
+                "pending".into(),
+                "queue".into(),
+                "stack".into(),
+            ],
         }
     } else {
         AuthAnalysisRules {
@@ -769,6 +898,8 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "invited_email".into(),
                 "invitedEmail".into(),
             ],
+            non_sink_receiver_types: Vec::new(),
+            non_sink_receiver_name_prefixes: Vec::new(),
         }
     };
 
@@ -813,6 +944,14 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             &mut rules.token_recipient_fields,
             &lang_cfg.auth.token_recipient_fields,
         );
+        extend_unique(
+            &mut rules.non_sink_receiver_types,
+            &lang_cfg.auth.non_sink_receiver_types,
+        );
+        extend_unique(
+            &mut rules.non_sink_receiver_name_prefixes,
+            &lang_cfg.auth.non_sink_receiver_name_prefixes,
+        );
     }
 
     rules
@@ -831,6 +970,13 @@ pub fn canonical_name(name: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric())
         .map(|c| c.to_ascii_lowercase())
         .collect()
+}
+
+/// Return the first segment of a callee's receiver chain.
+/// For `map.insert` → `"map"`; for `self.cache.insert` → `"self"`;
+/// for a callee with no receiver (`HashMap::new`) → the full name.
+pub fn first_receiver_segment(callee: &str) -> &str {
+    callee.split('.').next().unwrap_or(callee)
 }
 
 pub fn matches_name(name: &str, pattern: &str) -> bool {
@@ -907,5 +1053,49 @@ mod tests {
                 .authorization_check_names
                 .contains(&"requireTypedOwnership".to_string())
         );
+    }
+
+    #[test]
+    fn rust_non_sink_receiver_defaults_include_std_collections() {
+        let cfg = Config::default();
+        let rules = build_auth_rules(&cfg, "rust");
+        assert!(rules.is_non_sink_receiver_type("HashMap"));
+        assert!(rules.is_non_sink_receiver_type("HashSet"));
+        assert!(rules.is_non_sink_receiver_type("Vec"));
+        assert!(rules.is_non_sink_receiver_type("std::collections::HashMap"));
+        assert!(rules.is_non_sink_receiver_type("HashMap<i64, usize>"));
+        assert!(!rules.is_non_sink_receiver_type("Database"));
+    }
+
+    #[test]
+    fn rust_non_sink_constructor_callee_matches_known_forms() {
+        let cfg = Config::default();
+        let rules = build_auth_rules(&cfg, "rust");
+        assert!(rules.is_non_sink_constructor_callee("HashMap::new"));
+        assert!(rules.is_non_sink_constructor_callee("HashMap::with_capacity"));
+        assert!(rules.is_non_sink_constructor_callee("SmallVec::from"));
+        assert!(rules.is_non_sink_constructor_callee("std::collections::HashMap::new"));
+        assert!(!rules.is_non_sink_constructor_callee("HashMap::get"));
+        assert!(!rules.is_non_sink_constructor_callee("Database::connect"));
+        assert!(!rules.is_non_sink_constructor_callee("plain_function"));
+    }
+
+    #[test]
+    fn callee_has_non_sink_receiver_matches_var_set_and_prefixes() {
+        use std::collections::HashSet;
+        let cfg = Config::default();
+        let rules = build_auth_rules(&cfg, "rust");
+        let mut vars = HashSet::new();
+        vars.insert("map".to_string());
+
+        // First receiver segment in non_sink_vars → skipped.
+        assert!(rules.callee_has_non_sink_receiver("map.insert", &vars));
+        // First segment not in vars, not a known prefix → not skipped.
+        assert!(!rules.callee_has_non_sink_receiver("db.insert", &vars));
+        // Deep receiver: "self.cache.insert" → first segment "self" → ambiguous.
+        assert!(!rules.callee_has_non_sink_receiver("self.cache.insert", &vars));
+        // Prefix-match on configured name prefix ("counts" is in defaults).
+        assert!(rules.callee_has_non_sink_receiver("counts.insert", &HashSet::new()));
+        assert!(rules.callee_has_non_sink_receiver("visited_nodes.insert", &HashSet::new()));
     }
 }

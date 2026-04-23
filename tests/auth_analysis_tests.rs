@@ -639,6 +639,26 @@ fn actix_scoped_write_without_membership_check() {
 }
 
 #[test]
+fn hashmap_local_noise_is_clean() {
+    // Phase A1: std::collections method calls on locally-constructed
+    // HashMap/HashSet bindings should not be treated as
+    // authorization-relevant Read/Mutation operations.
+    assert_absent("hashmap_local_noise.rs", "rs.auth.missing_ownership_check");
+}
+
+#[test]
+fn helper_scoped_params_is_clean() {
+    // Phase A1: a library helper whose internal work is `result.insert(..)`
+    // on a locally-constructed HashSet is not a sink — the call is
+    // classified as non-sink because the receiver is the locally-bound
+    // collection.
+    assert_absent(
+        "helper_scoped_params.rs",
+        "rs.auth.missing_ownership_check",
+    );
+}
+
+#[test]
 fn actix_admin_route_with_admin_guard_is_clean() {
     assert_absent(
         "actix_admin_route_clean.rs",

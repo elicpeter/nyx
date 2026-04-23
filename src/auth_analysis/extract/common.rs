@@ -4,6 +4,7 @@ use crate::auth_analysis::model::{
     Framework, HttpMethod, OperationKind, RouteRegistration, SensitiveOperation, ValueRef,
     ValueSourceKind,
 };
+use std::collections::HashSet;
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -352,6 +353,13 @@ struct UnitState {
     operations: Vec<SensitiveOperation>,
     value_refs: Vec<ValueRef>,
     condition_texts: Vec<String>,
+    /// Local variable names bound to a known non-sink collection
+    /// (e.g. `HashMap::new()`, `Vec::with_capacity(_)`, `vec![]`,
+    /// or via an explicit type annotation).  Consulted by
+    /// `collect_call` so method calls on these bindings
+    /// (`map.insert(…)`, `set.remove(…)`) aren't classified as
+    /// auth-relevant Read/Mutation operations.
+    non_sink_vars: HashSet<String>,
 }
 
 fn collect_unit_state(
@@ -372,6 +380,7 @@ fn collect_unit_state(
             }
         }
         "conditional_expression" => collect_condition(node, bytes, rules, state),
+        "let_declaration" => collect_non_sink_binding(node, bytes, rules, state),
         _ => {}
     }
 
@@ -426,6 +435,11 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
 
     let op_kind = if rules.is_token_lookup_call(&callee, &node_text) {
         Some(OperationKind::TokenLookup)
+    } else if rules.callee_has_non_sink_receiver(&callee, &state.non_sink_vars) {
+        // Call targets a local non-sink collection (HashMap, HashSet,
+        // Vec, …) — method calls like `map.insert` / `set.remove` are
+        // pure in-memory bookkeeping, not authorization-relevant.
+        None
     } else if rules.is_mutation(&callee) {
         Some(OperationKind::Mutation)
     } else if rules.is_read(&callee) {
@@ -483,6 +497,97 @@ fn collect_condition(
             args: Vec::new(),
             condition_text: Some(condition_text),
         });
+    }
+}
+
+/// Detect `let` bindings that produce a known non-sink collection
+/// (e.g. `HashMap::new()`, `Vec::with_capacity(_)`, `vec![]`, or an
+/// explicit type annotation like `: HashMap<_, _>`).  Registered
+/// variable names are consulted by `collect_call` so later method
+/// calls on those bindings (`map.insert(..)`, `set.remove(..)`)
+/// aren't treated as auth-relevant Read/Mutation operations.
+///
+/// Rust-oriented in practice; JS/TS/Python/etc. use different
+/// declaration node kinds and are unaffected.
+fn collect_non_sink_binding(
+    node: Node<'_>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+    state: &mut UnitState,
+) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+
+    if let Some(ty_node) = node.child_by_field_name("type") {
+        let ty_text = text(ty_node, bytes);
+        if rules.is_non_sink_receiver_type(&ty_text) {
+            state.non_sink_vars.insert(var_name);
+            return;
+        }
+    }
+
+    if let Some(value) = node.child_by_field_name("value")
+        && value_is_non_sink_constructor(value, bytes, rules)
+    {
+        state.non_sink_vars.insert(var_name);
+    }
+}
+
+fn first_identifier_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    if matches!(node.kind(), "identifier" | "shorthand_property_identifier_pattern") {
+        let value = text(node, bytes);
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    for idx in 0..node.named_child_count() {
+        let Some(child) = node.named_child(idx as u32) else {
+            continue;
+        };
+        if let Some(found) = first_identifier_name(child, bytes) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn value_is_non_sink_constructor(
+    node: Node<'_>,
+    bytes: &[u8],
+    rules: &AuthAnalysisRules,
+) -> bool {
+    match node.kind() {
+        "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
+            let callee = call_name(node, bytes);
+            rules.is_non_sink_constructor_callee(&callee)
+        }
+        "macro_invocation" => {
+            let name = node
+                .child_by_field_name("macro")
+                .map(|m| text(m, bytes))
+                .unwrap_or_default();
+            let last = name.rsplit("::").next().unwrap_or(&name);
+            matches!(last, "vec" | "smallvec")
+        }
+        "try_expression" | "await_expression" | "reference_expression" => {
+            for idx in 0..node.named_child_count() {
+                let Some(child) = node.named_child(idx as u32) else {
+                    continue;
+                };
+                if value_is_non_sink_constructor(child, bytes, rules) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
     }
 }
 

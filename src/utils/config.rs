@@ -474,6 +474,18 @@ pub struct AuthAnalysisConfig {
     pub token_lookup_names: Vec<String>,
     pub token_expiry_fields: Vec<String>,
     pub token_recipient_fields: Vec<String>,
+    /// Types whose instances should never be treated as auth sinks
+    /// (e.g. `HashMap`, `HashSet`, `Vec`).  When a `let` binding's RHS
+    /// constructs one of these, or an explicit type annotation names
+    /// one, the bound variable is tagged as non-sink and method calls
+    /// on it (`map.insert`, `vec.push`, …) are not classified as
+    /// Read/Mutation operations.
+    pub non_sink_receiver_types: Vec<String>,
+    /// Variable-name prefixes that strongly imply a local/in-memory
+    /// collection, used as a fallback when the type cannot be
+    /// resolved (e.g. `visited`, `seen`, `counts`).  Matched against
+    /// the first segment of the callee receiver chain.
+    pub non_sink_receiver_name_prefixes: Vec<String>,
 }
 
 impl Default for AuthAnalysisConfig {
@@ -489,6 +501,8 @@ impl Default for AuthAnalysisConfig {
             token_lookup_names: Vec::new(),
             token_expiry_fields: Vec::new(),
             token_recipient_fields: Vec::new(),
+            non_sink_receiver_types: Vec::new(),
+            non_sink_receiver_name_prefixes: Vec::new(),
         }
     }
 }
@@ -1013,6 +1027,14 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
         extend_dedup(
             &mut entry.auth.token_recipient_fields,
             user_lang_cfg.auth.token_recipient_fields,
+        );
+        extend_dedup(
+            &mut entry.auth.non_sink_receiver_types,
+            user_lang_cfg.auth.non_sink_receiver_types,
+        );
+        extend_dedup(
+            &mut entry.auth.non_sink_receiver_name_prefixes,
+            user_lang_cfg.auth.non_sink_receiver_name_prefixes,
         );
     }
 
