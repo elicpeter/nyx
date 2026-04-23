@@ -53,9 +53,7 @@ fn apply_mode(
         "cfg" => AnalysisMode::Cfg,
         "taint" => AnalysisMode::Taint,
         _ => {
-            return Err(bad_request(
-                "mode must be one of: full, ast, cfg, taint",
-            ));
+            return Err(bad_request("mode must be one of: full, ast, cfg, taint"));
         }
     };
     Ok(())

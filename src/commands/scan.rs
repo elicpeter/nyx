@@ -927,8 +927,7 @@ fn run_topo_batches(
             // classify the reason when the cap actually fires.  Bounded
             // at 4 entries so the memory overhead is negligible even
             // with a 64-iter budget; the classifier only needs the tail.
-            let mut delta_trajectory: smallvec::SmallVec<[u32; 4]> =
-                smallvec::SmallVec::new();
+            let mut delta_trajectory: smallvec::SmallVec<[u32; 4]> = smallvec::SmallVec::new();
 
             // Phase-B worklist: files to re-analyse in this iteration.
             // Initialised to the full batch so iteration 0 behaves like
@@ -938,19 +937,15 @@ fn run_topo_batches(
             // Storing `PathBuf` clones (matching how the rest of the
             // SCC loop identifies files) so membership tests are cheap
             // HashSet lookups.
-            let mut dirty_files: HashSet<std::path::PathBuf> = batch
-                .files
-                .iter()
-                .map(|p| (*p).clone())
-                .collect();
+            let mut dirty_files: HashSet<std::path::PathBuf> =
+                batch.files.iter().map(|p| (*p).clone()).collect();
 
             // Per-file diag cache: retains the most-recent iteration's
             // diagnostics for each file.  When Phase-B skips a clean
             // file in iteration N, its diags from iteration N-1 are
             // still in this map, preserving final-iteration
             // completeness.
-            let mut diags_by_file: HashMap<std::path::PathBuf, Vec<Diag>> =
-                HashMap::new();
+            let mut diags_by_file: HashMap<std::path::PathBuf, Vec<Diag>> = HashMap::new();
 
             for iter in 0..scc_cap {
                 iters_used = iter + 1;
@@ -1079,12 +1074,9 @@ fn run_topo_batches(
                 // changed in iteration N.  If no key changed, the
                 // dirty set is empty — which implies convergence (and
                 // matches `iter_converged` above).
-                let changed_cap_keys =
-                    changed_cap_keys_of(&snap_before, &snap_after);
-                let changed_ssa_keys = changed_ssa_keys_of(
-                    &ssa_snap_before,
-                    global_summaries.snapshot_ssa(),
-                );
+                let changed_cap_keys = changed_cap_keys_of(&snap_before, &snap_after);
+                let changed_ssa_keys =
+                    changed_ssa_keys_of(&ssa_snap_before, global_summaries.snapshot_ssa());
                 let all_changed_keys: HashSet<crate::symbol::FuncKey> =
                     changed_cap_keys.union(&changed_ssa_keys).cloned().collect();
                 let changed_caps_count = changed_cap_keys.len();
@@ -1103,19 +1095,13 @@ fn run_topo_batches(
                 // this batch calls — rare but must not regress to
                 // missed analysis).
                 let namespaces_needing_reanalysis =
-                    crate::callgraph::namespaces_for_callers(
-                        call_graph,
-                        &all_changed_keys,
-                    );
+                    crate::callgraph::namespaces_for_callers(call_graph, &all_changed_keys);
                 let next_dirty: HashSet<std::path::PathBuf> = batch
                     .files
                     .iter()
                     .filter(|p| {
                         let abs = p.to_string_lossy();
-                        let rel = crate::symbol::normalize_namespace(
-                            &abs,
-                            root_str_ref,
-                        );
+                        let rel = crate::symbol::normalize_namespace(&abs, root_str_ref);
                         namespaces_needing_reanalysis.contains(&rel)
                     })
                     .map(|p| (*p).clone())
@@ -1194,8 +1180,7 @@ fn run_topo_batches(
             );
 
             if !converged {
-                let reason =
-                    crate::engine_notes::CapHitReason::classify(&delta_trajectory);
+                let reason = crate::engine_notes::CapHitReason::classify(&delta_trajectory);
                 tracing::warn!(
                     batch = batch_idx,
                     files = batch.files.len(),

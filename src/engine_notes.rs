@@ -106,12 +106,7 @@ impl CapHitReason {
         // Detect period-2 oscillation: last 4 samples as (a,b,a,b) with a ≠ b.
         if deltas.len() >= 4 {
             let n = deltas.len();
-            let (a0, b0, a1, b1) = (
-                deltas[n - 4],
-                deltas[n - 3],
-                deltas[n - 2],
-                deltas[n - 1],
-            );
+            let (a0, b0, a1, b1) = (deltas[n - 4], deltas[n - 3], deltas[n - 2], deltas[n - 1]);
             if a0 == a1 && b0 == b1 && a0 != b0 {
                 let tail = deltas
                     .iter()

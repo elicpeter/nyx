@@ -268,10 +268,7 @@ mod tests {
         });
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"kind\":\"in_file_pass2\""), "got {json}");
-        assert!(
-            json.contains("\"namespace\":\"src/foo.js\""),
-            "got {json}"
-        );
+        assert!(json.contains("\"namespace\":\"src/foo.js\""), "got {json}");
     }
 
     #[test]

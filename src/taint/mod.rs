@@ -905,7 +905,10 @@ fn analyse_multi_body(
             if body.is_some_and(|b| b.meta.parent_body_id.is_none()) {
                 toplevel_findings.push(f);
             } else {
-                findings_by_body.entry(BodyId(f.body_id.0)).or_default().push(f);
+                findings_by_body
+                    .entry(BodyId(f.body_id.0))
+                    .or_default()
+                    .push(f);
             }
         }
 
@@ -1003,10 +1006,8 @@ fn analyse_multi_body(
                     // in this same round sees the updated seed via
                     // its `global_seed` ancestor lookup.
                     if use_gauss_seidel {
-                        let filtered =
-                            ssa_transfer::filter_seed_to_toplevel(&es, &toplevel_keys);
-                        current_seed =
-                            ssa_transfer::join_seed_maps(&current_seed, &filtered);
+                        let filtered = ssa_transfer::filter_seed_to_toplevel(&es, &toplevel_keys);
+                        current_seed = ssa_transfer::join_seed_maps(&current_seed, &filtered);
                         body_exit_states.insert(BodyId(0), current_seed.clone());
                     }
                     body_exit_states.insert(body.meta.id, es);

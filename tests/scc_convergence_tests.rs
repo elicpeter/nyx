@@ -338,9 +338,7 @@ fn scc_cap_hit_records_classified_reason() {
                 .map(|ev| ev.engine_notes.as_slice())
                 .map(|notes| {
                     notes.iter().find_map(|n| match n {
-                        EngineNote::CrossFileFixpointCapped { reason, .. } => {
-                            Some(reason.clone())
-                        }
+                        EngineNote::CrossFileFixpointCapped { reason, .. } => Some(reason.clone()),
                         _ => None,
                     })
                 })
