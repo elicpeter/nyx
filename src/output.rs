@@ -216,8 +216,18 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
             // Engine provenance notes — surface any cap-hit / lowering
             // bail / timeout signals recorded by the analysis engine so
             // downstream consumers can tell "nothing found" from "engine
-            // stopped looking".  `confidence_capped` is true if any note
-            // in the list corresponds to a lost-precision event.
+            // stopped looking".
+            //
+            // Three properties are emitted together:
+            //   * `engine_notes`       — raw list of {kind, ...} entries
+            //   * `confidence_capped`  — true iff any non-informational
+            //                            note is present (back-compat
+            //                            boolean; drives legacy dashboards)
+            //   * `loss_direction`     — worst `LossDirection` across
+            //                            the list ("under-report",
+            //                            "over-report", "bail").  Absent
+            //                            when only informational notes
+            //                            are attached.
             if let Some(engine_notes) = d.evidence.as_ref().and_then(|ev| {
                 if ev.engine_notes.is_empty() {
                     None
@@ -237,6 +247,9 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                             .any(crate::engine_notes::EngineNote::lowers_confidence)
                     ),
                 );
+                if let Some(dir) = crate::engine_notes::worst_direction(engine_notes) {
+                    props.insert("loss_direction".into(), json!(dir.tag()));
+                }
             }
 
             // Add rollup data if present

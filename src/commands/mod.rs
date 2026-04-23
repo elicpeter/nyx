@@ -60,6 +60,7 @@ pub fn handle_command(
             show_instances,
             min_score,
             min_confidence,
+            require_converged,
             // Analysis engine toggles
             constraint_solving,
             no_constraint_solving,
@@ -168,6 +169,10 @@ pub fn handle_command(
                     Some(expr.parse::<crate::evidence::Confidence>().map_err(|e| {
                         crate::errors::NyxError::Msg(format!("invalid --min-confidence value: {e}"))
                     })?);
+            }
+
+            if require_converged {
+                config.output.require_converged = true;
             }
 
             if show_all {

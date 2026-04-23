@@ -368,6 +368,11 @@ pub fn handle(
         diags.retain(|d| d.confidence.is_none_or(|c| c >= min_conf));
     }
 
+    // ── Apply --require-converged filter ────────────────────────────
+    if config.output.require_converged {
+        retain_converged_findings(&mut diags);
+    }
+
     // ── Apply inline suppressions ───────────────────────────────────
     apply_suppressions(&mut diags);
     if !show_suppressed {
@@ -439,6 +444,42 @@ pub(crate) fn post_process_diags(diags: &mut Vec<Diag>, cfg: &Config) {
     if let Some(max) = cfg.output.max_results {
         diags.truncate(max as usize);
     }
+}
+
+/// Drop diagnostics whose engine provenance notes indicate the analysis
+/// that emitted them was not fully converged in a way that affects this
+/// specific finding's credibility.
+///
+/// A diagnostic is **removed** when its evidence carries any engine
+/// note whose [`crate::engine_notes::LossDirection`] is `OverReport`
+/// (widening lost validation predicates, so the finding is more likely
+/// a false positive) or `Bail` (SSA lowering or parse aborted before
+/// producing a trustworthy result).
+///
+/// A diagnostic is **kept** in all other cases:
+///   * no evidence struct, or
+///   * evidence with no engine notes, or
+///   * only informational notes (e.g. `InlineCacheReused`), or
+///   * `UnderReport` notes only (the emitted flow is still real; the
+///     result set is just a lower bound).
+///
+/// Surfaced to users via `--require-converged` / the
+/// `config.output.require_converged` setting.  Intended as a strict
+/// CI gate where a finding from non-converged analysis is worse than
+/// no finding at all.
+pub fn retain_converged_findings(diags: &mut Vec<Diag>) {
+    use crate::engine_notes::{LossDirection, worst_direction};
+    diags.retain(|d| {
+        d.evidence
+            .as_ref()
+            .and_then(|ev| worst_direction(&ev.engine_notes))
+            .is_none_or(|dir| {
+                matches!(
+                    dir,
+                    LossDirection::UnderReport | LossDirection::Informational
+                )
+            })
+    });
 }
 
 /// Collapse `taint-unsanitised-flow` findings that share the same primary

@@ -281,6 +281,20 @@ pub enum Commands {
         #[arg(long)]
         min_confidence: Option<String>,
 
+        /// Drop findings emitted from capped / widened / bailed analysis
+        ///
+        /// Suppresses any finding whose engine provenance notes indicate
+        /// over-reporting (predicate/path widening) or analysis bail
+        /// (SSA lowering failure, parse timeout).  Under-report notes —
+        /// where the emitted finding is still a real flow but the
+        /// result set is a lower bound — are kept.
+        ///
+        /// Intended for strict CI gates where a finding from non-converged
+        /// analysis is worse than no finding.  Applied after ranking and
+        /// before the `max_results` truncation.
+        #[arg(long)]
+        require_converged: bool,
+
         // ── Analysis engine toggles (override [analysis.engine] config) ───
         /// Enable path-constraint solving (default: on)
         #[arg(long, overrides_with = "no_constraint_solving")]

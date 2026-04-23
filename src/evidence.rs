@@ -281,6 +281,16 @@ pub struct StateEvidence {
 ///
 /// This is called as a post-pass after all findings are collected; findings
 /// that already have a confidence set (e.g. from CFG analysis) are preserved.
+///
+/// When the finding carries engine provenance notes whose
+/// [`crate::engine_notes::LossDirection`] is `OverReport` or `Bail`,
+/// the computed confidence is capped at `Medium` regardless of the
+/// points-based taint score.  `OverReport` means precision was widened
+/// (validation guards may have been lost, so the finding is more
+/// likely to be a false positive); `Bail` means analysis of the body
+/// aborted before producing a trustworthy result.  `UnderReport` notes
+/// (e.g. `WorklistCapped`) do *not* cap confidence — the reported flow
+/// is still real, just surrounded by an incomplete result set.
 pub fn compute_confidence(diag: &Diag) -> Confidence {
     // Degraded analysis caps confidence
     if let Some(ev) = &diag.evidence
@@ -291,31 +301,54 @@ pub fn compute_confidence(diag: &Diag) -> Confidence {
 
     let id = &diag.id;
 
-    if id.starts_with("taint-") {
-        return compute_taint_confidence(diag);
-    }
-
-    if id.starts_with("state-") {
-        return match id.as_str() {
+    let base = if id.starts_with("taint-") {
+        compute_taint_confidence(diag)
+    } else if id.starts_with("state-") {
+        match id.as_str() {
             "state-use-after-close" => Confidence::High,
             "state-double-close" => Confidence::High,
             "state-unauthed-access" => Confidence::High,
             "state-resource-leak" => Confidence::Medium,
             "state-resource-leak-possible" => Confidence::Low,
             _ => Confidence::Medium,
-        };
-    }
-
-    if id.starts_with("cfg-") {
+        }
+    } else if id.starts_with("cfg-") {
         // If CFG conversion already set confidence, preserve it
-        return diag.confidence.unwrap_or(Confidence::Medium);
-    }
-
-    // AST patterns: High severity → Medium confidence, else Low
-    if diag.severity == Severity::High {
+        diag.confidence.unwrap_or(Confidence::Medium)
+    } else if diag.severity == Severity::High {
+        // AST patterns: High severity → Medium confidence, else Low
         Confidence::Medium
     } else {
         Confidence::Low
+    };
+
+    apply_engine_notes_cap(diag, base)
+}
+
+/// Cap `base` at `Medium` when the finding carries any engine note
+/// whose direction is [`crate::engine_notes::LossDirection::OverReport`]
+/// or [`crate::engine_notes::LossDirection::Bail`].
+///
+/// Returns `base` unchanged when no evidence is present, no notes are
+/// attached, or only `Informational` / `UnderReport` notes are present.
+fn apply_engine_notes_cap(diag: &Diag, base: Confidence) -> Confidence {
+    let Some(ev) = &diag.evidence else {
+        return base;
+    };
+    let Some(worst) = crate::engine_notes::worst_direction(&ev.engine_notes) else {
+        return base;
+    };
+    match worst {
+        crate::engine_notes::LossDirection::OverReport
+        | crate::engine_notes::LossDirection::Bail => base.min(Confidence::Medium),
+        // UnderReport: result set is a lower bound, but the emitted
+        // finding itself remains as credible as the analysis decided.
+        // Do not cap — the rank completeness penalty is the right lever
+        // for that case (see rank.rs::completeness_penalty).
+        crate::engine_notes::LossDirection::UnderReport => base,
+        // Informational is filtered out upstream by `worst_direction`,
+        // but keep the arm to force a decision if the enum grows.
+        crate::engine_notes::LossDirection::Informational => base,
     }
 }
 
@@ -662,6 +695,7 @@ pub fn compute_confidence_limiters(diag: &Diag) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::labels::SourceKind;
 
     fn make_diag(id: &str, severity: Severity) -> Diag {
         Diag {
@@ -879,6 +913,141 @@ mod tests {
     #[test]
     fn compute_confidence_ast_high_severity_medium() {
         let d = make_diag("rs.code_exec.eval", Severity::High);
+        assert_eq!(compute_confidence(&d), Confidence::Medium);
+    }
+
+    // ── engine_notes direction-aware capping ────────────────────────
+
+    fn taint_high_confidence_diag() -> Diag {
+        // A known-High taint configuration: UserInput + source+sink+snippet +
+        // short path + cap_specificity=1 → score 7 → High.  Re-used as the
+        // "clean" baseline for every engine-notes cap test.
+        let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::High);
+        d.evidence = Some(Evidence {
+            source: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 1,
+                col: 1,
+                kind: "source".into(),
+                snippet: Some("req.query.id".into()),
+            }),
+            sink: Some(SpanEvidence {
+                path: "test.rs".into(),
+                line: 5,
+                col: 1,
+                kind: "sink".into(),
+                snippet: Some("exec(id)".into()),
+            }),
+            source_kind: Some(SourceKind::UserInput),
+            cap_specificity: Some(1),
+            hop_count: Some(1),
+            ..Default::default()
+        });
+        d
+    }
+
+    fn with_notes(mut d: Diag, notes: Vec<crate::engine_notes::EngineNote>) -> Diag {
+        let mut ev = d.evidence.clone().unwrap_or_default();
+        ev.engine_notes = smallvec::SmallVec::from_vec(notes);
+        d.evidence = Some(ev);
+        d
+    }
+
+    #[test]
+    fn confidence_uncapped_without_engine_notes() {
+        assert_eq!(
+            compute_confidence(&taint_high_confidence_diag()),
+            Confidence::High,
+            "baseline must be High so cap tests have something to cap"
+        );
+    }
+
+    #[test]
+    fn confidence_not_capped_by_under_report() {
+        // UnderReport indicates we may have missed OTHER findings.  The
+        // finding we *did* emit is still sound; its confidence stays High.
+        let d = with_notes(
+            taint_high_confidence_diag(),
+            vec![crate::engine_notes::EngineNote::WorklistCapped { iterations: 100 }],
+        );
+        assert_eq!(compute_confidence(&d), Confidence::High);
+    }
+
+    #[test]
+    fn confidence_capped_at_medium_by_over_report() {
+        // OverReport (PredicateStateWidened) means validation predicates
+        // were lost — the emitted finding is more likely to be spurious.
+        let d = with_notes(
+            taint_high_confidence_diag(),
+            vec![crate::engine_notes::EngineNote::PredicateStateWidened],
+        );
+        assert_eq!(compute_confidence(&d), Confidence::Medium);
+    }
+
+    #[test]
+    fn confidence_capped_at_medium_by_bail() {
+        let d = with_notes(
+            taint_high_confidence_diag(),
+            vec![crate::engine_notes::EngineNote::ParseTimeout { timeout_ms: 1000 }],
+        );
+        assert_eq!(compute_confidence(&d), Confidence::Medium);
+    }
+
+    #[test]
+    fn confidence_cap_does_not_upgrade_low() {
+        // `base.min(Medium)` is what caps — it must not *raise* a Low
+        // baseline to Medium.  Use a taint finding with weak evidence so
+        // the points scorer gives us Low, then attach a Bail note.
+        let mut d = make_diag("taint-unsanitised-flow (source 1:1)", Severity::Low);
+        d.evidence = Some(Evidence {
+            source: None,
+            sink: None,
+            source_kind: Some(SourceKind::Database),
+            hop_count: Some(10),
+            ..Default::default()
+        });
+        d = with_notes(
+            d,
+            vec![crate::engine_notes::EngineNote::ParseTimeout { timeout_ms: 100 }],
+        );
+        assert_eq!(
+            compute_confidence(&d),
+            Confidence::Low,
+            "Bail cap must never raise Low → Medium"
+        );
+    }
+
+    #[test]
+    fn confidence_not_capped_by_informational() {
+        let d = with_notes(
+            taint_high_confidence_diag(),
+            vec![crate::engine_notes::EngineNote::InlineCacheReused],
+        );
+        assert_eq!(compute_confidence(&d), Confidence::High);
+    }
+
+    #[test]
+    fn confidence_cap_applies_to_state_findings_too() {
+        // state-use-after-close is High by default; an OverReport note
+        // on it must cap it to Medium, same as the taint path.
+        let d = with_notes(
+            make_diag("state-use-after-close", Severity::High),
+            vec![crate::engine_notes::EngineNote::PredicateStateWidened],
+        );
+        assert_eq!(compute_confidence(&d), Confidence::Medium);
+    }
+
+    #[test]
+    fn confidence_cap_chooses_worst_when_mixed() {
+        // UnderReport alone does not cap; OverReport does.  Mixing them
+        // must apply the cap (worst-direction wins).
+        let d = with_notes(
+            taint_high_confidence_diag(),
+            vec![
+                crate::engine_notes::EngineNote::WorklistCapped { iterations: 10 },
+                crate::engine_notes::EngineNote::PredicateStateWidened,
+            ],
+        );
         assert_eq!(compute_confidence(&d), Confidence::Medium);
     }
 

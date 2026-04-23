@@ -295,6 +295,20 @@ pub struct OutputConfig {
     )]
     pub min_confidence: Option<crate::evidence::Confidence>,
 
+    /// Drop findings emitted from non-converged analysis.
+    ///
+    /// When `true`, findings whose engine provenance notes include any
+    /// `OverReport` (widening) or `Bail` (lowering/parse failure)
+    /// direction are filtered out before output.  `UnderReport`
+    /// findings — where the result set is a lower bound but each
+    /// emitted flow is still real — are kept.
+    ///
+    /// Surfaced via `--require-converged`; intended for strict CI
+    /// gating where a finding from capped analysis is worse than no
+    /// finding.
+    #[serde(default)]
+    pub require_converged: bool,
+
     /// Include Quality-category findings (excluded by default).
     #[serde(default)]
     pub include_quality: bool,
@@ -342,6 +356,7 @@ impl Default for OutputConfig {
             attack_surface_ranking: true,
             min_score: None,
             min_confidence: None,
+            require_converged: false,
             include_quality: false,
             show_all: false,
             max_low: 20,
@@ -903,6 +918,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.output.attack_surface_ranking = user.output.attack_surface_ranking;
     default.output.min_score = user.output.min_score;
     default.output.min_confidence = user.output.min_confidence;
+    default.output.require_converged = user.output.require_converged;
     default.output.include_quality = user.output.include_quality;
     default.output.show_all = user.output.show_all;
     default.output.max_low = user.output.max_low;

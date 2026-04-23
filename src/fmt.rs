@@ -258,23 +258,32 @@ fn render_diag(d: &Diag, width: usize) -> String {
         (None, Some(c)) => format!("  {}", style(format!("(Confidence: {c})")).dim()),
         (None, None) => String::new(),
     };
-    let engine_notes_count = d
+    // Engine provenance notes: show count + worst direction so a user
+    // scanning the console can see "this finding is from capped analysis"
+    // at a glance.  Direction tags ("under-report", "over-report", "bail")
+    // are stable strings from `LossDirection::tag()` — kept in sync with
+    // the SARIF `result.properties.engine_notes[].kind` serialization so
+    // downstream tooling can cross-reference console and SARIF output.
+    // Informational-only notes (e.g. InlineCacheReused) are not surfaced
+    // here because they carry no credibility signal.
+    let engine_notes_suffix = d
         .evidence
         .as_ref()
-        .map(|e| e.engine_notes.len())
-        .unwrap_or(0);
-    let engine_notes_suffix = if engine_notes_count > 0 {
-        format!(
-            "  {}",
-            style(format!(
-                "[capped: {engine_notes_count} note{}]",
-                if engine_notes_count == 1 { "" } else { "s" }
+        .filter(|e| !e.engine_notes.is_empty())
+        .and_then(|e| {
+            let direction = crate::engine_notes::worst_direction(&e.engine_notes)?;
+            let count = e.engine_notes.len();
+            Some(format!(
+                "  {}",
+                style(format!(
+                    "[capped: {count} note{} — {}]",
+                    if count == 1 { "" } else { "s" },
+                    direction.tag(),
+                ))
+                .yellow()
             ))
-            .yellow()
-        )
-    } else {
-        String::new()
-    };
+        })
+        .unwrap_or_default();
     // Alternative-path annotation (Phase 7).  When the Phase 7 dedup
     // preserves sibling findings for the same `(body, sink, source)`
     // that differ on validation status or traversed variables, mark

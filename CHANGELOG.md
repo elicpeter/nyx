@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Direction-aware engine provenance** — `EngineNote` variants now declare a `LossDirection` (`UnderReport`, `OverReport`, `Bail`, `Informational`) via `EngineNote::direction()`. The classification feeds three downstream behaviours:
+  - `compute_confidence` caps at `Medium` when any attached note has direction `OverReport` (widening) or `Bail` (lowering/parse abort). `UnderReport` does not cap — the emitted flow is still real, just part of an incomplete result set.
+  - Attack-surface ranking (`src/rank.rs`) gains a `completeness` component: `-8` for `OverReport`/`Bail`, `-3` for `UnderReport`, max-of-directions (not additive). Magnitudes are calibrated so `High`-severity findings from capped analysis still outrank `Medium`-severity findings from converged analysis.
+  - New `--require-converged` CLI flag (and `output.require_converged` config) drops findings whose notes indicate `OverReport` or `Bail` direction, for strict CI gates where capped-analysis findings are worse than none.
+  - Console `[capped: N notes — over-report]` suffix and new SARIF `result.properties.loss_direction` property.
+  - New `nyx_scanner::commands::scan::retain_converged_findings` public function for programmatic consumers.
+
 ### Changed
 
 ### Fixed
