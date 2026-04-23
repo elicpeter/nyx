@@ -46,6 +46,21 @@ pub enum SsaOp {
     CatchParam,
     /// Non-defining node (e.g. If condition evaluation, Entry, Exit).
     Nop,
+    /// Sentinel for "no reaching definition on this control-flow edge".
+    ///
+    /// Emitted by SSA lowering as a synthesized instruction in the entry
+    /// block and referenced from phi operands whose incoming edge does
+    /// not carry a definition of the phi's variable — e.g. a try/catch
+    /// rejoin where a variable is only defined on the normal path, or
+    /// an early-return branch on a later-defined variable.
+    ///
+    /// Having an explicit value lets phis satisfy the invariant that
+    /// `phi.operands.len() == block.preds.len()` (one operand per
+    /// predecessor). Downstream analyses treat Undef as a
+    /// no-taint / unknown / bottom-of-the-lattice contribution: a phi
+    /// operand of Undef carries no caps, no concrete value, and no
+    /// abstract fact.
+    Undef,
 }
 
 /// A single SSA instruction.

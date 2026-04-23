@@ -182,6 +182,9 @@ fn ssa_operand_constant(
                 }
             }
             SsaOp::Nop => {}
+            // Undef is a non-user, non-dynamic sentinel — treat like Const
+            // (no additional operands to trace).
+            SsaOp::Undef => {}
         }
     }
     true

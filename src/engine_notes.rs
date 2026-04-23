@@ -92,10 +92,16 @@ pub enum EngineNote {
     /// aborted, so some flows may have been missed, but emitted flows
     /// are still backed by propagated taint.
     WorklistCapped { iterations: u32 },
-    /// Origin tracking was truncated when a value exceeded `MAX_ORIGINS`.
-    /// Direction: [`LossDirection::UnderReport`] — we dropped
-    /// provenance for some origins; the finding's reported source may
-    /// be an arbitrary survivor, but the flow itself is real.
+    /// Origin tracking was truncated when a value exceeded the configured
+    /// per-value origin cap (`analysis.engine.max_origins`, default 32).
+    /// Direction: [`LossDirection::UnderReport`] — each dropped origin
+    /// corresponds to a real source flow whose independent finding will
+    /// not be emitted.  Other survivors still produce findings, so the
+    /// counter is a strict lower bound on under-reporting.  Raise
+    /// `max_origins` if operators observe this note on realistic inputs.
+    /// Truncation is deterministic: origins are sorted by source
+    /// location and the largest-by-location are dropped first, so the
+    /// survivor set is stable across runs and merge orderings.
     OriginsTruncated { dropped: u32 },
     /// JS/TS pass-2 in-file global propagation hit its iteration cap.
     /// Direction: [`LossDirection::UnderReport`] — global state may

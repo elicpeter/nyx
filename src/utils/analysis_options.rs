@@ -23,6 +23,20 @@ use std::sync::OnceLock;
 /// Default parse timeout (milliseconds).  See [`AnalysisOptions::parse_timeout_ms`].
 pub const DEFAULT_PARSE_TIMEOUT_MS: u64 = 10_000;
 
+/// Default upper bound on the number of taint origins tracked per lattice
+/// value.  Raised from the historical `4` to `32` so realistic codebases
+/// with wide joins (many param sources, deep helper chains) no longer
+/// silently drop origin attribution.  Tunable via
+/// [`AnalysisOptions::max_origins`] — see
+/// `src/taint/ssa_transfer/state.rs::effective_max_origins`.
+pub const DEFAULT_MAX_ORIGINS: u32 = 32;
+
+/// Minimum permitted `max_origins` value.  A cap of `0` would make origin
+/// tracking impossible (every merge would truncate); the test override
+/// still accepts `0` through its own path, but runtime config clamps to
+/// at least `1` so production scans always carry *some* provenance.
+pub const MIN_MAX_ORIGINS: u32 = 1;
+
 /// Options for the symbolic-execution pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -77,6 +91,17 @@ pub struct AnalysisOptions {
     /// Per-file tree-sitter parse timeout in milliseconds.  `0` disables the
     /// cap entirely (not recommended outside of controlled benchmarks).
     pub parse_timeout_ms: u64,
+    /// Maximum taint origins retained per lattice value.
+    ///
+    /// Controls both [`crate::taint::domain::VarTaint::origins`] and
+    /// the equivalent per-object bound inside the heap state.  When a
+    /// merge would exceed this bound, origins are dropped deterministically
+    /// (sorted by source location) and an
+    /// [`crate::engine_notes::EngineNote::OriginsTruncated`] note is
+    /// recorded on the affected finding.  Raising this reduces the
+    /// chance of silent under-reporting at the cost of slightly wider
+    /// lattice values.  See [`DEFAULT_MAX_ORIGINS`].
+    pub max_origins: u32,
 }
 
 impl Default for AnalysisOptions {
@@ -88,6 +113,7 @@ impl Default for AnalysisOptions {
             symex: SymexOptions::default(),
             backwards_analysis: false,
             parse_timeout_ms: DEFAULT_PARSE_TIMEOUT_MS,
+            max_origins: DEFAULT_MAX_ORIGINS,
         }
     }
 }
@@ -125,6 +151,7 @@ pub fn current() -> AnalysisOptions {
         },
         backwards_analysis: env_bool_default("NYX_BACKWARDS", false),
         parse_timeout_ms: env_u64_default("NYX_PARSE_TIMEOUT_MS", DEFAULT_PARSE_TIMEOUT_MS),
+        max_origins: env_u32_default("NYX_MAX_ORIGINS", DEFAULT_MAX_ORIGINS).max(MIN_MAX_ORIGINS),
     }
 }
 
@@ -138,6 +165,13 @@ fn env_bool_default(key: &str, default: bool) -> bool {
 fn env_u64_default(key: &str, default: u64) -> u64 {
     match std::env::var(key) {
         Ok(v) => v.parse::<u64>().unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
+fn env_u32_default(key: &str, default: u32) -> u32 {
+    match std::env::var(key) {
+        Ok(v) => v.parse::<u32>().unwrap_or(default),
         Err(_) => default,
     }
 }
@@ -158,6 +192,7 @@ mod tests {
         assert!(opts.symex.smt);
         assert!(!opts.backwards_analysis, "backwards analysis defaults off");
         assert_eq!(opts.parse_timeout_ms, DEFAULT_PARSE_TIMEOUT_MS);
+        assert_eq!(opts.max_origins, DEFAULT_MAX_ORIGINS);
     }
 
     #[test]
@@ -174,6 +209,7 @@ mod tests {
             },
             backwards_analysis: true,
             parse_timeout_ms: 5_000,
+            max_origins: 64,
         };
         let s = toml::to_string(&opts).unwrap();
         let back: AnalysisOptions = toml::from_str(&s).unwrap();

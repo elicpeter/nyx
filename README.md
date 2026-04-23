@@ -88,9 +88,11 @@ Inputs: `path`, `version`, `format` (`sarif`|`json`|`console`), `fail-on`, `args
 cargo install nyx-scanner
 ```
 
-**Pre-built binaries:** Grab the archive for your platform from [Releases](https://github.com/elicpeter/nyx/releases), verify against `SHA256SUMS`, unzip, and drop `nyx` on your `PATH`.
+**Pre-built binaries:** Grab the archive for your platform from [Releases](https://github.com/elicpeter/nyx/releases), verify against `SHA256SUMS` (and the detached `SHA256SUMS.asc` GPG signature, when present), unzip, and drop `nyx` on your `PATH`.
 
 ```bash
+# Optional: verify the checksum file's GPG signature (when SHA256SUMS.asc is published)
+gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing
 unzip nyx-x86_64-unknown-linux-gnu.zip && chmod +x nyx && sudo mv nyx /usr/local/bin/
 ```

@@ -31,8 +31,11 @@ use std::collections::HashMap;
 /// Maximum heap objects tracked per SSA value's points-to set.
 pub const MAX_POINTSTO: usize = 8;
 
-/// Maximum origins tracked per heap object (matches MAX_ORIGINS in ssa_transfer).
-const MAX_HEAP_ORIGINS: usize = 4;
+// Heap origin cap used to be `const MAX_HEAP_ORIGINS: usize = 4` — now
+// governed by the shared `analysis.engine.max_origins` knob through
+// `crate::taint::ssa_transfer::push_origin_bounded`.  Unifying the two
+// lattices behind a single tunable means operators raise *one* value to
+// eliminate silent truncation everywhere.
 
 /// Maximum distinct `Index(n)` slots tracked per heap object.
 /// When exceeded, all indexed entries for that object collapse into `Elements`.
@@ -164,15 +167,17 @@ pub struct HeapTaint {
 }
 
 impl HeapTaint {
-    /// Monotone merge: OR caps, union origins (bounded).
+    /// Monotone merge: OR caps, union origins (bounded, deterministic).
+    ///
+    /// Delegates to
+    /// [`crate::taint::ssa_transfer::push_origin_bounded`] so the heap
+    /// and SSA taint lattices share one origin cap
+    /// (`analysis.engine.max_origins`) and one truncation-notification
+    /// path.
     fn merge(&mut self, caps: Cap, origins: &[TaintOrigin]) {
         self.caps |= caps;
         for orig in origins {
-            if self.origins.len() < MAX_HEAP_ORIGINS
-                && !self.origins.iter().any(|o| o.node == orig.node)
-            {
-                self.origins.push(*orig);
-            }
+            crate::taint::ssa_transfer::push_origin_bounded(&mut self.origins, *orig);
         }
     }
 
@@ -250,22 +255,11 @@ impl HeapState {
                 self.entries[idx].1.merge(caps, origins);
             }
             Err(idx) => {
-                self.entries.insert(
-                    idx,
-                    (
-                        key,
-                        HeapTaint {
-                            caps,
-                            origins: {
-                                let mut o = SmallVec::new();
-                                for orig in origins.iter().take(MAX_HEAP_ORIGINS) {
-                                    o.push(*orig);
-                                }
-                                o
-                            },
-                        },
-                    ),
-                );
+                let mut o: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+                for orig in origins {
+                    crate::taint::ssa_transfer::push_origin_bounded(&mut o, *orig);
+                }
+                self.entries.insert(idx, (key, HeapTaint { caps, origins: o }));
             }
         }
     }
@@ -414,11 +408,7 @@ impl HeapState {
             if *eid == id && matches!(slot, HeapSlot::Index(_)) {
                 merged_caps |= taint.caps;
                 for orig in &taint.origins {
-                    if merged_origins.len() < MAX_HEAP_ORIGINS
-                        && !merged_origins.iter().any(|o| o.node == orig.node)
-                    {
-                        merged_origins.push(*orig);
-                    }
+                    crate::taint::ssa_transfer::push_origin_bounded(&mut merged_origins, *orig);
                 }
                 false // remove this entry
             } else {

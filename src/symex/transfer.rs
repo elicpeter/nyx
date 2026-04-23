@@ -124,6 +124,12 @@ pub fn transfer_inst(
             // Nop does not define a meaningful value — skip.
         }
 
+        SsaOp::Undef => {
+            // Phi-operand sentinel for edges without a reaching
+            // definition. No concrete value, no taint.
+            state.set(inst.value, SymbolicValue::Unknown);
+        }
+
         SsaOp::Assign(uses) => {
             let uses_slice: &[_] = uses;
             match uses_slice.len() {

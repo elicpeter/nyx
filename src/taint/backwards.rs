@@ -223,6 +223,9 @@ pub fn backward_transfer(
         ),
         SsaOp::CatchParam => (BackwardStep::ReachedCatchParam, SmallVec::new()),
         SsaOp::Nop => (BackwardStep::Unknown, SmallVec::new()),
+        // Undef is a phi-operand sentinel on edges with no reaching
+        // definition — nothing to trace backwards through.
+        SsaOp::Undef => (BackwardStep::ReachedConst, SmallVec::new()),
         SsaOp::Phi(operands) => {
             // Demand fans out to every incoming value: the runtime value of
             // a phi is the runtime value of exactly one predecessor, so

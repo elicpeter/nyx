@@ -22,8 +22,13 @@ use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-/// Maximum origins tracked per SSA value.
-pub(super) const MAX_ORIGINS: usize = 4;
+// NOTE: The per-SSA-value origin cap used to be a hardcoded
+// `MAX_ORIGINS: usize = 4`.  It is now governed by the stable
+// `analysis.engine.max_origins` option (default `32`) — see
+// `crate::utils::analysis_options` and [`effective_max_origins`].  The
+// test-only override below still short-circuits the config read so
+// `engine_notes_tests.rs` can force a tiny cap to trigger truncation
+// on small fixtures.
 
 /// Default safety cap on taint worklist iterations.  Deliberately large so
 /// well-formed programs never hit it; the cap exists to bound adversarial
@@ -79,8 +84,9 @@ pub fn reset_worklist_observability() {
     WORKLIST_CAP_HITS.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Test-only override for [`MAX_ORIGINS`].  `cap = 0` restores the default
-/// (4).  Used to force `OriginsTruncated` emission on small fixtures.
+/// Test-only override for the origin cap.  `cap = 0` restores the
+/// runtime-configured default (see [`effective_max_origins`]).  Used to
+/// force `OriginsTruncated` emission on small fixtures.
 static MAX_ORIGINS_OVERRIDE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 /// Total number of origins dropped since the most recent reset — captured
@@ -95,9 +101,23 @@ pub fn set_max_origins_override(cap: usize) {
     MAX_ORIGINS_OVERRIDE.store(cap, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Resolve the live origin cap.
+///
+/// Precedence (highest first):
+/// 1. The test-only `MAX_ORIGINS_OVERRIDE` atomic (`set_max_origins_override`).
+/// 2. The runtime `analysis.engine.max_origins` option, which itself
+///    resolves through the installed runtime → `NYX_MAX_ORIGINS` →
+///    [`crate::utils::analysis_options::DEFAULT_MAX_ORIGINS`].
+///
+/// A result of `0` is never returned: the runtime path clamps to
+/// [`crate::utils::analysis_options::MIN_MAX_ORIGINS`] on ingest, so the
+/// engine always carries at least one origin slot.
 pub(super) fn effective_max_origins() -> usize {
     let o = MAX_ORIGINS_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
-    if o == 0 { MAX_ORIGINS } else { o }
+    if o != 0 {
+        return o;
+    }
+    crate::utils::analysis_options::current().max_origins as usize
 }
 
 /// Observability: total origins dropped by the engine since the most
@@ -380,26 +400,115 @@ pub(super) fn merge_join_ssa_vars(
     result
 }
 
+/// Deterministic sort key for a [`TaintOrigin`].
+///
+/// Ordering is lexicographic over
+/// `(source_span_start, source_span_end, source_kind_tag, node_index)`.
+/// `source_span` is the most stable component across bodies — cross-body
+/// remapped origins carry the original byte span explicitly; intra-body
+/// origins default to `(0, 0)` and fall through to the secondary keys.
+///
+/// Using a total order lets [`push_origin_bounded`] and
+/// [`merge_origins`] decide *which* origin to drop when the cap is
+/// exceeded: they always drop the origin with the largest key, making
+/// the survivor set a deterministic function of the input set rather
+/// than of merge visitation order.
+fn origin_sort_key(o: &TaintOrigin) -> (usize, usize, u8, usize) {
+    let (span_start, span_end) = o.source_span.unwrap_or((0, 0));
+    let kind_tag: u8 = match o.source_kind {
+        crate::labels::SourceKind::UserInput => 0,
+        crate::labels::SourceKind::EnvironmentConfig => 1,
+        crate::labels::SourceKind::FileSystem => 2,
+        crate::labels::SourceKind::Database => 3,
+        crate::labels::SourceKind::CaughtException => 4,
+        crate::labels::SourceKind::Unknown => 5,
+    };
+    (span_start, span_end, kind_tag, o.node.index())
+}
+
+/// Bounded, deterministic insertion of an origin into a sorted origin
+/// set.  Returns `true` when `new` was admitted (or de-duplicated against
+/// an existing entry), `false` when the cap forced a drop.  On drop,
+/// the origin with the *largest* sort key is evicted first — the caller
+/// sees a survivor set that depends only on the input multiset and
+/// [`effective_max_origins`], not on insertion order.
+///
+/// Records the engine note and increments [`ORIGINS_TRUNCATION_COUNT`]
+/// exactly once per physical drop.  Calling sites that used to inline
+/// the "dedup + push if under cap" pattern should migrate here so
+/// truncation is globally consistent.
+pub(crate) fn push_origin_bounded(
+    target: &mut SmallVec<[TaintOrigin; 2]>,
+    new: TaintOrigin,
+) -> bool {
+    // Identity check: same node counts as the same origin.  We keep
+    // node-only dedup to match [`ssa_vars_leq`], which compares origin
+    // sets by node membership — widening dedup here without tightening
+    // there would break the monotonicity invariant.
+    if target.iter().any(|o| o.node == new.node) {
+        return true;
+    }
+
+    let cap = effective_max_origins();
+    let new_key = origin_sort_key(&new);
+
+    if target.len() < cap {
+        // Insert in sorted order so iteration is deterministic.
+        let pos = target
+            .iter()
+            .position(|o| origin_sort_key(o) > new_key)
+            .unwrap_or(target.len());
+        target.insert(pos, new);
+        return true;
+    }
+
+    // Cap reached: evict the worst (largest key) entry iff `new` is better.
+    let worst_idx = target
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, o)| origin_sort_key(o))
+        .map(|(i, _)| i)
+        .expect("cap ≥ MIN_MAX_ORIGINS (1) means target is non-empty");
+    let worst_key = origin_sort_key(&target[worst_idx]);
+
+    ORIGINS_TRUNCATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    record_engine_note(crate::engine_notes::EngineNote::OriginsTruncated { dropped: 1 });
+
+    if new_key < worst_key {
+        target.remove(worst_idx);
+        let pos = target
+            .iter()
+            .position(|o| origin_sort_key(o) > new_key)
+            .unwrap_or(target.len());
+        target.insert(pos, new);
+        true
+    } else {
+        // `new` itself is the worst — drop it instead of the survivor.
+        false
+    }
+}
+
+/// Merge two origin sets with deterministic truncation.
+///
+/// Equivalent to seeding the survivor list with `a` and folding each
+/// element of `b` through [`push_origin_bounded`].  The resulting list
+/// is sorted by [`origin_sort_key`] and bounded at
+/// [`effective_max_origins`].
 pub(super) fn merge_origins(
     a: &SmallVec<[TaintOrigin; 2]>,
     b: &SmallVec<[TaintOrigin; 2]>,
 ) -> SmallVec<[TaintOrigin; 2]> {
-    let mut merged = a.clone();
-    let cap = effective_max_origins();
-    let mut dropped: u32 = 0;
-    for origin in b {
-        if merged.iter().any(|o| o.node == origin.node) {
-            continue;
-        }
-        if merged.len() >= cap {
-            dropped = dropped.saturating_add(1);
-            continue;
-        }
-        merged.push(*origin);
+    // Seed the result with `a` — but re-sort defensively in case the
+    // caller constructed `a` through non-bounded paths.  Historically
+    // every write goes through `push_origin_bounded` (or `merge_origins`
+    // itself), so this resort is a no-op on the steady state but costs
+    // nothing at cap sizes ≤ 32.
+    let mut merged: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+    for o in a.iter().copied() {
+        push_origin_bounded(&mut merged, o);
     }
-    if dropped > 0 {
-        ORIGINS_TRUNCATION_COUNT.fetch_add(dropped as usize, std::sync::atomic::Ordering::Relaxed);
-        record_engine_note(crate::engine_notes::EngineNote::OriginsTruncated { dropped });
+    for o in b.iter().copied() {
+        push_origin_bounded(&mut merged, o);
     }
     merged
 }
@@ -465,4 +574,148 @@ pub(super) fn merge_join_ssa_predicates(
         }
     }
     result
+}
+
+#[cfg(test)]
+mod origin_cap_tests {
+    //! Tests for the deterministic, config-driven origin cap.  These
+    //! cover the behavior at the `push_origin_bounded` / `merge_origins`
+    //! boundary — the end-to-end engine-note signal is exercised in
+    //! `tests/engine_notes_tests.rs`.
+
+    use super::*;
+    use crate::labels::SourceKind;
+    use petgraph::graph::NodeIndex;
+    use std::sync::Mutex;
+
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
+
+    fn origin(node: usize, span_start: usize) -> TaintOrigin {
+        TaintOrigin {
+            node: NodeIndex::new(node),
+            source_kind: SourceKind::UserInput,
+            source_span: Some((span_start, span_start + 1)),
+        }
+    }
+
+    #[test]
+    fn push_origin_bounded_dedups_by_node() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_max_origins_override(4);
+
+        let mut target: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+        assert!(push_origin_bounded(&mut target, origin(1, 10)));
+        assert!(push_origin_bounded(&mut target, origin(1, 99))); // same node, dedups
+        assert_eq!(target.len(), 1, "duplicate node must not grow the set");
+
+        set_max_origins_override(0);
+    }
+
+    #[test]
+    fn push_origin_bounded_is_order_independent() {
+        // Core invariant: the survivor set is a function of the input
+        // multiset and the cap, not of insertion order.  Regression
+        // guard against the pre-fix "keep first 4, drop rest" policy
+        // which made the survivor set depend on merge-visitation order.
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_max_origins_override(3);
+
+        let origins = [
+            origin(1, 50),
+            origin(2, 10), // smallest span
+            origin(3, 30),
+            origin(4, 70),
+            origin(5, 90), // largest span
+        ];
+
+        let mut forward: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+        for o in origins.iter() {
+            push_origin_bounded(&mut forward, *o);
+        }
+
+        let mut reverse: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+        for o in origins.iter().rev() {
+            push_origin_bounded(&mut reverse, *o);
+        }
+
+        let forward_nodes: Vec<_> = forward.iter().map(|o| o.node.index()).collect();
+        let reverse_nodes: Vec<_> = reverse.iter().map(|o| o.node.index()).collect();
+        assert_eq!(
+            forward_nodes, reverse_nodes,
+            "survivor set must not depend on insertion order: forward {forward_nodes:?} \
+             reverse {reverse_nodes:?}"
+        );
+
+        // Spot-check: the 3 smallest-span origins (nodes 2, 3, 1 by span
+        // order) survive; the two largest (4, 5) are evicted.
+        assert_eq!(forward_nodes, vec![2, 3, 1]);
+
+        set_max_origins_override(0);
+    }
+
+    #[test]
+    fn push_origin_bounded_increments_truncation_counter() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_max_origins_override(2);
+        reset_origins_observability();
+
+        let mut target: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+        push_origin_bounded(&mut target, origin(1, 10));
+        push_origin_bounded(&mut target, origin(2, 20));
+        // Both below cause truncation (new is worse than worst survivor
+        // at node 2 because span=50 > 20, or new beats and evicts).
+        push_origin_bounded(&mut target, origin(3, 30));
+        push_origin_bounded(&mut target, origin(4, 40));
+
+        assert_eq!(
+            origins_truncation_count(),
+            2,
+            "expected 2 truncation events (3rd and 4th push at cap=2)"
+        );
+
+        set_max_origins_override(0);
+        reset_origins_observability();
+    }
+
+    #[test]
+    fn merge_origins_is_symmetric() {
+        // join(a, b) and join(b, a) must produce identical survivor
+        // sets.  The old implementation was asymmetric: it always kept
+        // all of `a` and only added from `b` until cap, so which side
+        // was passed as `a` determined the survivors at truncation.
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_max_origins_override(3);
+
+        let a: SmallVec<[TaintOrigin; 2]> = [origin(1, 100), origin(2, 200)].into_iter().collect();
+        let b: SmallVec<[TaintOrigin; 2]> = [origin(3, 10), origin(4, 50)].into_iter().collect();
+
+        let ab = merge_origins(&a, &b);
+        let ba = merge_origins(&b, &a);
+
+        let ab_nodes: Vec<_> = ab.iter().map(|o| o.node.index()).collect();
+        let ba_nodes: Vec<_> = ba.iter().map(|o| o.node.index()).collect();
+        assert_eq!(
+            ab_nodes, ba_nodes,
+            "merge must be commutative under truncation: ab={ab_nodes:?} ba={ba_nodes:?}"
+        );
+
+        set_max_origins_override(0);
+    }
+
+    #[test]
+    fn effective_cap_reads_runtime_config_when_override_zero() {
+        // Override takes priority; override=0 falls through to config.
+        // `current()` returns the default (32) when no runtime is
+        // installed — which is the state the rest of the test suite runs
+        // under.  Guard that the fallback path reaches 32.
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_max_origins_override(0);
+        assert_eq!(
+            effective_max_origins(),
+            crate::utils::analysis_options::DEFAULT_MAX_ORIGINS as usize
+        );
+        set_max_origins_override(7);
+        assert_eq!(effective_max_origins(), 7);
+        set_max_origins_override(0);
+    }
 }

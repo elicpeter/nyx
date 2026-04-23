@@ -32,7 +32,9 @@ use state::{
     MAX_WORKLIST_ITERATIONS, ORIGINS_TRUNCATION_COUNT, WORKLIST_CAP_HITS, effective_max_origins,
     effective_worklist_cap,
 };
-pub(crate) use state::{record_engine_note, reset_body_engine_notes, take_body_engine_notes};
+pub(crate) use state::{
+    push_origin_bounded, record_engine_note, reset_body_engine_notes, take_body_engine_notes,
+};
 pub use summary_extract::extract_ssa_func_summary;
 
 use crate::abstract_interp::AbstractState;
@@ -530,11 +532,7 @@ pub fn extract_ssa_exit_state(
                 .and_modify(|existing| {
                     existing.caps |= taint.caps;
                     for orig in &taint.origins {
-                        if existing.origins.len() < effective_max_origins()
-                            && !existing.origins.iter().any(|o| o.node == orig.node)
-                        {
-                            existing.origins.push(*orig);
-                        }
+                        push_origin_bounded(&mut existing.origins, *orig);
                     }
                 })
                 .or_insert_with(|| taint.clone());
@@ -571,11 +569,7 @@ pub fn join_seed_maps(
             .and_modify(|existing| {
                 existing.caps |= taint.caps;
                 for orig in &taint.origins {
-                    if existing.origins.len() < effective_max_origins()
-                        && !existing.origins.iter().any(|o| o.node == orig.node)
-                    {
-                        existing.origins.push(*orig);
-                    }
+                    push_origin_bounded(&mut existing.origins, *orig);
                 }
             })
             .or_insert_with(|| taint.clone());
@@ -613,11 +607,7 @@ pub fn filter_seed_to_toplevel(
             .and_modify(|existing| {
                 existing.caps |= taint.caps;
                 for orig in &taint.origins {
-                    if existing.origins.len() < effective_max_origins()
-                        && !existing.origins.iter().any(|o| o.node == orig.node)
-                    {
-                        existing.origins.push(*orig);
-                    }
+                    push_origin_bounded(&mut existing.origins, *orig);
                 }
                 existing.uses_summary |= taint.uses_summary;
             })
@@ -760,11 +750,7 @@ pub(super) fn transfer_block(
                     any_tainted = true;
                     combined_caps |= taint.caps;
                     for orig in &taint.origins {
-                        if combined_origins.len() < effective_max_origins()
-                            && !combined_origins.iter().any(|o| o.node == orig.node)
-                        {
-                            combined_origins.push(*orig);
-                        }
+                        push_origin_bounded(&mut combined_origins, *orig);
                     }
 
                     // Path sensitivity: check if this operand is validated in its predecessor
@@ -1342,11 +1328,7 @@ fn inline_analyse_callee(
             if let Some(taint) = state.get(*v) {
                 combined_caps |= taint.caps;
                 for orig in &taint.origins {
-                    if combined_origins.len() < effective_max_origins()
-                        && !combined_origins.iter().any(|o| o.node == orig.node)
-                    {
-                        combined_origins.push(populate_span(*orig));
-                    }
+                    push_origin_bounded(&mut combined_origins, populate_span(*orig));
                 }
             }
         }
@@ -1596,14 +1578,23 @@ fn extract_inline_return_taint(
         out
     };
 
+    // Internal origins all share `placeholder_node`, so the standard
+    // [`push_origin_bounded`] (which dedups by node) would collapse them
+    // to one entry.  Dedup by `(source_span, source_kind)` here and
+    // account for truncation explicitly so the engine-note signal
+    // matches the rest of the pipeline.
     let push_internal = |target: &mut SmallVec<[TaintOrigin; 2]>, orig: &TaintOrigin| {
         let new_orig = prep_internal(orig);
-        if target.len() < effective_max_origins()
-            && !target.iter().any(|o| {
-                o.source_span == new_orig.source_span && o.source_kind == new_orig.source_kind
-            })
-        {
+        if target.iter().any(|o| {
+            o.source_span == new_orig.source_span && o.source_kind == new_orig.source_kind
+        }) {
+            return;
+        }
+        if target.len() < effective_max_origins() {
             target.push(new_orig);
+        } else {
+            ORIGINS_TRUNCATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            record_engine_note(crate::engine_notes::EngineNote::OriginsTruncated { dropped: 1 });
         }
     };
 
@@ -1815,6 +1806,10 @@ fn apply_cached_shape(
     }
 
     if dropped > 0 {
+        // Mirror the counter increment the shared helper does, so the
+        // global `origins_truncation_count()` observability hook covers
+        // this site too.
+        ORIGINS_TRUNCATION_COUNT.fetch_add(dropped as usize, std::sync::atomic::Ordering::Relaxed);
         record_engine_note(crate::engine_notes::EngineNote::OriginsTruncated { dropped });
     }
 
@@ -1975,11 +1970,7 @@ pub(super) fn transfer_inst(
                         resolved_callee = true;
                         return_bits |= ret.caps;
                         for orig in &ret.origins {
-                            if return_origins.len() < effective_max_origins()
-                                && !return_origins.iter().any(|o| o.node == orig.node)
-                            {
-                                return_origins.push(*orig);
-                            }
+                            push_origin_bounded(&mut return_origins, *orig);
                         }
                     }
                 }
@@ -2196,10 +2187,7 @@ pub(super) fn transfer_inst(
                                 effective_param_sanitizer(&resolved, param_idx, state);
                             return_bits |= arg_caps & !param_sanitizer;
                             for orig in &arg_origins {
-                                if return_origins.len() < effective_max_origins()
-                                    && !return_origins.iter().any(|o| o.node == orig.node)
-                                {
-                                    return_origins.push(*orig);
+                                if push_origin_bounded(&mut return_origins, *orig) {
                                     any_origin_added = true;
                                 }
                             }
@@ -2212,11 +2200,7 @@ pub(super) fn transfer_inst(
                             collect_args_taint(args, receiver, state, effective_params);
                         return_bits |= prop_caps;
                         for orig in &prop_origins {
-                            if return_origins.len() < effective_max_origins()
-                                && !return_origins.iter().any(|o| o.node == orig.node)
-                            {
-                                return_origins.push(*orig);
-                            }
+                            push_origin_bounded(&mut return_origins, *orig);
                         }
                     }
                 }
@@ -2287,11 +2271,7 @@ pub(super) fn transfer_inst(
                     let (use_caps, use_origins) = collect_args_taint(args, receiver, state, &[]);
                     return_bits |= use_caps;
                     for orig in &use_origins {
-                        if return_origins.len() < effective_max_origins()
-                            && !return_origins.iter().any(|o| o.node == orig.node)
-                        {
-                            return_origins.push(*orig);
-                        }
+                        push_origin_bounded(&mut return_origins, *orig);
                     }
                 }
                 return_bits &= !sanitizer_bits;
@@ -2356,13 +2336,7 @@ pub(super) fn transfer_inst(
                                     if let Some(taint) = state.get(v) {
                                         input_caps |= taint.caps;
                                         for orig in &taint.origins {
-                                            if input_origins.len() < effective_max_origins()
-                                                && !input_origins
-                                                    .iter()
-                                                    .any(|o| o.node == orig.node)
-                                            {
-                                                input_origins.push(*orig);
-                                            }
+                                            push_origin_bounded(&mut input_origins, *orig);
                                         }
                                     }
                                 }
@@ -2470,11 +2444,7 @@ pub(super) fn transfer_inst(
                             if let Some(taint) = state.get(v) {
                                 src_caps |= taint.caps;
                                 for orig in &taint.origins {
-                                    if src_origins.len() < effective_max_origins()
-                                        && !src_origins.iter().any(|o| o.node == orig.node)
-                                    {
-                                        src_origins.push(*orig);
-                                    }
+                                    push_origin_bounded(&mut src_origins, *orig);
                                 }
                             }
                         }
@@ -2616,11 +2586,7 @@ pub(super) fn transfer_inst(
                             if let Some(taint) = state.get(v) {
                                 src_caps |= taint.caps;
                                 for orig in &taint.origins {
-                                    if src_origins.len() < effective_max_origins()
-                                        && !src_origins.iter().any(|o| o.node == orig.node)
-                                    {
-                                        src_origins.push(*orig);
-                                    }
+                                    push_origin_bounded(&mut src_origins, *orig);
                                 }
                             }
                         }
@@ -2777,11 +2743,7 @@ pub(super) fn transfer_inst(
                         combined_caps |= taint.caps;
                         inherited_summary |= taint.uses_summary;
                         for orig in &taint.origins {
-                            if combined_origins.len() < effective_max_origins()
-                                && !combined_origins.iter().any(|o| o.node == orig.node)
-                            {
-                                combined_origins.push(*orig);
-                            }
+                            push_origin_bounded(&mut combined_origins, *orig);
                         }
                     }
                 }
@@ -2816,11 +2778,7 @@ pub(super) fn transfer_inst(
                         source_kind,
                         source_span: None,
                     };
-                    if combined_origins.len() < effective_max_origins()
-                        && !combined_origins.iter().any(|o| o.node == inst.cfg_node)
-                    {
-                        combined_origins.push(origin);
-                    }
+                    push_origin_bounded(&mut combined_origins, origin);
                 }
             }
 
@@ -2998,6 +2956,14 @@ pub(super) fn transfer_inst(
 
         SsaOp::Phi(_) => {
             // Phis processed separately above — shouldn't appear in body
+        }
+
+        SsaOp::Undef => {
+            // Undef is a phi-operand sentinel that lives in block 0's
+            // body so it has a valid `value_defs` entry. It contributes
+            // no taint: leave `state` unchanged so the phi operand
+            // lookup (`state.get(operand_val)`) returns `None` for
+            // predecessors whose incoming edge carries no definition.
         }
     }
 
@@ -3388,11 +3354,7 @@ fn collect_block_events(
                     any_tainted = true;
                     combined_caps |= taint.caps;
                     for orig in &taint.origins {
-                        if combined_origins.len() < effective_max_origins()
-                            && !combined_origins.iter().any(|o| o.node == orig.node)
-                        {
-                            combined_origins.push(*orig);
-                        }
+                        push_origin_bounded(&mut combined_origins, *orig);
                     }
 
                     // Path sensitivity: check if this operand is validated in predecessor
@@ -4026,11 +3988,7 @@ fn collect_args_taint(
             if let Some(taint) = state.get(*rv) {
                 combined_caps |= taint.caps;
                 for orig in &taint.origins {
-                    if combined_origins.len() < effective_max_origins()
-                        && !combined_origins.iter().any(|o| o.node == orig.node)
-                    {
-                        combined_origins.push(*orig);
-                    }
+                    push_origin_bounded(&mut combined_origins, *orig);
                 }
             }
         }
@@ -4039,11 +3997,7 @@ fn collect_args_taint(
                 if let Some(taint) = state.get(v) {
                     combined_caps |= taint.caps;
                     for orig in &taint.origins {
-                        if combined_origins.len() < effective_max_origins()
-                            && !combined_origins.iter().any(|o| o.node == orig.node)
-                        {
-                            combined_origins.push(*orig);
-                        }
+                        push_origin_bounded(&mut combined_origins, *orig);
                     }
                 }
             }
@@ -4058,11 +4012,7 @@ fn collect_args_taint(
                     if let Some(taint) = state.get(v) {
                         combined_caps |= taint.caps;
                         for orig in &taint.origins {
-                            if combined_origins.len() < effective_max_origins()
-                                && !combined_origins.iter().any(|o| o.node == orig.node)
-                            {
-                                combined_origins.push(*orig);
-                            }
+                            push_origin_bounded(&mut combined_origins, *orig);
                         }
                     }
                 }
@@ -4113,11 +4063,7 @@ fn try_curl_url_propagation(
             if let Some(taint) = state.get(v) {
                 url_caps |= taint.caps;
                 for orig in &taint.origins {
-                    if url_origins.len() < effective_max_origins()
-                        && !url_origins.iter().any(|o| o.node == orig.node)
-                    {
-                        url_origins.push(*orig);
-                    }
+                    push_origin_bounded(&mut url_origins, *orig);
                 }
             }
         }
@@ -4134,11 +4080,7 @@ fn try_curl_url_propagation(
             if let Some(taint) = state.get(v) {
                 url_caps |= taint.caps;
                 for orig in &taint.origins {
-                    if url_origins.len() < effective_max_origins()
-                        && !url_origins.iter().any(|o| o.node == orig.node)
-                    {
-                        url_origins.push(*orig);
-                    }
+                    push_origin_bounded(&mut url_origins, *orig);
                 }
             }
         }
@@ -4152,11 +4094,7 @@ fn try_curl_url_propagation(
             let mut merged = existing.clone();
             merged.caps |= url_caps;
             for orig in &url_origins {
-                if merged.origins.len() < effective_max_origins()
-                    && !merged.origins.iter().any(|o| o.node == orig.node)
-                {
-                    merged.origins.push(*orig);
-                }
+                push_origin_bounded(&mut merged.origins, *orig);
             }
             state.set(handle_val, merged);
         }
@@ -4314,11 +4252,7 @@ fn try_container_propagation(
                         if let Some(taint) = state.get(v) {
                             val_caps |= taint.caps;
                             for orig in &taint.origins {
-                                if val_origins.len() < effective_max_origins()
-                                    && !val_origins.iter().any(|o| o.node == orig.node)
-                                {
-                                    val_origins.push(*orig);
-                                }
+                                push_origin_bounded(&mut val_origins, *orig);
                             }
                         }
                     }
@@ -4456,11 +4390,7 @@ fn merge_taint_into(
             let mut merged = existing.clone();
             merged.caps |= caps;
             for orig in origins {
-                if merged.origins.len() < effective_max_origins()
-                    && !merged.origins.iter().any(|o| o.node == orig.node)
-                {
-                    merged.origins.push(*orig);
-                }
+                push_origin_bounded(&mut merged.origins, *orig);
             }
             state.set(target, merged);
         }
@@ -4802,7 +4732,8 @@ fn inst_use_values(inst: &SsaInst) -> Vec<SsaValue> {
         | SsaOp::Param { .. }
         | SsaOp::SelfParam
         | SsaOp::CatchParam
-        | SsaOp::Nop => Vec::new(),
+        | SsaOp::Nop
+        | SsaOp::Undef => Vec::new(),
     }
 }
 
@@ -4967,11 +4898,7 @@ fn propagate_taint_to_aliases(
             let merged_caps = existing.caps | taint_caps;
             let mut merged_origins = existing.origins.clone();
             for orig in taint_origins {
-                if merged_origins.len() < effective_max_origins()
-                    && !merged_origins.iter().any(|o| o.node == orig.node)
-                {
-                    merged_origins.push(*orig);
-                }
+                push_origin_bounded(&mut merged_origins, *orig);
             }
             state.set(
                 v,

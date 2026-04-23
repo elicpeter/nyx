@@ -141,7 +141,7 @@ fn lower_to_ssa_inner(
 
     // 6. Rename variables (dominator tree preorder walk)
     let dom_tree_children = build_dom_tree_children(num_blocks, &doms, &block_graph);
-    let (mut ssa_blocks, value_defs, cfg_node_map) = rename_variables(
+    let (mut ssa_blocks, mut value_defs, cfg_node_map) = rename_variables(
         cfg,
         &blocks_nodes,
         &block_succs,
@@ -152,6 +152,11 @@ fn lower_to_ssa_inner(
         &external_vars,
         &nop_nodes,
     );
+
+    // 6b. Fill any missing phi operands with a shared Undef sentinel so
+    // every phi has exactly one operand per predecessor. See
+    // `fill_undef_phi_operands` for the invariant rationale.
+    fill_undef_phi_operands(&mut ssa_blocks, &block_preds, &mut value_defs, &blocks_nodes);
 
     // 7. Fill in preds/succs on SsaBlocks
     for bid in 0..num_blocks {
@@ -172,11 +177,11 @@ fn lower_to_ssa_inner(
     {
         debug_assert_bfs_ordering(&block_preds);
     }
-    // Phi operand counts are a release-level invariant: an SSA body with
-    // fewer phi operands than block predecessors is unsound (downstream
-    // taint analysis assumes every predecessor contributes one operand).
-    // Keep this active in release builds so unsound lowering surfaces
-    // loudly rather than corrupting analysis silently.
+    // Phi operand counts are a release-level invariant: every phi must
+    // have exactly one operand per predecessor. Missing operands are
+    // filled with an explicit Undef sentinel in
+    // `fill_undef_phi_operands`; extra operands would reference
+    // nonexistent predecessors and corrupt analysis silently.
     assert_phi_operand_counts(&ssa_blocks, &block_preds);
 
     // 8. Map exception edges from CFG node indices to SSA block IDs
@@ -1433,45 +1438,34 @@ fn debug_assert_bfs_ordering(block_preds: &[Vec<usize>]) {
     }
 }
 
-/// Verify phi operand counts: each phi must have **no more** operands than
-/// the block has predecessors.
+/// Verify phi operand counts: each phi must have exactly one operand
+/// per predecessor, and every operand must reference an actual
+/// predecessor of the block.
 ///
-/// Runs in release builds because the "too many operands" case is
+/// Runs in release builds because phi-operand mismatches are
 /// load-bearing for soundness — downstream taint, const, and abstract
-/// analyses iterate phi operands by `(pred_blk, value)` pairs, and an
-/// operand referencing a nonexistent predecessor either panics (bounds
-/// mismatch) or silently feeds garbage taint into the join.
+/// analyses iterate phi operands by `(pred_blk, value)` pairs, and
+/// either a missing operand (silent "no contribution" on that edge)
+/// or a phantom operand (garbage into the join) corrupts analysis
+/// without surfacing.
 ///
-/// # Why `<=` and not `==`
-///
-/// The current lowering pushes a phi operand only when the variable has a
-/// live reaching value on that predecessor edge (`rename_variables` at
-/// site L1153). On edges where the variable is not yet defined (e.g. a
-/// catch-block binding joining back with normal flow, or an early-return
-/// branch on a later-defined variable), no operand is pushed for that
-/// predecessor. Downstream consumers iterate `(pred_blk, value)` pairs
-/// rather than indexing positionally, so a missing operand is
-/// *interpreted as* "this predecessor contributes no taint from this phi"
-/// — operationally equivalent to an Undef operand.
-///
-/// A strict-equality invariant (`==`) is the right long-term shape (it
-/// would require every pred to contribute an explicit value, possibly an
-/// `SsaOp::Undef` sentinel), but forcing it today would crash real-world
-/// fixtures covering try/catch, rescue/ensure, and early-return patterns
-/// across all 10 languages. Promoting to `<=` in release catches the
-/// genuine unsoundness (more operands than preds) while leaving the
-/// stricter invariant for a follow-up that lands with a matching
-/// lowering change.
+/// The invariant is strict equality. Predecessors that carry no
+/// reaching definition for the phi's variable are filled with the
+/// [`SsaOp::Undef`] sentinel in `fill_undef_phi_operands`, rather than
+/// being dropped — so consumers that look up by `(pred_blk, value)`
+/// see a real operand for every control-flow edge.
 fn assert_phi_operand_counts(ssa_blocks: &[SsaBlock], block_preds: &[Vec<usize>]) {
+    use std::collections::HashSet;
     for (i, block) in ssa_blocks.iter().enumerate() {
+        let pred_set: HashSet<u32> = block_preds[i].iter().map(|&p| p as u32).collect();
         for phi in &block.phis {
             if let SsaOp::Phi(ref operands) = phi.op {
-                assert!(
-                    operands.len() <= block_preds[i].len(),
-                    "SSA phi operand count exceeds predecessor count: block {} phi v{} \
-                     (var={:?}) has {} operands but block has {} predecessors. This is an \
-                     unsound SSA lowering — every operand must reference an existing \
-                     predecessor. preds={:?}, operand_preds={:?}",
+                assert_eq!(
+                    operands.len(),
+                    block_preds[i].len(),
+                    "SSA phi operand count does not match predecessor count: block {} phi v{} \
+                     (var={:?}) has {} operands but block has {} predecessors. \
+                     preds={:?}, operand_preds={:?}",
                     i,
                     phi.value.0,
                     phi.var_name,
@@ -1480,6 +1474,120 @@ fn assert_phi_operand_counts(ssa_blocks: &[SsaBlock], block_preds: &[Vec<usize>]
                     block_preds[i],
                     operands.iter().map(|(b, _)| b.0).collect::<Vec<_>>(),
                 );
+                // Each operand's pred block must be an actual predecessor,
+                // and no predecessor may appear more than once.
+                let mut seen: HashSet<u32> = HashSet::new();
+                for (pred_blk, _) in operands.iter() {
+                    assert!(
+                        pred_set.contains(&pred_blk.0),
+                        "SSA phi operand references nonexistent predecessor: block {} phi v{} \
+                         references pred B{} but block predecessors are {:?}",
+                        i,
+                        phi.value.0,
+                        pred_blk.0,
+                        block_preds[i],
+                    );
+                    assert!(
+                        seen.insert(pred_blk.0),
+                        "SSA phi operand duplicates predecessor: block {} phi v{} has two \
+                         operands for pred B{}",
+                        i,
+                        phi.value.0,
+                        pred_blk.0,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Post-rename pass: ensure every phi has one operand per predecessor.
+///
+/// During rename, phi operands are only pushed when the variable has a
+/// live reaching definition on that predecessor edge. Edges where the
+/// variable is not yet defined (e.g. a try-body rejoining after a
+/// catch-only binding, an early-return branch on a later-defined
+/// variable, an orphan catch block's implicit predecessors) leave the
+/// phi with fewer operands than the block has predecessors.
+///
+/// This pass scans all phis, and for every missing `(pred_block, _)`
+/// slot, pushes `(pred_block, undef_val)` where `undef_val` is a
+/// single shared sentinel instruction ([`SsaOp::Undef`]) synthesized
+/// at the end of block 0's body. Consumers iterate phi operands by
+/// `(pred_blk, value)` and therefore see a real operand on every
+/// control-flow edge — no implicit "missing = empty" semantics.
+///
+/// The Undef instruction is created lazily (only when at least one phi
+/// has a gap) so functions with fully-dominating definitions pay zero
+/// cost. All phis share the same Undef value: a phi operand is
+/// identified by its `(pred_block, value)` pair, so sharing the value
+/// across phis is safe and keeps the synthesized-instruction count at
+/// most one per function body.
+fn fill_undef_phi_operands(
+    ssa_blocks: &mut [SsaBlock],
+    block_preds: &[Vec<usize>],
+    value_defs: &mut Vec<ValueDef>,
+    blocks_nodes: &[Vec<NodeIndex>],
+) {
+    // Fast path: detect whether any phi has a gap. Avoid allocating
+    // the Undef value in the common case where every phi is saturated.
+    let needs_undef = ssa_blocks.iter().enumerate().any(|(bi, block)| {
+        block.phis.iter().any(|phi| {
+            if let SsaOp::Phi(ref operands) = phi.op {
+                operands.len() < block_preds[bi].len()
+            } else {
+                false
+            }
+        })
+    });
+    if !needs_undef {
+        return;
+    }
+
+    // Anchor the synthetic Undef instruction to the entry block's first
+    // CFG node so span lookups don't hit an invalid NodeIndex.
+    let anchor_node = blocks_nodes
+        .first()
+        .and_then(|b| b.first())
+        .copied()
+        .expect("entry block has at least one CFG node");
+
+    let undef_val = SsaValue(value_defs.len() as u32);
+    value_defs.push(ValueDef {
+        var_name: None,
+        cfg_node: anchor_node,
+        block: BlockId(0),
+    });
+    // Place the Undef instruction at the end of block 0's body so it
+    // appears after any synthetic Param / SelfParam emissions — its
+    // only role is to anchor the SsaValue; ordering relative to other
+    // body instructions is cosmetic (no consumer depends on its
+    // position, only on the value lookup).
+    ssa_blocks[0].body.push(SsaInst {
+        value: undef_val,
+        op: SsaOp::Undef,
+        cfg_node: anchor_node,
+        var_name: None,
+        span: (0, 0),
+    });
+
+    // Fill missing operand slots. Iterate `block_preds[bi]` in its
+    // natural order so the resulting phi operand list is deterministic
+    // across runs.
+    for (bi, block) in ssa_blocks.iter_mut().enumerate() {
+        for phi in block.phis.iter_mut() {
+            if let SsaOp::Phi(ref mut operands) = phi.op {
+                if operands.len() == block_preds[bi].len() {
+                    continue;
+                }
+                use std::collections::HashSet;
+                let present: HashSet<u32> = operands.iter().map(|(b, _)| b.0).collect();
+                for &pred in &block_preds[bi] {
+                    let pid = pred as u32;
+                    if !present.contains(&pid) {
+                        operands.push((BlockId(pid), undef_val));
+                    }
+                }
             }
         }
     }
@@ -2015,6 +2123,93 @@ mod tests {
         }
     }
 
+    /// Regression guard for the Undef fill pass. When a variable is
+    /// only defined on one branch of a join (e.g. a catch-only binding
+    /// rejoining the normal path), the lowering must still emit one
+    /// phi operand per predecessor — the missing edge becoming a
+    /// reference to the synthesized `SsaOp::Undef` sentinel rather
+    /// than being dropped.
+    #[test]
+    fn partial_phi_edge_fills_with_undef_sentinel() {
+        // Entry → Body → Join
+        //           ↓
+        //        Catch (defines `e`) → Join
+        //
+        // `e` is defined only on the exception path; on the normal path
+        // from Body → Join it has no reaching definition. The phi for `e`
+        // at Join must have two operands (one per predecessor), with the
+        // Body-side operand pointing at the Undef sentinel.
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        let body = cfg.add_node(make_node(StmtKind::Seq));
+        let catch = cfg.add_node(NodeInfo {
+            catch_param: true,
+            taint: TaintMeta {
+                defines: Some("e".into()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let join = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                uses: vec!["e".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, body, EdgeKind::Seq);
+        cfg.add_edge(body, join, EdgeKind::Seq);
+        cfg.add_edge(body, catch, EdgeKind::Exception);
+        cfg.add_edge(catch, join, EdgeKind::Seq);
+        cfg.add_edge(join, exit, EdgeKind::Seq);
+
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+
+        // Find the phi for `e`.
+        let phi_block = ssa
+            .blocks
+            .iter()
+            .find(|b| b.phis.iter().any(|p| p.var_name.as_deref() == Some("e")))
+            .expect("expected a phi for `e`");
+        let phi_for_e = phi_block
+            .phis
+            .iter()
+            .find(|p| p.var_name.as_deref() == Some("e"))
+            .unwrap();
+        let operands = match &phi_for_e.op {
+            SsaOp::Phi(ops) => ops,
+            _ => panic!("expected SsaOp::Phi for `e`"),
+        };
+
+        // Strict invariant: one operand per predecessor.
+        assert_eq!(
+            operands.len(),
+            phi_block.preds.len(),
+            "phi for `e` must have one operand per predecessor",
+        );
+
+        // At least one operand must reference the Undef sentinel (the
+        // Body-side edge where `e` has no reaching definition).
+        let found_inst = |v: SsaValue| -> Option<&SsaInst> {
+            ssa.blocks
+                .iter()
+                .flat_map(|b| b.phis.iter().chain(b.body.iter()))
+                .find(|i| i.value == v)
+        };
+        let any_undef = operands.iter().any(|(_, v)| {
+            found_inst(*v)
+                .map(|i| matches!(i.op, SsaOp::Undef))
+                .unwrap_or(false)
+        });
+        assert!(
+            any_undef,
+            "phi for `e` at the catch-join must reference SsaOp::Undef \
+             on the normal-path predecessor edge",
+        );
+    }
+
     #[test]
     fn phi_assertion_helper_accepts_exact_operand_count() {
         // Direct test of the assertion helper: a phi with exactly as many
@@ -2063,13 +2258,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "SSA phi operand count exceeds predecessor count")]
+    #[should_panic(expected = "SSA phi operand count does not match predecessor count")]
     fn phi_assertion_helper_rejects_more_operands_than_preds() {
-        // Promoted to release assertion. A phi with MORE operands
-        // than preds references a nonexistent predecessor — guaranteed
-        // unsound because downstream consumers either panic on the lookup
-        // or silently feed garbage taint into the join. This must fire
-        // regardless of debug/release.
+        // A phi with MORE operands than preds references a nonexistent
+        // predecessor — unsound because downstream consumers either
+        // panic on the lookup or silently feed garbage taint into the
+        // join. Strict-equality invariant catches this.
         let dummy_node = NodeIndex::new(0);
         let block = SsaBlock {
             id: BlockId(1),
@@ -2107,14 +2301,12 @@ mod tests {
     }
 
     #[test]
-    fn phi_assertion_helper_accepts_fewer_operands_than_preds() {
-        // Partial phis — a variable that isn't yet defined on every
-        // incoming edge (e.g. caught exception binding, early-return
-        // branch on a later-defined var) legitimately produces fewer
-        // operands than preds. Downstream iterates by (pred_blk, value)
-        // pairs, so the missing operand is interpreted as "no taint from
-        // this predecessor" — equivalent to an Undef sentinel.
-        // See module docstring for the `==` follow-up plan.
+    #[should_panic(expected = "SSA phi operand count does not match predecessor count")]
+    fn phi_assertion_helper_rejects_fewer_operands_than_preds() {
+        // A phi with fewer operands than preds violates the strict-equality
+        // invariant: `fill_undef_phi_operands` is responsible for filling
+        // every missing slot with an Undef sentinel, so the final body
+        // should never have gaps. This test guards the post-pass.
         let dummy_node = NodeIndex::new(0);
         let block = SsaBlock {
             id: BlockId(1),
@@ -2123,6 +2315,46 @@ mod tests {
                 op: SsaOp::Phi(smallvec::smallvec![(BlockId(0), SsaValue(1))]),
                 cfg_node: dummy_node,
                 var_name: Some("e".into()),
+                span: (0, 0),
+            }],
+            body: vec![],
+            terminator: Terminator::Unreachable,
+            preds: smallvec::smallvec![BlockId(0), BlockId(2)],
+            succs: smallvec::smallvec![],
+        };
+        let block_preds = vec![vec![], vec![0, 2]];
+        assert_phi_operand_counts(
+            &[
+                SsaBlock {
+                    id: BlockId(0),
+                    phis: vec![],
+                    body: vec![],
+                    terminator: Terminator::Goto(BlockId(1)),
+                    preds: smallvec::smallvec![],
+                    succs: smallvec::smallvec![BlockId(1)],
+                },
+                block,
+            ],
+            &block_preds,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "SSA phi operand references nonexistent predecessor")]
+    fn phi_assertion_helper_rejects_wrong_pred_block() {
+        // A phi with the correct operand count but referencing a block
+        // that isn't actually a predecessor must also fail the invariant.
+        let dummy_node = NodeIndex::new(0);
+        let block = SsaBlock {
+            id: BlockId(1),
+            phis: vec![SsaInst {
+                value: SsaValue(0),
+                op: SsaOp::Phi(smallvec::smallvec![
+                    (BlockId(0), SsaValue(1)),
+                    (BlockId(3), SsaValue(2)),
+                ]),
+                cfg_node: dummy_node,
+                var_name: Some("x".into()),
                 span: (0, 0),
             }],
             body: vec![],

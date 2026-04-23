@@ -201,7 +201,7 @@ pub(super) fn reconstruct_flow_path(
                 }
                 current = pick_tainted_operand(&vals, origin, ssa);
             }
-            SsaOp::Const(_) | SsaOp::Nop => break,
+            SsaOp::Const(_) | SsaOp::Nop | SsaOp::Undef => break,
         }
     }
 

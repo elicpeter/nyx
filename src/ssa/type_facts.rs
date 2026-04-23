@@ -420,6 +420,9 @@ pub fn analyze_types(
                     // Defer: will be filled in second pass
                     TypeFact::unknown()
                 }
+                // Undef contributes no type information — phi joins
+                // pick up the type from the other (defined) operand.
+                SsaOp::Undef => TypeFact::unknown(),
             };
             facts.insert(inst.value, fact);
         }

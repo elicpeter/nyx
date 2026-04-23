@@ -108,7 +108,8 @@ fn inst_used_values(inst: &SsaInst) -> Vec<SsaValue> {
         | SsaOp::Param { .. }
         | SsaOp::SelfParam
         | SsaOp::CatchParam
-        | SsaOp::Nop => Vec::new(),
+        | SsaOp::Nop
+        | SsaOp::Undef => Vec::new(),
     }
 }
 

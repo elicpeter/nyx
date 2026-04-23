@@ -547,6 +547,7 @@ fn op_kind(op: &SsaOp) -> &'static str {
         SsaOp::SelfParam => "SelfParam",
         SsaOp::CatchParam => "CatchParam",
         SsaOp::Nop => "Nop",
+        SsaOp::Undef => "Undef",
     }
 }
 

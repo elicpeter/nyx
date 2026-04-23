@@ -356,6 +356,16 @@ pub enum Commands {
         #[arg(long)]
         parse_timeout_ms: Option<u64>,
 
+        /// Maximum taint origins retained per lattice value (default: 32).
+        ///
+        /// When origin sets exceed this cap, origins are truncated
+        /// deterministically (by source location) and an
+        /// `OriginsTruncated` engine note is recorded on affected findings.
+        /// Raise for very wide codebases where truncation is observed;
+        /// lower only when lattice width is a measured bottleneck.
+        #[arg(long)]
+        max_origins: Option<u32>,
+
         // ── Deprecated aliases (hidden) ─────────────────────────────────
         /// Deprecated: use --index off
         #[arg(long, hide = true)]

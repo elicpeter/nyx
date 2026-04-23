@@ -281,6 +281,10 @@ fn eval_inst(inst: &SsaInst, values: &HashMap<SsaValue, ConstLattice>) -> ConstL
         | SsaOp::CatchParam => ConstLattice::Varying,
         SsaOp::Phi(_) => ConstLattice::Varying, // phis in body shouldn't happen
         SsaOp::Nop => ConstLattice::Varying,
+        // Undef contributes no knowledge: `Top` is the lattice identity
+        // for meet, so a phi operand of Undef leaves the joined value
+        // to the other incoming operands.
+        SsaOp::Undef => ConstLattice::Top,
     }
 }
 
@@ -304,7 +308,8 @@ fn inst_uses(inst: &SsaInst) -> Vec<SsaValue> {
         | SsaOp::Param { .. }
         | SsaOp::SelfParam
         | SsaOp::CatchParam
-        | SsaOp::Nop => Vec::new(),
+        | SsaOp::Nop
+        | SsaOp::Undef => Vec::new(),
     }
 }
 

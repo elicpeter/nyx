@@ -79,6 +79,7 @@ pub fn handle_command(
             backwards_analysis,
             no_backwards_analysis,
             parse_timeout_ms,
+            max_origins,
             // Deprecated aliases
             no_index,
             rebuild_index,
@@ -249,6 +250,9 @@ pub fn handle_command(
             }
             if let Some(ms) = parse_timeout_ms {
                 engine.parse_timeout_ms = ms;
+            }
+            if let Some(n) = max_origins {
+                engine.max_origins = n.max(crate::utils::analysis_options::MIN_MAX_ORIGINS);
             }
             config.analysis.engine = engine;
             if engine.parse_timeout_ms == 0 {
@@ -427,5 +431,9 @@ fn print_engine_explanation(config: &Config, engine_profile: Option<EngineProfil
     println!(
         "  Parse timeout:           {} ms  (--parse-timeout-ms / NYX_PARSE_TIMEOUT_MS; 0 disables)",
         engine.parse_timeout_ms
+    );
+    println!(
+        "  Max taint origins:       {}      (--max-origins / NYX_MAX_ORIGINS; per-lattice-value cap)",
+        engine.max_origins
     );
 }

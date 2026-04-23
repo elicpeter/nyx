@@ -319,6 +319,7 @@ fn op_view(op: &SsaOp) -> (String, Vec<String>) {
         SsaOp::SelfParam => ("SelfParam".into(), vec![]),
         SsaOp::CatchParam => ("CatchParam".into(), vec![]),
         SsaOp::Nop => ("Nop".into(), vec![]),
+        SsaOp::Undef => ("Undef".into(), vec![]),
     }
 }
 
