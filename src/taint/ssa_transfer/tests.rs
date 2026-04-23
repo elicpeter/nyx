@@ -463,13 +463,11 @@ mod binding_key_tests {
         seed.insert(BindingKey::new("x", BodyId(1)), taint(1));
         seed.insert(BindingKey::new("x", BodyId(2)), taint(2));
         assert_eq!(
-            seed_lookup(&seed, &BindingKey::new("x", BodyId(1)))
-                .map(|t| t.caps),
+            seed_lookup(&seed, &BindingKey::new("x", BodyId(1))).map(|t| t.caps),
             Some(Cap::from_bits_truncate(1))
         );
         assert_eq!(
-            seed_lookup(&seed, &BindingKey::new("x", BodyId(2)))
-                .map(|t| t.caps),
+            seed_lookup(&seed, &BindingKey::new("x", BodyId(2))).map(|t| t.caps),
             Some(Cap::from_bits_truncate(2))
         );
         // BodyId(3) has no entry and there is no wildcard fallback.
@@ -494,17 +492,11 @@ mod binding_key_tests {
         let joined = join_seed_maps(&a, &b);
         assert_eq!(joined.len(), 2);
         assert_eq!(
-            joined
-                .get(&BindingKey::new("x", BodyId(1)))
-                .unwrap()
-                .caps,
+            joined.get(&BindingKey::new("x", BodyId(1))).unwrap().caps,
             Cap::from_bits_truncate(1)
         );
         assert_eq!(
-            joined
-                .get(&BindingKey::new("x", BodyId(2)))
-                .unwrap()
-                .caps,
+            joined.get(&BindingKey::new("x", BodyId(2))).unwrap().caps,
             Cap::from_bits_truncate(2)
         );
     }

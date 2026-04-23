@@ -139,10 +139,7 @@ fn bail_note_caps_confidence_and_applies_completeness_penalty() {
 #[test]
 fn under_report_note_does_not_cap_confidence_but_does_penalize_rank() {
     let mut d = high_confidence_taint_diag("x.rs", 1);
-    attach_notes(
-        &mut d,
-        vec![EngineNote::WorklistCapped { iterations: 100 }],
-    );
+    attach_notes(&mut d, vec![EngineNote::WorklistCapped { iterations: 100 }]);
     d.confidence = Some(compute_confidence(&d));
 
     assert_eq!(
@@ -192,7 +189,8 @@ fn rank_diags_sorts_converged_above_capped_at_same_severity() {
     rank_diags(&mut diags);
 
     assert_eq!(
-        diags[0].path, "a.rs",
+        diags[0].path,
+        "a.rs",
         "converged finding must rank first, got {:?}",
         diags.iter().map(|d| &d.path).collect::<Vec<_>>()
     );
@@ -239,10 +237,7 @@ fn pipeline_is_deterministic_under_input_permutation() {
     let mut c = high_confidence_taint_diag("c.rs", 1);
     attach_notes(&mut a, vec![EngineNote::WorklistCapped { iterations: 1 }]);
     attach_notes(&mut b, vec![EngineNote::PredicateStateWidened]);
-    attach_notes(
-        &mut c,
-        vec![EngineNote::ParseTimeout { timeout_ms: 100 }],
-    );
+    attach_notes(&mut c, vec![EngineNote::ParseTimeout { timeout_ms: 100 }]);
 
     let seed = vec![a, b, c];
     let mut order1: Vec<Diag> = seed.clone();
@@ -259,8 +254,14 @@ fn pipeline_is_deterministic_under_input_permutation() {
     let paths1: Vec<_> = order1.iter().map(|d| &d.path).collect();
     let paths2: Vec<_> = order2.iter().map(|d| &d.path).collect();
     let paths3: Vec<_> = order3.iter().map(|d| &d.path).collect();
-    assert_eq!(paths1, paths2, "rank order must be input-permutation-stable");
-    assert_eq!(paths1, paths3, "rank order must be input-permutation-stable");
+    assert_eq!(
+        paths1, paths2,
+        "rank order must be input-permutation-stable"
+    );
+    assert_eq!(
+        paths1, paths3,
+        "rank order must be input-permutation-stable"
+    );
 }
 
 // ── Direction API regressions ──────────────────────────────────────────
@@ -274,7 +275,8 @@ fn worst_direction_matches_sarif_property() {
         EngineNote::WorklistCapped { iterations: 1 },
         EngineNote::PredicateStateWidened,
     ];
-    let dir = worst_direction(&notes).expect("mixed non-informational notes must yield a direction");
+    let dir =
+        worst_direction(&notes).expect("mixed non-informational notes must yield a direction");
     assert_eq!(dir, LossDirection::OverReport);
     assert_eq!(dir.tag(), "over-report");
 }
@@ -373,13 +375,12 @@ fn sarif_exports_loss_direction_property() {
     // the snake-case tag of the worst direction.  Consumers rely on
     // this string being stable across releases.
     let mut d = high_confidence_taint_diag("sample.rs", 1);
-    attach_notes(
-        &mut d,
-        vec![EngineNote::WorklistCapped { iterations: 10 }],
-    );
+    attach_notes(&mut d, vec![EngineNote::WorklistCapped { iterations: 10 }]);
     let sarif = nyx_scanner::output::build_sarif(&[d], std::path::Path::new("."));
 
-    let results = sarif["runs"][0]["results"].as_array().expect("runs[0].results");
+    let results = sarif["runs"][0]["results"]
+        .as_array()
+        .expect("runs[0].results");
     let result = &results[0];
     let props = &result["properties"];
 
@@ -458,8 +459,5 @@ fn every_engine_note_direction_is_documented() {
     );
     check(EngineNote::PredicateStateWidened, LossDirection::OverReport);
     check(EngineNote::PathEnvCapped, LossDirection::OverReport);
-    check(
-        EngineNote::InlineCacheReused,
-        LossDirection::Informational,
-    );
+    check(EngineNote::InlineCacheReused, LossDirection::Informational);
 }

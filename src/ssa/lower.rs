@@ -156,7 +156,12 @@ fn lower_to_ssa_inner(
     // 6b. Fill any missing phi operands with a shared Undef sentinel so
     // every phi has exactly one operand per predecessor. See
     // `fill_undef_phi_operands` for the invariant rationale.
-    fill_undef_phi_operands(&mut ssa_blocks, &block_preds, &mut value_defs, &blocks_nodes);
+    fill_undef_phi_operands(
+        &mut ssa_blocks,
+        &block_preds,
+        &mut value_defs,
+        &blocks_nodes,
+    );
 
     // 7. Fill in preds/succs on SsaBlocks
     for bid in 0..num_blocks {

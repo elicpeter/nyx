@@ -1347,11 +1347,7 @@ fn inline_analyse_callee(
     let receiver_seed: Option<VarTaint> = receiver.and_then(|rv| {
         state.get(rv).map(|taint| VarTaint {
             caps: taint.caps,
-            origins: taint
-                .origins
-                .iter()
-                .map(|o| populate_span(*o))
-                .collect(),
+            origins: taint.origins.iter().map(|o| populate_span(*o)).collect(),
             uses_summary: false,
         })
     });
@@ -1585,9 +1581,10 @@ fn extract_inline_return_taint(
     // matches the rest of the pipeline.
     let push_internal = |target: &mut SmallVec<[TaintOrigin; 2]>, orig: &TaintOrigin| {
         let new_orig = prep_internal(orig);
-        if target.iter().any(|o| {
-            o.source_span == new_orig.source_span && o.source_kind == new_orig.source_kind
-        }) {
+        if target
+            .iter()
+            .any(|o| o.source_span == new_orig.source_span && o.source_kind == new_orig.source_kind)
+        {
             return;
         }
         if target.len() < effective_max_origins() {

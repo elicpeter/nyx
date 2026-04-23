@@ -259,7 +259,8 @@ impl HeapState {
                 for orig in origins {
                     crate::taint::ssa_transfer::push_origin_bounded(&mut o, *orig);
                 }
-                self.entries.insert(idx, (key, HeapTaint { caps, origins: o }));
+                self.entries
+                    .insert(idx, (key, HeapTaint { caps, origins: o }));
             }
         }
     }
