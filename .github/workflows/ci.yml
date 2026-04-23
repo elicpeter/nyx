@@ -117,7 +117,12 @@ jobs:
           tool: cargo-about@0.7.1
 
       - name: Regenerate license attribution
-        run: cargo about generate about.hbs -o /tmp/THIRDPARTY-LICENSES.html
+        # --offline skips clearlydefined.io so regeneration is deterministic.
+        # Without this, cargo-about pulls harvested metadata from the network
+        # and the output drifts as that service updates, breaking the diff.
+        # The committed THIRDPARTY-LICENSES.html must also be generated with
+        # --offline — see scripts/regen-licenses or the README contributor guide.
+        run: cargo about generate --offline about.hbs -o /tmp/THIRDPARTY-LICENSES.html
 
       - name: Diff against committed file
         run: diff -u THIRDPARTY-LICENSES.html /tmp/THIRDPARTY-LICENSES.html

@@ -22,7 +22,6 @@ exclude = [
     ".idea/",
     "tests/",
     "benches/",
-    "examples/",
     "docs/",
     ".DS_Store",
     ".nyx/",
