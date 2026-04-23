@@ -49,7 +49,24 @@ use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
+
+/// Derive a stable synthetic `body_id` tag for a callee being inlined.
+///
+/// Used exclusively to scope [`BindingKey`] entries in the per-call
+/// `param_seed` so same-named formal parameters across different
+/// callees cannot silently alias if seeds ever co-mingle in the
+/// future.  The high bit is set to keep the value disjoint from real
+/// `BodyId(u32)` values (which are small indices into `FileCfg.bodies`).
+fn callee_seed_body_id(key: &FuncKey) -> u32 {
+    let mut h = DefaultHasher::new();
+    key.hash(&mut h);
+    let v = h.finish();
+    let folded = (v as u32) ^ ((v >> 32) as u32);
+    folded | 0x8000_0000
+}
 
 // ── SSA Taint Transfer ──────────────────────────────────────────────────
 
@@ -457,11 +474,17 @@ pub fn run_ssa_taint(ssa: &SsaBody, cfg: &Cfg, transfer: &SsaTaintTransfer) -> V
 /// Recomputes exit states from converged entry states, then maps
 /// SsaValue → var_name → `BindingKey`.  The returned map is suitable
 /// for seeding child bodies via `global_seed`.
+///
+/// `owner_body_id` is the id of the body being summarised; it tags
+/// every key via [`BindingKey::with_body_id`] so that same-named
+/// bindings from different bodies do not silently alias when the
+/// seed is later merged (e.g. in the JS/TS two-level solve).
 pub fn extract_ssa_exit_state(
     block_states: &[Option<SsaTaintState>],
     ssa: &SsaBody,
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
+    owner_body_id: u32,
 ) -> HashMap<BindingKey, VarTaint> {
     // Compute exit states by replaying transfer on converged entry states
     let empty_induction = HashSet::new();
@@ -481,9 +504,7 @@ pub fn extract_ssa_exit_state(
         }
     }
 
-    // Map SsaValue → var_name → BindingKey
-    // TODO(C-2): pass body_id into this function and use BindingKey::with_body_id
-    // to scope exit-state keys to their owning body.
+    // Map SsaValue → var_name → BindingKey, scoped to the owning body.
     let mut result: HashMap<BindingKey, VarTaint> = HashMap::new();
     for (val, taint) in &joined.values {
         let var_name = ssa
@@ -491,7 +512,7 @@ pub fn extract_ssa_exit_state(
             .get(val.0 as usize)
             .and_then(|vd| vd.var_name.as_deref());
         if let Some(name) = var_name {
-            let key = BindingKey::new(name);
+            let key = BindingKey::with_body_id(name, owner_body_id);
             result
                 .entry(key)
                 .and_modify(|existing| {
@@ -1249,8 +1270,10 @@ fn inline_analyse_callee(
 
     // Build per-parameter seed from actual argument taint.
     // Map callee's Param var_name → caller's argument taint via BindingKey.
-    // TODO(C-2): use BindingKey::with_body_id(var_name, callee_body_id) to scope
-    // seeds to the callee's body, preventing shadowed-name collisions.
+    // Tag every entry with a synthetic callee-scoped body id so same-named
+    // formal parameters across different callees cannot silently alias
+    // should these seeds ever be merged or observed jointly.
+    let callee_body_id = callee_seed_body_id(&callee_key);
     let mut param_seed: HashMap<BindingKey, VarTaint> = HashMap::new();
 
     for block in &callee_body.ssa.blocks {
@@ -1328,7 +1351,7 @@ fn inline_analyse_callee(
 
             if !combined_caps.is_empty() {
                 param_seed.insert(
-                    BindingKey::new(var_name.as_str()),
+                    BindingKey::with_body_id(var_name.as_str(), callee_body_id),
                     VarTaint {
                         caps: combined_caps,
                         origins: combined_origins,

@@ -550,6 +550,39 @@ mod binding_key_tests {
         assert!(seed_lookup(&seed, &key).is_none());
     }
 
+    /// When writers have tagged the same name with different body_ids
+    /// (e.g. JS/TS two-level solve's `combined_exit` after several
+    /// functions have contributed), a reader using the wildcard form
+    /// (`BindingKey::new(name)` → `body_id = None`) must see the
+    /// **union** of all matching entries.  Returning an arbitrary
+    /// first-match would be non-deterministic and could silently cross-
+    /// link taint from an unrelated scope while dropping real taint.
+    #[test]
+    fn seed_lookup_wildcard_unions_matches_across_body_ids() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::with_body_id("x", 1), taint(0b0001));
+        seed.insert(BindingKey::with_body_id("x", 2), taint(0b0010));
+        seed.insert(BindingKey::with_body_id("x", 3), taint(0b0100));
+        // Unrelated name must not pollute the union.
+        seed.insert(BindingKey::with_body_id("y", 1), taint(0b1000));
+
+        let wildcard = BindingKey::new("x");
+        let looked = seed_lookup(&seed, &wildcard).expect("wildcard hits");
+        assert_eq!(looked.caps, Cap::from_bits_truncate(0b0111));
+    }
+
+    /// Exact body_id lookup must keep its O(1) semantics and not be
+    /// affected by the wildcard-union slow path.
+    #[test]
+    fn seed_lookup_exact_body_id_ignores_siblings() {
+        let mut seed = HashMap::new();
+        seed.insert(BindingKey::with_body_id("x", 1), taint(0b0001));
+        seed.insert(BindingKey::with_body_id("x", 2), taint(0b0010));
+        let key = BindingKey::with_body_id("x", 1);
+        let looked = seed_lookup(&seed, &key).expect("exact match");
+        assert_eq!(looked.caps, Cap::from_bits_truncate(0b0001));
+    }
+
     // ── join_seed_maps ─────────────────────────────────────────────────
 
     #[test]

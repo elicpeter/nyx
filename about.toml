@@ -1,3 +1,16 @@
+# Pin the target triples scanned so `cargo about generate` produces the
+# same output regardless of host OS. Must match the release build matrix
+# in .github/workflows/release-build.yml — otherwise the CI diff step
+# (third-party-licenses) will fail on platform-specific crates like
+# linux-raw-sys, android_system_properties, etc.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
 accepted = [
     # --- Apache / MIT / BSD / permissive ---
     "Apache-2.0",

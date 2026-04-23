@@ -190,19 +190,46 @@ impl BindingKey {
 
 /// Look up a binding in a seed map with body-id-aware fallback.
 ///
-/// 1. Exact HashMap lookup (name + body_id).
-/// 2. Fallback: linear scan for any entry where [`BindingKey::matches`]
-///    succeeds (handles `None`-wildcard cases).
-pub fn seed_lookup<'a>(
-    seed: &'a HashMap<BindingKey, VarTaint>,
+/// 1. Exact HashMap lookup (name + body_id).  On hit, returns a clone.
+/// 2. Wildcard fallback: when the exact lookup misses, scan for every
+///    entry where [`BindingKey::matches`] succeeds and **union** their
+///    caps + origins.  Unioning (rather than returning the first match)
+///    makes the read deterministic and complete when multiple writers
+///    have contributed same-named entries with different body_ids — e.g.
+///    the JS/TS two-level solve's `combined_exit`, where taint from
+///    several function bodies is joined into a single seed before a
+///    callee reads it.
+pub fn seed_lookup(
+    seed: &HashMap<BindingKey, VarTaint>,
     key: &BindingKey,
-) -> Option<&'a VarTaint> {
-    // Fast path: exact match (name + body_id)
+) -> Option<VarTaint> {
+    // Fast path: exact match (name + body_id identical).
     if let Some(taint) = seed.get(key) {
-        return Some(taint);
+        return Some(taint.clone());
     }
-    // Slow path: wildcard match when body_ids differ
-    seed.iter().find(|(k, _)| k.matches(key)).map(|(_, v)| v)
+    // Slow path: wildcard match when body_ids differ.  Union across
+    // every entry whose BindingKey matches by name (accounting for
+    // `None` on either side).  Origins are deduplicated by node.
+    let mut unioned: Option<VarTaint> = None;
+    for (k, v) in seed.iter() {
+        if !k.matches(key) {
+            continue;
+        }
+        match unioned.as_mut() {
+            None => unioned = Some(v.clone()),
+            Some(acc) => {
+                acc.caps |= v.caps;
+                for orig in &v.origins {
+                    if acc.origins.iter().any(|o| o.node == orig.node) {
+                        continue;
+                    }
+                    acc.origins.push(*orig);
+                }
+                acc.uses_summary |= v.uses_summary;
+            }
+        }
+    }
+    unioned
 }
 
 // ── SSA Taint State ─────────────────────────────────────────────────────

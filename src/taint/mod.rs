@@ -657,9 +657,17 @@ fn analyse_body_with_seed(
                     backwards::annotate_finding(finding, verdict);
                 }
             }
-            // Extract exit state for seeding child bodies.
-            let exit_state =
-                ssa_transfer::extract_ssa_exit_state(&block_states, &ssa_body, cfg, &transfer);
+            // Extract exit state for seeding child bodies.  Tag every
+            // entry with the owner body's id so a later join (e.g. the
+            // JS/TS two-level `combined_exit`) cannot silently alias
+            // same-named bindings from different bodies.
+            let exit_state = ssa_transfer::extract_ssa_exit_state(
+                &block_states,
+                &ssa_body,
+                cfg,
+                &transfer,
+                body_id.0,
+            );
             (findings, Some(exit_state))
         }
         Err(e) => {
