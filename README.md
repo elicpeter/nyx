@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/nyx-logo-text.png" alt="nyx logo" width="500"/>
 
-**A local-first security scanner with a browser UI. Scan your repo, triage in your browser — no cloud, no account.**
+**A local-first security scanner with a browser UI. Scan your repo and triage in your browser, with no cloud and no account.**
 
 [![crates.io](https://img.shields.io/crates/v/nyx-scanner.svg)](https://crates.io/crates/nyx-scanner)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -9,7 +9,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/elicpeter/nyx/ci.yml?branch=master)](https://github.com/elicpeter/nyx/actions)
 </div>
 
-<p align="center"><img src="assets/screenshots/demo.gif" alt="Nyx UI walkthrough — scan, browse findings, inspect flow path, triage" width="900"/></p>
+<p align="center"><img src="assets/screenshots/demo.gif" alt="Nyx UI walkthrough: scan, browse findings, inspect flow path, triage" width="900"/></p>
 
 ---
 
@@ -25,7 +25,7 @@ nyx serve          # opens http://localhost:9700 in your browser
 
 Everything stays on your machine: loopback-only bind, host-header enforcement, CSRF on every mutation, no telemetry, no login.
 
-<!-- SCREENSHOT: assets/screenshots/overview.png — OverviewPage dashboard (top findings, stats, engine profile) -->
+<!-- SCREENSHOT: assets/screenshots/overview.png: OverviewPage dashboard (top findings, stats, engine profile) -->
 
 ---
 
@@ -35,16 +35,16 @@ Everything stays on your machine: loopback-only bind, host-header enforcement, C
 |---|---|
 | **Overview** | Dashboard: finding counts by severity, top offenders, engine profile summary |
 | **Findings** | Browsable list with severity badges, triage status, rule filter, language filter |
-| **Finding detail** | Flow-path visualiser — numbered steps (source → sanitizer → sink), code snippets, evidence, cross-file markers, triage dropdown |
+| **Finding detail** | Flow-path visualiser with numbered steps (source → sanitizer → sink), code snippets, evidence, cross-file markers, triage dropdown |
 | **Triage** | Bulk update states (open, investigating, fixed, false_positive, accepted_risk, suppressed), audit trail, import/export JSON |
 | **Explorer** | File tree with per-file symbol list and finding overlay |
 | **Scans** | Run history, metrics, diff two scans to see what changed |
 | **Rules** | Built-in and custom rules per language; add rules from the UI |
 | **Config** | Live config editor; reload without restart |
 
-<!-- SCREENSHOT: assets/screenshots/finding-detail.png — FindingDetailPage flow visualiser (THIS is the money shot) -->
-<!-- SCREENSHOT: assets/screenshots/triage.png — TriagePage bulk actions + audit log -->
-<!-- SCREENSHOT: assets/screenshots/explorer.png — ExplorerPage file tree + symbol list -->
+<!-- SCREENSHOT: assets/screenshots/finding-detail.png: FindingDetailPage flow visualiser (THIS is the money shot) -->
+<!-- SCREENSHOT: assets/screenshots/triage.png: TriagePage bulk actions + audit log -->
+<!-- SCREENSHOT: assets/screenshots/explorer.png: ExplorerPage file tree + symbol list -->
 
 `nyx serve` flags: `--port <N>` (default `9700`), `--host <addr>` (loopback only: `127.0.0.1`, `localhost`, or `::1`), `--no-browser`. See `[server]` in `nyx.conf` for persistent settings.
 
@@ -101,7 +101,7 @@ git clone https://github.com/elicpeter/nyx.git
 cd nyx && cargo build --release
 ```
 
-Requires stable Rust 1.88+. The frontend is compiled and embedded in the binary at build time — no separate install for `nyx serve`.
+Requires stable Rust 1.88+. The frontend is compiled and embedded in the binary at build time, so there is no separate install step for `nyx serve`.
 
 ---
 
@@ -111,9 +111,9 @@ All 10 languages parse via tree-sitter and run through the full pipeline, but ru
 
 | Tier | Languages | F1 | Use as a CI gate? |
 |---|---|---|---|
-| **Stable** | Python, JavaScript, TypeScript | 96.8%–100% | Yes |
-| **Beta** | Go, Java, Ruby, PHP | 92.9%–97.0% | Yes, with light FP triage |
-| **Preview** | C, C++ | 88.9%–92.3% | No — pair with clang-tidy / Clang Static Analyzer |
+| **Stable** | Python, JavaScript, TypeScript | 96.8% to 100% | Yes |
+| **Beta** | Go, Java, Ruby, PHP | 92.9% to 97.0% | Yes, with light FP triage |
+| **Preview** | C, C++ | 88.9% to 92.3% | No. Pair with clang-tidy or Clang Static Analyzer |
 | **Experimental** | Rust | 86.4% | Review findings, don't block merges |
 
 Per-dimension detail and known blind spots live in [`docs/language-maturity.md`](docs/language-maturity.md).
@@ -124,10 +124,10 @@ Per-dimension detail and known blind spots live in [`docs/language-maturity.md`]
 
 Two passes over the filesystem, with an optional SQLite index to skip unchanged files:
 
-1. **Pass 1** — parse each file via tree-sitter, build an intra-procedural CFG (petgraph), lower to pruned SSA (Cytron phi insertion over dominance frontiers), and export per-function summaries (source/sanitizer/sink caps, taint transforms, points-to, callees).
-2. **Summary merge** — union all per-file summaries into a `GlobalSummaries` map.
-3. **Pass 2** — re-analyze each file with full cross-file context. A forward dataflow worklist propagates taint through the SSA lattice with guaranteed convergence. Call-graph SCCs iterate to fixed-point so mutually recursive functions get accurate summaries.
-4. **Rank, dedupe, emit** — findings scored by severity × evidence strength × source-kind exploitability, emitted to console, JSON, or SARIF.
+1. **Pass 1**: parse each file via tree-sitter, build an intra-procedural CFG (petgraph), lower to pruned SSA (Cytron phi insertion over dominance frontiers), and export per-function summaries (source/sanitizer/sink caps, taint transforms, points-to, callees).
+2. **Summary merge**: union all per-file summaries into a `GlobalSummaries` map.
+3. **Pass 2**: re-analyze each file with full cross-file context. A forward dataflow worklist propagates taint through the SSA lattice with guaranteed convergence. Call-graph SCCs iterate to fixed-point so mutually recursive functions get accurate summaries.
+4. **Rank, dedupe, emit**: findings are scored by severity × evidence strength × source-kind exploitability, then emitted to console, JSON, or SARIF.
 
 Detector families: taint (cross-file source→sink), CFG structural (auth gaps, unguarded sinks, resource leaks), state model (use-after-close, double-close, must-leak, unauthed-access), AST patterns (tree-sitter structural match). Full detector docs: [`docs/detectors.md`](docs/detectors.md).
 
