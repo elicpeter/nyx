@@ -9,25 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Direction-aware engine provenance** — `EngineNote` variants now declare a `LossDirection` (`UnderReport`, `OverReport`, `Bail`, `Informational`) via `EngineNote::direction()`. The classification feeds three downstream behaviours:
-  - `compute_confidence` caps at `Medium` when any attached note has direction `OverReport` (widening) or `Bail` (lowering/parse abort). `UnderReport` does not cap — the emitted flow is still real, just part of an incomplete result set.
-  - Attack-surface ranking (`src/rank.rs`) gains a `completeness` component: `-8` for `OverReport`/`Bail`, `-3` for `UnderReport`, max-of-directions (not additive). Magnitudes are calibrated so `High`-severity findings from capped analysis still outrank `Medium`-severity findings from converged analysis.
-  - New `--require-converged` CLI flag (and `output.require_converged` config) drops findings whose notes indicate `OverReport` or `Bail` direction, for strict CI gates where capped-analysis findings are worse than none.
-  - Console `[capped: N notes — over-report]` suffix and new SARIF `result.properties.loss_direction` property.
-  - New `nyx_scanner::commands::scan::retain_converged_findings` public function for programmatic consumers.
-
 ### Changed
 
 ### Fixed
 
 ### Removed
 
-## [0.5.0] - 2026-04-22
+## [0.5.0] - 2026-04-23
 
 **Note**: 0.5.0 introduces an SSA-based taint engine and major cross-file improvements. If you upgrade and see new false positives or regressions on cross-file flows, please open an issue with a minimal reproduction.
 
 ### Added
 
+- **Direction-aware engine provenance** — `EngineNote` variants now declare a `LossDirection` (`UnderReport`, `OverReport`, `Bail`, `Informational`) via `EngineNote::direction()`. The classification feeds three downstream behaviours:
+  - `compute_confidence` caps at `Medium` when any attached note has direction `OverReport` (widening) or `Bail` (lowering/parse abort). `UnderReport` does not cap — the emitted flow is still real, just part of an incomplete result set.
+  - Attack-surface ranking (`src/rank.rs`) gains a `completeness` component: `-8` for `OverReport`/`Bail`, `-3` for `UnderReport`, max-of-directions (not additive). Magnitudes are calibrated so `High`-severity findings from capped analysis still outrank `Medium`-severity findings from converged analysis.
+  - New `--require-converged` CLI flag (and `output.require_converged` config) drops findings whose notes indicate `OverReport` or `Bail` direction, for strict CI gates where capped-analysis findings are worse than none.
+  - Console `[capped: N notes — over-report]` suffix and new SARIF `result.properties.loss_direction` property.
+  - New `nyx_scanner::commands::scan::retain_converged_findings` public function for programmatic consumers.
 - **EngineNote provenance system** — new `src/engine_notes.rs` with `EngineNote` enum (`WorklistCapped`, `OriginsTruncated`, `InFileFixpointCapped`, `CrossFileFixpointCapped`, `SsaLoweringBailed`, `ParseTimeout`, `PredicateStateWidened`, `PathEnvCapped`, `InlineCacheReused`) and `EngineNote::lowers_confidence()`. Findings carry `engine_notes: SmallVec<[EngineNote; 2]>` that flows through `Evidence` into JSON and SARIF output via `result.properties.engine_notes` plus `result.properties.confidence_capped`, so downstream consumers can distinguish "found nothing" from "engine stopped looking". Wired into the worklist safety cap in `run_ssa_taint_internal`, the `MAX_ORIGINS` cap (via `merge_origins` drop count and a post-hoc saturation scan), the cross-file SCC safety cap in `tag_unconverged_findings`, and SSA lowering bails in `analyse_body_with_seed`. Parse timeouts now surface an `engine.parse_timeout` synthetic informational diagnostic with a `ParseTimeout` note. Console output appends `[capped: N note(s)]` when notes are attached. `parse_timeout_ms = 0` emits a startup WARN log. Test-only override hooks (`set_worklist_cap_override`, `set_max_origins_override`) and observability counters (`worklist_cap_hit_count`, `max_worklist_iterations`, `origins_truncation_count`) mirror the existing `SCC_FIXPOINT_CAP_OVERRIDE` pattern. Regression coverage in `tests/engine_notes_tests.rs` forces each cap site and asserts the corresponding signal. (`PRE_RELEASE_PLAN.md` Phase 3.)
 - **Localhost UI and hostile-repo security hardening** — tightened Nyx's trust boundaries for malicious repositories, persisted scan artifacts, and browser traffic to the local web UI.
   - **Centralized repo path containment** — new shared path helper in `src/utils/path.rs` now resolves repo-relative and absolute in-repo paths through one canonicalization path, rejects traversal and symlink escapes, rejects special files for text reads, and enforces a consistent UI/debug file-size cap. File serving, explorer/debug routes, and finding code-context loading now use the same guardrail.
