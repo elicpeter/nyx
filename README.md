@@ -219,6 +219,17 @@ Pull requests welcome. Run `cargo fmt`, `cargo clippy --all -- -D warnings`, and
 
 ---
 
+## AI Disclosure
+
+- **Engine code** (taint analysis, SSA, CFG, call graph, abstract interpretation, symbolic execution, rule matching): predominantly human-written. AI assistance was used selectively for refactors, boilerplate, and exploratory spikes, with all merged code reviewed and tested by a human.
+- **Documentation** under `docs/` and most of this README: AI-generated from the codebase and hand-edited for accuracy. Report any doc/code drift as a bug.
+- **Test fixtures and expectations**: many of the per-language fixtures in `tests/fixtures/` and `benches/fixtures/` were authored with AI assistance, then audited and curated by a human. Expectation files (`expected.yaml`) reflect verified triage, not raw model output.
+- **Rule metadata and language labels** (`src/labels/*.rs`, rule descriptions): AI-assisted drafting against authoritative language/API references; human-reviewed before landing.
+
+If you depend on Nyx in a regulated or safety-critical context, treat it as you would any static analyzer: validate findings against your own corpus before using them as gates.
+
+---
+
 ## License
 
 GNU General Public License v3.0 or later (GPL-3.0-or-later). The optional `smt` feature bundles Z3 (MIT-licensed); distributors of binaries built with `--features smt` should include Z3's license in their attribution. Full text in [LICENSE](./LICENSE); third-party dependencies in [THIRDPARTY-LICENSES.html](./THIRDPARTY-LICENSES.html).

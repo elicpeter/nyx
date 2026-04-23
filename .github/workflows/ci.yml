@@ -128,10 +128,18 @@ jobs:
         # and the output drifts as that service updates, breaking the diff.
         # The committed THIRDPARTY-LICENSES.html must also be generated with
         # --offline — see scripts/regen-licenses or the README contributor guide.
-        run: cargo about generate --offline about.hbs -o /tmp/THIRDPARTY-LICENSES.html
+        #
+        # tr -d '\r' normalizes line endings. Some crates (r2d2_sqlite, vcpkg,
+        # etc.) ship LICENSE files with CRLF; cargo-about inlines them verbatim,
+        # but git's core.autocrlf=input strips CR on commit. Without this
+        # normalization the diff sees CRLF in /tmp and LF in the committed file
+        # and flags every line of those sections.
+        run: cargo about generate --offline about.hbs | tr -d '\r' > /tmp/THIRDPARTY-LICENSES.html
 
       - name: Diff against committed file
-        run: diff -u THIRDPARTY-LICENSES.html /tmp/THIRDPARTY-LICENSES.html
+        # --strip-trailing-cr is a belt-and-suspenders guard in case one side
+        # still has CR; the tr step above is the primary fix.
+        run: diff -u --strip-trailing-cr THIRDPARTY-LICENSES.html /tmp/THIRDPARTY-LICENSES.html
 
   rust-beta-build:
     name: rust-beta-build
