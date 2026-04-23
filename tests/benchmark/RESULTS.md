@@ -1,16 +1,116 @@
 # Nyx Benchmark Results
 
-Current baseline (as of Phase 13 real-CVE corpus, 2026-04-23):
+Current baseline (as of Phase 15 real-CVE language-gap expansion, 2026-04-23):
 
 | Metric                | File-level | Rule-level | CI floor |
 |-----------------------|------------|------------|----------|
-| Precision             | 0.942      | 0.942      | 0.861    |
+| Precision             | 0.945      | 0.945      | 0.861    |
 | Recall                | 1.000      | 0.994      | 0.944    |
-| F1                    | 0.970      | 0.967      | 0.901    |
+| F1                    | 0.972      | 0.969      | 0.901    |
 
-Corpus: 273 cases across 10 languages — 267 synthetic + 6 real-CVE cases. Scanner 0.5.0, full analysis mode. CI floors are unchanged from Phase CF-7; the Phase 13 delta is within 1 pp and does not warrant tightening.
+Corpus: 295 cases across 10 languages — 267 synthetic + 28 real-CVE cases (14 vulnerable/patched pairs). Scanner 0.5.0, full analysis mode. CI floors are unchanged from Phase CF-7; the Phase 15 delta is within 1 pp and does not warrant tightening.
 
 Machine-readable per-run data lives in `tests/benchmark/results/` (`latest.json` plus dated snapshots). This file is a narrative changelog — only the two most recent phases are kept in full detail; earlier phases are condensed into the history table at the end.
+
+---
+
+## Phase 15 — Real-CVE language-gap expansion (2026-04-23)
+
+### Motivation
+
+Phase 13 and Phase 14 covered 9 CVEs across Python, JavaScript, TypeScript, Go, Java, Ruby, and PHP — every Stable and Beta tier language. The Preview-tier languages (C, C++) had zero real-CVE coverage, so the memory-safety and command-injection pattern rules for those languages were defended only by synthetic micro-fixtures. Phase 15 fills that gap with 4 Preview-tier CVEs (2 C, 2 C++) and adds a second Java CVE in the Runtime.exec class (to complement the existing Commons Collections deserialization case). Rust was considered but dropped: its code-quality pattern rules (`rs.memory.*`, `rs.quality.*`) are not CVE-class, and the taint-flow sink set (sqlx / rusqlite / diesel / reqwest / `std::process::Command`) did not yield a permissive-licensed, well-documented CVE reducible to ~30 LOC with a clean patched variant. Go was considered for a second CVE but dropped: idiomatic prepared statements make Go SQLi CVEs rare, `gob` decoding is niche, and published `InsecureSkipVerify` CVEs mostly describe receiver-side TLS bypass rather than the client-side pattern the rule detects.
+
+### What changed
+
+- **Five additional CVE pairs** added to `tests/benchmark/cve_corpus/` (10 fixture files, vulnerable + patched per CVE). Same header convention, same minimal-reproducer discipline, same `provenance: "real_cve"` marker. First entries ever for `cve_corpus/c/` and `cve_corpus/cpp/`.
+- **Ground truth**: 10 new cases; `corpus_size` bumped 285 → 295. Vulnerable fixtures assert on an `expected_rule_ids` entry (the pattern-rule that fires on the disclosed sink) plus `taint-unsanitised-flow` as an acceptable alternative. Patched fixtures assert on `forbidden_rule_ids` (the CVE's class-specific rule plus the cross-cutting taint ID) so Nyx does not refire on the fix.
+- **No harness changes**: the `cve_corpus/` path resolution and `real_cve` provenance scaffolding landed in Phase 13; Phase 15 is pure fixture + ground-truth expansion.
+- **Regression thresholds unchanged**: floors stay at `P≥0.861 R≥0.944 F1≥0.901`.
+
+### Real-CVE Corpus
+
+| CVE              | Language   | Project                      | License              | Vuln class       | Vulnerable outcome | Patched outcome |
+|------------------|------------|------------------------------|----------------------|------------------|--------------------|-----------------|
+| CVE-2023-48022   | Python     | Ray                          | Apache-2.0           | CMDI             | TP (rule + line)   | TN              |
+| CVE-2017-18342   | Python     | PyYAML                       | MIT                  | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2019-14939   | JavaScript | mongo-express                | MIT                  | code_exec        | TP (rule + line)   | TN              |
+| CVE-2023-26159   | TypeScript | follow-redirects             | MIT                  | SSRF             | TP (rule + line)   | TN              |
+| CVE-2022-30323   | Go         | hashicorp/go-getter          | MPL-2.0              | CMDI             | TP (rule + line)   | TN              |
+| CVE-2015-7501    | Java       | Apache Commons Collections   | Apache-2.0           | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2013-0156    | Ruby       | Ruby on Rails                | MIT                  | Deserialization  | TP (rule)          | TN              |
+| CVE-2017-9841    | PHP        | PHPUnit                      | BSD-3-Clause         | code_exec        | TP (rule + line)   | TN              |
+| CVE-2018-15133   | PHP        | Laravel                      | MIT                  | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2016-3714    | C          | ImageMagick (ImageTragick)   | ImageMagick License  | CMDI             | TP (rule + line)   | TN              |
+| CVE-2019-18634   | C          | sudo (pwfeedback)            | ISC                  | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2019-13132   | C++        | ZeroMQ libzmq                | MPL-2.0              | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2022-1941    | C++        | Protocol Buffers             | BSD-3-Clause         | memory_safety    | TP (rule + line)   | TN              |
+| CVE-2017-12629   | Java       | Apache Solr                  | Apache-2.0           | CMDI             | TP (rule + line)   | TN              |
+
+New-in-Phase-15 detail:
+
+- **CVE-2016-3714** (ImageMagick "ImageTragick" delegate RCE). Vulnerable fixture: user-controlled filename is substituted into a shell template and handed to `system()` — Nyx fires `c.cmdi.system` at the documented sink line. Patched fixture: in-process coder + basename check, no `system()` path — zero findings.
+- **CVE-2019-18634** (sudo pwfeedback stack overflow). Vulnerable fixture: stdin-sourced token `strcpy`'d into a fixed on-stack feedback buffer — Nyx fires `c.memory.strcpy`. Patched fixture: a bounded `copy_bounded` helper replaces the unchecked copy — zero findings.
+- **CVE-2019-13132** (ZeroMQ libzmq V2 metadata overflow). Vulnerable fixture: peer-controlled bytes `strcpy`'d into a fixed on-stack identity buffer, mirroring the ZMTP v2 decode path — Nyx fires `cpp.memory.strcpy`. Patched fixture: bounded `std::string.assign` + hard length cap — zero findings.
+- **CVE-2022-1941** (Protocol Buffers C++ `ParseContext` unknown-field overflow). Vulnerable fixture: wire-declared length trusted and `strcpy`'d into a scratch buffer — Nyx fires `cpp.memory.strcpy`. Patched fixture: bounded `std::string.assign` + `MAX_LABEL` cap — zero findings.
+- **CVE-2017-12629** (Apache Solr XSLT response writer RCE). Vulnerable fixture: `req.getParameter("tr") → Runtime.getRuntime().exec(new String[]{"/bin/sh","-c","xsltproc "+tr})` — Nyx fires `java.cmdi.runtime_exec` and `taint-unsanitised-flow` (source line 29 → sink line 33). Patched fixture: fixed allowlist of transformer names mapped to classpath resources, no `Runtime.exec` path — zero findings.
+
+Per-CVE precision/recall: each vulnerable case contributes 1 TP (Java CVE-2017-12629 contributes 2 — pattern-rule + taint edge) and its patched sibling 1 TN, so per-CVE precision and recall are both 1.000 at the rule level.
+
+### Delta
+
+Aggregate rule-level F1 on the 295-case corpus is **0.969** (P=**0.945**, R=**0.994**), a +0.001 delta vs the Phase 14 baseline (F1=0.968, P=0.944, R=0.994). File-level F1 **0.972** (P=0.945, R=1.000). The precision win is the ten new cases contributing 10 TP + 5 TN with no spurious firings on the fixes, diluting the existing FP rate slightly.
+
+### Notes on selection
+
+Phase 15 followed the same criteria as Phase 13/14: publicly disclosed CVE with a stable NVD advisory URL, vulnerability class already covered by a Nyx pattern rule so the vulnerable fixture produces a concrete `expected_rule_ids` hit (not just a generic `taint-unsanitised-flow`), extractable to ~30 LOC, permissive upstream license. The C/C++ picks target the two most abundant CVE classes for those languages — unchecked-copy memory-safety bugs (`strcpy` / `sprintf`-family) and shell-injection command-execution (`system()`-family). Each picked CVE is a well-known, historically damaging bug: ImageTragick mass-exploited image-upload endpoints in 2016, sudo pwfeedback gave any local user root on default-configured Linux distros in 2019, libzmq CVE-2019-13132 was pre-auth RCE on curve-disabled sockets, protobuf CVE-2022-1941 exposed every gRPC or Envoy binary decoding untrusted bytes, and Solr CVE-2017-12629 was a flagship unauthenticated-RCE vector for the entire Lucene / Solr fleet. Fixtures are minimal reproducers of the unsafe sink pattern, with explicit disclaimers — they are not verbatim excerpts of upstream internals.
+
+---
+
+## Phase 14 — Real-CVE corpus expansion (2026-04-23)
+
+### Motivation
+
+Phase 13 seeded the real-CVE subtree with one CVE per stable-tier language (Python / JavaScript / TypeScript). Six fixtures is enough to demonstrate the mechanism but not enough to defend the Beta- and Preview-tier languages against regressions on real-world code. Phase 14 extends the subtree to cover Go, Java, Ruby, and PHP, plus a second Python CVE in a different vulnerability class (deserialization, not CMDI). The goal is the same as Phase 13: regression protection on demonstrably real disclosed bugs, not synthetic analogues.
+
+### What changed
+
+- **Six additional CVE pairs** added to `tests/benchmark/cve_corpus/` (12 fixture files, vulnerable + patched per CVE). Same header convention, same minimal-reproducer discipline, same `provenance: "real_cve"` marker.
+- **Ground truth**: 12 new cases; `corpus_size` bumped 273 → 285. Vulnerable fixtures assert on an `expected_rule_ids` entry (the pattern-rule that fires on the disclosed sink) plus `taint-unsanitised-flow` as an acceptable alternative. Patched fixtures assert on `forbidden_rule_ids` (the CVE's class-specific rule) so Nyx does not refire on the fix.
+- **No harness changes**: the `cve_corpus/` path resolution and `real_cve` provenance scaffolding landed in Phase 13; Phase 14 is pure fixture + ground-truth expansion.
+- **Regression thresholds unchanged**: floors stay at `P≥0.861 R≥0.944 F1≥0.901`.
+
+### Real-CVE Corpus
+
+| CVE              | Language   | Project                      | License      | Vuln class       | Vulnerable outcome | Patched outcome |
+|------------------|------------|------------------------------|--------------|------------------|--------------------|-----------------|
+| CVE-2023-48022   | Python     | Ray                          | Apache-2.0   | CMDI             | TP (rule + line)   | TN              |
+| CVE-2017-18342   | Python     | PyYAML                       | MIT          | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2019-14939   | JavaScript | mongo-express                | MIT          | code_exec        | TP (rule + line)   | TN              |
+| CVE-2023-26159   | TypeScript | follow-redirects             | MIT          | SSRF             | TP (rule + line)   | TN              |
+| CVE-2022-30323   | Go         | hashicorp/go-getter          | MPL-2.0      | CMDI             | TP (rule + line)   | TN              |
+| CVE-2015-7501    | Java       | Apache Commons Collections   | Apache-2.0   | Deserialization  | TP (rule + line)   | TN              |
+| CVE-2013-0156    | Ruby       | Ruby on Rails                | MIT          | Deserialization  | TP (rule)          | TN              |
+| CVE-2017-9841    | PHP        | PHPUnit                      | BSD-3-Clause | code_exec        | TP (rule + line)   | TN              |
+| CVE-2018-15133   | PHP        | Laravel                      | MIT          | Deserialization  | TP (rule + line)   | TN              |
+
+New-in-Phase-14 detail:
+
+- **CVE-2017-18342** (PyYAML `yaml.load` default loader). Vulnerable fixture: `request.get_data → yaml.load` — Nyx fires `py.deser.yaml_load` and `taint-unsanitised-flow` at the documented sink line. Patched fixture: `yaml.safe_load` — zero findings.
+- **CVE-2022-30323** (hashicorp/go-getter URL → git argv injection). Vulnerable fixture: `r.URL.Query().Get("src") → exec.Command("git", "clone", url, ...)` — Nyx fires `go.cmdi.exec_command` and `taint-unsanitised-flow`. Patched fixture: scheme allowlist + in-process go-git `PlainClone` removes the `exec.Command` path entirely — zero findings.
+- **CVE-2015-7501** (Apache Commons Collections `InvokerTransformer` gadget chain). Vulnerable fixture: `req.getInputStream → new ObjectInputStream(...).readObject()` — Nyx fires `java.deser.readobject` and `taint-unsanitised-flow`. Patched fixture: Jackson JSON codec replaces native Java deserialization — zero findings.
+- **CVE-2013-0156** (Rails XML-params YAML tag RCE). Vulnerable fixture: `YAML.load(params[:prefs])` — Nyx fires `rb.deser.yaml_load` (no taint edge because Ruby `params[...]` is not currently labeled as a taint source; the AST pattern is what catches this class). Patched fixture: `JSON.parse` replaces `YAML.load` — zero findings.
+- **CVE-2017-9841** (PHPUnit `eval-stdin.php` webshell). Vulnerable fixture: `file_get_contents('php://input') → eval(...)` — Nyx fires `php.code_exec.eval` and `taint-unsanitised-flow`. Patched fixture: SAPI guard and the eval sink removed — zero findings.
+- **CVE-2018-15133** (Laravel cookie `unserialize` on leaked APP_KEY). Vulnerable fixture: `$_COOKIE['XSRF-TOKEN'] → base64_decode → unserialize` — Nyx fires `php.deser.unserialize` and `taint-unsanitised-flow`. Patched fixture: HMAC-verified JSON payload — zero findings.
+
+Per-CVE precision/recall: each vulnerable case contributes 1 TP and its patched sibling 1 TN, so per-CVE precision and recall are both 1.000 at the rule level.
+
+### Delta
+
+Aggregate rule-level F1 on the 285-case corpus is **0.968** (P=**0.944**, R=**0.994**), a +0.001 delta vs the Phase 13 baseline (F1=0.967, P=0.942, R=0.994). File-level F1 **0.971** (P=0.944, R=1.000). The precision win is the twelve new cases contributing 6 TP + 6 TN with no spurious firings on the fixes, diluting the existing FP rate slightly.
+
+### Notes on selection
+
+Phase 14's picks followed the Phase 13 criteria: publicly disclosed CVE with a known patch, vulnerability class already covered by a Nyx pattern rule (so the vulnerable fixture produces a concrete `expected_rule_ids` hit, not just a generic `taint-unsanitised-flow`), extractable to ~30 LOC, permissive upstream license. Each added CVE is a well-known, historically damaging bug — mass-scanned webshells (PHPUnit 2017), pre-auth RCE on every Rails app (2013-0156), the original Java deserialization gadget chain (Commons Collections 2015), the go-getter fleet-wide Terraform/Packer/Nomad/Vault exposure (2022), and a textbook Laravel cookie-forgery chain (2018).
 
 ---
 

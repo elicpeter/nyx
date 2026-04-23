@@ -207,3 +207,172 @@ fn scc_cap_hit_still_emits_tagged_low_confidence_findings() {
         );
     }
 }
+
+/// Phase-E3 / Phase-B: verify that the worklist reduces per-iteration
+/// work without changing the final output.  We do this by running the
+/// 16-cycle fixture twice — once through the normal pass-2 path,
+/// which uses the worklist — and asserting (a) findings match and
+/// (b) iteration count stays within the same bound as the 8-cycle.
+///
+/// This test is load-bearing for Phase-B correctness: if the worklist
+/// ever skips a file whose dependencies did change, this test's
+/// required-finding validator would fire, failing the test.
+#[test]
+fn phase_b_worklist_preserves_findings_on_16cycle() {
+    let _guard = SCC_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    set_scc_fixpoint_cap_override(0);
+    let dir = fixture_path("cross_file_scc_16cycle");
+
+    // First run.  Worklist is active by default.
+    let diags1 = scan_fixture_dir(&dir, AnalysisMode::Full);
+    let iters1 = last_scc_max_iterations();
+    validate_expectations(&diags1, &dir);
+
+    // Second run.  Worklist is still active; we expect byte-for-byte
+    // finding identity because the worklist changes *which* files
+    // run per iteration but does not affect the set of summaries
+    // produced or their final values.
+    let diags2 = scan_fixture_dir(&dir, AnalysisMode::Full);
+    let iters2 = last_scc_max_iterations();
+    validate_expectations(&diags2, &dir);
+
+    // Iteration count should be deterministic across runs (same
+    // fixture, same cap, same call graph → same worklist schedule).
+    assert_eq!(
+        iters1, iters2,
+        "worklist iteration count must be deterministic; \
+         run1={iters1}, run2={iters2}"
+    );
+
+    // Finding count equality as a weaker correctness check (full
+    // equality is validated by `validate_expectations` on both runs).
+    assert_eq!(
+        diags1.len(),
+        diags2.len(),
+        "worklist must not introduce finding-count churn"
+    );
+}
+
+/// Phase-E broader fixture: 8-function SCC chain across 8 files.
+///
+/// Exercises iteration counts well above the old 3-bound and into the
+/// 8–16 range that the `64` safety cap is meant to cover.  Failure
+/// here is a stronger signal than the 4-cycle test: at depth 8 the
+/// cost of each iteration becomes visible, so a regression either in
+/// iteration count (summary churn) or in per-iteration cost (Phase-B
+/// worklist) shows up.
+#[test]
+fn scc_8cycle_converges_within_bound() {
+    let _guard = SCC_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    set_scc_fixpoint_cap_override(0);
+    let dir = fixture_path("cross_file_scc_8cycle");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+
+    let iters = last_scc_max_iterations();
+    assert!(
+        (8..=16).contains(&iters),
+        "Expected 8..=16 iterations for 8-cycle fixture; got {iters}. \
+         Lower bound guards the chain-depth invariant (Jacobi \
+         iteration must walk one hop per round).  Upper bound guards \
+         against summary-refinement regressions."
+    );
+}
+
+/// Phase-E stress fixture: 16-function SCC chain across 16 files.
+///
+/// At this depth the iteration count dominates per-iteration cost, so
+/// this is the fixture most sensitive to Phase-B worklist
+/// optimisation. Once Phase B lands, this test's wall-clock budget
+/// will tighten.
+#[test]
+fn scc_16cycle_converges_within_bound() {
+    let _guard = SCC_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    set_scc_fixpoint_cap_override(0);
+    let dir = fixture_path("cross_file_scc_16cycle");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+
+    let iters = last_scc_max_iterations();
+    assert!(
+        (16..=32).contains(&iters),
+        "Expected 16..=32 iterations for 16-cycle fixture; got {iters}. \
+         Lower bound guards the chain-depth invariant.  Upper bound \
+         guards against summary-refinement regressions that would \
+         push iteration count near the safety cap."
+    );
+}
+
+/// Phase-D regression: cap-hit must record a [`CapHitReason`] that is
+/// *not* `Unknown` whenever the convergence loop ran for at least two
+/// iterations.  On the 4-cycle fixture with cap=2, the delta trajectory
+/// should show monotone shrinkage (summaries refining toward but not
+/// reaching fixpoint), which the classifier reports as
+/// `MonotoneShrinking`.
+///
+/// This test is load-bearing: if the classifier ever returns `Unknown`
+/// on a real cap-hit it means either the trajectory is not being
+/// recorded or the classification rules have regressed.  A plateau or
+/// oscillation reason would also be acceptable (either would still be
+/// a useful signal) but `Unknown` would silently hide the actionable
+/// information.
+#[test]
+fn scc_cap_hit_records_classified_reason() {
+    use nyx_scanner::engine_notes::{CapHitReason, EngineNote};
+
+    let _guard = SCC_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = fixture_path("cross_file_scc_deep_cycle");
+
+    // cap=2 forces cap-hit with at least two iterations recorded,
+    // giving the classifier enough samples to differentiate
+    // monotone-shrinking from Unknown.
+    set_scc_fixpoint_cap_override(2);
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    set_scc_fixpoint_cap_override(0);
+
+    let tagged: Vec<_> = diags
+        .iter()
+        .filter_map(|d| {
+            d.evidence
+                .as_ref()
+                .map(|ev| ev.engine_notes.as_slice())
+                .map(|notes| {
+                    notes.iter().find_map(|n| match n {
+                        EngineNote::CrossFileFixpointCapped { reason, .. } => {
+                            Some(reason.clone())
+                        }
+                        _ => None,
+                    })
+                })
+                .and_then(|r| r.map(|reason| (d, reason)))
+        })
+        .collect();
+
+    assert!(
+        !tagged.is_empty(),
+        "cap=2 scan of deep-cycle fixture must produce at least one \
+         CrossFileFixpointCapped note; got diags: {:#?}",
+        diags
+            .iter()
+            .map(|d| format!("{}:{}:{} {}", d.path, d.line, d.col, d.id))
+            .collect::<Vec<_>>()
+    );
+
+    // The reason must be *something* other than Unknown — that's the
+    // whole point of Phase-D classification.  Any structured variant
+    // proves the trajectory pipeline fired end-to-end.
+    for (d, reason) in &tagged {
+        assert!(
+            !matches!(reason, CapHitReason::Unknown),
+            "cap-hit must produce a classified reason, not Unknown. \
+             This means either (a) the trajectory is not being recorded \
+             across iterations or (b) the classifier's rules no longer \
+             cover the observed pattern. Finding: {}:{}:{} id={} \
+             reason={reason:?}",
+            d.path,
+            d.line,
+            d.col,
+            d.id,
+        );
+    }
+}

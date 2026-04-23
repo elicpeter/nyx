@@ -108,11 +108,13 @@ See [configuration.md](configuration.md#analysisengine) for the full schema.
 
 Individual engine toggles are fine-grained but hard to remember in combination.  The `--engine-profile` shortcut sets the whole stack in one shot, and individual flags are layered on top after the profile is applied.
 
-| Flag | What it sets |
-|------|--------------|
-| `--engine-profile fast` | AST + CFG + basic taint only.  Disables abstract interpretation, context-sensitive inlining, symex (all variants), backwards analysis, and SMT. |
-| `--engine-profile balanced` | AST + CFG + SSA taint + abstract interpretation + context-sensitive inlining.  Disables symex, backwards analysis, and SMT. (This is equivalent to the default posture without symex.) |
-| `--engine-profile deep` | Everything in `balanced` plus symex (with cross-file and interprocedural) and backwards analysis.  Still disables SMT (requires the `smt` cargo feature). |
+| Profile | Backwards | Symex | Abstract-interp | Context-sensitive |
+|---------|-----------|-------|-----------------|-------------------|
+| `fast` | off | off | off | off |
+| `balanced` (default) | off | off | on | on |
+| `deep` | on | on (cross-file + interprocedural) | on | on |
+
+All three profiles build the AST, CFG, and SSA lattice and run forward taint; the columns above show which additional analyses each profile enables.  SMT (`symex.smt`) is always off unless Nyx was built with `--features smt`.
 
 Individual flags override the profile.  For example, `--engine-profile fast --backwards-analysis` runs the fast stack but with backwards analysis on.
 

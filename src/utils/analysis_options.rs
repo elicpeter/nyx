@@ -18,7 +18,7 @@
 //! the `nyx` binary always goes through the configured runtime.
 
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 /// Default parse timeout (milliseconds).  See [`AnalysisOptions::parse_timeout_ms`].
 pub const DEFAULT_PARSE_TIMEOUT_MS: u64 = 10_000;
@@ -120,21 +120,45 @@ impl Default for AnalysisOptions {
 
 /// Process-wide installed options.  Accessors fall back to
 /// [`AnalysisOptions::default`] (with env-var overrides for backward
-/// compatibility) until the CLI entry point installs a value.
-static RUNTIME: OnceLock<AnalysisOptions> = OnceLock::new();
+/// compatibility) until a caller installs a value.
+///
+/// A `RwLock` is used rather than a `OnceLock` so that long-lived callers
+/// (notably `nyx serve`, which resolves the engine profile per scan
+/// request) can replace the installed options between scans via
+/// [`reinstall`].  Within a single scan run, engine toggles must not
+/// change mid-flight — the caller is responsible for that invariant
+/// (`JobManager`'s single-scan guarantee provides it in the server).
+static RUNTIME: RwLock<Option<AnalysisOptions>> = RwLock::new(None);
 
-/// Install the process-wide analysis options.  Subsequent calls are a no-op
-/// (by design: a single scan run must not change its own engine toggles
-/// mid-flight).  Returns whether the install succeeded.
+/// Install the process-wide analysis options, first-wins.  Subsequent
+/// calls are a no-op and return `false`, matching the semantics the CLI
+/// entry point relies on (one install per process lifetime for non-serve
+/// commands).  Servers that resolve options per request should use
+/// [`reinstall`] instead.
 pub fn install(opts: AnalysisOptions) -> bool {
-    RUNTIME.set(opts).is_ok()
+    let mut guard = RUNTIME.write().expect("analysis options RwLock poisoned");
+    if guard.is_some() {
+        return false;
+    }
+    *guard = Some(opts);
+    true
+}
+
+/// Replace the installed options unconditionally.  Intended for the HTTP
+/// server's scan thread, which re-resolves the engine profile from each
+/// incoming request; `install`'s first-wins semantics would otherwise
+/// pin the first scan's choice for the lifetime of the server.  Callers
+/// must ensure no scan is concurrently reading `current()` — in practice
+/// this means calling `reinstall` before the scan's rayon pool starts.
+pub fn reinstall(opts: AnalysisOptions) {
+    *RUNTIME.write().expect("analysis options RwLock poisoned") = Some(opts);
 }
 
 /// Read the active options.  Returns the installed runtime when present,
 /// otherwise defaults merged with env-var fallbacks (legacy path).
 pub fn current() -> AnalysisOptions {
-    if let Some(rt) = RUNTIME.get() {
-        return *rt;
+    if let Some(rt) = *RUNTIME.read().expect("analysis options RwLock poisoned") {
+        return rt;
     }
     // Legacy env-var fallback: applies only when no runtime has been
     // installed (primarily for library consumers and old tests).  Logged

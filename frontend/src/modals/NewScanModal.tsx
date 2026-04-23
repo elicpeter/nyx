@@ -2,12 +2,30 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Modal } from '../components/ui/Modal';
 import { useHealth } from '../api/queries/health';
-import { useStartScan } from '../api/mutations/scans';
+import {
+  useStartScan,
+  type ScanMode,
+  type EngineProfile,
+  type StartScanBody,
+} from '../api/mutations/scans';
 
 interface NewScanModalProps {
   open: boolean;
   onClose: () => void;
 }
+
+const MODE_HINTS: Record<ScanMode, string> = {
+  full: 'AST + CFG + taint (default)',
+  ast: 'AST patterns only — fastest',
+  cfg: 'CFG structural + taint',
+  taint: 'Taint flows only',
+};
+
+const PROFILE_HINTS: Record<EngineProfile, string> = {
+  fast: 'Basic taint. No abstract-interp / context-sensitive / symex / backwards.',
+  balanced: 'Default. Adds abstract-interp + context-sensitive inlining.',
+  deep: 'Adds symex (cross-file + interproc) and demand-driven backwards taint. ~2–3× slower.',
+};
 
 export function NewScanModal({ open, onClose }: NewScanModalProps) {
   const { data: health } = useHealth();
@@ -15,12 +33,18 @@ export function NewScanModal({ open, onClose }: NewScanModalProps) {
   const navigate = useNavigate();
   const defaultRoot = health?.scan_root || '';
   const [scanRoot, setScanRoot] = useState('');
+  const [mode, setMode] = useState<ScanMode>('full');
+  const [engineProfile, setEngineProfile] = useState<EngineProfile>('balanced');
 
   const handleStart = async () => {
     const root = scanRoot.trim();
-    const body = root && root !== defaultRoot ? { scan_root: root } : undefined;
+    const body: StartScanBody = {};
+    if (root && root !== defaultRoot) body.scan_root = root;
+    if (mode !== 'full') body.mode = mode;
+    body.engine_profile = engineProfile;
+    const payload = Object.keys(body).length ? body : undefined;
     try {
-      await startScan.mutateAsync(body);
+      await startScan.mutateAsync(payload);
       onClose();
       navigate('/scans');
     } catch (e) {
@@ -43,6 +67,31 @@ export function NewScanModal({ open, onClose }: NewScanModalProps) {
               onChange={(e) => setScanRoot(e.target.value)}
               placeholder="/path/to/project"
             />
+          </div>
+          <div className="form-group">
+            <label>Analysis Mode</label>
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as ScanMode)}
+            >
+              <option value="full">Full</option>
+              <option value="ast">AST only</option>
+              <option value="cfg">CFG + taint</option>
+              <option value="taint">Taint only</option>
+            </select>
+            <span className="form-hint">{MODE_HINTS[mode]}</span>
+          </div>
+          <div className="form-group">
+            <label>Engine Profile</label>
+            <select
+              value={engineProfile}
+              onChange={(e) => setEngineProfile(e.target.value as EngineProfile)}
+            >
+              <option value="fast">Fast</option>
+              <option value="balanced">Balanced (default)</option>
+              <option value="deep">Deep</option>
+            </select>
+            <span className="form-hint">{PROFILE_HINTS[engineProfile]}</span>
           </div>
           <div className="scan-modal-actions">
             <button className="btn btn-sm" onClick={onClose}>

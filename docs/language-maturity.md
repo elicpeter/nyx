@@ -9,9 +9,10 @@ The classifications here are grounded in three concrete signals:
 1. **Rule depth** — how many distinct source / sanitizer / sink matchers exist
    for the language in `src/labels/<lang>.rs`, and how many vulnerability
    classes (Cap bits) those matchers cover.
-2. **Benchmark results** — rule-level precision / recall / F1 on the 262-case
-   corpus in [`tests/benchmark/RESULTS.md`](../tests/benchmark/RESULTS.md),
-   last measured 2026-04-20 with scanner version 0.5.0.
+2. **Benchmark results** — rule-level precision / recall / F1 on the 295-case
+   corpus (267 synthetic + 14 real-CVE pairs) in
+   [`tests/benchmark/RESULTS.md`](../tests/benchmark/RESULTS.md), last measured
+   2026-04-23 with scanner version 0.5.0.
 3. **Known weak spots** — FPs and FNs the maintainers have deliberately left
    in the benchmark rather than suppressed, documented release-by-release in
    `RESULTS.md`.

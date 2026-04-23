@@ -63,7 +63,13 @@ nyx scan ./server --format json --index off
 
 # AST patterns only (fastest; skips CFG + taint)
 nyx scan --mode ast
+
+# Engine-depth shortcut: fast | balanced (default) | deep
+# `deep` adds symex + demand-driven backwards taint for higher precision at ~2-3× cost
+nyx scan --engine-profile deep
 ```
+
+Forward cross-file taint runs in every profile. Symex and the demand-driven backwards walk are opt-in — either via `--engine-profile deep`, or individually (`--symex`, `--backwards-analysis`). See [`docs/cli.md`](docs/cli.md#engine-depth-profile) for the full toggle matrix.
 
 ### GitHub Action
 
@@ -109,7 +115,7 @@ Requires stable Rust 1.88+. The frontend is compiled and embedded in the binary 
 
 ## Languages
 
-All 10 languages parse via tree-sitter and run through the full pipeline, but rule depth is uneven. Tiers reflect benchmark F1 on the 273-case corpus at [`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json):
+All 10 languages parse via tree-sitter and run through the full pipeline, but rule depth is uneven. Tiers reflect benchmark F1 on the 295-case corpus at [`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json):
 
 | Tier | Languages | F1 | Use as a CI gate? |
 |---|---|---|---|
@@ -119,6 +125,29 @@ All 10 languages parse via tree-sitter and run through the full pipeline, but ru
 | **Experimental** | Rust | 86.4% | Review findings, don't block merges |
 
 Per-dimension detail and known blind spots live in [`docs/language-maturity.md`](docs/language-maturity.md).
+
+### Validated against real CVEs
+
+The corpus also holds a small set of vulnerable/patched pairs extracted from published advisories, so the benchmark floor is defended by regression protection on demonstrably real bugs — not just synthetic analogues. Nyx fires on the vulnerable file and emits zero findings on the patched file for each pair.
+
+| CVE | Project | Language | Class |
+|---|---|---|---|
+| [CVE-2023-48022](https://nvd.nist.gov/vuln/detail/CVE-2023-48022) | Ray | Python | Command injection |
+| [CVE-2017-18342](https://nvd.nist.gov/vuln/detail/CVE-2017-18342) | PyYAML | Python | Deserialization |
+| [CVE-2019-14939](https://nvd.nist.gov/vuln/detail/CVE-2019-14939) | mongo-express | JavaScript | Code execution (`eval`) |
+| [CVE-2023-26159](https://nvd.nist.gov/vuln/detail/CVE-2023-26159) | follow-redirects | TypeScript | SSRF |
+| [CVE-2022-30323](https://nvd.nist.gov/vuln/detail/CVE-2022-30323) | hashicorp/go-getter | Go | Command injection |
+| [CVE-2015-7501](https://nvd.nist.gov/vuln/detail/CVE-2015-7501) | Apache Commons Collections | Java | Deserialization |
+| [CVE-2013-0156](https://nvd.nist.gov/vuln/detail/CVE-2013-0156) | Ruby on Rails | Ruby | Deserialization |
+| [CVE-2017-9841](https://nvd.nist.gov/vuln/detail/CVE-2017-9841) | PHPUnit | PHP | Code execution (`eval`) |
+| [CVE-2018-15133](https://nvd.nist.gov/vuln/detail/CVE-2018-15133) | Laravel | PHP | Deserialization |
+| [CVE-2016-3714](https://nvd.nist.gov/vuln/detail/CVE-2016-3714) | ImageMagick (ImageTragick) | C | Command injection |
+| [CVE-2019-18634](https://nvd.nist.gov/vuln/detail/CVE-2019-18634) | sudo (pwfeedback) | C | Memory safety |
+| [CVE-2019-13132](https://nvd.nist.gov/vuln/detail/CVE-2019-13132) | ZeroMQ libzmq | C++ | Memory safety |
+| [CVE-2022-1941](https://nvd.nist.gov/vuln/detail/CVE-2022-1941) | Protocol Buffers | C++ | Memory safety |
+| [CVE-2017-12629](https://nvd.nist.gov/vuln/detail/CVE-2017-12629) | Apache Solr | Java | Command injection |
+
+Fixtures live under [`tests/benchmark/cve_corpus/`](tests/benchmark/cve_corpus/) with upstream attribution headers.
 
 ---
 
@@ -162,7 +191,7 @@ Or add rules interactively: `nyx config add-rule --lang javascript --matcher esc
 
 ## Status
 
-Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 273-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
+Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 295-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
 
 Limitations:
 - Taint analysis is intra-procedural with cross-file summaries, not fully inter-procedural.

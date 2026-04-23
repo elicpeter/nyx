@@ -71,6 +71,59 @@ fn js_ts_pass2_cap() -> usize {
     if o == 0 { JS_TS_PASS2_SAFETY_CAP } else { o }
 }
 
+/// Test-only override for the Gauss-Seidel toggle.  Values:
+///
+/// * `0` — respect `NYX_JS_GAUSS_SEIDEL` env var (default production
+///   behaviour).
+/// * `1` — force Jacobi (env ignored).
+/// * `2` — force Gauss-Seidel (env ignored).
+///
+/// Used exclusively by integration tests that need to assert both
+/// variants produce equal findings without per-test process isolation.
+static JS_TS_GAUSS_SEIDEL_OVERRIDE: AtomicUsize = AtomicUsize::new(0);
+
+/// Force Jacobi or Gauss-Seidel from test code.  `0` clears the
+/// override and restores env-var-driven behaviour.
+#[doc(hidden)]
+pub fn set_js_ts_gauss_seidel_override(mode: usize) {
+    JS_TS_GAUSS_SEIDEL_OVERRIDE.store(mode, Ordering::Relaxed);
+}
+
+/// Returns true when the Gauss-Seidel variant of JS/TS pass-2 is
+/// enabled.
+///
+/// Default: **Jacobi** (order-independent, reproducible, one round
+/// per chain hop).  Set `NYX_JS_GAUSS_SEIDEL=1` to enable
+/// **Gauss-Seidel** (in-place updates: a body's exit becomes visible
+/// to later bodies in the same round, typically halving iteration
+/// count on chain-shaped code).
+///
+/// Opt-in deliberately: Gauss-Seidel is order-dependent (the result
+/// depends on the traversal order of bodies), which can affect
+/// reproducibility for scanners whose output feeds CI gates.  Before
+/// flipping this on by default we need the Phase-A corpus run to
+/// prove chain-depth ≥4 is common enough to justify the complexity.
+///
+/// Test-override via [`set_js_ts_gauss_seidel_override`] takes
+/// precedence over the env var.
+///
+/// See `tests/gauss_seidel_tests.rs` for the determinism test that
+/// guards the invariant "same fixture → same findings under both
+/// variants".
+pub fn js_ts_gauss_seidel_enabled() -> bool {
+    match JS_TS_GAUSS_SEIDEL_OVERRIDE.load(Ordering::Relaxed) {
+        1 => return false, // force Jacobi
+        2 => return true,  // force Gauss-Seidel
+        _ => {}
+    }
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| match std::env::var("NYX_JS_GAUSS_SEIDEL") {
+        Ok(v) => !matches!(v.as_str(), "" | "0" | "false"),
+        Err(_) => false,
+    })
+}
+
 /// A raw flow step at CFG level (before line/col resolution).
 #[derive(Debug, Clone)]
 pub struct FlowStepRaw {
@@ -779,6 +832,11 @@ fn analyse_multi_body(
     // `combined_exit == current_seed` break firing.
     let mut converged_early = true;
     let mut iters_used: usize = 0;
+    // Trajectory of per-round seed-delta sizes; populated inside the
+    // max_iterations > 1 branch and read on cap-hit.  Default empty
+    // → classifier returns `Unknown`, which is the correct outcome
+    // for non-JS/TS languages (no iterative loop ran).
+    let mut convergence_trajectory: smallvec::SmallVec<[u32; 4]> = smallvec::SmallVec::new();
     if max_iterations > 1 {
         let top = file_cfg.toplevel();
         let top_cfg = &top.graph;
@@ -800,14 +858,60 @@ fn analyse_multi_body(
             keys
         };
 
+        // Phase-B (body granularity): precompute per-body read-set of
+        // top-level binding names.  A non-toplevel body only needs
+        // re-analysis when a name it reads via Param or via the
+        // global_seed ancestor-lookup path has actually changed in
+        // the combined seed.  `reads` is a superset of the body's
+        // top-level dependencies — we err on the side of over-running
+        // (false dirty) rather than missing a dependency.
+        let body_reads: HashMap<BodyId, HashSet<String>> = {
+            let mut m: HashMap<BodyId, HashSet<String>> = HashMap::new();
+            for body in &file_cfg.bodies {
+                if body.meta.parent_body_id.is_none() {
+                    continue; // top-level has no global_seed lookups
+                }
+                let mut names: HashSet<String> = HashSet::new();
+                for (_idx, info) in body.graph.node_references() {
+                    for u in &info.taint.uses {
+                        names.insert(u.to_string());
+                    }
+                }
+                m.insert(body.meta.id, names);
+            }
+            m
+        };
+
         // Initial seed is the top-level exit state.
         let mut current_seed = body_exit_states
             .get(&BodyId(0))
             .cloned()
             .unwrap_or_default();
 
+        // Phase-B per-body findings cache: retains the most-recent
+        // round's findings for each body.  Round N re-runs only dirty
+        // bodies; clean bodies keep their round N-1 findings.  This
+        // replaces the previous "drop all non-toplevel findings, run
+        // everything, repeat" pattern.
+        let mut findings_by_body: HashMap<BodyId, Vec<Finding>> = HashMap::new();
+
+        // Seed the cache with the pass-1 findings so round 0 of the
+        // worklist has a consistent starting state.  We partition
+        // `all_findings` into "toplevel" (kept verbatim) and
+        // "non-toplevel" (moved into the cache, keyed by body).
+        let mut toplevel_findings: Vec<Finding> = Vec::new();
+        for f in std::mem::take(&mut all_findings) {
+            let body = file_cfg.bodies.get(f.body_id.0 as usize);
+            if body.is_some_and(|b| b.meta.parent_body_id.is_none()) {
+                toplevel_findings.push(f);
+            } else {
+                findings_by_body.entry(BodyId(f.body_id.0)).or_default().push(f);
+            }
+        }
+
         let rounds = max_iterations.saturating_sub(1);
         converged_early = rounds == 0;
+        let use_gauss_seidel = js_ts_gauss_seidel_enabled();
         for round in 0..rounds {
             iters_used = round + 1;
             // Combine function body exits filtered to top-level scope.
@@ -823,28 +927,50 @@ fn analyse_multi_body(
                 }
             }
 
+            // Record seed-delta for cap-hit classification.  Count the
+            // number of keys whose value differs between current_seed
+            // and combined_exit.  This mirrors scan.rs's diff helpers
+            // but at BindingKey granularity.
+            let iter_delta = seed_delta_size(&current_seed, &combined_exit);
+            if convergence_trajectory.len() == 4 {
+                convergence_trajectory.remove(0);
+            }
+            convergence_trajectory.push(iter_delta as u32);
+
             // Converged: seed didn't change.
             if combined_exit == current_seed {
                 converged_early = true;
                 break;
             }
+
+            // Phase-B: compute which binding names changed so we can
+            // skip bodies whose read-set is disjoint from the change
+            // set.
+            let changed_names = changed_binding_names(&current_seed, &combined_exit);
             current_seed = combined_exit;
 
             // Re-run non-toplevel bodies with updated seed.
-            // Replace non-toplevel findings (the new round has more complete
-            // taint context and symex annotations).
             body_exit_states.insert(BodyId(0), current_seed.clone());
-            // Remove stale non-toplevel findings from previous rounds.
-            all_findings.retain(|f| {
-                file_cfg
-                    .bodies
-                    .get(f.body_id.0 as usize)
-                    .is_none_or(|b| b.meta.parent_body_id.is_none())
-            });
+            // Phase-C: Gauss-Seidel variant — as each body is
+            // re-analysed, merge its new exit into `current_seed`
+            // immediately so subsequent bodies in the same round see
+            // the fresh value.  Order matters here; we pin to
+            // `order` (containment-topological) for reproducibility.
+            // The Jacobi path leaves `current_seed` untouched for
+            // the rest of the round.
             for &idx in &order {
                 let body = &file_cfg.bodies[idx];
                 if body.meta.parent_body_id.is_none() {
                     continue; // don't re-run top-level
+                }
+                // Skip clean bodies: nothing this body reads has
+                // changed, so re-analysis would produce byte-identical
+                // output.  The cached findings from the previous
+                // round (or pass-1) remain correct.
+                if let Some(reads) = body_reads.get(&body.meta.id) {
+                    if reads.is_disjoint(&changed_names) {
+                        continue;
+                    }
                 }
                 let parent_seed = body
                     .meta
@@ -866,10 +992,38 @@ fn analyse_multi_body(
                     import_bindings,
                     cross_file_bodies,
                 );
-                all_findings.extend(findings);
+                // Phase-B: replace (not append) this body's findings
+                // in the cache.  Previous rounds' findings for this
+                // body are superseded by the new round's output.
+                findings_by_body.insert(body.meta.id, findings);
                 if let Some(es) = exit_state {
+                    // Phase-C Gauss-Seidel: immediately publish this
+                    // body's filtered exit into `current_seed` and
+                    // `body_exit_states[BodyId(0)]` so the next body
+                    // in this same round sees the updated seed via
+                    // its `global_seed` ancestor lookup.
+                    if use_gauss_seidel {
+                        let filtered =
+                            ssa_transfer::filter_seed_to_toplevel(&es, &toplevel_keys);
+                        current_seed =
+                            ssa_transfer::join_seed_maps(&current_seed, &filtered);
+                        body_exit_states.insert(BodyId(0), current_seed.clone());
+                    }
                     body_exit_states.insert(body.meta.id, es);
                 }
+            }
+        }
+
+        // After the loop, flatten per-body caches back into
+        // `all_findings`, preserving the toplevel findings we set
+        // aside earlier.
+        all_findings = toplevel_findings;
+        for body in &file_cfg.bodies {
+            if body.meta.parent_body_id.is_none() {
+                continue;
+            }
+            if let Some(fs) = findings_by_body.remove(&body.meta.id) {
+                all_findings.extend(fs);
             }
         }
     }
@@ -881,6 +1035,32 @@ fn analyse_multi_body(
     let reported_iters = if iters_used == 0 { 1 } else { iters_used };
     LAST_JS_TS_PASS2_ITERATIONS.store(reported_iters, Ordering::Relaxed);
 
+    // Phase A1 convergence telemetry: record this file's pass-2
+    // outcome.  No-op unless `NYX_CONVERGENCE_TELEMETRY=1`.  Only
+    // emitted for JS/TS (`max_iterations > 1`) where a pass-2 loop
+    // actually ran; single-iteration languages do not produce a
+    // convergence event.
+    if max_iterations > 1 {
+        let non_toplevel_bodies = file_cfg
+            .bodies
+            .iter()
+            .filter(|b| b.meta.parent_body_id.is_some())
+            .count();
+        crate::convergence_telemetry::record(
+            crate::convergence_telemetry::ConvergenceEvent::InFilePass2(
+                crate::convergence_telemetry::InFilePass2Record {
+                    schema: crate::convergence_telemetry::SCHEMA_VERSION,
+                    namespace: namespace.to_string(),
+                    body_count: non_toplevel_bodies,
+                    iterations: iters_used,
+                    cap: max_iterations,
+                    converged: converged_early,
+                    trajectory: convergence_trajectory.clone(),
+                },
+            ),
+        );
+    }
+
     // Cap-hit: the loop exhausted `max_iterations` without the
     // `combined_exit == current_seed` break firing.  Tag every finding
     // produced by this file so downstream consumers know the results
@@ -888,10 +1068,16 @@ fn analyse_multi_body(
     // (`max_iterations > 1`); single-iteration languages always
     // converge trivially by definition.
     if max_iterations > 1 && !converged_early {
+        // Trajectory is captured in the convergence loop above; empty
+        // when the loop never entered the delta-push path (rounds ==
+        // 0, non-JS/TS, etc.).  Classifier defaults to `Unknown` for
+        // <2 samples.
+        let reason = crate::engine_notes::CapHitReason::classify(&convergence_trajectory);
         tracing::warn!(
             file = %namespace,
             iterations = iters_used,
             cap = max_iterations,
+            reason = reason.tag(),
             "JS/TS pass-2 in-file fixpoint did not converge within safety cap — \
              results may be imprecise. This usually indicates a very deep chain \
              of top-level bindings threaded through helper functions; please \
@@ -899,6 +1085,7 @@ fn analyse_multi_body(
         );
         let note = EngineNote::InFileFixpointCapped {
             iterations: iters_used as u32,
+            reason,
         };
         for f in &mut all_findings {
             f.merge_note(note.clone());
@@ -906,6 +1093,58 @@ fn analyse_multi_body(
     }
 
     all_findings
+}
+
+/// Return the set of binding **names** whose value differs between two
+/// seed maps.  Used by the Phase-B body-level worklist to decide
+/// which non-toplevel bodies must re-run.
+///
+/// Names (not full `BindingKey`s) because `filter_seed_to_toplevel`
+/// re-keys every surviving entry to `BodyId(0)` anyway, and
+/// per-body reads are plain identifier strings from the SSA IR.
+/// Collapsing to names avoids a spurious mismatch when the same
+/// binding appears under different body-scoped keys.
+fn changed_binding_names(
+    before: &HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>,
+    after: &HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>,
+) -> HashSet<String> {
+    let mut changed = HashSet::new();
+    for (k, v_after) in after {
+        match before.get(k) {
+            Some(v_before) if v_before == v_after => {}
+            _ => {
+                changed.insert(k.name.to_string());
+            }
+        }
+    }
+    for k in before.keys() {
+        if !after.contains_key(k) {
+            changed.insert(k.name.to_string());
+        }
+    }
+    changed
+}
+
+/// Count [`ssa_transfer::BindingKey`]s whose [`VarTaint`] differs
+/// between two seed maps.  Keys present in one map but missing from the
+/// other count as differences.
+fn seed_delta_size(
+    before: &HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>,
+    after: &HashMap<ssa_transfer::BindingKey, crate::taint::domain::VarTaint>,
+) -> usize {
+    let mut changed = 0usize;
+    for (k, v_after) in after {
+        match before.get(k) {
+            Some(v_before) if v_before == v_after => {}
+            _ => changed += 1,
+        }
+    }
+    for k in before.keys() {
+        if !after.contains_key(k) {
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// Find function entry nodes: (func_name, entry_node) pairs.

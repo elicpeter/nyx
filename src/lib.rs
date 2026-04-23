@@ -48,6 +48,7 @@ pub mod cfg_analysis;
 pub mod cli;
 pub mod commands;
 pub mod constraint;
+pub mod convergence_telemetry;
 pub mod database;
 pub mod engine_notes;
 pub mod errors;

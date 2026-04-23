@@ -214,6 +214,13 @@ impl JobManager {
         let manager = Arc::clone(self);
         let jid = job_id.clone();
         std::thread::spawn(move || {
+            // Apply per-scan engine options (e.g. `engine_profile` from the
+            // start-scan request) to the process-wide runtime so every
+            // rayon worker that calls `analysis_options::current()` sees
+            // the resolved values.  The JobManager's `active_job_id` mutex
+            // guarantees no other scan is concurrently reading these, so
+            // `reinstall` is race-free here.
+            crate::utils::analysis_options::reinstall(config.analysis.engine);
             let start = Instant::now();
             log_collector.info("Indexed scan started (rebuild enabled)", None);
 

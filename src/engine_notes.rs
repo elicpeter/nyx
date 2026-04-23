@@ -25,6 +25,150 @@
 //! preserves the observability goal while fixing the credibility gap.
 
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
+
+/// Classification of *why* a fix-point loop hit its safety cap.
+///
+/// The cap-hit alone is not actionable — "we ran 64 iterations and did
+/// not detect convergence" can mean several very different things:
+///
+/// * the lattice is still shrinking but slowly (e.g. a 72-function chain
+///   SCC that legitimately needs >64 iterations),
+/// * the lattice stopped shrinking but the convergence predicate still
+///   detects change (the change set stabilised at a non-zero value —
+///   monotonicity is fine but something in the convergence predicate is
+///   spurious), or
+/// * the lattice is oscillating (two iterations alternating with the
+///   same change-set size; this is a *bug*, not a tuning issue).
+///
+/// Recording the reason makes cap-hit telemetry actionable: operators
+/// can tell when "raise the cap" would actually help vs. when they are
+/// looking at a summary-non-monotonicity regression.
+///
+/// Serialized as a nested snake_case tagged enum so SARIF/JSON consumers
+/// can pattern-match without depending on Rust layout.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CapHitReason {
+    /// The change-set size was still decreasing when the cap fired.
+    /// `trajectory` is the last N iteration deltas (most recent last).
+    /// Operators can safely raise the cap; the underlying analysis is
+    /// healthy but the SCC is larger than the current budget.
+    MonotoneShrinking { trajectory: SmallVec<[u32; 4]> },
+    /// The change-set size stayed constant for the last ≥2 iterations
+    /// without reaching zero.  This is unusual: every iteration is
+    /// updating the *same* keys, which suggests a summary that changes
+    /// the same fields back and forth even though the cap bits are
+    /// saturating.  Raise the cap **and** investigate.
+    Plateau { delta: u32 },
+    /// The change-set size oscillated with a detected period ≤ N/2.
+    /// Genuinely bad — the analysis is not monotone, convergence will
+    /// *never* be reached, and raising the cap will not help.  File a
+    /// bug with the fixture attached.
+    SuspectedOscillation {
+        period: u8,
+        trajectory: SmallVec<[u32; 4]>,
+    },
+    /// Default when the engine did not record a trajectory (e.g. the
+    /// cap fired after only one iteration so there is nothing to
+    /// classify).  Preserves backwards compatibility for old notes
+    /// deserialized from disk.
+    Unknown,
+}
+
+impl Default for CapHitReason {
+    fn default() -> Self {
+        CapHitReason::Unknown
+    }
+}
+
+impl CapHitReason {
+    /// Classify a trajectory of per-iteration change-set sizes.
+    ///
+    /// `deltas` should carry the *changed-key counts* from the last N
+    /// iterations (most recent last).  Classification rules:
+    ///
+    /// 1. Fewer than 2 samples → `Unknown` (nothing to diff against).
+    /// 2. A period-2 pattern (a,b,a,b) with a ≠ b → `SuspectedOscillation`.
+    /// 3. Last two samples equal and non-zero → `Plateau`.
+    /// 4. Strictly decreasing tail → `MonotoneShrinking`.
+    /// 5. Otherwise → `Unknown` (inconclusive; rare in practice).
+    ///
+    /// The function is pure — no allocation beyond the returned
+    /// [`SmallVec`] — so it is safe to call from within a hot loop when
+    /// a cap actually fires.  Callers should accumulate deltas in a
+    /// fixed-size ring buffer to bound memory.
+    pub fn classify(deltas: &[u32]) -> CapHitReason {
+        if deltas.len() < 2 {
+            return CapHitReason::Unknown;
+        }
+
+        // Detect period-2 oscillation: last 4 samples as (a,b,a,b) with a ≠ b.
+        if deltas.len() >= 4 {
+            let n = deltas.len();
+            let (a0, b0, a1, b1) = (
+                deltas[n - 4],
+                deltas[n - 3],
+                deltas[n - 2],
+                deltas[n - 1],
+            );
+            if a0 == a1 && b0 == b1 && a0 != b0 {
+                let tail = deltas
+                    .iter()
+                    .rev()
+                    .take(4)
+                    .rev()
+                    .copied()
+                    .collect::<SmallVec<[u32; 4]>>();
+                return CapHitReason::SuspectedOscillation {
+                    period: 2,
+                    trajectory: tail,
+                };
+            }
+        }
+
+        let last = deltas[deltas.len() - 1];
+        let prev = deltas[deltas.len() - 2];
+
+        // Plateau: change-set size stuck at the same non-zero value.
+        if last == prev && last > 0 {
+            return CapHitReason::Plateau { delta: last };
+        }
+
+        // Monotone shrinking: strictly decreasing over the full
+        // recorded tail.  (Equal-zero at the end would have meant
+        // convergence, so the cap wouldn't have fired.)
+        let mut monotone = true;
+        for w in deltas.windows(2) {
+            if w[1] > w[0] {
+                monotone = false;
+                break;
+            }
+        }
+        if monotone {
+            let tail = deltas
+                .iter()
+                .rev()
+                .take(4)
+                .rev()
+                .copied()
+                .collect::<SmallVec<[u32; 4]>>();
+            return CapHitReason::MonotoneShrinking { trajectory: tail };
+        }
+
+        CapHitReason::Unknown
+    }
+
+    /// Stable snake-case tag for log/diag consumption.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            CapHitReason::MonotoneShrinking { .. } => "monotone_shrinking",
+            CapHitReason::Plateau { .. } => "plateau",
+            CapHitReason::SuspectedOscillation { .. } => "suspected_oscillation",
+            CapHitReason::Unknown => "unknown",
+        }
+    }
+}
 
 /// Direction of precision loss encoded by an [`EngineNote`].
 ///
@@ -106,12 +250,32 @@ pub enum EngineNote {
     /// JS/TS pass-2 in-file global propagation hit its iteration cap.
     /// Direction: [`LossDirection::UnderReport`] — global state may
     /// not have reached fixpoint; cross-function flows could be missed.
-    InFileFixpointCapped { iterations: u32 },
+    ///
+    /// `reason` classifies *why* the cap fired (monotone-but-slow,
+    /// plateau, suspected oscillation) so operators can tell a
+    /// tunable-budget problem from a monotonicity regression.  Older
+    /// serialized notes without this field default to
+    /// [`CapHitReason::Unknown`].
+    InFileFixpointCapped {
+        iterations: u32,
+        #[serde(default)]
+        reason: CapHitReason,
+    },
     /// Cross-file SCC fixpoint hit `SCC_FIXPOINT_SAFETY_CAP`.
     /// Direction: [`LossDirection::UnderReport`] — the iterative
     /// cross-file join aborted; summaries for members of this SCC may
     /// be incomplete.
-    CrossFileFixpointCapped { iterations: u32 },
+    ///
+    /// `reason` classifies *why* the cap fired (monotone-but-slow,
+    /// plateau, suspected oscillation) so operators can tell a
+    /// tunable-budget problem from a monotonicity regression.  Older
+    /// serialized notes without this field default to
+    /// [`CapHitReason::Unknown`].
+    CrossFileFixpointCapped {
+        iterations: u32,
+        #[serde(default)]
+        reason: CapHitReason,
+    },
     /// SSA lowering produced an empty body (parse failure or
     /// unsupported shape).  Direction: [`LossDirection::Bail`] — any
     /// finding attributed to this body is weakly supported because the
@@ -253,11 +417,19 @@ mod tests {
             LossDirection::UnderReport
         );
         assert_eq!(
-            EngineNote::InFileFixpointCapped { iterations: 1 }.direction(),
+            EngineNote::InFileFixpointCapped {
+                iterations: 1,
+                reason: CapHitReason::Unknown,
+            }
+            .direction(),
             LossDirection::UnderReport
         );
         assert_eq!(
-            EngineNote::CrossFileFixpointCapped { iterations: 1 }.direction(),
+            EngineNote::CrossFileFixpointCapped {
+                iterations: 1,
+                reason: CapHitReason::Unknown,
+            }
+            .direction(),
             LossDirection::UnderReport
         );
 
@@ -346,6 +518,92 @@ mod tests {
             EngineNote::ParseTimeout { timeout_ms: 100 },
         ];
         assert_eq!(worst_direction(&notes), Some(LossDirection::Bail));
+    }
+
+    #[test]
+    fn cap_hit_reason_too_few_samples_unknown() {
+        assert_eq!(CapHitReason::classify(&[]), CapHitReason::Unknown);
+        assert_eq!(CapHitReason::classify(&[5]), CapHitReason::Unknown);
+    }
+
+    #[test]
+    fn cap_hit_reason_detects_period_2_oscillation() {
+        let result = CapHitReason::classify(&[3, 7, 3, 7]);
+        match result {
+            CapHitReason::SuspectedOscillation { period, .. } => assert_eq!(period, 2),
+            other => panic!("expected SuspectedOscillation; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cap_hit_reason_detects_plateau() {
+        let result = CapHitReason::classify(&[10, 5, 5]);
+        assert_eq!(result, CapHitReason::Plateau { delta: 5 });
+    }
+
+    #[test]
+    fn cap_hit_reason_plateau_at_zero_is_not_a_plateau() {
+        // Zero-delta means we converged; classifier should not flag.
+        let result = CapHitReason::classify(&[3, 0, 0]);
+        // Strictly decreasing tail → monotone-shrinking; not plateau.
+        match result {
+            CapHitReason::MonotoneShrinking { .. } => {}
+            other => panic!("expected MonotoneShrinking; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cap_hit_reason_detects_monotone_shrinking() {
+        let result = CapHitReason::classify(&[10, 7, 4, 2]);
+        match result {
+            CapHitReason::MonotoneShrinking { trajectory } => {
+                assert_eq!(trajectory.as_slice(), &[10, 7, 4, 2]);
+            }
+            other => panic!("expected MonotoneShrinking; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cap_hit_reason_non_monotone_non_oscillating_is_unknown() {
+        // Goes up then down without a clean period-2 pattern.
+        let result = CapHitReason::classify(&[3, 8, 2]);
+        assert_eq!(result, CapHitReason::Unknown);
+    }
+
+    #[test]
+    fn cap_hit_reason_serializes_snake_case_tag() {
+        let r = CapHitReason::Plateau { delta: 4 };
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(s.contains("\"kind\":\"plateau\""), "got {s}");
+        assert!(s.contains("\"delta\":4"), "got {s}");
+    }
+
+    #[test]
+    fn in_file_fixpoint_capped_serde_backcompat() {
+        // Older serialized notes without the `reason` field must still
+        // deserialize (serde(default) → CapHitReason::Unknown).
+        let legacy = r#"{"kind":"in_file_fixpoint_capped","iterations":7}"#;
+        let parsed: EngineNote = serde_json::from_str(legacy).unwrap();
+        match parsed {
+            EngineNote::InFileFixpointCapped { iterations, reason } => {
+                assert_eq!(iterations, 7);
+                assert_eq!(reason, CapHitReason::Unknown);
+            }
+            other => panic!("expected InFileFixpointCapped; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cross_file_fixpoint_capped_serde_backcompat() {
+        let legacy = r#"{"kind":"cross_file_fixpoint_capped","iterations":64}"#;
+        let parsed: EngineNote = serde_json::from_str(legacy).unwrap();
+        match parsed {
+            EngineNote::CrossFileFixpointCapped { iterations, reason } => {
+                assert_eq!(iterations, 64);
+                assert_eq!(reason, CapHitReason::Unknown);
+            }
+            other => panic!("expected CrossFileFixpointCapped; got {other:?}"),
+        }
     }
 
     #[test]

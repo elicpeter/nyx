@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 273
+    "corpus_size": 295
   },
   "cases": [
     {
@@ -4476,10 +4476,29 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 5]],
-      "expected_source_lines": [[6, 6]],
-      "expected_call_site_lines": [[7, 7]],
-      "tags": ["cross-file", "helper-function", "sink-in-helper"],
+      "expected_sink_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_call_site_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "tags": [
+        "cross-file",
+        "helper-function",
+        "sink-in-helper"
+      ],
       "disabled": false,
       "notes": "Cross-file sink-in-helper: app.py line 6 reads env source, line 7 calls run_cmd() (cross-file call), helper.py line 5 is the real os.system sink. Phase 3 attribution must report helper.py:5 as the primary location (not app.py:7) and include app.py:7 in flow_steps as a Call step."
     },
@@ -6515,9 +6534,22 @@
       "forbidden_rule_ids": [],
       "expected_severity": "MEDIUM",
       "expected_category": "Security",
-      "expected_sink_lines": [[13, 13]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["sqli", "shell-metachar-gate"],
+      "expected_sink_lines": [
+        [
+          13,
+          13
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "sqli",
+        "shell-metachar-gate"
+      ],
       "disabled": false,
       "notes": "Shell-metachar rejection is not a SQL sanitizer; SQL injection must still fire"
     },
@@ -6540,9 +6572,22 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["format-macro", "env-var"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "format-macro",
+        "env-var"
+      ],
       "disabled": false,
       "notes": "Tainted input interpolated via format!() into sh -c"
     },
@@ -6565,9 +6610,22 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[9, 9]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["match-expression", "env-var"],
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "match-expression",
+        "env-var"
+      ],
       "disabled": false,
       "notes": "env::var bound via match expression then used as Command program name"
     },
@@ -6590,9 +6648,22 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[7, 7]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["string-concat", "binary-op"],
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "string-concat",
+        "binary-op"
+      ],
       "disabled": false,
       "notes": "Tainted &str concatenated via + into sh -c argument"
     },
@@ -6615,11 +6686,25 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[14, 14]],
-      "expected_source_lines": [[6, 6]],
-      "tags": ["hashmap", "static-lookup", "dangerous-literal"],
+      "expected_sink_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "hashmap",
+        "static-lookup",
+        "dangerous-literal"
+      ],
       "disabled": false,
-      "notes": "Static HashMap where one inserted value carries shell metacharacters — finite-set suppression must NOT clear this sink"
+      "notes": "Static HashMap where one inserted value carries shell metacharacters \u2014 finite-set suppression must NOT clear this sink"
     },
     {
       "case_id": "rs-cmdi-009",
@@ -6640,12 +6725,31 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[5, 6]],
-      "expected_source_lines": [[10, 11]],
-      "expected_call_site_lines": [[12, 12]],
-      "tags": ["indirect", "helper-function", "multisink"],
+      "expected_sink_lines": [
+        [
+          5,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          11
+        ]
+      ],
+      "expected_call_site_lines": [
+        [
+          12,
+          12
+        ]
+      ],
+      "tags": [
+        "indirect",
+        "helper-function",
+        "multisink"
+      ],
       "disabled": false,
-      "notes": "Helper run_both takes two tainted params and invokes two Command sinks on consecutive lines (5, 6). Phase 3 attribution must land each finding's primary line inside the helper, not at the call site (line 12). NOTE: the summary currently stores one SinkSite per callee so both findings may collapse onto the same helper line today — the ±2 sink range and the call-site assertion guard against regression to caller-attribution regardless."
+      "notes": "Helper run_both takes two tainted params and invokes two Command sinks on consecutive lines (5, 6). Phase 3 attribution must land each finding's primary line inside the helper, not at the call site (line 12). NOTE: the summary currently stores one SinkSite per callee so both findings may collapse onto the same helper line today \u2014 the \u00b12 sink range and the call-site assertion guard against regression to caller-attribution regardless."
     },
     {
       "case_id": "rs-cmdi-cross-001",
@@ -6666,12 +6770,30 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[9, 9]],
-      "expected_source_lines": [[7, 7]],
-      "expected_call_site_lines": [[8, 8]],
-      "tags": ["cross-file", "propagation"],
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_call_site_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "cross-file",
+        "propagation"
+      ],
       "disabled": false,
-      "notes": "Cross-file taint: main.rs line 7 env::var → transform::wrap at line 8 → Command::new at line 9. Sink is the top-level Command::new; transform::wrap is a cross-file propagator, not a sink."
+      "notes": "Cross-file taint: main.rs line 7 env::var \u2192 transform::wrap at line 8 \u2192 Command::new at line 9. Sink is the top-level Command::new; transform::wrap is a cross-file propagator, not a sink."
     },
     {
       "case_id": "rs-path-005",
@@ -6692,11 +6814,25 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["filesystem", "remove", "known-gap"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "filesystem",
+        "remove",
+        "known-gap"
+      ],
       "disabled": false,
-      "notes": "fs::remove_file not in Rust sink rules — known FN coverage"
+      "notes": "fs::remove_file not in Rust sink rules \u2014 known FN coverage"
     },
     {
       "case_id": "rs-ssrf-003",
@@ -6717,11 +6853,24 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[6, 6]],
-      "expected_source_lines": [[4, 4]],
-      "tags": ["builder-chain", "known-gap"],
+      "expected_sink_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "tags": [
+        "builder-chain",
+        "known-gap"
+      ],
       "disabled": false,
-      "notes": "reqwest::Client::new().get(url).send() — builder chain not matched by reqwest::get/Client.execute sinks"
+      "notes": "reqwest::Client::new().get(url).send() \u2014 builder chain not matched by reqwest::get/Client.execute sinks"
     },
     {
       "case_id": "rs-sqli-001",
@@ -6742,11 +6891,25 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[8, 8]],
-      "expected_source_lines": [[5, 5]],
-      "tags": ["rusqlite", "format-macro", "known-gap"],
+      "expected_sink_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          5,
+          5
+        ]
+      ],
+      "tags": [
+        "rusqlite",
+        "format-macro",
+        "known-gap"
+      ],
       "disabled": false,
-      "notes": "rusqlite::Connection.execute not in Rust sink rules — SQLi class has no Rust coverage"
+      "notes": "rusqlite::Connection.execute not in Rust sink rules \u2014 SQLi class has no Rust coverage"
     },
     {
       "case_id": "rs-deser-001",
@@ -6767,11 +6930,25 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[9, 9]],
-      "expected_source_lines": [[8, 8]],
-      "tags": ["serde", "yaml", "known-gap"],
+      "expected_sink_lines": [
+        [
+          9,
+          9
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "serde",
+        "yaml",
+        "known-gap"
+      ],
       "disabled": false,
-      "notes": "serde_yaml::from_str not in Rust sink rules — deserialization class has no Rust coverage"
+      "notes": "serde_yaml::from_str not in Rust sink rules \u2014 deserialization class has no Rust coverage"
     },
     {
       "case_id": "rs-xss-001",
@@ -6792,11 +6969,25 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[4, 4]],
-      "expected_source_lines": [[3, 3]],
-      "tags": ["framework", "axum", "html"],
+      "expected_sink_lines": [
+        [
+          4,
+          4
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          3,
+          3
+        ]
+      ],
+      "tags": [
+        "framework",
+        "axum",
+        "html"
+      ],
       "disabled": false,
-      "notes": "Axum Path<String> → Html(format!(...)) — requires framework rules (Cargo.toml present)"
+      "notes": "Axum Path<String> \u2192 Html(format!(...)) \u2014 requires framework rules (Cargo.toml present)"
     },
     {
       "case_id": "rs-safe-009",
@@ -6815,7 +7006,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["match-guard", "validated"],
+      "tags": [
+        "match-guard",
+        "validated"
+      ],
       "disabled": false,
       "notes": "Match guard restricts input to ASCII alphanumeric before Command"
     },
@@ -6836,9 +7030,12 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["hashmap", "static-lookup"],
+      "tags": [
+        "hashmap",
+        "static-lookup"
+      ],
       "disabled": false,
-      "notes": "Tainted key indexes static HashMap — value is hardcoded, not tainted"
+      "notes": "Tainted key indexes static HashMap \u2014 value is hardcoded, not tainted"
     },
     {
       "case_id": "rs-safe-011",
@@ -6857,9 +7054,12 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["type-parse", "u16"],
+      "tags": [
+        "type-parse",
+        "u16"
+      ],
       "disabled": false,
-      "notes": "Input parsed to u16 before use as Command arg — type-narrowed"
+      "notes": "Input parsed to u16 before use as Command arg \u2014 type-narrowed"
     },
     {
       "case_id": "rs-safe-cross-001",
@@ -6878,7 +7078,10 @@
       "expected_category": null,
       "expected_sink_lines": null,
       "expected_source_lines": null,
-      "tags": ["cross-file", "sanitizer"],
+      "tags": [
+        "cross-file",
+        "sanitizer"
+      ],
       "disabled": false,
       "notes": "Cross-file: sanitize_shell in sanitizer.rs clears SHELL_ESCAPE cap before Command"
     },
@@ -7349,12 +7552,22 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [6, 6]
+        [
+          6,
+          6
+        ]
       ],
       "expected_source_lines": [
-        [5, 5]
+        [
+          5,
+          5
+        ]
       ],
-      "tags": ["innerHTML", "typed-express", "reflected"],
+      "tags": [
+        "innerHTML",
+        "typed-express",
+        "reflected"
+      ],
       "disabled": false,
       "notes": "Baseline TS XSS: typed Express handler flows req.query into innerHTML"
     },
@@ -7378,14 +7591,24 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [7, 7]
+        [
+          7,
+          7
+        ]
       ],
       "expected_source_lines": [
-        [5, 5]
+        [
+          5,
+          5
+        ]
       ],
-      "tags": ["as-any", "type-assertion", "innerHTML"],
+      "tags": [
+        "as-any",
+        "type-assertion",
+        "innerHTML"
+      ],
       "disabled": false,
-      "notes": "TS-specific: taint must flow through `as any` and chained assertions (as_expression→Kind::Seq)"
+      "notes": "TS-specific: taint must flow through `as any` and chained assertions (as_expression\u2192Kind::Seq)"
     },
     {
       "case_id": "ts-xss-003",
@@ -7405,12 +7628,22 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [11, 11]
+        [
+          11,
+          11
+        ]
       ],
       "expected_source_lines": [
-        [9, 9]
+        [
+          9,
+          9
+        ]
       ],
-      "tags": ["generics", "interprocedural", "innerHTML"],
+      "tags": [
+        "generics",
+        "interprocedural",
+        "innerHTML"
+      ],
       "disabled": false,
       "notes": "Tests Phase 11 inline context-sensitivity through generic identity<T> function"
     },
@@ -7432,12 +7665,22 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [7, 7]
+        [
+          7,
+          7
+        ]
       ],
       "expected_source_lines": [
-        [5, 5]
+        [
+          5,
+          5
+        ]
       ],
-      "tags": ["optional-chain", "adversarial-source", "innerHTML"],
+      "tags": [
+        "optional-chain",
+        "adversarial-source",
+        "innerHTML"
+      ],
       "disabled": false,
       "notes": "Adversarial: optional-chained source `req?.query?.name`. Tests whether the source matcher survives optional_chain_expression nodes. Expected FN until optional chaining is lowered to member access in labeling"
     },
@@ -7459,12 +7702,22 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [9, 10]
+        [
+          9,
+          10
+        ]
       ],
       "expected_source_lines": [
-        [7, 7]
+        [
+          7,
+          7
+        ]
       ],
-      "tags": ["tsx", "jsx", "dangerouslySetInnerHTML"],
+      "tags": [
+        "tsx",
+        "jsx",
+        "dangerouslySetInnerHTML"
+      ],
       "disabled": false,
       "notes": "TSX fixture: user bio flows into `dangerouslySetInnerHTML` and is sent via res.send. Exercises TSX grammar wiring (LANGUAGE_TSX) and confirms taint propagation through JSX expressions"
     },
@@ -7486,12 +7739,22 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [10, 10]
+        [
+          10,
+          10
+        ]
       ],
       "expected_source_lines": [
-        [9, 9]
+        [
+          9,
+          9
+        ]
       ],
-      "tags": ["sqli", "pg", "template-literal"],
+      "tags": [
+        "sqli",
+        "pg",
+        "template-literal"
+      ],
       "disabled": false,
       "notes": "Template-literal SQL via pg Pool.query; exact SQL_QUERY sink match"
     },
@@ -7513,14 +7776,24 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [10, 10]
+        [
+          10,
+          10
+        ]
       ],
       "expected_source_lines": [
-        [9, 9]
+        [
+          9,
+          9
+        ]
       ],
-      "tags": ["sqli", "prisma", "queryRawUnsafe"],
+      "tags": [
+        "sqli",
+        "prisma",
+        "queryRawUnsafe"
+      ],
       "disabled": false,
-      "notes": "Prisma $queryRawUnsafe — TS-specific ORM sink"
+      "notes": "Prisma $queryRawUnsafe \u2014 TS-specific ORM sink"
     },
     {
       "case_id": "ts-cmdi-001",
@@ -7540,12 +7813,22 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [9, 9]
+        [
+          9,
+          9
+        ]
       ],
       "expected_source_lines": [
-        [8, 8]
+        [
+          8,
+          8
+        ]
       ],
-      "tags": ["cmdi", "child_process", "template-literal"],
+      "tags": [
+        "cmdi",
+        "child_process",
+        "template-literal"
+      ],
       "disabled": false,
       "notes": "Destructured exec with template literal command from req.body"
     },
@@ -7567,14 +7850,25 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [11, 11]
+        [
+          11,
+          11
+        ]
       ],
       "expected_source_lines": [
-        [10, 10]
+        [
+          10,
+          10
+        ]
       ],
-      "tags": ["cmdi", "async", "promisify", "execAsync"],
+      "tags": [
+        "cmdi",
+        "async",
+        "promisify",
+        "execAsync"
+      ],
       "disabled": false,
-      "notes": "promisify-wrapped exec (execAsync) — TS rules enumerate execAsync as a command sink"
+      "notes": "promisify-wrapped exec (execAsync) \u2014 TS rules enumerate execAsync as a command sink"
     },
     {
       "case_id": "ts-ssrf-001",
@@ -7594,14 +7888,23 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [8, 8]
+        [
+          8,
+          8
+        ]
       ],
       "expected_source_lines": [
-        [7, 7]
+        [
+          7,
+          7
+        ]
       ],
-      "tags": ["ssrf", "axios"],
+      "tags": [
+        "ssrf",
+        "axios"
+      ],
       "disabled": false,
-      "notes": "axios.get with req.query.url — baseline TS SSRF"
+      "notes": "axios.get with req.query.url \u2014 baseline TS SSRF"
     },
     {
       "case_id": "ts-ssrf-002",
@@ -7621,14 +7924,25 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [9, 9]
+        [
+          9,
+          9
+        ]
       ],
       "expected_source_lines": [
-        [8, 8]
+        [
+          8,
+          8
+        ]
       ],
-      "tags": ["ssrf", "fastify", "framework-rules", "adversarial-framework"],
+      "tags": [
+        "ssrf",
+        "fastify",
+        "framework-rules",
+        "adversarial-framework"
+      ],
       "disabled": false,
-      "notes": "Fastify framework route — exercises framework_rules(ctx) source detection for request.query. Expected FN when framework context is not detected from a single file (no package.json)"
+      "notes": "Fastify framework route \u2014 exercises framework_rules(ctx) source detection for request.query. Expected FN when framework context is not detected from a single file (no package.json)"
     },
     {
       "case_id": "ts-ssrf-003",
@@ -7648,14 +7962,25 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [9, 9]
+        [
+          9,
+          9
+        ]
       ],
       "expected_source_lines": [
-        [7, 7]
+        [
+          7,
+          7
+        ]
       ],
-      "tags": ["ssrf", "axios", "url-encode", "adversarial-fn-guard"],
+      "tags": [
+        "ssrf",
+        "axios",
+        "url-encode",
+        "adversarial-fn-guard"
+      ],
       "disabled": false,
-      "notes": "Regression guard for prefix-locked SSRF suppression: encodeURIComponent is applied to the HOST (not path), so the template prefix 'https://' does not lock the destination. Must still fire as SSRF — proves the StringFact host check does not over-suppress when the attacker controls the authority component"
+      "notes": "Regression guard for prefix-locked SSRF suppression: encodeURIComponent is applied to the HOST (not path), so the template prefix 'https://' does not lock the destination. Must still fire as SSRF \u2014 proves the StringFact host check does not over-suppress when the attacker controls the authority component"
     },
     {
       "case_id": "ts-code_injection-001",
@@ -7677,12 +8002,21 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [6, 6]
+        [
+          6,
+          6
+        ]
       ],
       "expected_source_lines": [
-        [5, 5]
+        [
+          5,
+          5
+        ]
       ],
-      "tags": ["eval", "code-injection"],
+      "tags": [
+        "eval",
+        "code-injection"
+      ],
       "disabled": false,
       "notes": "Classic eval + user input; AST pattern ts.code_exec.eval applies"
     },
@@ -7706,14 +8040,23 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [6, 6]
+        [
+          6,
+          6
+        ]
       ],
       "expected_source_lines": [
-        [5, 5]
+        [
+          5,
+          5
+        ]
       ],
-      "tags": ["new-function", "code-injection"],
+      "tags": [
+        "new-function",
+        "code-injection"
+      ],
       "disabled": false,
-      "notes": "new Function(body) — AST pattern ts.code_exec.new_function"
+      "notes": "new Function(body) \u2014 AST pattern ts.code_exec.new_function"
     },
     {
       "case_id": "ts-open_redirect-001",
@@ -7735,12 +8078,21 @@
       "expected_severity": "MEDIUM",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [6, 6]
+        [
+          6,
+          6
+        ]
       ],
       "expected_source_lines": [
-        [5, 5]
+        [
+          5,
+          5
+        ]
       ],
-      "tags": ["open-redirect", "location-href"],
+      "tags": [
+        "open-redirect",
+        "location-href"
+      ],
       "disabled": false,
       "notes": "Open redirect via location.href = userUrl"
     },
@@ -7762,12 +8114,21 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [6, 6]
+        [
+          6,
+          6
+        ]
       ],
       "expected_source_lines": [
-        [5, 5]
+        [
+          5,
+          5
+        ]
       ],
-      "tags": ["path-traversal", "sendFile"],
+      "tags": [
+        "path-traversal",
+        "sendFile"
+      ],
       "disabled": false,
       "notes": "res.sendFile with unsanitized req.query.path"
     },
@@ -7791,12 +8152,19 @@
       "expected_severity": "MEDIUM",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [4, 4]
+        [
+          4,
+          4
+        ]
       ],
       "expected_source_lines": null,
-      "tags": ["crypto", "weak-hash", "md5"],
+      "tags": [
+        "crypto",
+        "weak-hash",
+        "md5"
+      ],
       "disabled": false,
-      "notes": "md5() imported from the md5 package — AST pattern ts.crypto.weak_hash_import"
+      "notes": "md5() imported from the md5 package \u2014 AST pattern ts.crypto.weak_hash_import"
     },
     {
       "case_id": "ts-secrets-001",
@@ -7818,12 +8186,18 @@
       "expected_severity": "MEDIUM",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [5, 5]
+        [
+          5,
+          5
+        ]
       ],
       "expected_source_lines": null,
-      "tags": ["secrets", "fallback-env"],
+      "tags": [
+        "secrets",
+        "fallback-env"
+      ],
       "disabled": false,
-      "notes": "process.env.KEY || 'hardcoded' — AST pattern ts.secrets.fallback_secret"
+      "notes": "process.env.KEY || 'hardcoded' \u2014 AST pattern ts.secrets.fallback_secret"
     },
     {
       "case_id": "ts-insecure_config-001",
@@ -7843,12 +8217,18 @@
       "expected_severity": "MEDIUM",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [4, 4]
+        [
+          4,
+          4
+        ]
       ],
       "expected_source_lines": null,
-      "tags": ["tls", "reject-unauthorized"],
+      "tags": [
+        "tls",
+        "reject-unauthorized"
+      ],
       "disabled": false,
-      "notes": "TLS verification disabled — AST pattern"
+      "notes": "TLS verification disabled \u2014 AST pattern"
     },
     {
       "case_id": "ts-insecure_config-002",
@@ -7868,12 +8248,18 @@
       "expected_severity": "MEDIUM",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [9, 9]
+        [
+          9,
+          9
+        ]
       ],
       "expected_source_lines": null,
-      "tags": ["cookies", "httpOnly"],
+      "tags": [
+        "cookies",
+        "httpOnly"
+      ],
       "disabled": false,
-      "notes": "session cookie httpOnly: false — AST pattern"
+      "notes": "session cookie httpOnly: false \u2014 AST pattern"
     },
     {
       "case_id": "ts-prototype-001",
@@ -7893,12 +8279,17 @@
       "expected_severity": "MEDIUM",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [4, 4]
+        [
+          4,
+          4
+        ]
       ],
       "expected_source_lines": null,
-      "tags": ["prototype-pollution"],
+      "tags": [
+        "prototype-pollution"
+      ],
       "disabled": false,
-      "notes": "__proto__ write — AST pattern"
+      "notes": "__proto__ write \u2014 AST pattern"
     },
     {
       "case_id": "ts-interproc-001",
@@ -7918,12 +8309,22 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [17, 17]
+        [
+          17,
+          17
+        ]
       ],
       "expected_source_lines": [
-        [15, 15]
+        [
+          15,
+          15
+        ]
       ],
-      "tags": ["cmdi", "class-method", "interprocedural"],
+      "tags": [
+        "cmdi",
+        "class-method",
+        "interprocedural"
+      ],
       "disabled": false,
       "notes": "Class method builder: Runner.build concatenates tainted target, caller passes result to exec. Stresses intra-file class-method call resolution"
     },
@@ -7947,14 +8348,24 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [13, 13]
+        [
+          13,
+          13
+        ]
       ],
       "expected_source_lines": [
-        [12, 12]
+        [
+          12,
+          12
+        ]
       ],
-      "tags": ["discriminated-union", "narrowing", "cmdi"],
+      "tags": [
+        "discriminated-union",
+        "narrowing",
+        "cmdi"
+      ],
       "disabled": false,
-      "notes": "TS discriminated-union narrowing (kind === 'ping') does not sanitize — a.target is still user-controlled. Guards against the FP of treating `kind` guards as security sanitizers"
+      "notes": "TS discriminated-union narrowing (kind === 'ping') does not sanitize \u2014 a.target is still user-controlled. Guards against the FP of treating `kind` guards as security sanitizers"
     },
     {
       "case_id": "ts-type_system-002",
@@ -7974,15 +8385,29 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [10, 10],
-        [20, 20]
+        [
+          10,
+          10
+        ],
+        [
+          20,
+          20
+        ]
       ],
       "expected_source_lines": [
-        [19, 19]
+        [
+          19,
+          19
+        ]
       ],
-      "tags": ["interface", "dispatch", "adversarial-interprocedural", "cmdi"],
+      "tags": [
+        "interface",
+        "dispatch",
+        "adversarial-interprocedural",
+        "cmdi"
+      ],
       "disabled": false,
-      "notes": "Interface-typed receiver `impl: Runner` → resolve to ShellRunner.run → exec. Tests intra-file method resolution through interface types; expected FN if only normalized callee-name matching is used"
+      "notes": "Interface-typed receiver `impl: Runner` \u2192 resolve to ShellRunner.run \u2192 exec. Tests intra-file method resolution through interface types; expected FN if only normalized callee-name matching is used"
     },
     {
       "case_id": "ts-type_system-003",
@@ -8002,13 +8427,26 @@
       "expected_severity": "HIGH",
       "expected_category": "Security",
       "expected_sink_lines": [
-        [15, 15],
-        [23, 23]
+        [
+          15,
+          15
+        ],
+        [
+          23,
+          23
+        ]
       ],
       "expected_source_lines": [
-        [23, 23]
+        [
+          23,
+          23
+        ]
       ],
-      "tags": ["decorator", "adversarial-decorator", "cmdi"],
+      "tags": [
+        "decorator",
+        "adversarial-decorator",
+        "cmdi"
+      ],
       "disabled": false,
       "notes": "Method decorator wraps Service.run; the undecorated body still contains exec(cmd). Tests whether decorator syntax interferes with class-method extraction. Expected FN if decorator parsing derails summary extraction"
     },
@@ -8029,7 +8467,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "dompurify"],
+      "tags": [
+        "sanitizer",
+        "dompurify"
+      ],
       "disabled": false,
       "notes": "DOMPurify.sanitize inline before innerHTML"
     },
@@ -8050,7 +8491,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["type-coercion", "Number"],
+      "tags": [
+        "type-coercion",
+        "Number"
+      ],
       "disabled": false,
       "notes": "Number() coercion sanitizes SQL integer interpolation; Number is in TS sanitizer rules with Cap::all()"
     },
@@ -8071,9 +8515,13 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["url-encode", "ssrf", "adversarial-fp"],
+      "tags": [
+        "url-encode",
+        "ssrf",
+        "adversarial-fp"
+      ],
       "disabled": false,
-      "notes": "Semantically safe: user term is URL-encoded into a fixed-host URL; no SSRF possible. Known Nyx weak spot — encodeURIComponent is Cap::URL_ENCODE while axios sink is Cap::SSRF, so cap mismatch may yield FP. Documents the cap-overlap limitation"
+      "notes": "Semantically safe: user term is URL-encoded into a fixed-host URL; no SSRF possible. Known Nyx weak spot \u2014 encodeURIComponent is Cap::URL_ENCODE while axios sink is Cap::SSRF, so cap mismatch may yield FP. Documents the cap-overlap limitation"
     },
     {
       "case_id": "ts-safe-004",
@@ -8092,7 +8540,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["no-source", "hardcoded"],
+      "tags": [
+        "no-source",
+        "hardcoded"
+      ],
       "disabled": false,
       "notes": "Hardcoded URL, no user input; should be a clean TN"
     },
@@ -8113,7 +8564,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "validator"],
+      "tags": [
+        "sanitizer",
+        "validator"
+      ],
       "disabled": false,
       "notes": "validator.escape sanitizes XSS payload before innerHTML"
     },
@@ -8136,9 +8590,13 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["type-check", "typeof", "eval"],
+      "tags": [
+        "type-check",
+        "typeof",
+        "eval"
+      ],
       "disabled": false,
-      "notes": "typeof === 'number' guards eval; only numbers reach sink. Forbidden ts.code_exec.eval here because the taint flow is gated — pattern-only detection would be an FP"
+      "notes": "typeof === 'number' guards eval; only numbers reach sink. Forbidden ts.code_exec.eval here because the taint flow is gated \u2014 pattern-only detection would be an FP"
     },
     {
       "case_id": "ts-safe-007",
@@ -8157,7 +8615,12 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["sanitizer", "interprocedural", "dompurify", "adversarial-fp"],
+      "tags": [
+        "sanitizer",
+        "interprocedural",
+        "dompurify",
+        "adversarial-fp"
+      ],
       "disabled": false,
       "notes": "DOMPurify wrapped in cleanHtml() helper. Known JS weak spot (js-interproc-safe-001 is an FP); documents whether TS handling matches"
     },
@@ -8178,7 +8641,10 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["constant", "no-source"],
+      "tags": [
+        "constant",
+        "no-source"
+      ],
       "disabled": false,
       "notes": "Compile-time constant SQL; no user input; should TN"
     },
@@ -8199,9 +8665,13 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["parameterized", "sqli", "adversarial-fp"],
+      "tags": [
+        "parameterized",
+        "sqli",
+        "adversarial-fp"
+      ],
       "disabled": false,
-      "notes": "Parameterized pg query: SQL string is constant, id flows as $1 placeholder value. Semantically safe but taint still reaches pool.query call; known Nyx limitation — positional args aren't distinguished for SQL_QUERY sink"
+      "notes": "Parameterized pg query: SQL string is constant, id flows as $1 placeholder value. Semantically safe but taint still reaches pool.query call; known Nyx limitation \u2014 positional args aren't distinguished for SQL_QUERY sink"
     },
     {
       "case_id": "ts-safe-010",
@@ -8220,7 +8690,11 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["tsx", "jsx", "auto-escape"],
+      "tags": [
+        "tsx",
+        "jsx",
+        "auto-escape"
+      ],
       "disabled": false,
       "notes": "TSX fixture: user bio rendered as JSX text child. React auto-escapes JSX text so this is semantically safe. Guards against over-flagging JSX expressions now that TSX grammar is wired"
     },
@@ -8243,9 +8717,24 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[31, 31]],
-      "expected_source_lines": [[26, 27]],
-      "tags": ["cve", "ray", "rce", "flask"],
+      "expected_sink_lines": [
+        [
+          31,
+          31
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          26,
+          27
+        ]
+      ],
+      "tags": [
+        "cve",
+        "ray",
+        "rce",
+        "flask"
+      ],
       "disabled": false,
       "notes": "CVE-2023-48022: Ray dashboard job-submission RCE via shell-interpreted entrypoint in os.system. Apache-2.0"
     },
@@ -8270,7 +8759,12 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["cve", "ray", "patched", "negative"],
+      "tags": [
+        "cve",
+        "ray",
+        "patched",
+        "negative"
+      ],
       "disabled": false,
       "notes": "CVE-2023-48022 patched counterpart: shlex.split + subprocess.Popen(shell=False); regression guard that Nyx does not refire on the fix"
     },
@@ -8293,9 +8787,25 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[30, 30]],
-      "expected_source_lines": [[23, 25]],
-      "tags": ["cve", "mongo-express", "rce", "express", "eval"],
+      "expected_sink_lines": [
+        [
+          30,
+          30
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          23,
+          25
+        ]
+      ],
+      "tags": [
+        "cve",
+        "mongo-express",
+        "rce",
+        "express",
+        "eval"
+      ],
       "disabled": false,
       "notes": "CVE-2019-14939: mongo-express /checkValid evaluated req.body.document with eval(); RCE on the admin interface. MIT"
     },
@@ -8320,7 +8830,12 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["cve", "mongo-express", "patched", "negative"],
+      "tags": [
+        "cve",
+        "mongo-express",
+        "patched",
+        "negative"
+      ],
       "disabled": false,
       "notes": "CVE-2019-14939 patched counterpart: EJSON.parse replaces eval; regression guard that Nyx does not refire on the fix"
     },
@@ -8341,9 +8856,25 @@
       "forbidden_rule_ids": [],
       "expected_severity": "HIGH",
       "expected_category": "Security",
-      "expected_sink_lines": [[32, 32]],
-      "expected_source_lines": [[27, 28]],
-      "tags": ["cve", "follow-redirects", "ssrf", "express", "axios"],
+      "expected_sink_lines": [
+        [
+          32,
+          32
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          27,
+          28
+        ]
+      ],
+      "tags": [
+        "cve",
+        "follow-redirects",
+        "ssrf",
+        "express",
+        "axios"
+      ],
       "disabled": false,
       "notes": "CVE-2023-26159: follow-redirects leaked Authorization across cross-origin redirects; caller-side pattern is SSRF via unvalidated user URL into HTTP client. MIT"
     },
@@ -8366,9 +8897,758 @@
       "expected_category": "Security",
       "expected_sink_lines": [],
       "expected_source_lines": [],
-      "tags": ["cve", "follow-redirects", "patched", "negative"],
+      "tags": [
+        "cve",
+        "follow-redirects",
+        "patched",
+        "negative"
+      ],
       "disabled": false,
       "notes": "CVE-2023-26159 patched counterpart: URL allowlist check guards axios.get; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-py-2017-18342-vulnerable",
+      "file": "cve_corpus/python/CVE-2017-18342/vulnerable.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "deserialization",
+      "cwe": "CWE-502",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "py.deser.yaml_load"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          30,
+          30
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          26,
+          26
+        ]
+      ],
+      "tags": [
+        "cve",
+        "pyyaml",
+        "deserialization",
+        "flask"
+      ],
+      "disabled": false,
+      "notes": "CVE-2017-18342: PyYAML yaml.load default loader instantiated arbitrary Python objects from !!python/object tags; RCE on any app passing untrusted YAML. MIT"
+    },
+    {
+      "case_id": "cve-py-2017-18342-patched",
+      "file": "cve_corpus/python/CVE-2017-18342/patched.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "py.deser.yaml_load",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "pyyaml",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2017-18342 patched counterpart: yaml.safe_load replaces yaml.load; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-php-2017-9841-vulnerable",
+      "file": "cve_corpus/php/CVE-2017-9841/vulnerable.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "code_exec",
+      "cwe": "CWE-94",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "php.code_exec.eval"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          22,
+          22
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          21,
+          21
+        ]
+      ],
+      "tags": [
+        "cve",
+        "phpunit",
+        "rce",
+        "eval",
+        "stdin"
+      ],
+      "disabled": false,
+      "notes": "CVE-2017-9841: PHPUnit Util/PHP/eval-stdin.php fed php://input to eval(); mass-scanned for webshell deployment. BSD-3-Clause"
+    },
+    {
+      "case_id": "cve-php-2017-9841-patched",
+      "file": "cve_corpus/php/CVE-2017-9841/patched.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "php.code_exec.eval",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "phpunit",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2017-9841 patched counterpart: stub rejects non-CLI SAPI and removes the eval sink entirely; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-php-2018-15133-vulnerable",
+      "file": "cve_corpus/php/CVE-2018-15133/vulnerable.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "deserialization",
+      "cwe": "CWE-502",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "php.deser.unserialize"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          26,
+          26
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          24,
+          24
+        ]
+      ],
+      "tags": [
+        "cve",
+        "laravel",
+        "deserialization",
+        "cookie"
+      ],
+      "disabled": false,
+      "notes": "CVE-2018-15133: Laravel <= 5.6.29 unserialized a cookie-borne payload without HMAC verification; known gadget chains reached arbitrary code when APP_KEY leaked. MIT"
+    },
+    {
+      "case_id": "cve-php-2018-15133-patched",
+      "file": "cve_corpus/php/CVE-2018-15133/patched.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "php.deser.unserialize",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "laravel",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2018-15133 patched counterpart: HMAC-verified JSON cookie replaces PHP-serialized payload; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-rb-2013-0156-vulnerable",
+      "file": "cve_corpus/ruby/CVE-2013-0156/vulnerable.rb",
+      "language": "ruby",
+      "is_vulnerable": true,
+      "vuln_class": "deserialization",
+      "cwe": "CWE-502",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "rb.deser.yaml_load"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          28,
+          28
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "rails",
+        "deserialization",
+        "params"
+      ],
+      "disabled": false,
+      "notes": "CVE-2013-0156: Rails XML params parser round-tripped tagged YAML through YAML.load, instantiating arbitrary Ruby objects; unauthenticated RCE on every affected Rails app. MIT"
+    },
+    {
+      "case_id": "cve-rb-2013-0156-patched",
+      "file": "cve_corpus/ruby/CVE-2013-0156/patched.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "rb.deser.yaml_load",
+        "rb.deser.marshal_load",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "rails",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2013-0156 patched counterpart: params decoded as JSON, no YAML loader on untrusted input; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-java-2015-7501-vulnerable",
+      "file": "cve_corpus/java/CVE-2015-7501/vulnerable.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "deserialization",
+      "cwe": "CWE-502",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "java.deser.readobject"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          35,
+          35
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          34,
+          34
+        ]
+      ],
+      "tags": [
+        "cve",
+        "commons-collections",
+        "deserialization",
+        "servlet"
+      ],
+      "disabled": false,
+      "notes": "CVE-2015-7501: Apache Commons Collections InvokerTransformer chain drove RCE on any app reading attacker-controlled bytes through ObjectInputStream.readObject. Apache-2.0"
+    },
+    {
+      "case_id": "cve-java-2015-7501-patched",
+      "file": "cve_corpus/java/CVE-2015-7501/patched.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "java.deser.readobject",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "commons-collections",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2015-7501 patched counterpart: Jackson JSON codec replaces native Java deserialization; no ObjectInputStream on the request path; regression guard"
+    },
+    {
+      "case_id": "cve-go-2022-30323-vulnerable",
+      "file": "cve_corpus/go/CVE-2022-30323/vulnerable.go",
+      "language": "go",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "go.cmdi.exec_command"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          34,
+          34
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          30,
+          30
+        ]
+      ],
+      "tags": [
+        "cve",
+        "go-getter",
+        "cmdi",
+        "git"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-30323: hashicorp/go-getter forwarded user URLs into `git clone` argv, letting `ext::`/`upload-pack=` aliases reach a shell; affected Terraform, Packer, Nomad, Vault. MPL-2.0"
+    },
+    {
+      "case_id": "cve-go-2022-30323-patched",
+      "file": "cve_corpus/go/CVE-2022-30323/patched.go",
+      "language": "go",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "go.cmdi.exec_command",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "go-getter",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-30323 patched counterpart: scheme allowlist + in-process go-git clone removes the exec.Command path; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-c-2016-3714-vulnerable",
+      "file": "cve_corpus/c/CVE-2016-3714/vulnerable.c",
+      "language": "c",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "c.cmdi.system"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          34,
+          34
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "imagemagick",
+        "imagetragick",
+        "cmdi"
+      ],
+      "disabled": false,
+      "notes": "CVE-2016-3714 (ImageTragick): ImageMagick delegate policies substituted user-controlled filenames into shell templates passed to system(), enabling unauthenticated RCE via crafted MVG/MSL uploads. ImageMagick License"
+    },
+    {
+      "case_id": "cve-c-2016-3714-patched",
+      "file": "cve_corpus/c/CVE-2016-3714/patched.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "c.cmdi.system",
+        "c.cmdi.popen",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "imagemagick",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2016-3714 patched counterpart: in-process coder + basename check removes the system() path; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-c-2019-18634-vulnerable",
+      "file": "cve_corpus/c/CVE-2019-18634/vulnerable.c",
+      "language": "c",
+      "is_vulnerable": true,
+      "vuln_class": "memory_safety",
+      "cwe": "CWE-120",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "c.memory.strcpy"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          39,
+          39
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "sudo",
+        "pwfeedback",
+        "stack-overflow"
+      ],
+      "disabled": false,
+      "notes": "CVE-2019-18634: sudo pwfeedback stack buffer overflow in getln() when a long stdin token spilled past the feedback buffer; local root on Linux/macOS sudoers with pwfeedback enabled. ISC"
+    },
+    {
+      "case_id": "cve-c-2019-18634-patched",
+      "file": "cve_corpus/c/CVE-2019-18634/patched.c",
+      "language": "c",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "c.memory.strcpy",
+        "c.memory.strcat",
+        "c.memory.sprintf",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "sudo",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2019-18634 patched counterpart: bounded copy routine replaces the strcpy sink; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-cpp-2019-13132-vulnerable",
+      "file": "cve_corpus/cpp/CVE-2019-13132/vulnerable.cpp",
+      "language": "cpp",
+      "is_vulnerable": true,
+      "vuln_class": "memory_safety",
+      "cwe": "CWE-120",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "cpp.memory.strcpy"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          32,
+          32
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "libzmq",
+        "zmtp",
+        "stack-overflow"
+      ],
+      "disabled": false,
+      "notes": "CVE-2019-13132: ZeroMQ libzmq v2 decoder trusted attacker-supplied metadata length and copied peer bytes into a fixed on-stack buffer, enabling unauthenticated RCE on curve-disabled sockets. MPL-2.0"
+    },
+    {
+      "case_id": "cve-cpp-2019-13132-patched",
+      "file": "cve_corpus/cpp/CVE-2019-13132/patched.cpp",
+      "language": "cpp",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cpp.memory.strcpy",
+        "cpp.memory.strcat",
+        "cpp.memory.sprintf",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "libzmq",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2019-13132 patched counterpart: bounded std::string assign + hard cap removes the strcpy sink; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-cpp-2022-1941-vulnerable",
+      "file": "cve_corpus/cpp/CVE-2022-1941/vulnerable.cpp",
+      "language": "cpp",
+      "is_vulnerable": true,
+      "vuln_class": "memory_safety",
+      "cwe": "CWE-120",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "cpp.memory.strcpy"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          37,
+          37
+        ]
+      ],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "protobuf",
+        "parse-context",
+        "heap-overflow"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-1941: Protocol Buffers C++ ParseContext copied unknown-field bytes into a backing buffer without clamping the declared length, causing OOB read/write in any binary decoding untrusted protobufs. BSD-3-Clause"
+    },
+    {
+      "case_id": "cve-cpp-2022-1941-patched",
+      "file": "cve_corpus/cpp/CVE-2022-1941/patched.cpp",
+      "language": "cpp",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "cpp.memory.strcpy",
+        "cpp.memory.strcat",
+        "cpp.memory.sprintf",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "protobuf",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-1941 patched counterpart: bounded std::string assign + MAX_LABEL cap removes the strcpy sink; regression guard that Nyx does not refire on the fix"
+    },
+    {
+      "case_id": "cve-java-2017-12629-vulnerable",
+      "file": "cve_corpus/java/CVE-2017-12629/vulnerable.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "java.cmdi.runtime_exec"
+      ],
+      "allowed_alternative_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          33,
+          33
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          29,
+          29
+        ]
+      ],
+      "tags": [
+        "cve",
+        "solr",
+        "xslt",
+        "rce"
+      ],
+      "disabled": false,
+      "notes": "CVE-2017-12629: Apache Solr XSLT response writer evaluated attacker-supplied stylesheets that reached Runtime.exec via XPath Java-binding extensions; unauthenticated RCE on any exposed Solr node. Apache-2.0"
+    },
+    {
+      "case_id": "cve-java-2017-12629-patched",
+      "file": "cve_corpus/java/CVE-2017-12629/patched.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "java.cmdi.runtime_exec",
+        "java.reflection.class_forname",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "solr",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2017-12629 patched counterpart: transformer name allowlist + in-process secure TransformerFactory removes the Runtime.exec path; regression guard that Nyx does not refire on the fix"
     }
   ]
 }

@@ -2609,7 +2609,8 @@ tr.selected td {
   color: var(--text-secondary);
 }
 .scan-modal-form .form-group input,
-.scan-modal-form .form-group textarea {
+.scan-modal-form .form-group textarea,
+.scan-modal-form .form-group select {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -2617,6 +2618,12 @@ tr.selected td {
   font-size: var(--text-sm);
   background: var(--bg);
   color: var(--text);
+}
+.scan-modal-form .form-group .form-hint {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
 }
 .scan-modal-actions {
   display: flex;

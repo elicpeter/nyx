@@ -440,11 +440,17 @@ fn every_engine_note_direction_is_documented() {
         LossDirection::UnderReport,
     );
     check(
-        EngineNote::InFileFixpointCapped { iterations: 1 },
+        EngineNote::InFileFixpointCapped {
+            iterations: 1,
+            reason: nyx_scanner::engine_notes::CapHitReason::Unknown,
+        },
         LossDirection::UnderReport,
     );
     check(
-        EngineNote::CrossFileFixpointCapped { iterations: 1 },
+        EngineNote::CrossFileFixpointCapped {
+            iterations: 1,
+            reason: nyx_scanner::engine_notes::CapHitReason::Unknown,
+        },
         LossDirection::UnderReport,
     );
     check(

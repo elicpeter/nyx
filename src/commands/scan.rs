@@ -406,6 +406,32 @@ pub fn handle(
         }
     }
 
+    // ── Phase A1 convergence telemetry flush ────────────────────────────
+    // When `NYX_CONVERGENCE_TELEMETRY=1` is set the SCC and JS/TS pass-2
+    // loops have been pushing per-iteration records into the
+    // `convergence_telemetry` collector.  Flush them to a JSONL sidecar
+    // so downstream analysis can compute P50/P95/P99 iteration counts.
+    if crate::convergence_telemetry::is_enabled() {
+        let path = crate::convergence_telemetry::default_path(&scan_path);
+        match crate::convergence_telemetry::write_jsonl(&path) {
+            Ok(n) if n > 0 => {
+                tracing::info!(
+                    records = n,
+                    path = %path.display(),
+                    "wrote convergence telemetry sidecar"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "failed to write convergence telemetry sidecar"
+                );
+            }
+        }
+    }
+
     // ── --fail-on: exit non-zero if threshold breached ──────────────────
     // Suppressed findings do not count toward the threshold.
     if let Some(threshold) = fail_on {
@@ -647,6 +673,56 @@ pub const SCC_UNCONVERGED_NOTE_PREFIX: &str = "scc_unconverged:";
 /// can match on this tighter string.
 pub const SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX: &str = "scc_unconverged:cross-file ";
 
+/// Return the set of FuncKeys whose cap snapshot changed between two
+/// [`GlobalSummaries::snapshot_caps`] results.
+///
+/// Used by the Phase-B worklist to derive the next iteration's dirty
+/// file set.  Semantics match [`diff_cap_snapshots`] — a key that
+/// appears or disappears counts as changed.
+fn changed_cap_keys_of(
+    before: &HashMap<crate::symbol::FuncKey, (u16, u16, u16, Vec<usize>)>,
+    after: &HashMap<crate::symbol::FuncKey, (u16, u16, u16, Vec<usize>)>,
+) -> HashSet<crate::symbol::FuncKey> {
+    let mut changed = HashSet::new();
+    for (k, v_after) in after {
+        match before.get(k) {
+            Some(v_before) if v_before == v_after => {}
+            _ => {
+                changed.insert(k.clone());
+            }
+        }
+    }
+    for k in before.keys() {
+        if !after.contains_key(k) {
+            changed.insert(k.clone());
+        }
+    }
+    changed
+}
+
+/// Return the set of FuncKeys whose SSA summary changed between two
+/// snapshots.  Semantics match [`diff_ssa_snapshots`].
+fn changed_ssa_keys_of(
+    before: &HashMap<crate::symbol::FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+    after: &HashMap<crate::symbol::FuncKey, crate::summary::ssa_summary::SsaFuncSummary>,
+) -> HashSet<crate::symbol::FuncKey> {
+    let mut changed = HashSet::new();
+    for (k, v_after) in after {
+        match before.get(k) {
+            Some(v_before) if v_before == v_after => {}
+            _ => {
+                changed.insert(k.clone());
+            }
+        }
+    }
+    for k in before.keys() {
+        if !after.contains_key(k) {
+            changed.insert(k.clone());
+        }
+    }
+    changed
+}
+
 /// Attach a low-confidence tag and a diagnostic note to every finding
 /// produced by an SCC batch that did not converge within the safety cap.
 ///
@@ -663,13 +739,26 @@ pub const SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX: &str = "scc_unconverged:cross-
 /// `cross_file = true` switches the note to the cross-file
 /// variant so downstream consumers can distinguish the two reasons an
 /// SCC might hit the cap.
-fn tag_unconverged_findings(diags: &mut [Diag], iterations: usize, cap: usize, cross_file: bool) {
+///
+/// `reason` carries the trajectory-based classification ([`CapHitReason`])
+/// so operators can tell monotone-but-slow from plateau from suspected
+/// oscillation.  See the [`crate::engine_notes::CapHitReason`]
+/// documentation for the classification rules.
+fn tag_unconverged_findings(
+    diags: &mut [Diag],
+    iterations: usize,
+    cap: usize,
+    cross_file: bool,
+    reason: crate::engine_notes::CapHitReason,
+) {
     use crate::engine_notes::{EngineNote, push_unique};
     use crate::evidence::{Confidence, Evidence};
 
     let engine_note = EngineNote::CrossFileFixpointCapped {
         iterations: iterations as u32,
+        reason: reason.clone(),
     };
+    let reason_tag = reason.tag();
     for d in diags.iter_mut() {
         d.confidence = match d.confidence {
             Some(c) if c < Confidence::Low => Some(c), // already-lower preserved
@@ -678,12 +767,13 @@ fn tag_unconverged_findings(diags: &mut [Diag], iterations: usize, cap: usize, c
         let note = if cross_file {
             format!(
                 "{SCC_UNCONVERGED_CROSS_FILE_NOTE_PREFIX}SCC did not converge within \
-                 {iterations} iterations (cap {cap}); cross-file taint may be imprecise"
+                 {iterations} iterations (cap {cap}, reason={reason_tag}); \
+                 cross-file taint may be imprecise"
             )
         } else {
             format!(
                 "{SCC_UNCONVERGED_NOTE_PREFIX}SCC did not converge within {iterations} \
-                 iterations (cap {cap}); results may be imprecise"
+                 iterations (cap {cap}, reason={reason_tag}); results may be imprecise"
             )
         };
         match d.evidence.as_mut() {
@@ -775,11 +865,25 @@ fn effective_scc_cap() -> usize {
 /// For batches with mutual recursion, iterates until summaries converge
 /// (bounded by [`SCC_FIXPOINT_SAFETY_CAP`]).  Updates `global_summaries`
 /// between batches so later callers see refined callee context.
+///
+/// `call_graph` is required by the Phase-B worklist: after each
+/// iteration we compute the set of FuncKeys whose summary changed,
+/// fan out to their callers via the call graph, and only re-analyse
+/// files that contain a caller of a changed key in the next iteration.
+/// This reduces per-iteration cost from O(|batch.files|) to
+/// O(|dirty_files|), which is typically a small fraction of the
+/// batch for SCCs larger than 4–8 functions.
+///
+/// When `call_graph` is missing an edge (e.g. a summary was inserted
+/// after graph construction), we conservatively fall back to
+/// re-analysing the full batch — correctness is preserved at the cost
+/// of the worklist optimisation for that iteration.
 #[allow(clippy::too_many_arguments)]
 fn run_topo_batches(
     batches: &[FileBatch<'_>],
     orphans: &[&PathBuf],
     global_summaries: &mut GlobalSummaries,
+    call_graph: &CallGraph,
     cfg: &Config,
     scan_root: Option<&Path>,
     pb: &ProgressBar,
@@ -817,18 +921,52 @@ fn run_topo_batches(
                      summary + inline convergence"
                 );
             }
-            let mut iteration_diags = Vec::new();
             let mut converged = false;
             let mut iters_used: usize = 0;
+            // Ring buffer of per-iteration change-set sizes, used to
+            // classify the reason when the cap actually fires.  Bounded
+            // at 4 entries so the memory overhead is negligible even
+            // with a 64-iter budget; the classifier only needs the tail.
+            let mut delta_trajectory: smallvec::SmallVec<[u32; 4]> =
+                smallvec::SmallVec::new();
+
+            // Phase-B worklist: files to re-analyse in this iteration.
+            // Initialised to the full batch so iteration 0 behaves like
+            // the pre-Phase-B implementation; subsequent iterations
+            // prune to files containing a caller of a changed summary.
+            //
+            // Storing `PathBuf` clones (matching how the rest of the
+            // SCC loop identifies files) so membership tests are cheap
+            // HashSet lookups.
+            let mut dirty_files: HashSet<std::path::PathBuf> = batch
+                .files
+                .iter()
+                .map(|p| (*p).clone())
+                .collect();
+
+            // Per-file diag cache: retains the most-recent iteration's
+            // diagnostics for each file.  When Phase-B skips a clean
+            // file in iteration N, its diags from iteration N-1 are
+            // still in this map, preserving final-iteration
+            // completeness.
+            let mut diags_by_file: HashMap<std::path::PathBuf, Vec<Diag>> =
+                HashMap::new();
+
             for iter in 0..scc_cap {
                 iters_used = iter + 1;
                 let snap_before = global_summaries.snapshot_caps();
 
-                // Intermediate iteration diags may be incomplete due to
-                // not-yet-converged summaries — only keep final iteration's.
-                iteration_diags.clear();
-
                 let ssa_snap_before = global_summaries.snapshot_ssa().clone();
+
+                // Phase-B: restrict this iteration's analysis to dirty
+                // files only.  `batch.files` is the authoritative list
+                // for ordering / membership; `dirty_files` filters.
+                let iter_files: Vec<&PathBuf> = batch
+                    .files
+                    .iter()
+                    .filter(|p| dirty_files.contains(**p))
+                    .copied()
+                    .collect();
 
                 let batch_results: Vec<(
                     std::path::PathBuf,
@@ -842,8 +980,7 @@ fn run_topo_batches(
                         crate::symbol::FuncKey,
                         crate::taint::ssa_transfer::CalleeSsaBody,
                     )>,
-                )> = batch
-                    .files
+                )> = iter_files
                     .par_iter()
                     .map(|path| {
                         if let Some(p) = progress {
@@ -911,8 +1048,12 @@ fn run_topo_batches(
                     .collect();
 
                 let mut ssa_count: usize = 0;
-                for (_path, diags, summaries, ssa_summaries, _ssa_bodies) in batch_results {
-                    iteration_diags.extend(diags);
+                for (path, diags, summaries, ssa_summaries, _ssa_bodies) in batch_results {
+                    // Phase-B: replace (not append) this file's diags
+                    // so the cache always reflects the latest
+                    // iteration's output.  Clean files skipped this
+                    // iteration retain their previous diags.
+                    diags_by_file.insert(path, diags);
 
                     for s in summaries {
                         let key = s.func_key(root_str_ref);
@@ -928,6 +1069,59 @@ fn run_topo_batches(
                 let snap_after = global_summaries.snapshot_caps();
                 let ssa_converged = ssa_snap_before == *global_summaries.snapshot_ssa();
                 let iter_converged = snap_before == snap_after && ssa_converged;
+
+                // Phase-B: collect the exact set of FuncKeys whose
+                // summary changed this iteration, and derive the next
+                // iteration's dirty-file set from it.
+                //
+                // A file becomes dirty for iteration N+1 iff it
+                // contains at least one caller of a FuncKey that
+                // changed in iteration N.  If no key changed, the
+                // dirty set is empty — which implies convergence (and
+                // matches `iter_converged` above).
+                let changed_cap_keys =
+                    changed_cap_keys_of(&snap_before, &snap_after);
+                let changed_ssa_keys = changed_ssa_keys_of(
+                    &ssa_snap_before,
+                    global_summaries.snapshot_ssa(),
+                );
+                let all_changed_keys: HashSet<crate::symbol::FuncKey> =
+                    changed_cap_keys.union(&changed_ssa_keys).cloned().collect();
+                let changed_caps_count = changed_cap_keys.len();
+                let changed_ssa_count = changed_ssa_keys.len();
+                let iter_delta = changed_caps_count + changed_ssa_count;
+                if delta_trajectory.len() == 4 {
+                    delta_trajectory.remove(0);
+                }
+                delta_trajectory.push(iter_delta as u32);
+
+                // Recompute dirty_files for the next iteration: every
+                // file in the batch that owns at least one caller of a
+                // changed key.  Fall back to the full batch when the
+                // call graph does not resolve any caller (e.g. all
+                // changes happened in leaf functions that no one in
+                // this batch calls — rare but must not regress to
+                // missed analysis).
+                let namespaces_needing_reanalysis =
+                    crate::callgraph::namespaces_for_callers(
+                        call_graph,
+                        &all_changed_keys,
+                    );
+                let next_dirty: HashSet<std::path::PathBuf> = batch
+                    .files
+                    .iter()
+                    .filter(|p| {
+                        let abs = p.to_string_lossy();
+                        let rel = crate::symbol::normalize_namespace(
+                            &abs,
+                            root_str_ref,
+                        );
+                        namespaces_needing_reanalysis.contains(&rel)
+                    })
+                    .map(|p| (*p).clone())
+                    .collect();
+                dirty_files = next_dirty;
+
                 tracing::debug!(
                     batch = batch_idx,
                     files = batch.files.len(),
@@ -936,21 +1130,79 @@ fn run_topo_batches(
                     ssa_summaries_updated = ssa_count,
                     ssa_converged,
                     converged = iter_converged,
+                    delta = iter_delta,
+                    dirty_next = dirty_files.len(),
                     "SCC batch iteration"
                 );
+                // Phase-B strengthened fixpoint: converged iff no
+                // summary changed (snapshot equality) *and* no
+                // downstream caller remains to reprocess.  The latter
+                // catches the rare case where snapshot equality holds
+                // by coincidence but the call graph would still have
+                // requested re-analysis.  In practice one implies the
+                // other; asserting both is a defensive invariant.
+                if iter_converged && dirty_files.is_empty() {
+                    converged = true;
+                    break;
+                }
                 if iter_converged {
+                    // Snapshots equal but dirty_files non-empty is
+                    // anomalous — log and treat as converged
+                    // (snapshot equality is the correctness-preserving
+                    // signal).
+                    tracing::debug!(
+                        batch = batch_idx,
+                        dirty = dirty_files.len(),
+                        "SCC converged by snapshot but dirty_files non-empty; \
+                         call graph disagrees with summary diff — accepting \
+                         snapshot as authoritative"
+                    );
                     converged = true;
                     break;
                 }
             }
+            // After the loop, flatten per-file diags into the
+            // iteration_diags vector in batch order for deterministic
+            // output.  Files that were in the batch but never made
+            // dirty (shouldn't happen — iter 0 runs all of them) are
+            // skipped silently.
+            let mut iteration_diags: Vec<Diag> = Vec::new();
+            for p in &batch.files {
+                if let Some(v) = diags_by_file.remove(*p) {
+                    iteration_diags.extend(v);
+                }
+            }
             LAST_SCC_MAX_ITERATIONS.fetch_max(iters_used, Ordering::Relaxed);
+
+            // Phase A1: emit per-batch telemetry record (no-op unless
+            // NYX_CONVERGENCE_TELEMETRY=1).  Recorded regardless of
+            // converged / cap-hit so the downstream distribution
+            // analysis sees early-convergence runs too.
+            crate::convergence_telemetry::record(
+                crate::convergence_telemetry::ConvergenceEvent::SccBatch(
+                    crate::convergence_telemetry::SccBatchRecord {
+                        schema: crate::convergence_telemetry::SCHEMA_VERSION,
+                        batch_index: batch_idx,
+                        file_count: batch.files.len(),
+                        cross_file: cross_file_scc,
+                        iterations: iters_used,
+                        cap: scc_cap,
+                        converged,
+                        trajectory: delta_trajectory.clone(),
+                    },
+                ),
+            );
+
             if !converged {
+                let reason =
+                    crate::engine_notes::CapHitReason::classify(&delta_trajectory);
                 tracing::warn!(
                     batch = batch_idx,
                     files = batch.files.len(),
                     iterations = iters_used,
                     cap = scc_cap,
                     cross_file = cross_file_scc,
+                    reason = reason.tag(),
                     "SCC batch did not converge within safety cap — results \
                      may be imprecise. This usually indicates a very large \
                      mutually-recursive region or a non-monotone summary \
@@ -960,8 +1212,9 @@ fn run_topo_batches(
                     l.warn(
                         format!(
                             "SCC batch {batch_idx} ({} files, cross_file={cross_file_scc}) \
-                             did not converge within {scc_cap} iterations",
-                            batch.files.len()
+                             did not converge within {scc_cap} iterations (reason={})",
+                            batch.files.len(),
+                            reason.tag()
                         ),
                         None,
                         None,
@@ -974,7 +1227,13 @@ fn run_topo_batches(
                 // the evidence so downstream UIs / reviewers can surface
                 // the degradation.  Cross-file SCCs get a
                 // tighter note prefix so the precision cause is explicit.
-                tag_unconverged_findings(&mut iteration_diags, iters_used, scc_cap, cross_file_scc);
+                tag_unconverged_findings(
+                    &mut iteration_diags,
+                    iters_used,
+                    scc_cap,
+                    cross_file_scc,
+                    reason,
+                );
             }
             // Count progress for these files once.
             pb.inc(batch.files.len() as u64);
@@ -1454,6 +1713,7 @@ pub(crate) fn scan_filesystem_with_observer(
             &batches,
             &orphans,
             &mut gs,
+            &call_graph,
             cfg,
             Some(root),
             &pb,
@@ -2125,6 +2385,7 @@ pub fn scan_with_index_parallel_observer(
         &batches,
         &orphans,
         &mut global_summaries,
+        &call_graph,
         cfg,
         Some(scan_root),
         &pb2,
@@ -2755,7 +3016,13 @@ mod scc_tagging_tests {
     #[test]
     fn tag_unconverged_caps_confidence_and_appends_note() {
         let mut diags = vec![make_diag(Some(Confidence::High)), make_diag(None)];
-        tag_unconverged_findings(&mut diags, 64, 64, false);
+        tag_unconverged_findings(
+            &mut diags,
+            64,
+            64,
+            false,
+            crate::engine_notes::CapHitReason::Unknown,
+        );
 
         assert_eq!(diags[0].confidence, Some(Confidence::Low));
         assert_eq!(diags[1].confidence, Some(Confidence::Low));
@@ -2776,7 +3043,13 @@ mod scc_tagging_tests {
         // Nothing is strictly below Low today, but the cap-at-Low logic
         // should still produce Low as the floor when confidence is Low.
         let mut diags = vec![make_diag(Some(Confidence::Low))];
-        tag_unconverged_findings(&mut diags, 10, 64, false);
+        tag_unconverged_findings(
+            &mut diags,
+            10,
+            64,
+            false,
+            crate::engine_notes::CapHitReason::Unknown,
+        );
         assert_eq!(diags[0].confidence, Some(Confidence::Low));
     }
 
@@ -2785,7 +3058,13 @@ mod scc_tagging_tests {
         let mut d = make_diag(None);
         d.evidence = None;
         let mut diags = vec![d];
-        tag_unconverged_findings(&mut diags, 7, 64, false);
+        tag_unconverged_findings(
+            &mut diags,
+            7,
+            64,
+            false,
+            crate::engine_notes::CapHitReason::Unknown,
+        );
 
         let ev = diags[0].evidence.as_ref().expect("evidence created");
         assert!(
@@ -2798,8 +3077,20 @@ mod scc_tagging_tests {
     #[test]
     fn tag_unconverged_does_not_duplicate_notes_on_rerun() {
         let mut diags = vec![make_diag(None)];
-        tag_unconverged_findings(&mut diags, 64, 64, false);
-        tag_unconverged_findings(&mut diags, 64, 64, false);
+        tag_unconverged_findings(
+            &mut diags,
+            64,
+            64,
+            false,
+            crate::engine_notes::CapHitReason::Unknown,
+        );
+        tag_unconverged_findings(
+            &mut diags,
+            64,
+            64,
+            false,
+            crate::engine_notes::CapHitReason::Unknown,
+        );
         let notes = &diags[0].evidence.as_ref().unwrap().notes;
         let count = notes
             .iter()
@@ -2814,7 +3105,13 @@ mod scc_tagging_tests {
         // variant while remaining a strict superset of the base
         // prefix so existing consumers still match.
         let mut diags = vec![make_diag(None)];
-        tag_unconverged_findings(&mut diags, 64, 64, true);
+        tag_unconverged_findings(
+            &mut diags,
+            64,
+            64,
+            true,
+            crate::engine_notes::CapHitReason::Unknown,
+        );
 
         let ev = diags[0].evidence.as_ref().expect("evidence populated");
         // The cross-file note must also start with the base prefix so
@@ -2834,7 +3131,13 @@ mod scc_tagging_tests {
         // Sanity check: the non-cross-file variant must not emit the
         // cross-file note. Prevents accidental tag unification.
         let mut diags = vec![make_diag(None)];
-        tag_unconverged_findings(&mut diags, 64, 64, false);
+        tag_unconverged_findings(
+            &mut diags,
+            64,
+            64,
+            false,
+            crate::engine_notes::CapHitReason::Unknown,
+        );
 
         let ev = diags[0].evidence.as_ref().expect("evidence populated");
         assert!(

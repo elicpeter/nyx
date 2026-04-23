@@ -2,10 +2,19 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiPost, apiDelete } from '../client';
 import type { ScanView } from '../types';
 
+export type ScanMode = 'full' | 'ast' | 'cfg' | 'taint';
+export type EngineProfile = 'fast' | 'balanced' | 'deep';
+
+export interface StartScanBody {
+  scan_root?: string;
+  mode?: ScanMode;
+  engine_profile?: EngineProfile;
+}
+
 export function useStartScan() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body?: { scan_root?: string }) =>
+    mutationFn: (body?: StartScanBody) =>
       apiPost<ScanView>('/scans', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['scans'] });

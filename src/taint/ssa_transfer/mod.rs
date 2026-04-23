@@ -1410,6 +1410,24 @@ fn inline_analyse_callee(
     } else {
         Some(param_seed.as_slice())
     };
+    // INVARIANT (`inline_cache` correctness across JS/TS pass-2 rounds):
+    // `global_seed` MUST remain `None` on the child transfer.  The
+    // per-file [`InlineCache`] is reused across all iterations of the
+    // pass-2 convergence loop in `taint::mod::analyse_multi_body`; the
+    // cache is keyed by `(FuncKey, ArgTaintSig)` only, so if the
+    // inlined callee could read from a caller's `global_seed` — which
+    // is refined each round — the same cache key could map to two
+    // different return shapes across rounds, producing a
+    // non-reproducible fixed point.
+    //
+    // Today the invariant is preserved here (global_seed: None) so
+    // cache reuse is safe without calling
+    // [`inline_cache_clear_epoch`].  If a future refactor threads
+    // `global_seed` into inline analysis, it MUST also clear the
+    // inline cache at pass-2 round boundaries.  The test
+    // `inline_analyse_callee_does_not_thread_global_seed` in
+    // `ssa_transfer/tests.rs` fails loudly if this invariant is
+    // broken.
     let child_transfer = SsaTaintTransfer {
         lang: transfer.lang,
         namespace: transfer.namespace,

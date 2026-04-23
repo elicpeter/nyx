@@ -429,6 +429,58 @@ pub struct FileBatch<'a> {
 ///
 /// Single-node SCCs always return `false`.  Multi-node SCCs whose nodes
 /// all belong to the same namespace return `false`.
+/// Reverse-edge traversal: return every [`FuncKey`] that has a call
+/// edge *into* `callee`.  Used by the Phase-B worklist to compute
+/// which callers need re-analysis after a callee's summary has
+/// changed.
+///
+/// Returns an empty vector when the callee is unknown to the call
+/// graph (e.g. summary was never produced, or the key was synthesised
+/// post-build).
+///
+/// Cost: O(in_degree) via petgraph's `Incoming` neighbours iterator;
+/// no allocation beyond the returned `Vec`.
+pub fn callers_of(cg: &CallGraph, callee: &FuncKey) -> Vec<FuncKey> {
+    let Some(&node) = cg.index.get(callee) else {
+        return Vec::new();
+    };
+    cg.graph
+        .neighbors_directed(node, petgraph::Direction::Incoming)
+        .map(|caller_node| cg.graph[caller_node].clone())
+        .collect()
+}
+
+/// Compute the set of file namespaces that must be re-analysed when a
+/// given set of callee [`FuncKey`]s have had their summaries refined.
+///
+/// Fans out from each changed callee to its callers via
+/// [`callers_of`], then projects onto `FuncKey::namespace`.  The
+/// result is a `HashSet<String>` suitable for membership checks while
+/// filtering the batch's file list.
+///
+/// A changed callee's *own* namespace is also included — if the
+/// callee's summary was refined, the file it lives in may itself
+/// have been a caller (intra-file recursion) or may carry sibling
+/// functions whose analysis should be re-run alongside the callee
+/// for consistency.
+///
+/// Deterministic: returns a [`std::collections::HashSet`] so iteration
+/// order is not guaranteed, but membership is deterministic.  Callers
+/// that need ordered output should collect and sort.
+pub fn namespaces_for_callers(
+    cg: &CallGraph,
+    changed: &std::collections::HashSet<FuncKey>,
+) -> std::collections::HashSet<String> {
+    let mut result = std::collections::HashSet::new();
+    for key in changed {
+        result.insert(key.namespace.clone());
+        for caller in callers_of(cg, key) {
+            result.insert(caller.namespace);
+        }
+    }
+    result
+}
+
 pub fn scc_spans_files(cg: &CallGraph, scc: &[NodeIndex]) -> bool {
     if scc.len() < 2 {
         return false;

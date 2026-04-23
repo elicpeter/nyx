@@ -30,12 +30,54 @@ pub fn routes() -> Router<AppState> {
 #[derive(serde::Deserialize, Default)]
 struct StartScanRequest {
     scan_root: Option<String>,
+    /// Analysis mode: "full" | "ast" | "cfg" | "taint".
+    mode: Option<String>,
+    /// Engine-depth profile: "fast" | "balanced" | "deep".
+    engine_profile: Option<String>,
     #[allow(dead_code)]
     languages: Option<Vec<String>>,
     #[allow(dead_code)]
     include_paths: Option<Vec<String>>,
     #[allow(dead_code)]
     exclude_paths: Option<Vec<String>>,
+}
+
+fn apply_mode(
+    config: &mut crate::utils::config::Config,
+    mode: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    use crate::utils::config::AnalysisMode;
+    config.scanner.mode = match mode.to_ascii_lowercase().as_str() {
+        "full" => AnalysisMode::Full,
+        "ast" => AnalysisMode::Ast,
+        "cfg" => AnalysisMode::Cfg,
+        "taint" => AnalysisMode::Taint,
+        _ => {
+            return Err(bad_request(
+                "mode must be one of: full, ast, cfg, taint",
+            ));
+        }
+    };
+    Ok(())
+}
+
+fn apply_engine_profile(
+    config: &mut crate::utils::config::Config,
+    profile: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    use crate::cli::EngineProfile;
+    let prof = match profile.to_ascii_lowercase().as_str() {
+        "fast" => EngineProfile::Fast,
+        "balanced" => EngineProfile::Balanced,
+        "deep" => EngineProfile::Deep,
+        _ => {
+            return Err(bad_request(
+                "engine_profile must be one of: fast, balanced, deep",
+            ));
+        }
+    };
+    config.analysis.engine = prof.apply(config.analysis.engine);
+    Ok(())
 }
 
 async fn start_scan(
@@ -45,7 +87,14 @@ async fn start_scan(
     let req = body.map(|b| b.0).unwrap_or_default();
     let scan_root = resolve_requested_scan_root(req.scan_root.as_deref(), &state.scan_root)?;
 
-    let config = state.config.read().clone();
+    let mut config = state.config.read().clone();
+    if let Some(ref mode) = req.mode {
+        apply_mode(&mut config, mode)?;
+    }
+    if let Some(ref profile) = req.engine_profile {
+        apply_engine_profile(&mut config, profile)?;
+    }
+
     let event_tx = state.event_tx.clone();
     let db_pool = state.db_pool.clone();
     let database_dir = state.database_dir.clone();
