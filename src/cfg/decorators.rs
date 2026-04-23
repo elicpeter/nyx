@@ -1,0 +1,552 @@
+use super::text_of;
+use tree_sitter::Node;
+
+/// Extract the leading identifier from a tree-sitter expression/call node.
+///
+/// Used by decorator extraction to reduce `login_required`, `permission_required(...)`,
+/// `flask_login.login_required`, `hasRole('ADMIN')` to their first identifier
+/// name — the matcher target.
+fn leading_ident_text(node: Node<'_>, code: &[u8]) -> Option<String> {
+    let mut cur = node;
+    loop {
+        match cur.kind() {
+            "identifier"
+            | "type_identifier"
+            | "property_identifier"
+            | "scoped_identifier"
+            | "name"
+            | "constant"
+            | "simple_identifier" => {
+                return text_of(cur, code);
+            }
+            _ => {}
+        }
+        // Peel wrappers: call → function, member/attribute → object or last segment
+        if let Some(fn_field) = cur.child_by_field_name("function") {
+            cur = fn_field;
+            continue;
+        }
+        if let Some(name_field) = cur.child_by_field_name("name") {
+            cur = name_field;
+            continue;
+        }
+        if let Some(obj_field) = cur.child_by_field_name("object") {
+            // For `flask_login.login_required`, we want the RIGHT side.
+            if let Some(prop) = cur.child_by_field_name("property") {
+                cur = prop;
+                continue;
+            }
+            cur = obj_field;
+            continue;
+        }
+        // Fallback: first non-trivia child.
+        let mut walker = cur.walk();
+        let next = cur
+            .children(&mut walker)
+            .find(|c| !matches!(c.kind(), "@" | "(" | ")" | "," | " " | "\n"));
+        match next {
+            Some(n) if n.id() != cur.id() => cur = n,
+            _ => return text_of(cur, code),
+        }
+    }
+}
+
+/// Strip trailing `!` / `?` / `()` and leading `:` / `@`, then lowercase.
+fn normalize_decorator_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let trimmed = trimmed.trim_start_matches(':').trim_start_matches('@');
+    // If a call syntax leaked through (e.g. `UseGuards(AuthGuard)`), keep only
+    // the head — callers that want the arg handle it separately.
+    let head = trimmed
+        .split(['(', ' ', '\t', '\n'])
+        .next()
+        .unwrap_or(trimmed);
+    let head = head.trim_end_matches('!').trim_end_matches('?');
+    // Keep only the last path segment so `module.name` / `a::b::c` become `c`.
+    let head = head.rsplit(['.', ':']).next().unwrap_or(head);
+    head.to_ascii_lowercase()
+}
+
+/// Collect decorator-argument identifiers for call-style decorators like
+/// NestJS `@UseGuards(AuthGuard, JwtGuard)` or Java `@PreAuthorize("hasRole('USER')")`.
+///
+/// For Java annotations with string-literal arguments, also splits out bare
+/// identifiers from inside the string so that `hasRole('ADMIN')` contributes
+/// `hasrole` and `admin` as additional matcher candidates.
+fn decorator_arg_names(decorator_ast: Node<'_>, code: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let args = decorator_ast.child_by_field_name("arguments").or_else(|| {
+        let mut w = decorator_ast.walk();
+        decorator_ast
+            .children(&mut w)
+            .find(|c| matches!(c.kind(), "argument_list" | "arguments"))
+    });
+    let Some(args) = args else {
+        return out;
+    };
+    let mut walker = args.walk();
+    for arg in args.children(&mut walker) {
+        match arg.kind() {
+            "(" | ")" | "," => continue,
+            "string" | "string_literal" | "interpreted_string_literal" => {
+                if let Some(s) = text_of(arg, code) {
+                    for token in s.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+                        if !token.is_empty() {
+                            out.push(token.to_ascii_lowercase());
+                        }
+                    }
+                }
+            }
+            _ => {
+                if let Some(name) = leading_ident_text(arg, code) {
+                    out.push(name.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Walk tree-sitter decorator/annotation/attribute children of a function AST
+/// node and return normalized names for auth-rule matching.
+///
+/// Grammar-specific notes:
+/// - **Python**: function is wrapped by `decorated_definition` whose siblings
+///   are `decorator` nodes containing an `identifier` or `call` expression.
+/// - **JS/TS**: decorators attach to `method_definition` children or appear
+///   as siblings inside `class_body`; stage-3 decorators use `decorator` nodes.
+///   `@UseGuards(AuthGuard)` — we include the call args too.
+/// - **Java**: annotations live in the `modifiers` child of `method_declaration`;
+///   kinds are `marker_annotation` / `annotation`.
+/// - **Rust**: `function_item` has `attribute_item` siblings (outer `#[..]`).
+/// - **PHP**: `method_declaration` has an `attribute_list` child with `attribute`
+///   grandchildren (`#[IsGranted(..)]`).
+/// - **C++**: `function_definition` preceded or prefixed by `attribute_declaration`
+///   / `attribute` (`[[authenticated]]`).
+/// - **Ruby**: not a per-function decorator. `before_action :authenticate_user!`
+///   at class body scope applies to every method in the class. `only:` /
+///   `except:` hash args scope the filter to the listed action names; the
+///   filter is only recorded for the current method when the scope matches.
+///   Conditional filters (`if:` / `unless:`) are not honored — those require
+///   predicate evaluation and are deferred.
+pub(super) fn extract_auth_decorators<'a>(func_node: Node<'a>, lang: &str, code: &'a [u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |raw: &str| {
+        let norm = normalize_decorator_name(raw);
+        if !norm.is_empty() && !out.contains(&norm) {
+            out.push(norm);
+        }
+    };
+
+    match lang {
+        "python" => {
+            if let Some(parent) = func_node.parent() {
+                if parent.kind() == "decorated_definition" {
+                    let mut w = parent.walk();
+                    for ch in parent.children(&mut w) {
+                        if ch.kind() != "decorator" {
+                            continue;
+                        }
+                        // `decorator` → '@' + expression child.
+                        let mut dw = ch.walk();
+                        let expr = ch.children(&mut dw).find(|c| c.kind() != "@");
+                        let Some(expr) = expr else { continue };
+                        if let Some(name) = leading_ident_text(expr, code) {
+                            push(&name);
+                        }
+                        // Arguments (e.g. `permission_required('view_user')`).
+                        for arg in decorator_arg_names(expr, code) {
+                            push(&arg);
+                        }
+                    }
+                }
+            }
+        }
+        "javascript" | "typescript" => {
+            // Decorators may live as children of method_definition or as
+            // preceding siblings inside a class_body.
+            let mut seen = Vec::new();
+            let mut w = func_node.walk();
+            for ch in func_node.children(&mut w) {
+                if ch.kind() == "decorator" {
+                    seen.push(ch);
+                }
+            }
+            if let Some(parent) = func_node.parent() {
+                if parent.kind() == "class_body" {
+                    let mut pw = parent.walk();
+                    for sib in parent.children(&mut pw) {
+                        if sib.id() == func_node.id() {
+                            break;
+                        }
+                        if sib.kind() == "decorator" {
+                            seen.push(sib);
+                        } else if sib.kind() != "decorator" && !seen.is_empty() {
+                            // Only the contiguous run of decorators immediately
+                            // before this method is relevant; reset if a non-
+                            // decorator node intervenes.
+                            if sib.end_byte() < func_node.start_byte() {
+                                seen.clear();
+                            }
+                        }
+                    }
+                }
+            }
+            for dec in seen {
+                let mut dw = dec.walk();
+                let expr = dec.children(&mut dw).find(|c| c.kind() != "@");
+                let Some(expr) = expr else { continue };
+                if let Some(name) = leading_ident_text(expr, code) {
+                    push(&name);
+                }
+                for arg in decorator_arg_names(expr, code) {
+                    push(&arg);
+                }
+            }
+        }
+        "java" => {
+            // method_declaration has a `modifiers` field listing annotations.
+            let modifiers = func_node.child_by_field_name("modifiers").or_else(|| {
+                let mut w = func_node.walk();
+                func_node.children(&mut w).find(|c| c.kind() == "modifiers")
+            });
+            if let Some(modifiers) = modifiers {
+                let mut w = modifiers.walk();
+                for ch in modifiers.children(&mut w) {
+                    match ch.kind() {
+                        "marker_annotation" | "annotation" => {
+                            if let Some(name_node) = ch.child_by_field_name("name") {
+                                if let Some(t) = text_of(name_node, code) {
+                                    push(&t);
+                                }
+                            } else if let Some(t) = leading_ident_text(ch, code) {
+                                push(&t);
+                            }
+                            for arg in decorator_arg_names(ch, code) {
+                                push(&arg);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        "rust" => {
+            // In tree-sitter-rust, outer `#[..]` attributes may appear either
+            // as children of `function_item` OR as preceding siblings inside
+            // the parent container (grammar has varied by version).
+            let mut harvest = |node: Node<'_>| {
+                if node.kind() == "attribute_item" || node.kind() == "inner_attribute_item" {
+                    let mut aw = node.walk();
+                    for inner in node.children(&mut aw) {
+                        if inner.kind() == "attribute" {
+                            if let Some(name) = leading_ident_text(inner, code) {
+                                push(&name);
+                            }
+                        }
+                    }
+                }
+            };
+            let mut w = func_node.walk();
+            for ch in func_node.children(&mut w) {
+                harvest(ch);
+            }
+            if let Some(parent) = func_node.parent() {
+                let mut pw = parent.walk();
+                let mut pending: Vec<Node<'_>> = Vec::new();
+                for sib in parent.children(&mut pw) {
+                    if sib.id() == func_node.id() {
+                        for p in &pending {
+                            harvest(*p);
+                        }
+                        break;
+                    }
+                    if sib.kind() == "attribute_item" || sib.kind() == "inner_attribute_item" {
+                        pending.push(sib);
+                    } else {
+                        pending.clear();
+                    }
+                }
+            }
+        }
+        "php" => {
+            // `attribute_list` child of `method_declaration`.
+            let mut w = func_node.walk();
+            for ch in func_node.children(&mut w) {
+                if ch.kind() == "attribute_list" {
+                    let mut aw = ch.walk();
+                    for attr_group in ch.children(&mut aw) {
+                        let mut gw = attr_group.walk();
+                        for attr in attr_group.children(&mut gw) {
+                            if attr.kind() == "attribute" {
+                                if let Some(name) = leading_ident_text(attr, code) {
+                                    push(&name);
+                                }
+                                for arg in decorator_arg_names(attr, code) {
+                                    push(&arg);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "cpp" => {
+            // C++ attributes `[[auth]]` appear as preceding siblings
+            // (`attribute_declaration`) or as children of the function declarator.
+            let mut harvest = |node: Node<'_>| {
+                let mut w = node.walk();
+                for ch in node.children(&mut w) {
+                    if ch.kind() == "attribute" {
+                        if let Some(name) = leading_ident_text(ch, code) {
+                            push(&name);
+                        }
+                    }
+                }
+            };
+            let mut w = func_node.walk();
+            for ch in func_node.children(&mut w) {
+                if ch.kind() == "attribute_declaration" || ch.kind() == "attribute_specifier" {
+                    harvest(ch);
+                }
+            }
+            if let Some(parent) = func_node.parent() {
+                let mut pw = parent.walk();
+                let mut pending: Vec<Node<'_>> = Vec::new();
+                for sib in parent.children(&mut pw) {
+                    if sib.id() == func_node.id() {
+                        for p in &pending {
+                            harvest(*p);
+                        }
+                        break;
+                    }
+                    if sib.kind() == "attribute_declaration" {
+                        pending.push(sib);
+                    } else {
+                        pending.clear();
+                    }
+                }
+            }
+        }
+        "ruby" => {
+            // Walk up to enclosing class/module body and collect
+            // `before_action :name` filter calls. Apply `only:` / `except:`
+            // hash args by comparing against the current method name.
+            let method_name = func_node
+                .child_by_field_name("name")
+                .and_then(|n| text_of(n, code))
+                .map(|s| normalize_decorator_name(&s))
+                .unwrap_or_default();
+            let mut cursor = func_node.parent();
+            while let Some(node) = cursor {
+                match node.kind() {
+                    "class" | "module" => {
+                        // Body is the direct sibling/child sequence.
+                        let mut w = node.walk();
+                        for ch in node.children(&mut w) {
+                            match ch.kind() {
+                                "body_statement" | "block_body" => {
+                                    let mut bw = ch.walk();
+                                    for stmt in ch.children(&mut bw) {
+                                        collect_ruby_before_action(
+                                            stmt,
+                                            code,
+                                            &method_name,
+                                            &mut out,
+                                        );
+                                    }
+                                }
+                                "call" | "method_call" | "identifier" | "command" => {
+                                    collect_ruby_before_action(ch, code, &method_name, &mut out);
+                                }
+                                _ => {}
+                            }
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+                cursor = node.parent();
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// If a Ruby statement is `before_action :name` (or `before_filter :name`),
+/// push the normalized filter name into `out` — honoring any `only:` / `except:`
+/// hash arguments against `method_name`.
+///
+/// Positional symbol args (`before_action :a, :b, only: [:x]`) all share the
+/// single trailing scope. Conditional filters (`if:` / `unless:`) are not
+/// honored here — those require predicate evaluation and are deferred.
+fn collect_ruby_before_action(
+    node: Node<'_>,
+    code: &[u8],
+    method_name: &str,
+    out: &mut Vec<String>,
+) {
+    // The call may be wrapped in expression nodes; drill to a call-shaped node.
+    let mut cur = node;
+    loop {
+        match cur.kind() {
+            "call" | "method_call" | "command" => break,
+            _ => {}
+        }
+        let mut w = cur.walk();
+        let next = cur
+            .children(&mut w)
+            .find(|c| matches!(c.kind(), "call" | "method_call" | "command" | "identifier"));
+        match next {
+            Some(n) if n.id() != cur.id() => cur = n,
+            _ => return,
+        }
+    }
+    let head = cur
+        .child_by_field_name("method")
+        .or_else(|| cur.child_by_field_name("name"))
+        .and_then(|n| text_of(n, code))
+        .or_else(|| leading_ident_text(cur, code));
+    let Some(head) = head else { return };
+    let head_lc = head.to_ascii_lowercase();
+    if !(head_lc == "before_action" || head_lc == "before_filter") {
+        return;
+    }
+    let args = cur.child_by_field_name("arguments").or_else(|| {
+        let mut w = cur.walk();
+        cur.children(&mut w).find(|c| {
+            matches!(
+                c.kind(),
+                "argument_list" | "arguments" | "command_argument_list"
+            )
+        })
+    });
+    let Some(args) = args else { return };
+
+    let mut positional: Vec<String> = Vec::new();
+    let mut only_list: Vec<String> = Vec::new();
+    let mut except_list: Vec<String> = Vec::new();
+    let mut only_present = false;
+    let mut except_present = false;
+
+    let mut w = args.walk();
+    for arg in args.children(&mut w) {
+        match arg.kind() {
+            "simple_symbol" | "symbol" | "hash_key_symbol" | "identifier" => {
+                if let Some(t) = text_of(arg, code) {
+                    let norm = normalize_decorator_name(&t);
+                    if !norm.is_empty() {
+                        positional.push(norm);
+                    }
+                }
+            }
+            "pair" => {
+                collect_ruby_filter_pair(
+                    arg,
+                    code,
+                    &mut only_list,
+                    &mut except_list,
+                    &mut only_present,
+                    &mut except_present,
+                );
+            }
+            "hash" => {
+                let mut hw = arg.walk();
+                for pair_node in arg.children(&mut hw) {
+                    if pair_node.kind() == "pair" {
+                        collect_ruby_filter_pair(
+                            pair_node,
+                            code,
+                            &mut only_list,
+                            &mut except_list,
+                            &mut only_present,
+                            &mut except_present,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Scope check: apply filter to this method only when the scope matches.
+    if except_present
+        && except_list
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(method_name))
+    {
+        return;
+    }
+    if only_present
+        && !only_list
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(method_name))
+    {
+        return;
+    }
+
+    for filter in positional {
+        if !out.contains(&filter) {
+            out.push(filter);
+        }
+    }
+}
+
+/// Parse a single `only:` / `except:` hash pair and append the symbol list into
+/// the corresponding out-vec. Sets the `*_present` flag when the key is seen,
+/// regardless of whether the value parses into any symbols — treating
+/// `only: []` as "no actions match" is safer than ignoring the scope.
+fn collect_ruby_filter_pair(
+    pair_node: Node<'_>,
+    code: &[u8],
+    only_list: &mut Vec<String>,
+    except_list: &mut Vec<String>,
+    only_present: &mut bool,
+    except_present: &mut bool,
+) {
+    let key_node = pair_node.child_by_field_name("key");
+    let Some(key_node) = key_node else { return };
+    let Some(key_text) = text_of(key_node, code) else {
+        return;
+    };
+    let key_norm = normalize_decorator_name(&key_text);
+    let value_node = pair_node.child_by_field_name("value");
+    match key_norm.as_str() {
+        "only" => {
+            *only_present = true;
+            if let Some(v) = value_node {
+                collect_ruby_symbol_list(v, code, only_list);
+            }
+        }
+        "except" => {
+            *except_present = true;
+            if let Some(v) = value_node {
+                collect_ruby_symbol_list(v, code, except_list);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Recursively collect symbol / identifier names from a `:x` or `[:x, :y]`
+/// value into `out`, using the tree-sitter AST (no text parsing).
+fn collect_ruby_symbol_list(node: Node<'_>, code: &[u8], out: &mut Vec<String>) {
+    match node.kind() {
+        "simple_symbol" | "symbol" | "hash_key_symbol" | "identifier" | "string" => {
+            if let Some(t) = text_of(node, code) {
+                let norm = normalize_decorator_name(&t);
+                if !norm.is_empty() {
+                    out.push(norm);
+                }
+            }
+        }
+        "array" => {
+            let mut w = node.walk();
+            for ch in node.children(&mut w) {
+                collect_ruby_symbol_list(ch, code, out);
+            }
+        }
+        _ => {}
+    }
+}
