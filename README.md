@@ -193,10 +193,13 @@ Or add rules interactively: `nyx config add-rule --lang javascript --matcher esc
 
 Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 295-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
 
+Taint analysis is interprocedural: persisted per-function SSA summaries carry per-return-path transforms and parameter-granularity points-to, and call-graph SCCs (including SCCs that span files) iterate to a joint fixed-point. The default `balanced` profile also runs k=1 context-sensitive inlining for intra-file callees. Symex (with cross-file and interprocedural frames) and the demand-driven backwards walk are opt-in — enable them individually (`--symex`, `--backwards-analysis`) or together with `--engine-profile deep`.
+
 Limitations:
-- Taint analysis is intra-procedural with cross-file summaries, not fully inter-procedural.
-- Cross-language interop edges must be configured explicitly.
-- Not all language features are modeled (macros, dynamic dispatch, aliased imports).
+- Interprocedural precision is bounded, not unlimited: context-sensitive inlining is k=1 with a callee body-size cap, and SCC fixed-point has an iteration cap. When the engine hits a bound it falls back to summaries and records an `engine_note` on the finding.
+- Cross-language interop edges (FFI, subprocess, WASM) must be configured explicitly.
+- Not all language features are modeled (macros, most dynamic dispatch, aliased imports, reflection).
+- Rust is experimental tier; C/C++ are preview tier — pair them with a clang-based tool before using as a hard CI gate.
 - Results may contain false positives or false negatives; manual review is expected.
 
 ---
