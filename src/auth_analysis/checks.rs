@@ -395,10 +395,7 @@ fn is_actor_context_subject(subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     if let Some(base) = subject.base.as_deref() {
         let root = base.split('.').next().unwrap_or(base);
         if unit.self_actor_vars.contains(root)
-            && subject
-                .field
-                .as_deref()
-                .is_some_and(is_self_actor_id_field)
+            && subject.field.as_deref().is_some_and(is_self_actor_id_field)
         {
             return true;
         }
@@ -540,9 +537,7 @@ fn is_batch_collection(subject: &ValueRef) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{is_actor_context_subject, is_relevant_target_subject};
-    use crate::auth_analysis::model::{
-        AnalysisUnit, AnalysisUnitKind, ValueRef, ValueSourceKind,
-    };
+    use crate::auth_analysis::model::{AnalysisUnit, AnalysisUnitKind, ValueRef, ValueSourceKind};
     use std::collections::{HashMap, HashSet};
 
     fn empty_unit() -> AnalysisUnit {
@@ -581,10 +576,7 @@ mod tests {
 
         // `user.id`-shape subjects count as actor context now.
         assert!(is_actor_context_subject(&member("user", "id"), &unit));
-        assert!(is_actor_context_subject(
-            &member("user", "user_id"),
-            &unit
-        ));
+        assert!(is_actor_context_subject(&member("user", "user_id"), &unit));
         assert!(is_actor_context_subject(&member("user", "uid"), &unit));
 
         // Pitfall guard: `user.group_id` / `user.workspace_id` stay

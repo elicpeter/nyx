@@ -673,10 +673,7 @@ fn helper_scoped_params_is_clean() {
     // on a locally-constructed HashSet is not a sink — the call is
     // classified as non-sink because the receiver is the locally-bound
     // collection.
-    assert_absent(
-        "helper_scoped_params.rs",
-        "rs.auth.missing_ownership_check",
-    );
+    assert_absent("helper_scoped_params.rs", "rs.auth.missing_ownership_check");
 }
 
 #[test]
@@ -684,10 +681,7 @@ fn self_scoped_user_is_clean() {
     // Phase A3: `let user = auth::require_auth(..).await?` binds the
     // authenticated caller, so `user.id` passed to a helper is self-
     // referential rather than a foreign scoped id.
-    assert_absent(
-        "self_scoped_user.rs",
-        "rs.auth.missing_ownership_check",
-    );
+    assert_absent("self_scoped_user.rs", "rs.auth.missing_ownership_check");
 }
 
 #[test]

@@ -578,7 +578,10 @@ fn collect_non_sink_binding(
 }
 
 fn first_identifier_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
-    if matches!(node.kind(), "identifier" | "shorthand_property_identifier_pattern") {
+    if matches!(
+        node.kind(),
+        "identifier" | "shorthand_property_identifier_pattern"
+    ) {
         let value = text(node, bytes);
         if !value.is_empty() {
             return Some(value);
@@ -595,11 +598,7 @@ fn first_identifier_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
     None
 }
 
-fn value_is_non_sink_constructor(
-    node: Node<'_>,
-    bytes: &[u8],
-    rules: &AuthAnalysisRules,
-) -> bool {
+fn value_is_non_sink_constructor(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules) -> bool {
     match node.kind() {
         "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
             let callee = call_name(node, bytes);
@@ -684,9 +683,7 @@ fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
         arg_refs.extend(extract_value_refs(arg, bytes));
     }
     let line = node.start_position().row + 1;
-    state
-        .row_population_data
-        .insert(var_name, (line, arg_refs));
+    state.row_population_data.insert(var_name, (line, arg_refs));
 }
 
 /// A3: record `let V = CALL(..)` (or `.await?` / `?` / reference
@@ -728,7 +725,9 @@ fn value_is_self_actor_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRu
             !callee.is_empty()
                 && (rules.is_login_guard(&callee) || rules.is_authorization_check(&callee))
         }
-        "try_expression" | "await_expression" | "reference_expression"
+        "try_expression"
+        | "await_expression"
+        | "reference_expression"
         | "parenthesized_expression" => {
             for idx in 0..node.named_child_count() {
                 let Some(child) = node.named_child(idx as u32) else {
@@ -775,7 +774,11 @@ fn is_self_actor_type_text(ty: &str) -> bool {
         .trim_start_matches("mut ")
         .trim();
     let after_colons = trimmed.rsplit("::").next().unwrap_or(trimmed);
-    let base = after_colons.split('<').next().unwrap_or(after_colons).trim();
+    let base = after_colons
+        .split('<')
+        .next()
+        .unwrap_or(after_colons)
+        .trim();
     matches!(
         base,
         "CurrentUser"
@@ -803,7 +806,10 @@ fn extract_row_receiver_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
             single_ident_receiver(function, bytes)
                 .or_else(|| single_ident_from_call_receiver(node, bytes))
         }
-        "field_expression" | "member_expression" | "attribute" | "selector_expression"
+        "field_expression"
+        | "member_expression"
+        | "attribute"
+        | "selector_expression"
         | "field_access" => single_ident_receiver(node, bytes),
         _ => None,
     }
@@ -831,11 +837,7 @@ fn single_ident_text(node: Node<'_>, bytes: &[u8]) -> Option<String> {
         "identifier" | "shorthand_property_identifier" | "field_identifier"
     ) {
         let value = text(node, bytes);
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        if value.is_empty() { None } else { Some(value) }
     } else {
         None
     }
@@ -847,7 +849,9 @@ fn unwrap_try_like(node: Node<'_>) -> Node<'_> {
     let mut cur = node;
     loop {
         match cur.kind() {
-            "try_expression" | "await_expression" | "reference_expression"
+            "try_expression"
+            | "await_expression"
+            | "reference_expression"
             | "parenthesized_expression" => {
                 let Some(inner) = cur
                     .child_by_field_name("expression")
@@ -1024,9 +1028,7 @@ fn resolve_else_block(alt: Node<'_>) -> Node<'_> {
 }
 
 fn branch_has_early_exit(branch: Node<'_>) -> bool {
-    named_children(branch)
-        .into_iter()
-        .any(node_is_early_exit)
+    named_children(branch).into_iter().any(node_is_early_exit)
 }
 
 fn node_is_early_exit(node: Node<'_>) -> bool {
