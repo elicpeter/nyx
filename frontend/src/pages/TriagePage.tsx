@@ -115,11 +115,15 @@ function TriageSummary({
     }
     const count = stateCounts[activeFilter] ?? 0;
     const label =
-      STATE_FILTERS.find((s) => s.value === activeFilter)?.label ?? activeFilter;
+      STATE_FILTERS.find((s) => s.value === activeFilter)?.label ??
+      activeFilter;
     return `${count.toLocaleString()} ${label.toLowerCase()}`;
   }, [totalCount, needsAttention, stateCounts, activeFilter]);
 
-  const showSeverity = activeFilter === 'needs_attention' || activeFilter === 'all' || activeFilter === 'open';
+  const showSeverity =
+    activeFilter === 'needs_attention' ||
+    activeFilter === 'all' ||
+    activeFilter === 'open';
 
   return (
     <div className="triage-hero">
@@ -140,9 +144,14 @@ function TriageSummary({
       {showSeverity && totalCount > 0 && (
         <div className="triage-hero-severity">
           {SEVERITIES.map((sev) => (
-            <span key={sev} className={`triage-sev-stat triage-sev-${sev.toLowerCase()}`}>
+            <span
+              key={sev}
+              className={`triage-sev-stat triage-sev-${sev.toLowerCase()}`}
+            >
               <span className="triage-sev-dot" aria-hidden />
-              <span className="triage-sev-count">{(openBySev[sev] ?? 0).toLocaleString()}</span>
+              <span className="triage-sev-count">
+                {(openBySev[sev] ?? 0).toLocaleString()}
+              </span>
               <span className="triage-sev-name">{sev}</span>
             </span>
           ))}
@@ -155,7 +164,9 @@ function TriageSummary({
             className={`triage-state-chip${activeFilter === 'all' ? ' active' : ''}`}
             onClick={() => onFilter('all')}
           >
-            <span className="triage-state-count">{totalCount.toLocaleString()}</span>
+            <span className="triage-state-count">
+              {totalCount.toLocaleString()}
+            </span>
             <span className="triage-state-label">Total</span>
           </button>
           {ALL_STATES.map((s) => {
@@ -168,7 +179,9 @@ function TriageSummary({
                 className={`triage-state-chip${activeFilter === s ? ' active' : ''}${muted ? ' muted' : ''}`}
                 onClick={() => onFilter(s)}
               >
-                <span className="triage-state-count">{count.toLocaleString()}</span>
+                <span className="triage-state-count">
+                  {count.toLocaleString()}
+                </span>
                 <span className="triage-state-label">{stateLabel(s)}</span>
               </button>
             );
@@ -188,7 +201,12 @@ interface RuleFilterChipsProps {
   onClear: () => void;
 }
 
-function RuleFilterChips({ rules, selected, onToggle, onClear }: RuleFilterChipsProps) {
+function RuleFilterChips({
+  rules,
+  selected,
+  onToggle,
+  onClear,
+}: RuleFilterChipsProps) {
   const [showMore, setShowMore] = useState(false);
   if (rules.length === 0) return null;
 
@@ -211,7 +229,11 @@ function RuleFilterChips({ rules, selected, onToggle, onClear }: RuleFilterChips
           >
             <span className="rule-chip-name">{rule}</span>
             <span className="rule-chip-count">{count}</span>
-            {active && <span className="rule-chip-x" aria-hidden>×</span>}
+            {active && (
+              <span className="rule-chip-x" aria-hidden>
+                ×
+              </span>
+            )}
           </button>
         );
       })}
@@ -282,7 +304,9 @@ function FindingRow({
           onClick={(e) => e.stopPropagation()}
           aria-label="Select finding"
         />
-        <span className={`finding-row-sev sev-${sev}`}>{f.severity || 'Low'}</span>
+        <span className={`finding-row-sev sev-${sev}`}>
+          {f.severity || 'Low'}
+        </span>
         <div className="finding-row-body">
           <div className="finding-row-title">
             <code className="finding-row-rule">{f.rule_id}</code>
@@ -298,7 +322,9 @@ function FindingRow({
               <span className="finding-row-line">:{f.line}</span>
             </span>
             {conf && conf !== 'high' && (
-              <span className={`finding-row-conf conf-${conf}`}>{conf} conf</span>
+              <span className={`finding-row-conf conf-${conf}`}>
+                {conf} conf
+              </span>
             )}
             {f.language && (
               <span className="finding-row-lang">{f.language}</span>
@@ -404,13 +430,17 @@ function FindingRow({
 }
 
 function FindingRowDetails({ finding: f }: { finding: FindingView }) {
-  const sourceLabels = f.labels.filter(([k]) => k === 'source' || k === 'sink' || k === 'sanitizer');
+  const sourceLabels = f.labels.filter(
+    ([k]) => k === 'source' || k === 'sink' || k === 'sanitizer',
+  );
   return (
     <div className="finding-row-details">
       <div className="finding-row-details-grid">
         <div className="finding-row-details-item">
           <div className="finding-row-details-label">Path</div>
-          <code className="finding-row-details-path">{f.path}:{f.line}</code>
+          <code className="finding-row-details-path">
+            {f.path}:{f.line}
+          </code>
         </div>
         {f.message && (
           <div className="finding-row-details-item">
@@ -494,7 +524,10 @@ function GroupHeader({
           const n = severityMix[sev] ?? 0;
           if (n === 0) return null;
           return (
-            <span key={sev} className={`finding-group-sev-pill sev-${sev.toLowerCase()}`}>
+            <span
+              key={sev}
+              className={`finding-group-sev-pill sev-${sev.toLowerCase()}`}
+            >
               {n} {sev}
             </span>
           );
@@ -578,14 +611,19 @@ function FindingsList({
   onTriage,
 }: FindingsListProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+    new Set(),
+  );
   const [showCount, setShowCount] = useState(200);
 
   useEffect(() => {
     setShowCount(200);
   }, [groupMode, findings.length]);
 
-  const groups = useMemo(() => buildGroups(findings, groupMode), [findings, groupMode]);
+  const groups = useMemo(
+    () => buildGroups(findings, groupMode),
+    [findings, groupMode],
+  );
 
   if (findings.length === 0) {
     return (
@@ -691,7 +729,11 @@ interface TriageBulkBarProps {
   onClear: () => void;
 }
 
-function TriageBulkBar({ selectedCount, onAction, onClear }: TriageBulkBarProps) {
+function TriageBulkBar({
+  selectedCount,
+  onAction,
+  onClear,
+}: TriageBulkBarProps) {
   const visible = selectedCount > 0;
   return (
     <div
@@ -920,8 +962,7 @@ export function TriagePage() {
       const bySev: Record<string, number> = {};
       SEVERITIES.forEach((sev) => {
         bySev[sev] = findings.filter(
-          (f) =>
-            (f.triage_state || 'open') === 'open' && f.severity === sev,
+          (f) => (f.triage_state || 'open') === 'open' && f.severity === sev,
         ).length;
       });
 
@@ -1097,7 +1138,10 @@ export function TriagePage() {
             className={`triage-tab${activeTab === 'findings' ? ' active' : ''}`}
             onClick={() => setActiveTab('findings')}
           >
-            Findings <span className="triage-tab-count">{totalCount.toLocaleString()}</span>
+            Findings{' '}
+            <span className="triage-tab-count">
+              {totalCount.toLocaleString()}
+            </span>
           </button>
           <button
             className={`triage-tab${activeTab === 'rules' ? ' active' : ''}${suppressionRules.length === 0 ? ' empty' : ''}`}
@@ -1105,7 +1149,9 @@ export function TriagePage() {
           >
             Suppression rules
             {suppressionRules.length > 0 && (
-              <span className="triage-tab-count">{suppressionRules.length}</span>
+              <span className="triage-tab-count">
+                {suppressionRules.length}
+              </span>
             )}
           </button>
           <button
@@ -1158,7 +1204,11 @@ export function TriagePage() {
               trigger={({ open }) => (
                 <button type="button" className="btn btn-sm triage-control-btn">
                   State: <strong>{currentStateLabel}</strong>
-                  <span className={`bulk-caret${open ? ' bulk-caret--open' : ''}`}>▾</span>
+                  <span
+                    className={`bulk-caret${open ? ' bulk-caret--open' : ''}`}
+                  >
+                    ▾
+                  </span>
                 </button>
               )}
             >
@@ -1182,7 +1232,11 @@ export function TriagePage() {
               trigger={({ open }) => (
                 <button type="button" className="btn btn-sm triage-control-btn">
                   Group by: <strong>{currentGroupLabel}</strong>
-                  <span className={`bulk-caret${open ? ' bulk-caret--open' : ''}`}>▾</span>
+                  <span
+                    className={`bulk-caret${open ? ' bulk-caret--open' : ''}`}
+                  >
+                    ▾
+                  </span>
                 </button>
               )}
             >
@@ -1209,7 +1263,8 @@ export function TriagePage() {
               onChange={(e) => setSearch(e.target.value)}
             />
             <span className="triage-result-count">
-              {filtered.length.toLocaleString()} result{filtered.length === 1 ? '' : 's'}
+              {filtered.length.toLocaleString()} result
+              {filtered.length === 1 ? '' : 's'}
             </span>
           </div>
 
