@@ -647,6 +647,27 @@ fn hashmap_local_noise_is_clean() {
 }
 
 #[test]
+fn row_ownership_equality_is_clean() {
+    // Phase A2: `if owner_id != user.id { return ... }` is a row-level
+    // ownership check — both the row-fetching call and any downstream
+    // uses of the row's fields should be considered authorized.
+    assert_absent(
+        "row_ownership_equality.rs",
+        "rs.auth.missing_ownership_check",
+    );
+}
+
+#[test]
+fn row_ownership_no_early_exit_flags() {
+    // Phase A2 regression guard: equality check without an early exit
+    // has no effect, so the downstream mutation should still flag.
+    assert_has(
+        "row_ownership_no_early_exit.rs",
+        "rs.auth.missing_ownership_check",
+    );
+}
+
+#[test]
 fn helper_scoped_params_is_clean() {
     // Phase A1: a library helper whose internal work is `result.insert(..)`
     // on a locally-constructed HashSet is not a sink — the call is

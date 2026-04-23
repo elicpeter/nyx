@@ -298,7 +298,7 @@ fn has_prior_subject_auth(
     relevant_checks.into_iter().any(|check| {
         subjects
             .iter()
-            .any(|subject| auth_check_covers_subject(check, subject))
+            .any(|subject| auth_check_covers_subject(check, subject, unit))
     })
 }
 
@@ -327,16 +327,29 @@ fn has_prior_collection_auth(
     })
 }
 
-fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef) -> bool {
+fn auth_check_covers_subject(check: &AuthCheck, subject: &ValueRef, unit: &AnalysisUnit) -> bool {
     let subject_key = canonical_subject_name(subject);
     let subject_related_base = related_subject_base(subject);
+    // A2: if the op subject is a variable read from a known row
+    // (`let group_id = existing.get("group_id")`), treat any check
+    // subject naming/based-on that row as covering.
+    let subject_row_binding = unit.row_field_vars.get(&subject.name).cloned();
     check.subjects.iter().any(|check_subject| {
         let check_key = canonical_subject_name(check_subject);
         let check_related_base = related_subject_base(check_subject);
-        check_key == subject_key
+        if check_key == subject_key
             || (subject_related_base.is_some() && subject_related_base == check_related_base)
             || (subject_related_base.as_ref() == Some(&check_key))
             || (check_related_base.as_ref() == Some(&subject_key))
+        {
+            return true;
+        }
+        if let Some(row) = subject_row_binding.as_deref()
+            && (check_key == row || check_related_base.as_deref() == Some(row))
+        {
+            return true;
+        }
+        false
     })
 }
 

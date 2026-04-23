@@ -1,10 +1,10 @@
-use crate::auth_analysis::config::{AuthAnalysisRules, matches_name, strip_quotes};
+use crate::auth_analysis::config::{AuthAnalysisRules, canonical_name, matches_name, strip_quotes};
 use crate::auth_analysis::model::{
     AnalysisUnit, AnalysisUnitKind, AuthCheck, AuthCheckKind, AuthorizationModel, CallSite,
     Framework, HttpMethod, OperationKind, RouteRegistration, SensitiveOperation, ValueRef,
     ValueSourceKind,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -343,6 +343,7 @@ pub fn build_function_unit(
         value_refs: state.value_refs,
         condition_texts: state.condition_texts,
         line,
+        row_field_vars: state.row_field_vars,
     }
 }
 
@@ -360,6 +361,19 @@ struct UnitState {
     /// (`map.insert(…)`, `set.remove(…)`) aren't classified as
     /// auth-relevant Read/Mutation operations.
     non_sink_vars: HashSet<String>,
+    /// Map from local variable name to the row binding it was read
+    /// from (`let owner_id = existing.get("user_id")` → `owner_id →
+    /// existing`). Powers A2's row-level ownership-equality check so
+    /// downstream uses of fields from the same row are implicitly
+    /// covered by a check on the row's owner column.
+    row_field_vars: HashMap<String, String>,
+    /// Per row-binding metadata from the `let ROW = CALL(...)` site:
+    /// the declaration line and the set of `ValueRef`s appearing in
+    /// the call's arguments. When an A2 AuthCheck fires against
+    /// `ROW`, we back-date the check to this line and merge these
+    /// argument value-refs into its subjects so the original fetch
+    /// (e.g. `db.query_one(..., &[doc_id])`) is also covered.
+    row_population_data: HashMap<String, (usize, Vec<ValueRef>)>,
 }
 
 fn collect_unit_state(
@@ -374,13 +388,23 @@ fn collect_unit_state(
         }
         "if_statement" | "elif_clause" | "while_statement" | "do_statement" | "if" | "unless"
         | "if_modifier" | "unless_modifier" | "while_modifier" | "until_modifier"
-        | "if_expression" | "while_expression" => {
+        | "while_expression" => {
             if let Some(condition) = node.child_by_field_name("condition") {
                 collect_condition(condition, bytes, rules, state);
             }
         }
+        "if_expression" => {
+            if let Some(condition) = node.child_by_field_name("condition") {
+                collect_condition(condition, bytes, rules, state);
+            }
+            detect_ownership_equality_check(node, bytes, state);
+        }
         "conditional_expression" => collect_condition(node, bytes, rules, state),
-        "let_declaration" => collect_non_sink_binding(node, bytes, rules, state),
+        "let_declaration" => {
+            collect_non_sink_binding(node, bytes, rules, state);
+            collect_row_field_binding(node, bytes, state);
+            collect_row_population(node, bytes, state);
+        }
         _ => {}
     }
 
@@ -589,6 +613,397 @@ fn value_is_non_sink_constructor(
         }
         _ => false,
     }
+}
+
+/// Track `let V = ROW.method(..)` or `let V = ROW.field` so later
+/// row-level ownership-equality checks on `V` (or on another var read
+/// from the same `ROW`) can be attributed back to `ROW`. See
+/// `detect_ownership_equality_check` for the consumer.
+fn collect_row_field_binding(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    let Some(row_name) = extract_row_receiver_name(value, bytes) else {
+        return;
+    };
+    state.row_field_vars.insert(var_name, row_name);
+}
+
+/// Record the line and argument value-refs of a `let ROW = CALL(..)`.
+/// When A2 synthesises an `AuthCheck` on `ROW` later, we back-date the
+/// check to this line and merge the args into its subjects so the
+/// original fetch (e.g. `db.query_one(.., &[doc_id])`) is also covered.
+fn collect_row_population(node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    let Some(pattern) = node.child_by_field_name("pattern") else {
+        return;
+    };
+    let Some(var_name) = first_identifier_name(pattern, bytes) else {
+        return;
+    };
+    if var_name.is_empty() {
+        return;
+    }
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    let call_node = unwrap_try_like(value);
+    if !matches!(
+        call_node.kind(),
+        "call_expression" | "call" | "method_invocation" | "method_call_expression"
+    ) {
+        return;
+    }
+    let args = call_node
+        .child_by_field_name("arguments")
+        .map(named_children)
+        .unwrap_or_default();
+    let mut arg_refs: Vec<ValueRef> = Vec::new();
+    for arg in args {
+        arg_refs.extend(extract_value_refs(arg, bytes));
+    }
+    let line = node.start_position().row + 1;
+    state
+        .row_population_data
+        .insert(var_name, (line, arg_refs));
+}
+
+/// Extract a single-segment receiver name for a value node of the shape
+/// `ROW.method(..)` or `ROW.field`. Returns `None` when the receiver
+/// isn't a simple identifier (e.g. deeper chains like `ctx.db.get(..)`).
+fn extract_row_receiver_name(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    let node = unwrap_try_like(node);
+    match node.kind() {
+        "call_expression" | "call" | "method_invocation" | "method_call_expression" => {
+            let function = node
+                .child_by_field_name("function")
+                .or_else(|| node.child_by_field_name("method"));
+            let function = function?;
+            single_ident_receiver(function, bytes)
+                .or_else(|| single_ident_from_call_receiver(node, bytes))
+        }
+        "field_expression" | "member_expression" | "attribute" | "selector_expression"
+        | "field_access" => single_ident_receiver(node, bytes),
+        _ => None,
+    }
+}
+
+fn single_ident_receiver(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    let object = node
+        .child_by_field_name("value")
+        .or_else(|| node.child_by_field_name("object"))
+        .or_else(|| node.child_by_field_name("operand"))
+        .or_else(|| node.child_by_field_name("receiver"))?;
+    single_ident_text(object, bytes)
+}
+
+fn single_ident_from_call_receiver(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    let receiver = node
+        .child_by_field_name("receiver")
+        .or_else(|| node.child_by_field_name("object"))?;
+    single_ident_text(receiver, bytes)
+}
+
+fn single_ident_text(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    if matches!(
+        node.kind(),
+        "identifier" | "shorthand_property_identifier" | "field_identifier"
+    ) {
+        let value = text(node, bytes);
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    } else {
+        None
+    }
+}
+
+/// Strip `?` / `.await` / `&` / `&mut` wrappers from a value node,
+/// returning the underlying call/field expression when present.
+fn unwrap_try_like(node: Node<'_>) -> Node<'_> {
+    let mut cur = node;
+    loop {
+        match cur.kind() {
+            "try_expression" | "await_expression" | "reference_expression"
+            | "parenthesized_expression" => {
+                let Some(inner) = cur
+                    .child_by_field_name("expression")
+                    .or_else(|| cur.named_child(0))
+                else {
+                    return cur;
+                };
+                cur = inner;
+            }
+            _ => return cur,
+        }
+    }
+}
+
+/// Detect the `if OWNER != SELF { return ... }` (or `==` with `else`
+/// early-exit) row-level ownership-equality pattern and emit a
+/// synthetic `AuthCheck { kind: Ownership }`.  The AuthCheck is
+/// back-dated to the row's `let` line — and populated with the row's
+/// original fetch arguments as subjects — so the row-fetching call
+/// (e.g. `db.query_one(.., &[doc_id])`) is also covered.
+fn detect_ownership_equality_check(if_node: Node<'_>, bytes: &[u8], state: &mut UnitState) {
+    let Some(condition_raw) = if_node.child_by_field_name("condition") else {
+        return;
+    };
+    let Some(consequence) = if_node.child_by_field_name("consequence") else {
+        return;
+    };
+    let alternative = if_node.child_by_field_name("alternative");
+    let condition = unwrap_parens_local(condition_raw);
+    if condition.kind() != "binary_expression" {
+        return;
+    }
+    let Some(operator) = binary_operator_text(condition, bytes) else {
+        return;
+    };
+    let is_ne = matches!(operator.as_str(), "!=" | "ne");
+    let is_eq = matches!(operator.as_str(), "==" | "eq");
+    if !is_ne && !is_eq {
+        return;
+    }
+    let Some((left, right)) = binary_operands(condition) else {
+        return;
+    };
+
+    let fail_branch = if is_ne {
+        consequence
+    } else if let Some(alt) = alternative {
+        resolve_else_block(alt)
+    } else {
+        return;
+    };
+
+    if !branch_has_early_exit(fail_branch) {
+        return;
+    }
+
+    let left_refs = extract_value_refs(left, bytes);
+    let right_refs = extract_value_refs(right, bytes);
+
+    let (owner_ref, _self_ref) = match (
+        pick_owner_field_ref(&left_refs),
+        pick_self_actor_ref(&right_refs),
+    ) {
+        (Some(o), Some(s)) => (o, s),
+        _ => match (
+            pick_owner_field_ref(&right_refs),
+            pick_self_actor_ref(&left_refs),
+        ) {
+            (Some(o), Some(s)) => (o, s),
+            _ => return,
+        },
+    };
+
+    let row_binding = state.row_field_vars.get(&owner_ref.name).cloned();
+    let if_line = if_node.start_position().row + 1;
+    let if_span = span(if_node);
+    let condition_text = text(condition, bytes);
+
+    let (check_line, mut subjects) = match row_binding
+        .as_ref()
+        .and_then(|row| state.row_population_data.get(row).map(|v| (row, v)))
+    {
+        Some((row, (row_line, arg_refs))) => {
+            let mut subjects = arg_refs.clone();
+            subjects.push(ValueRef {
+                source_kind: ValueSourceKind::Identifier,
+                name: row.clone(),
+                base: None,
+                field: None,
+                index: None,
+                span: if_span,
+            });
+            (*row_line, subjects)
+        }
+        None => match row_binding.as_ref() {
+            Some(row) => (
+                if_line,
+                vec![ValueRef {
+                    source_kind: ValueSourceKind::Identifier,
+                    name: row.clone(),
+                    base: None,
+                    field: None,
+                    index: None,
+                    span: if_span,
+                }],
+            ),
+            None => (if_line, Vec::new()),
+        },
+    };
+    subjects.push(owner_ref);
+
+    state.auth_checks.push(AuthCheck {
+        kind: AuthCheckKind::Ownership,
+        callee: "(row ownership equality)".into(),
+        subjects,
+        span: if_span,
+        line: check_line,
+        args: Vec::new(),
+        condition_text: Some(condition_text),
+    });
+}
+
+fn unwrap_parens_local(node: Node<'_>) -> Node<'_> {
+    if node.kind() == "parenthesized_expression" {
+        if let Some(inner) = node.named_child(0) {
+            return unwrap_parens_local(inner);
+        }
+    }
+    node
+}
+
+fn binary_operator_text(node: Node<'_>, bytes: &[u8]) -> Option<String> {
+    if let Some(op) = node.child_by_field_name("operator") {
+        let value = text(op, bytes);
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if !child.is_named() {
+            let value = text(child, bytes);
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn binary_operands<'tree>(node: Node<'tree>) -> Option<(Node<'tree>, Node<'tree>)> {
+    if let (Some(left), Some(right)) = (
+        node.child_by_field_name("left"),
+        node.child_by_field_name("right"),
+    ) {
+        return Some((left, right));
+    }
+    let children = named_children(node);
+    match children.as_slice() {
+        [left, right] => Some((*left, *right)),
+        _ => None,
+    }
+}
+
+fn resolve_else_block(alt: Node<'_>) -> Node<'_> {
+    // Rust wraps the else branch in an `else_clause` with the block
+    // as a named child. Other grammars differ, so we walk defensively.
+    if alt.kind() == "else_clause" {
+        if let Some(block) = named_children(alt).into_iter().next() {
+            return block;
+        }
+    }
+    alt
+}
+
+fn branch_has_early_exit(branch: Node<'_>) -> bool {
+    named_children(branch)
+        .into_iter()
+        .any(node_is_early_exit)
+}
+
+fn node_is_early_exit(node: Node<'_>) -> bool {
+    match node.kind() {
+        "return_expression" | "return_statement" => true,
+        "expression_statement" => named_children(node).into_iter().any(node_is_early_exit),
+        _ => false,
+    }
+}
+
+pub(super) fn is_owner_field_subject(subject: &ValueRef) -> bool {
+    let raw = match subject.source_kind {
+        ValueSourceKind::ArrayIndex => subject.base.as_deref().unwrap_or(&subject.name),
+        _ => subject
+            .field
+            .as_deref()
+            .or(subject.base.as_deref())
+            .unwrap_or(&subject.name),
+    };
+    let key = canonical_name(raw);
+    matches!(
+        key.as_str(),
+        "userid"
+            | "ownerid"
+            | "authorid"
+            | "createdby"
+            | "uploaderid"
+            | "updatedby"
+            | "submittedby"
+            | "assignedto"
+            | "creatorid"
+            | "postedby"
+    )
+}
+
+pub(super) fn is_self_actor_subject(subject: &ValueRef) -> bool {
+    // `req.user.id`, `session.user.id`, `ctx.session.user.id`, etc.
+    if subject.source_kind == ValueSourceKind::Session
+        && subject
+            .base
+            .as_deref()
+            .is_some_and(is_self_session_base_local)
+    {
+        return true;
+    }
+    // Plain member chains that name the caller directly: `user.id`,
+    // `current_user.id`, `actor.id`. A3 widens this set via
+    // `self_actor_vars`.
+    let Some(field) = subject.field.as_deref() else {
+        return false;
+    };
+    if !field.eq_ignore_ascii_case("id") {
+        return false;
+    }
+    let Some(base) = subject.base.as_deref() else {
+        return false;
+    };
+    let last = base.rsplit('.').next().unwrap_or(base);
+    matches!(
+        last,
+        "user" | "current_user" | "currentUser" | "actor" | "current_actor"
+    )
+}
+
+fn is_self_session_base_local(base: &str) -> bool {
+    matches!(
+        base,
+        "req.session.user"
+            | "request.session.user"
+            | "session.user"
+            | "req.session.currentUser"
+            | "request.session.currentUser"
+            | "session.currentUser"
+            | "req.user"
+            | "request.user"
+            | "req.currentUser"
+            | "request.currentUser"
+            | "ctx.session.user"
+            | "ctx.session.currentUser"
+            | "ctx.state.user"
+            | "ctx.state.currentUser"
+    )
+}
+
+fn pick_owner_field_ref(refs: &[ValueRef]) -> Option<ValueRef> {
+    refs.iter().find(|v| is_owner_field_subject(v)).cloned()
+}
+
+fn pick_self_actor_ref(refs: &[ValueRef]) -> Option<ValueRef> {
+    refs.iter().find(|v| is_self_actor_subject(v)).cloned()
 }
 
 fn classify_auth_check(callee: &str, rules: &AuthAnalysisRules) -> AuthCheckKind {
@@ -1372,4 +1787,69 @@ fn accessor_call_value_ref(
         index: None,
         span: span(node),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_owner_field_subject, is_self_actor_subject};
+    use crate::auth_analysis::model::{ValueRef, ValueSourceKind};
+
+    fn ident(name: &str) -> ValueRef {
+        ValueRef {
+            source_kind: ValueSourceKind::Identifier,
+            name: name.to_string(),
+            base: None,
+            field: None,
+            index: None,
+            span: (0, 0),
+        }
+    }
+
+    fn member(base: &str, field: &str) -> ValueRef {
+        ValueRef {
+            source_kind: ValueSourceKind::MemberField,
+            name: format!("{base}.{field}"),
+            base: Some(base.to_string()),
+            field: Some(field.to_string()),
+            index: None,
+            span: (0, 0),
+        }
+    }
+
+    fn session(base: &str, field: &str) -> ValueRef {
+        ValueRef {
+            source_kind: ValueSourceKind::Session,
+            name: format!("{base}.{field}"),
+            base: Some(base.to_string()),
+            field: Some(field.to_string()),
+            index: None,
+            span: (0, 0),
+        }
+    }
+
+    #[test]
+    fn is_owner_field_subject_matches_known_column_names() {
+        assert!(is_owner_field_subject(&ident("owner_id")));
+        assert!(is_owner_field_subject(&ident("user_id")));
+        assert!(is_owner_field_subject(&ident("author_id")));
+        assert!(is_owner_field_subject(&ident("created_by")));
+        assert!(is_owner_field_subject(&member("row", "owner_id")));
+        assert!(!is_owner_field_subject(&ident("group_id")));
+        assert!(!is_owner_field_subject(&ident("doc_id")));
+        assert!(!is_owner_field_subject(&ident("user")));
+    }
+
+    #[test]
+    fn is_self_actor_subject_matches_known_self_shapes() {
+        assert!(is_self_actor_subject(&member("user", "id")));
+        assert!(is_self_actor_subject(&member("current_user", "id")));
+        assert!(is_self_actor_subject(&session("req.user", "id")));
+        assert!(is_self_actor_subject(&session("ctx.session.user", "id")));
+        // Wrong field.
+        assert!(!is_self_actor_subject(&member("user", "workspace_id")));
+        // Unknown base.
+        assert!(!is_self_actor_subject(&member("target", "id")));
+        // Plain identifier, no base.
+        assert!(!is_self_actor_subject(&ident("user_id")));
+    }
 }

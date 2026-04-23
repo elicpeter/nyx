@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,12 @@ pub struct AnalysisUnit {
     pub value_refs: Vec<ValueRef>,
     pub condition_texts: Vec<String>,
     pub line: usize,
+    /// Map from local variable name to the row binding it was read from.
+    /// Populated when the extractor sees `let V = ROW.method(..)` or
+    /// `let V = ROW.field`.  Used by `auth_check_covers_subject` so a
+    /// row-level ownership-equality check (A2) on the row implicitly
+    /// covers downstream uses of fields read from the same row.
+    pub row_field_vars: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
