@@ -183,6 +183,7 @@ fn type_kind_index(kind: &TypeKind) -> u32 {
         TypeKind::FileHandle => 9,
         TypeKind::Url => 10,
         TypeKind::HttpClient => 11,
+        TypeKind::LocalCollection => 12,
     }
 }
 
@@ -200,6 +201,7 @@ fn type_kind_from_index(idx: u32) -> Option<TypeKind> {
         9 => Some(TypeKind::FileHandle),
         10 => Some(TypeKind::Url),
         11 => Some(TypeKind::HttpClient),
+        12 => Some(TypeKind::LocalCollection),
         _ => None,
     }
 }

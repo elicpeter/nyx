@@ -53,6 +53,43 @@ pub enum OperationKind {
     TokenLookup,
 }
 
+/// Classification of a sensitive operation by the resource it targets,
+/// introduced in Phase B1 to replace ad-hoc stringly-typed mutation/read
+/// matching.  `check_ownership_gaps` only fires on the first five
+/// classes — `InMemoryLocal` is never authorization-relevant and
+/// subsumes the A1 non-sink-receiver gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinkClass {
+    /// A write against a persistent datastore (SQL, ORM, or KV that
+    /// crosses tenant boundaries).
+    DbMutation,
+    /// A read against a persistent datastore that may return rows
+    /// belonging to another tenant without an explicit ownership check.
+    DbCrossTenantRead,
+    /// A publish / broadcast against a realtime bus (pub/sub, websocket
+    /// channel, event stream).  Always auth-relevant because receivers
+    /// are typically scoped by tenant id.
+    RealtimePublish,
+    /// An outbound HTTP / RPC call whose target or payload can encode a
+    /// tenant-scoped identifier.
+    OutboundNetwork,
+    /// A cache read/write whose keys routinely cross tenant boundaries
+    /// (Redis / memcache / distributed cache client).
+    CacheCrossTenant,
+    /// A method call against a local, in-memory collection (HashMap,
+    /// HashSet, Vec, …) — never authorization-relevant.
+    InMemoryLocal,
+}
+
+impl SinkClass {
+    /// Does this sink class participate in the missing-ownership gate?
+    /// Only `InMemoryLocal` is excluded; all other classes are treated
+    /// as potential cross-tenant sinks.
+    pub fn is_auth_relevant(&self) -> bool {
+        !matches!(self, SinkClass::InMemoryLocal)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueSourceKind {
     RequestParam,
@@ -96,6 +133,10 @@ pub struct AuthCheck {
 #[derive(Debug, Clone)]
 pub struct SensitiveOperation {
     pub kind: OperationKind,
+    /// Phase B1 sink classification.  `None` means the operation was
+    /// recorded for taxonomy completeness but does not match any known
+    /// resource class — defensive, and currently unused.
+    pub sink_class: Option<SinkClass>,
     pub callee: String,
     pub subjects: Vec<ValueRef>,
     pub span: (usize, usize),

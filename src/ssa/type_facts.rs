@@ -25,6 +25,13 @@ pub enum TypeKind {
     FileHandle,
     Url,
     HttpClient,
+    /// Phase B2: a local, in-memory collection (HashMap, HashSet, Vec,
+    /// BTreeMap, …).  Consumed by the auth analysis sink gate so method
+    /// calls on variables of this type (`map.insert(...)`) are treated
+    /// as in-memory bookkeeping rather than cross-tenant sinks.  Has no
+    /// `label_prefix` — it never participates in label-based callee
+    /// resolution.
+    LocalCollection,
 }
 
 impl TypeKind {
@@ -243,6 +250,13 @@ pub(crate) fn constructor_type(lang: Lang, callee: &str) -> Option<TypeKind> {
                 || base.ends_with("SqliteConnection::establish")
             {
                 Some(TypeKind::DatabaseConnection)
+            } else if is_rust_local_collection_constructor(base) {
+                // Phase B2: Rust std/indexmap/smallvec/dashmap collection
+                // constructors map to a generic "local collection" type so
+                // the auth analysis sink gate can recognise
+                // `let x = factory_fn(); x.insert(..)` even when the RHS
+                // isn't a syntactic constructor call.
+                Some(TypeKind::LocalCollection)
             } else {
                 None
             }
@@ -302,6 +316,45 @@ pub fn peel_identity_suffix(callee: &str) -> String {
         cur.truncate(dot_idx);
     }
     cur
+}
+
+/// Phase B2: does the peeled callee match a known Rust constructor for a
+/// local/in-memory collection type?  Covers std collections plus common
+/// third-party crates (indexmap, smallvec, dashmap).  Matches tail
+/// segments only so `crate::Foo::HashMap::new` also resolves.
+fn is_rust_local_collection_constructor(base: &str) -> bool {
+    const TYPES: &[&str] = &[
+        "HashMap",
+        "HashSet",
+        "BTreeMap",
+        "BTreeSet",
+        "VecDeque",
+        "BinaryHeap",
+        "LinkedList",
+        "Vec",
+        "IndexMap",
+        "IndexSet",
+        "SmallVec",
+        "FxHashMap",
+        "FxHashSet",
+        "DashMap",
+        "DashSet",
+    ];
+    const VERBS: &[&str] = &[
+        "new",
+        "with_capacity",
+        "with_capacity_and_hasher",
+        "with_hasher",
+        "from",
+        "from_iter",
+        "new_in",
+        "default",
+    ];
+    TYPES.iter().any(|ty| {
+        VERBS
+            .iter()
+            .any(|verb| base.ends_with(&format!("{ty}::{verb}")))
+    })
 }
 
 pub fn is_identity_method(callee: &str) -> bool {

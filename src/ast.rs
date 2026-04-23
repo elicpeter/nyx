@@ -1167,13 +1167,69 @@ impl<'a> ParsedFile<'a> {
 
     /// Run AST-backed authorization analyses that do not require CFG construction.
     fn run_auth_analyses(&self, cfg: &Config) -> Vec<Diag> {
+        // Phase B2: harvest SSA-derived variable types across every body
+        // in the file so `run_auth_analysis` can refine sink
+        // classification by receiver type (e.g. `HttpClient::send` →
+        // `OutboundNetwork`, `HashMap::new`-bound var → `InMemoryLocal`).
+        let var_types = self.collect_file_var_types();
         auth_analysis::run_auth_analysis(
             &self.source.tree,
             self.source.bytes,
             self.source.lang_slug,
             self.source.path,
             cfg,
+            var_types.as_ref(),
         )
+    }
+
+    /// Build a per-file `var_name → TypeKind` map by running SSA + type
+    /// facts on each body and copying type facts for SSA values whose
+    /// definition recorded a source-level variable name.  When the same
+    /// name resolves to different non-`Unknown` types across bodies the
+    /// entry is dropped — absence is safe because the auth analysis
+    /// sink gate simply falls back to its syntactic heuristics.  Returns
+    /// `None` when no body produces any typed variable (non-Rust files
+    /// currently emit few `LocalCollection` / security-typed facts, but
+    /// this path is language-agnostic).
+    fn collect_file_var_types(&self) -> Option<auth_analysis::VarTypes> {
+        let caller_lang = Lang::from_slug(self.source.lang_slug).unwrap_or(Lang::Rust);
+        let mut merged: std::collections::HashMap<String, crate::ssa::type_facts::TypeKind> =
+            std::collections::HashMap::new();
+        let mut dropped: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for body in &self.file_cfg.bodies {
+            let Some(facts) = cfg_analysis::build_body_const_facts(body, caller_lang) else {
+                continue;
+            };
+            for (idx, def) in facts.ssa.value_defs.iter().enumerate() {
+                let Some(name) = def.var_name.as_ref() else {
+                    continue;
+                };
+                let Some(ty) = facts.type_facts.get_type(crate::ssa::SsaValue(idx as u32)) else {
+                    continue;
+                };
+                if matches!(ty, crate::ssa::type_facts::TypeKind::Unknown) {
+                    continue;
+                }
+                if dropped.contains(name) {
+                    continue;
+                }
+                match merged.get(name) {
+                    Some(existing) if existing == ty => {}
+                    Some(_) => {
+                        merged.remove(name);
+                        dropped.insert(name.clone());
+                    }
+                    None => {
+                        merged.insert(name.clone(), ty.clone());
+                    }
+                }
+            }
+        }
+        if merged.is_empty() {
+            None
+        } else {
+            Some(merged)
+        }
     }
 }
 

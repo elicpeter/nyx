@@ -486,6 +486,19 @@ pub struct AuthAnalysisConfig {
     /// resolved (e.g. `visited`, `seen`, `counts`).  Matched against
     /// the first segment of the callee receiver chain.
     pub non_sink_receiver_name_prefixes: Vec<String>,
+    /// Phase B1: receiver-chain first-segment prefixes that classify
+    /// a call as a realtime publish / broadcast sink (pub/sub bus,
+    /// websocket channel, event stream).  Treated as cross-tenant by
+    /// default and gated by the ownership check.
+    pub realtime_receiver_prefixes: Vec<String>,
+    /// Phase B1: receiver-chain first-segment prefixes that classify
+    /// a call as an outbound network sink (HTTP client, RPC caller,
+    /// webhook dispatcher).
+    pub outbound_network_receiver_prefixes: Vec<String>,
+    /// Phase B1: receiver-chain first-segment prefixes that classify
+    /// a call as a cross-tenant cache access (Redis / memcache /
+    /// distributed KV client).
+    pub cache_receiver_prefixes: Vec<String>,
 }
 
 impl Default for AuthAnalysisConfig {
@@ -503,6 +516,9 @@ impl Default for AuthAnalysisConfig {
             token_recipient_fields: Vec::new(),
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            realtime_receiver_prefixes: Vec::new(),
+            outbound_network_receiver_prefixes: Vec::new(),
+            cache_receiver_prefixes: Vec::new(),
         }
     }
 }

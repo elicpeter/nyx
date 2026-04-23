@@ -71,6 +71,12 @@ fn check_ownership_gaps(model: &AuthorizationModel, rules: &AuthAnalysisRules) -
             if op.kind == OperationKind::TokenLookup {
                 continue;
             }
+            // Phase B1: `InMemoryLocal` sinks (HashMap/HashSet/Vec/…
+            // local bookkeeping) are never authorization-relevant.
+            // Subsumes the A1 non-sink-receiver gate.
+            if op.sink_class.is_some_and(|c| !c.is_auth_relevant()) {
+                continue;
+            }
             if op.kind == OperationKind::Read && unit_is_auth_helper(unit) {
                 continue;
             }
@@ -112,6 +118,10 @@ fn check_partial_batch_authorization(
 
     for unit in &model.units {
         for op in &unit.operations {
+            // Phase B1: in-memory bookkeeping is never a batch sink.
+            if op.sink_class.is_some_and(|c| !c.is_auth_relevant()) {
+                continue;
+            }
             let batch_subjects: Vec<&ValueRef> = op
                 .subjects
                 .iter()
@@ -158,11 +168,10 @@ fn check_stale_authorization(
     let mut findings = Vec::new();
 
     for unit in &model.units {
-        for op in unit
-            .operations
-            .iter()
-            .filter(|operation| operation.kind == OperationKind::Mutation)
-        {
+        for op in unit.operations.iter().filter(|operation| {
+            operation.kind == OperationKind::Mutation
+                && operation.sink_class.is_none_or(|c| c.is_auth_relevant())
+        }) {
             let session_subject = op.subjects.iter().any(is_stale_session_subject);
             if !session_subject {
                 continue;

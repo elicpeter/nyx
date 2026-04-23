@@ -696,6 +696,19 @@ fn true_positive_missing_check_flags() {
 }
 
 #[test]
+fn db_connection_type_inferred_is_clean() {
+    // Phase B2: `let conn = rusqlite::Connection::open(..).unwrap();`
+    // is inferred as a `DatabaseConnection` via SSA `constructor_type`
+    // (through `peel_identity_suffix`).  The handler logs the caller's
+    // own id; no foreign scoped id reaches the sink, so the ownership
+    // gate has nothing to flag — B2 must not introduce a false positive.
+    assert_absent(
+        "db_connection_type_inferred.rs",
+        "rs.auth.missing_ownership_check",
+    );
+}
+
+#[test]
 fn actix_admin_route_with_admin_guard_is_clean() {
     assert_absent(
         "actix_admin_route_clean.rs",

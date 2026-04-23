@@ -1,8 +1,8 @@
 use crate::auth_analysis::config::{AuthAnalysisRules, canonical_name, matches_name, strip_quotes};
 use crate::auth_analysis::model::{
     AnalysisUnit, AnalysisUnitKind, AuthCheck, AuthCheckKind, AuthorizationModel, CallSite,
-    Framework, HttpMethod, OperationKind, RouteRegistration, SensitiveOperation, ValueRef,
-    ValueSourceKind,
+    Framework, HttpMethod, OperationKind, RouteRegistration, SensitiveOperation, SinkClass,
+    ValueRef, ValueSourceKind,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -470,24 +470,44 @@ fn collect_call(node: Node<'_>, bytes: &[u8], rules: &AuthAnalysisRules, state: 
         });
     }
 
-    let op_kind = if rules.is_token_lookup_call(&callee, &node_text) {
-        Some(OperationKind::TokenLookup)
-    } else if rules.callee_has_non_sink_receiver(&callee, &state.non_sink_vars) {
-        // Call targets a local non-sink collection (HashMap, HashSet,
-        // Vec, …) — method calls like `map.insert` / `set.remove` are
-        // pure in-memory bookkeeping, not authorization-relevant.
-        None
-    } else if rules.is_mutation(&callee) {
-        Some(OperationKind::Mutation)
-    } else if rules.is_read(&callee) {
-        Some(OperationKind::Read)
+    // Phase B1: split classification into OperationKind (what verb?)
+    // and SinkClass (what resource?).  The sink class drives the
+    // ownership gate; OperationKind is kept for partial-batch / stale-
+    // session checks that care about read-vs-mutation semantics.
+    let (op_kind, sink_class) = if rules.is_token_lookup_call(&callee, &node_text) {
+        (Some(OperationKind::TokenLookup), None)
+    } else if let Some(class) = rules.classify_sink_class(&callee, &state.non_sink_vars) {
+        let op = match class {
+            SinkClass::DbCrossTenantRead => OperationKind::Read,
+            // InMemoryLocal: keep the verb for telemetry but the
+            // ownership gate ignores this class.
+            SinkClass::InMemoryLocal => {
+                if rules.is_mutation(&callee) {
+                    OperationKind::Mutation
+                } else {
+                    OperationKind::Read
+                }
+            }
+            // Publish / outbound / cache / DB mutation — treat as
+            // write-shaped by default unless the callee name is a
+            // read verb (e.g. `cache.get(tenant_id)`).
+            _ => {
+                if rules.is_read(&callee) && !rules.is_mutation(&callee) {
+                    OperationKind::Read
+                } else {
+                    OperationKind::Mutation
+                }
+            }
+        };
+        (Some(op), Some(class))
     } else {
-        None
+        (None, None)
     };
 
     if let Some(kind) = op_kind {
         state.operations.push(SensitiveOperation {
             kind,
+            sink_class,
             callee,
             subjects,
             span: span(node),
@@ -975,10 +995,10 @@ fn detect_ownership_equality_check(if_node: Node<'_>, bytes: &[u8], state: &mut 
 }
 
 fn unwrap_parens_local(node: Node<'_>) -> Node<'_> {
-    if node.kind() == "parenthesized_expression" {
-        if let Some(inner) = node.named_child(0) {
-            return unwrap_parens_local(inner);
-        }
+    if node.kind() == "parenthesized_expression"
+        && let Some(inner) = node.named_child(0)
+    {
+        return unwrap_parens_local(inner);
     }
     node
 }
@@ -1019,10 +1039,10 @@ fn binary_operands<'tree>(node: Node<'tree>) -> Option<(Node<'tree>, Node<'tree>
 fn resolve_else_block(alt: Node<'_>) -> Node<'_> {
     // Rust wraps the else branch in an `else_clause` with the block
     // as a named child. Other grammars differ, so we walk defensively.
-    if alt.kind() == "else_clause" {
-        if let Some(block) = named_children(alt).into_iter().next() {
-            return block;
-        }
+    if alt.kind() == "else_clause"
+        && let Some(block) = named_children(alt).into_iter().next()
+    {
+        return block;
     }
     alt
 }

@@ -1,3 +1,4 @@
+use crate::auth_analysis::model::SinkClass;
 use crate::utils::config::Config;
 
 #[derive(Debug, Clone)]
@@ -15,6 +16,15 @@ pub struct AuthAnalysisRules {
     pub token_recipient_fields: Vec<String>,
     pub non_sink_receiver_types: Vec<String>,
     pub non_sink_receiver_name_prefixes: Vec<String>,
+    /// Phase B1: receiver-chain first-segment prefixes that classify a
+    /// call as a realtime publish (pub/sub, websocket, event stream).
+    pub realtime_receiver_prefixes: Vec<String>,
+    /// Phase B1: receiver-chain prefixes that classify a call as an
+    /// outbound network sink (HTTP client, RPC caller).
+    pub outbound_network_receiver_prefixes: Vec<String>,
+    /// Phase B1: receiver-chain prefixes that classify a call as a
+    /// cross-tenant cache access.
+    pub cache_receiver_prefixes: Vec<String>,
 }
 
 impl AuthAnalysisRules {
@@ -33,6 +43,9 @@ impl AuthAnalysisRules {
             token_recipient_fields: Vec::new(),
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            realtime_receiver_prefixes: Vec::new(),
+            outbound_network_receiver_prefixes: Vec::new(),
+            cache_receiver_prefixes: Vec::new(),
         }
     }
 
@@ -118,6 +131,63 @@ impl AuthAnalysisRules {
             return true;
         }
         self.receiver_matches_non_sink_prefix(first)
+    }
+
+    /// Does the first segment of the callee's receiver chain match any
+    /// configured prefix in `prefixes`?  Comparison is case-insensitive
+    /// on the first segment and uses starts-with on each prefix.
+    fn receiver_matches_any_prefix(&self, first_segment: &str, prefixes: &[String]) -> bool {
+        if first_segment.is_empty() {
+            return false;
+        }
+        let lower = first_segment.to_ascii_lowercase();
+        prefixes.iter().any(|prefix| {
+            !prefix.is_empty() && lower.starts_with(prefix.to_ascii_lowercase().as_str())
+        })
+    }
+
+    /// Phase B1: classify a call into a [`SinkClass`].
+    ///
+    /// Dispatch order (first match wins):
+    ///   1. `InMemoryLocal` — receiver is a known non-sink collection
+    ///      (tracked in `non_sink_vars` or matches a configured
+    ///      non-sink prefix).  Subsumes the A1 gate.
+    ///   2. `RealtimePublish` — receiver first-segment matches a
+    ///      configured realtime prefix (e.g. `realtime`, `pubsub`).
+    ///   3. `OutboundNetwork` — receiver first-segment matches a
+    ///      configured outbound-network prefix (e.g. `http`, `reqwest`).
+    ///   4. `CacheCrossTenant` — receiver first-segment matches a
+    ///      configured cache prefix (e.g. `cache`, `redis`).
+    ///   5. `DbMutation` — callee name matches `mutation_indicator_names`.
+    ///   6. `DbCrossTenantRead` — callee name matches `read_indicator_names`.
+    ///
+    /// Returns `None` when the callee matches none of the above — the
+    /// call site is ignored by ownership-gap checks.
+    pub fn classify_sink_class(
+        &self,
+        callee: &str,
+        non_sink_vars: &std::collections::HashSet<String>,
+    ) -> Option<SinkClass> {
+        if self.callee_has_non_sink_receiver(callee, non_sink_vars) {
+            return Some(SinkClass::InMemoryLocal);
+        }
+        let first = first_receiver_segment(callee);
+        if self.receiver_matches_any_prefix(first, &self.realtime_receiver_prefixes) {
+            return Some(SinkClass::RealtimePublish);
+        }
+        if self.receiver_matches_any_prefix(first, &self.outbound_network_receiver_prefixes) {
+            return Some(SinkClass::OutboundNetwork);
+        }
+        if self.receiver_matches_any_prefix(first, &self.cache_receiver_prefixes) {
+            return Some(SinkClass::CacheCrossTenant);
+        }
+        if self.is_mutation(callee) {
+            return Some(SinkClass::DbMutation);
+        }
+        if self.is_read(callee) {
+            return Some(SinkClass::DbCrossTenantRead);
+        }
+        None
     }
 
     pub fn requires_admin_path(&self, path: &str) -> bool {
@@ -387,6 +457,9 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            realtime_receiver_prefixes: Vec::new(),
+            outbound_network_receiver_prefixes: Vec::new(),
+            cache_receiver_prefixes: Vec::new(),
         }
     } else if matches!(lang_slug, "ruby") {
         AuthAnalysisRules {
@@ -523,6 +596,9 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            realtime_receiver_prefixes: Vec::new(),
+            outbound_network_receiver_prefixes: Vec::new(),
+            cache_receiver_prefixes: Vec::new(),
         }
     } else if matches!(lang_slug, "go") {
         AuthAnalysisRules {
@@ -612,6 +688,9 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            realtime_receiver_prefixes: Vec::new(),
+            outbound_network_receiver_prefixes: Vec::new(),
+            cache_receiver_prefixes: Vec::new(),
         }
     } else if matches!(lang_slug, "java") {
         AuthAnalysisRules {
@@ -697,6 +776,9 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            realtime_receiver_prefixes: Vec::new(),
+            outbound_network_receiver_prefixes: Vec::new(),
+            cache_receiver_prefixes: Vec::new(),
         }
     } else if matches!(lang_slug, "rust") {
         AuthAnalysisRules {
@@ -832,6 +914,23 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
                 "queue".into(),
                 "stack".into(),
             ],
+            realtime_receiver_prefixes: vec![
+                "realtime".into(),
+                "pubsub".into(),
+                "broker".into(),
+                "broadcast".into(),
+                "notifier".into(),
+                "channels".into(),
+            ],
+            outbound_network_receiver_prefixes: vec![
+                "http".into(),
+                "reqwest".into(),
+                "hyper".into(),
+                "client".into(),
+                "webhook".into(),
+                "fetcher".into(),
+            ],
+            cache_receiver_prefixes: vec!["redis".into(), "memcache".into(), "memcached".into()],
         }
     } else {
         AuthAnalysisRules {
@@ -900,6 +999,9 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
             ],
             non_sink_receiver_types: Vec::new(),
             non_sink_receiver_name_prefixes: Vec::new(),
+            realtime_receiver_prefixes: Vec::new(),
+            outbound_network_receiver_prefixes: Vec::new(),
+            cache_receiver_prefixes: Vec::new(),
         }
     };
 
@@ -951,6 +1053,18 @@ pub fn build_auth_rules(config: &Config, lang_slug: &str) -> AuthAnalysisRules {
         extend_unique(
             &mut rules.non_sink_receiver_name_prefixes,
             &lang_cfg.auth.non_sink_receiver_name_prefixes,
+        );
+        extend_unique(
+            &mut rules.realtime_receiver_prefixes,
+            &lang_cfg.auth.realtime_receiver_prefixes,
+        );
+        extend_unique(
+            &mut rules.outbound_network_receiver_prefixes,
+            &lang_cfg.auth.outbound_network_receiver_prefixes,
+        );
+        extend_unique(
+            &mut rules.cache_receiver_prefixes,
+            &lang_cfg.auth.cache_receiver_prefixes,
         );
     }
 
@@ -1097,5 +1211,70 @@ mod tests {
         // Prefix-match on configured name prefix ("counts" is in defaults).
         assert!(rules.callee_has_non_sink_receiver("counts.insert", &HashSet::new()));
         assert!(rules.callee_has_non_sink_receiver("visited_nodes.insert", &HashSet::new()));
+    }
+
+    #[test]
+    fn classify_sink_class_dispatches_on_receiver_and_name() {
+        use crate::auth_analysis::model::SinkClass;
+        use std::collections::HashSet;
+        let cfg = Config::default();
+        let rules = build_auth_rules(&cfg, "rust");
+        let mut vars = HashSet::new();
+        vars.insert("map".to_string());
+
+        // In-memory local: tracked var → InMemoryLocal (trumps name-based match).
+        assert_eq!(
+            rules.classify_sink_class("map.insert", &vars),
+            Some(SinkClass::InMemoryLocal)
+        );
+        // In-memory local: configured name prefix.
+        assert_eq!(
+            rules.classify_sink_class("visited.insert", &HashSet::new()),
+            Some(SinkClass::InMemoryLocal)
+        );
+        // Realtime: default prefix `realtime` → RealtimePublish even when
+        // the method name (`publish_to_group`) would also match the
+        // mutation list.
+        assert_eq!(
+            rules.classify_sink_class("realtime.publish_to_group", &HashSet::new()),
+            Some(SinkClass::RealtimePublish)
+        );
+        // Outbound network: default prefix `http`.
+        assert_eq!(
+            rules.classify_sink_class("http.post", &HashSet::new()),
+            Some(SinkClass::OutboundNetwork)
+        );
+        // Cache: default prefix `redis`.
+        assert_eq!(
+            rules.classify_sink_class("redis.set", &HashSet::new()),
+            Some(SinkClass::CacheCrossTenant)
+        );
+        // DB mutation fallback: `db.insert` → mutation indicator →
+        // DbMutation (no receiver prefix matches `db`).
+        assert_eq!(
+            rules.classify_sink_class("db.insert", &HashSet::new()),
+            Some(SinkClass::DbMutation)
+        );
+        // DB cross-tenant read fallback: `db.find_by_id` → read indicator.
+        assert_eq!(
+            rules.classify_sink_class("db.find_by_id", &HashSet::new()),
+            Some(SinkClass::DbCrossTenantRead)
+        );
+        // Unknown verb with unknown receiver → None.
+        assert_eq!(
+            rules.classify_sink_class("widget.frobnicate", &HashSet::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn sink_class_is_auth_relevant_only_for_non_local_classes() {
+        use crate::auth_analysis::model::SinkClass;
+        assert!(SinkClass::DbMutation.is_auth_relevant());
+        assert!(SinkClass::DbCrossTenantRead.is_auth_relevant());
+        assert!(SinkClass::RealtimePublish.is_auth_relevant());
+        assert!(SinkClass::OutboundNetwork.is_auth_relevant());
+        assert!(SinkClass::CacheCrossTenant.is_auth_relevant());
+        assert!(!SinkClass::InMemoryLocal.is_auth_relevant());
     }
 }
