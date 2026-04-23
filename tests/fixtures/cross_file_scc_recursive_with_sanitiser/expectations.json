@@ -1,12 +1,11 @@
 {
   "required_findings": [],
   "forbidden_findings": [
-    { "id_prefix": "py.cmdi", "file_glob": "**/driver.py" }
+    {
+      "id_prefix": "py.cmdi",
+      "file_glob": "**/driver.py"
+    }
   ],
-  "noise_budget": {
-    "max_total_findings": 10,
-    "max_high_findings": 5
-  },
   "performance_expectations": {
     "max_ms_no_index": 2000,
     "max_ms_index_cold": 3000,

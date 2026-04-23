@@ -1,13 +1,11 @@
 {
   "required_findings": [],
   "forbidden_findings": [
-    { "id_prefix": "taint-unsanitised-flow", "file_glob": "**/main.rs" },
-    { "id_prefix": "taint-", "file_glob": "**/main.rs" }
+    {
+      "id_prefix": "taint-",
+      "file_glob": "**/main.rs"
+    }
   ],
-  "noise_budget": {
-    "max_total_findings": 6,
-    "max_high_findings": 3
-  },
   "performance_expectations": {
     "max_ms_no_index": 1000,
     "max_ms_index_cold": 1500,

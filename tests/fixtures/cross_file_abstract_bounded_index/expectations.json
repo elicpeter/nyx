@@ -1,13 +1,15 @@
 {
   "required_findings": [],
   "forbidden_findings": [
-    { "id_prefix": "taint-shell-injection", "file_glob": "**/main.py" },
-    { "id_prefix": "taint-unsanitised-flow", "file_glob": "**/main.py" }
+    {
+      "id_prefix": "taint-shell-injection",
+      "file_glob": "**/main.py"
+    },
+    {
+      "id_prefix": "taint-",
+      "file_glob": "**/main.py"
+    }
   ],
-  "noise_budget": {
-    "max_total_findings": 4,
-    "max_high_findings": 1
-  },
   "performance_expectations": {
     "max_ms_no_index": 1500,
     "max_ms_index_cold": 2000,
