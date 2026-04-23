@@ -62,3 +62,37 @@ fn cross_file_alias_bounded_graph() {
     let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
     validate_expectations(&diags, &dir);
 }
+
+/// Phase 11 factory pattern: `makeBag()` returns a fresh `[]` and
+/// `fillBag(bag, val)` stores into it.  Exercises
+/// `PointsToSummary.returns_fresh_alloc`, which synthesises a heap
+/// identity for the factory's call result so subsequent container ops
+/// in the caller have a heap cell to write into and read from.
+#[test]
+fn cross_file_container_factory() {
+    let dir = fixture_path("cross_file_container_factory");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Phase 11 receiver-chain regression: tainted receiver flows through
+/// `tainted.trim().toLowerCase()` — both zero-arg — and into
+/// `Runtime.exec`.  Pins the existing receiver-fallback behaviour so
+/// heap-aliasing changes in this phase do not regress it.
+#[test]
+fn receiver_chain_taint_java() {
+    let dir = fixture_path("receiver_chain_taint_java");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}
+
+/// Phase 11 callback-alias regression: cross-file sink reached through
+/// a two-hop local alias chain (`const f = helpers.dangerous; const g = f; g(x)`).
+/// Pins whether the engine's name-keyed callback-binding resolution
+/// walks the alias chain far enough to connect `g` → `dangerous`.
+#[test]
+fn cross_file_callback_alias() {
+    let dir = fixture_path("cross_file_callback_alias");
+    let diags = scan_fixture_dir(&dir, AnalysisMode::Full);
+    validate_expectations(&diags, &dir);
+}

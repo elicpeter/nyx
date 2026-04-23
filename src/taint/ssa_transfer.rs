@@ -15,7 +15,7 @@ use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
 use crate::constraint;
 use crate::interop::InteropEdge;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule, SourceKind};
-use crate::ssa::heap::{HeapSlot, HeapState, PointsToResult, PointsToSet};
+use crate::ssa::heap::{HeapObjectId, HeapSlot, HeapState, PointsToResult, PointsToSet};
 use crate::ssa::ir::*;
 use crate::state::lattice::Lattice;
 use crate::state::symbol::{SymbolId, SymbolInterner};
@@ -3260,6 +3260,37 @@ fn transfer_inst(
             //     `param_container_to_return`; both channels are idempotent
             //     so re-propagation is safe.
             //
+            // Fresh-container factory synthesis: when the callee's
+            // `PointsToSummary` marks a return path as a fresh allocation
+            // (container literal or known constructor not tracing to any
+            // parameter), synthesise a `HeapObjectId` keyed on the call's
+            // SSA value and seed it into `dynamic_pts`.  This closes the
+            // factory-pattern cross-file gap — `const bag = makeBag()`
+            // gives `bag` a stable heap identity so subsequent
+            // `fillBag(bag, …)` / `bag[0]` operations have a heap cell
+            // to store into or read from.
+            //
+            // Strictly additive: the existing `Param(i) → Return` edge
+            // handling below joins the caller's argument pts when the
+            // function also returns a parameter on some path, so a mixed
+            // factory (`if (x) return []; else return arg`) carries both
+            // the synthetic fresh cell and the aliased argument cells.
+            if resolved_points_to.returns_fresh_alloc
+                && let Some(dyn_ref) = transfer.dynamic_pts
+            {
+                let fresh = PointsToSet::singleton(HeapObjectId(inst.value));
+                let mut dyn_pts = dyn_ref.borrow_mut();
+                match dyn_pts.get(&inst.value) {
+                    Some(existing) => {
+                        let merged = existing.union(&fresh);
+                        dyn_pts.insert(inst.value, merged);
+                    }
+                    None => {
+                        dyn_pts.insert(inst.value, fresh);
+                    }
+                }
+            }
+
             // Overflow (the callee's alias graph exceeded
             // `MAX_ALIAS_EDGES`): conservatively treat *every* parameter
             // as aliasing every other parameter and the return.
@@ -7865,6 +7896,7 @@ pub fn extract_ssa_func_summary(
         &param_info,
         effective_params,
         formal_param_names,
+        Some(lang),
     );
 
     // Infer return type: scan return-reaching blocks for constructor calls.

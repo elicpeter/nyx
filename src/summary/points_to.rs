@@ -115,6 +115,24 @@ pub struct PointsToSummary {
     /// every other parameter and the return value".
     #[serde(default, skip_serializing_if = "core::ops::Not::not")]
     pub overflow: bool,
+    /// At least one return path produces a *fresh* container allocation —
+    /// a container literal (`[]`, `{}`) or a known container constructor
+    /// call (`new Map()`, `list()`, …) that does not trace back to any
+    /// parameter.  When this is `true` the caller synthesises a fresh
+    /// [`crate::ssa::heap::HeapObjectId`] keyed on the call's SSA value
+    /// and seeds it into `dynamic_pts`, so later container operations on
+    /// the call result (e.g. `bag[0]`, `fillBag(bag, …)`) can find a heap
+    /// cell to read from or store into.
+    ///
+    /// Closes the factory-pattern cross-file gap — `const bag = makeBag()`
+    /// followed by `fillBag(bag, env)` and `exec(bag[0])` — by giving the
+    /// caller's heap analysis a stable identity to attach stores to.
+    /// Combines freely with `Param(i) → Return` edges: a mixed-return
+    /// function (one branch returns a param, another returns a fresh
+    /// allocation) emits both and the caller joins the two points-to
+    /// sets.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub returns_fresh_alloc: bool,
 }
 
 impl PointsToSummary {
@@ -128,7 +146,7 @@ impl PointsToSummary {
     /// aliasing" interpretation.  Used by extraction to decide whether
     /// the field should be persisted or left empty.
     pub fn is_empty(&self) -> bool {
-        self.edges.is_empty() && !self.overflow
+        self.edges.is_empty() && !self.overflow && !self.returns_fresh_alloc
     }
 
     /// Insert an edge, preserving dedup and the bounded-size invariant.
@@ -160,10 +178,11 @@ impl PointsToSummary {
         self.edges.push(edge);
     }
 
-    /// Union two summaries, merging edges and OR-ing the overflow flag.
-    /// Respects the [`MAX_ALIAS_EDGES`] cap via the same overflow promotion
-    /// used by [`Self::insert`].
+    /// Union two summaries, merging edges and OR-ing the overflow /
+    /// fresh-alloc flags.  Respects the [`MAX_ALIAS_EDGES`] cap via the
+    /// same overflow promotion used by [`Self::insert`].
     pub fn merge(&mut self, other: &Self) {
+        self.returns_fresh_alloc |= other.returns_fresh_alloc;
         if other.overflow {
             self.overflow = true;
             return;
@@ -288,5 +307,32 @@ mod tests {
     fn serde_default_decodes_empty_object() {
         let back: PointsToSummary = serde_json::from_str("{}").unwrap();
         assert!(back.is_empty());
+    }
+
+    #[test]
+    fn returns_fresh_alloc_is_not_empty() {
+        let mut s = PointsToSummary::empty();
+        assert!(s.is_empty());
+        s.returns_fresh_alloc = true;
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn merge_propagates_fresh_alloc_flag() {
+        let mut a = PointsToSummary::empty();
+        let mut b = PointsToSummary::empty();
+        b.returns_fresh_alloc = true;
+        a.merge(&b);
+        assert!(a.returns_fresh_alloc);
+    }
+
+    #[test]
+    fn returns_fresh_alloc_roundtrips() {
+        let mut s = PointsToSummary::empty();
+        s.returns_fresh_alloc = true;
+        let json = serde_json::to_string(&s).unwrap();
+        let back: PointsToSummary = serde_json::from_str(&json).unwrap();
+        assert!(back.returns_fresh_alloc);
+        assert_eq!(s, back);
     }
 }

@@ -33,6 +33,7 @@ use std::collections::{HashMap, HashSet};
 use smallvec::SmallVec;
 
 use crate::summary::points_to::{AliasKind, AliasPosition, PointsToSummary};
+use crate::symbol::Lang;
 
 use super::ir::{SsaBody, SsaOp, SsaValue, Terminator};
 
@@ -163,6 +164,63 @@ fn is_receiver_name_local(name: &str) -> bool {
     matches!(name, "self" | "this")
 }
 
+/// Walk Assign/Phi chains from a return value to decide whether the path
+/// ends at a fresh container allocation (literal or constructor call).
+///
+/// Returns `true` the first time a qualifying allocation is found.
+/// Parameter-terminated paths, `Call` ops that are not container
+/// constructors, and constants that are not container literals all
+/// return `false` — soundly under-approximating, since the caller will
+/// simply fall back to the existing `Param(i) → Return` / store-into-
+/// heap channels when the flag is absent.
+fn trace_to_fresh_alloc(
+    v: SsaValue,
+    op_map: &HashMap<SsaValue, SsaOp>,
+    lang: Option<Lang>,
+    visited: &mut HashSet<SsaValue>,
+) -> bool {
+    if !visited.insert(v) {
+        return false;
+    }
+    let Some(op) = op_map.get(&v) else {
+        return false;
+    };
+    match op {
+        SsaOp::Const(Some(text)) => crate::ssa::heap::is_container_literal_public(text),
+        SsaOp::Call { callee, .. } => lang
+            .map(|l| crate::ssa::heap::is_container_constructor(callee, l))
+            .unwrap_or(false),
+        SsaOp::Assign(uses) => uses
+            .iter()
+            .any(|u| trace_to_fresh_alloc(*u, op_map, lang, visited)),
+        SsaOp::Phi(operands) => operands
+            .iter()
+            .any(|(_, pv)| trace_to_fresh_alloc(*pv, op_map, lang, visited)),
+        _ => false,
+    }
+}
+
+/// Whether any `Terminator::Return(Some(v))` in the body traces back to a
+/// fresh container allocation.  Invoked once per function; the visited
+/// set is fresh per return block so distinct returns do not poison each
+/// other's searches.
+fn returns_fresh_allocation(
+    ssa: &SsaBody,
+    op_map: &HashMap<SsaValue, SsaOp>,
+    lang: Option<Lang>,
+) -> bool {
+    for block in &ssa.blocks {
+        let Terminator::Return(Some(v)) = block.terminator else {
+            continue;
+        };
+        let mut visited = HashSet::new();
+        if trace_to_fresh_alloc(v, op_map, lang, &mut visited) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Compute the parameter-granularity points-to summary for a function.
 ///
 /// `param_info` carries one `(param_index, param_name, param_ssa_value)`
@@ -187,14 +245,38 @@ pub fn analyse_param_points_to(
     param_info: &[(usize, String, SsaValue)],
     formal_param_count: usize,
     formal_param_names: Option<&[String]>,
+    lang: Option<Lang>,
 ) -> PointsToSummary {
     let mut summary = PointsToSummary::empty();
-    if formal_param_count == 0 {
-        return summary;
-    }
 
     let op_map = build_op_map(ssa);
     let var_names = build_var_name_map(ssa);
+
+    // ── 0. Fresh-container return detection ─────────────────────────────
+    //
+    // A return path traces back to either:
+    //   * `SsaOp::Const(text)` where `text` is a container literal
+    //     (`[]`, `{}`, `new Map()`, …), OR
+    //   * `SsaOp::Call { callee, … }` where `callee` matches a known
+    //     container constructor for `lang` (`ArrayList`, `dict`, …).
+    //
+    // When at least one return path matches, the callee produces a
+    // caller-visible fresh heap identity on that path — callers
+    // synthesise a `HeapObjectId` keyed on the call result so later
+    // container operations have a stable heap cell.  Traces that reach a
+    // parameter are handled by the edge-based `Param(i) → Return` channel
+    // below and do not contribute here; a mixed function emits both.
+    //
+    // Runs before the early-out on `formal_param_count == 0` so pure
+    // factories (zero-param container constructors) still record the
+    // fresh-alloc signal.
+    if returns_fresh_allocation(ssa, &op_map, lang) {
+        summary.returns_fresh_alloc = true;
+    }
+
+    if formal_param_count == 0 {
+        return summary;
+    }
     // Build the name→positional-index map.  Summary param indices are
     // *positional* — they match the call-site `args[i]` position, which
     // excludes the receiver (`self`/`this`).  When `formal_param_names`
@@ -371,7 +453,7 @@ mod tests {
             (0usize, "a".to_string(), SsaValue(0)),
             (1usize, "b".to_string(), SsaValue(1)),
         ];
-        let s = analyse_param_points_to(&body, &pinfo, 2, None);
+        let s = analyse_param_points_to(&body, &pinfo, 2, None, None);
         assert!(!s.overflow, "unexpected overflow: {s:?}");
         assert!(
             s.edges.iter().any(|e| e.source == AliasPosition::Param(0)
@@ -394,7 +476,7 @@ mod tests {
         };
         let body = mk_body(vec![block], 1);
         let pinfo = vec![(0usize, "a".to_string(), SsaValue(0))];
-        let s = analyse_param_points_to(&body, &pinfo, 1, None);
+        let s = analyse_param_points_to(&body, &pinfo, 1, None, None);
         assert!(!s.overflow);
         assert_eq!(s.edges.len(), 1);
         assert_eq!(s.edges[0].source, AliasPosition::Param(0));
@@ -420,7 +502,7 @@ mod tests {
         };
         let body = mk_body(vec![block], 3);
         let pinfo = vec![(0usize, "b".to_string(), SsaValue(0))];
-        let s = analyse_param_points_to(&body, &pinfo, 1, None);
+        let s = analyse_param_points_to(&body, &pinfo, 1, None, None);
         assert!(
             s.is_empty(),
             "self-alias edges should not be emitted: {s:?}"
@@ -449,7 +531,7 @@ mod tests {
             (1usize, "b".to_string(), SsaValue(1)),
         ];
         // formal_param_count = 2 — index 5 is out of range.
-        let s = analyse_param_points_to(&body, &pinfo, 2, None);
+        let s = analyse_param_points_to(&body, &pinfo, 2, None, None);
         assert!(
             s.is_empty(),
             "synthetic captures past formal arity must not emit edges: {s:?}"
@@ -488,8 +570,79 @@ mod tests {
         // Only the first traced param is emitted (trace_to_param short-
         // circuits on first match), so overflow is not expected — we
         // instead verify the bounded behaviour: a single edge.
-        let s = analyse_param_points_to(&body, &pinfo, n as usize, None);
+        let s = analyse_param_points_to(&body, &pinfo, n as usize, None, None);
         assert!(!s.overflow);
         assert_eq!(s.edges.len(), 1);
+    }
+
+    #[test]
+    fn fresh_container_literal_return_sets_flag() {
+        // fn makeBag() { return []; }
+        // v0 = Const("[]")
+        // terminator: Return(v0)
+        let block = SsaBlock {
+            id: BlockId(0),
+            phis: vec![],
+            body: vec![inst(0, SsaOp::Const(Some("[]".to_string())), None)],
+            terminator: Terminator::Return(Some(SsaValue(0))),
+            preds: smallvec![],
+            succs: smallvec![],
+        };
+        let body = mk_body(vec![block], 1);
+        let s = analyse_param_points_to(&body, &[], 0, None, Some(Lang::JavaScript));
+        assert!(s.returns_fresh_alloc);
+        assert!(s.edges.is_empty());
+    }
+
+    #[test]
+    fn constructor_return_sets_flag() {
+        // fn makeList() { return list(); }
+        // v0 = Call("list", [])
+        // terminator: Return(v0)
+        let block = SsaBlock {
+            id: BlockId(0),
+            phis: vec![],
+            body: vec![inst(
+                0,
+                SsaOp::Call {
+                    callee: "list".to_string(),
+                    args: vec![],
+                    receiver: None,
+                },
+                None,
+            )],
+            terminator: Terminator::Return(Some(SsaValue(0))),
+            preds: smallvec![],
+            succs: smallvec![],
+        };
+        let body = mk_body(vec![block], 1);
+        let s = analyse_param_points_to(&body, &[], 0, None, Some(Lang::Python));
+        assert!(s.returns_fresh_alloc);
+    }
+
+    #[test]
+    fn return_of_param_does_not_set_fresh_flag() {
+        // fn identity(a) { return a; }
+        let block = SsaBlock {
+            id: BlockId(0),
+            phis: vec![],
+            body: vec![inst(0, SsaOp::Param { index: 0 }, Some("a"))],
+            terminator: Terminator::Return(Some(SsaValue(0))),
+            preds: smallvec![],
+            succs: smallvec![],
+        };
+        let body = mk_body(vec![block], 1);
+        let pinfo = vec![(0usize, "a".to_string(), SsaValue(0))];
+        let s = analyse_param_points_to(&body, &pinfo, 1, None, Some(Lang::JavaScript));
+        assert!(
+            !s.returns_fresh_alloc,
+            "param-only return must not set fresh-alloc flag"
+        );
+        // But the Param(0) → Return edge must still be emitted.
+        assert!(
+            s.edges.iter().any(|e| e.source == AliasPosition::Param(0)
+                && e.target == AliasPosition::Return),
+            "expected Param(0) → Return edge, got {s:?}"
+        );
     }
 }

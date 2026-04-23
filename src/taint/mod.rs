@@ -1012,10 +1012,15 @@ pub(crate) fn extract_intra_file_ssa_summaries(
                 .count()
         };
 
-        if param_count == 0 {
-            continue; // No params → no per-parameter summary needed
-        }
-
+        // Zero-param helpers are normally elided — a fixture with no
+        // parameters cannot carry per-parameter taint transforms.  But
+        // zero-arg factories (`function makeBag() { return []; }`) do
+        // have one observable cross-file effect: the return is a fresh
+        // container allocation.  Run the summary extractor for those and
+        // keep the result only when `returns_fresh_alloc` is set;
+        // everything else falls through the observable-effects filter
+        // below.
+        //
         // Pre-compute module aliases for JS/TS (read-only const prop pass)
         let mod_aliases = compute_module_aliases_for_summary(&func_ssa, lang);
         let mod_aliases_ref = if mod_aliases.is_empty() {
@@ -1042,7 +1047,10 @@ pub(crate) fn extract_intra_file_ssa_summaries(
         // `points_to` support, a void helper whose only observable behaviour
         // is a parameter-to-parameter alias (e.g. `fn set(t, v) { t.x = v; }`)
         // must survive this filter so summary application at cross-file
-        // call sites can replay the alias edges.
+        // call sites can replay the alias edges.  Zero-param factories
+        // are kept via the `returns_fresh_alloc` leg of
+        // `points_to.is_empty()` — `is_empty()` returns false when the
+        // fresh-alloc flag is set.
         if !summary.param_to_return.is_empty()
             || !summary.param_to_sink.is_empty()
             || !summary.source_caps.is_empty()
@@ -1138,7 +1146,14 @@ fn lower_all_functions_from_bodies(
         });
         key.namespace = namespace.to_string();
 
-        if param_count > 0 {
+        // Run the extractor even for zero-param functions so factories
+        // (`returns_fresh_alloc = true`) emit a summary the caller can
+        // replay.  A completely empty summary is still inserted for
+        // non-zero-param functions (see the existing rationale below) but
+        // zero-param cases without the factory flag stay out of the map
+        // to avoid cluttering `GlobalSummaries` with trivially-empty
+        // entries.
+        {
             let mod_aliases = compute_module_aliases_for_summary(&func_ssa, lang);
             let mod_aliases_ref = if mod_aliases.is_empty() {
                 None
@@ -1163,7 +1178,12 @@ fn lower_all_functions_from_bodies(
             // An empty summary tells resolve_callee "this function exists and has
             // no taint effects" — preventing fallthrough to the less precise old
             // FuncSummary which may report false source_caps from internal sources.
-            summaries.insert(key.clone(), summary);
+            // For zero-param functions we only insert when the summary carries
+            // the fresh-container signal (the only observable effect worth
+            // persisting for a parameter-less body).
+            if param_count > 0 || summary.points_to.returns_fresh_alloc {
+                summaries.insert(key.clone(), summary);
+            }
         }
 
         let opt = crate::ssa::optimize_ssa(&mut func_ssa, &body.graph, Some(lang));

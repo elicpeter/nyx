@@ -459,6 +459,15 @@ impl PointsToResult {
 
 // ── Allocation site detection ────────────────────────────────────────────
 
+/// Public re-export wrapper for container-literal detection.
+///
+/// Called from [`crate::ssa::param_points_to`] to decide whether a return
+/// path traces to a fresh allocation.  Keeps the internal helper private
+/// while exposing the classification via a stable name.
+pub fn is_container_literal_public(text: &str) -> bool {
+    is_container_literal(text)
+}
+
 /// Check if a const literal text represents a container/collection literal.
 fn is_container_literal(text: &str) -> bool {
     let t = text.trim();

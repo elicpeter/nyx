@@ -1053,6 +1053,23 @@ fn rename_variables(
                 // Return(Some(v_const)) correctly has no taint entry — preventing
                 // the last body instruction (which may be an unrelated tainted
                 // value) from being treated as the return value.
+                //
+                // Carry the literal text through when `cfg` captured it
+                // on the Return node (populated by `extract_literal_rhs`
+                // for `return []`, `return {}`, etc.).  Downstream
+                // container-literal detection — including the
+                // fresh-container-factory detector in
+                // [`crate::ssa::param_points_to`] — depends on that text
+                // surviving into `SsaOp::Const(Some(text))`.
+                let return_node = blocks_nodes[block_idx]
+                    .iter()
+                    .copied()
+                    .find(|&n| {
+                        let info = &cfg[n];
+                        info.kind == StmtKind::Return && info.taint.uses.is_empty()
+                    })
+                    .unwrap_or(last_node);
+                let const_text = cfg[return_node].taint.const_text.clone();
                 let const_v = SsaValue(*next_value);
                 *next_value += 1;
                 let block_id = BlockId(block_idx as u32);
@@ -1063,7 +1080,7 @@ fn rename_variables(
                 });
                 ssa_blocks[block_idx].body.push(SsaInst {
                     value: const_v,
-                    op: SsaOp::Const(None),
+                    op: SsaOp::Const(const_text),
                     cfg_node: last_node,
                     var_name: None,
                     span: last_info.ast.span,

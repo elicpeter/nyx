@@ -2236,6 +2236,20 @@ fn extract_literal_rhs(ast: Node, lang: &str, code: &[u8]) -> Option<String> {
         }
     }
 
+    // Return statement with a literal argument (`return []`, `return {}`).
+    // Lets SSA's const-return path ([`crate::ssa::lower`] line ~1066) emit
+    // `SsaOp::Const(Some(text))` instead of `Const(None)` so downstream
+    // container-literal detection (heap points-to, fresh-alloc summary)
+    // can recognise the fresh allocation.
+    if matches!(lookup(lang, ast.kind()), Kind::Return) {
+        let mut cursor = ast.walk();
+        for child in ast.named_children(&mut cursor) {
+            if is_syntactic_literal(child, code) {
+                return text_of(child, code);
+            }
+        }
+    }
+
     None
 }
 
@@ -3902,8 +3916,14 @@ fn push_node<'a>(
 
     // Capture constant text for SSA constant propagation: when this node
     // defines a variable from a syntactic literal (no identifier uses),
-    // extract the raw literal text from the AST.
-    let const_text = if defines.is_some() && uses.is_empty() {
+    // extract the raw literal text from the AST.  Also capture the
+    // argument of a const-return (`return []`) so the SSA const-return
+    // synthesis can emit `Const(Some(text))` instead of `Const(None)`,
+    // surfacing the literal text to downstream container-literal
+    // detection.
+    let const_text = if (defines.is_some() && uses.is_empty())
+        || (kind == StmtKind::Return && uses.is_empty())
+    {
         extract_literal_rhs(ast, lang, code)
     } else {
         None

@@ -1476,6 +1476,7 @@ fn synthesize_ssa_disambig(summary: &SsaFuncSummary) -> u32 {
     summary.param_return_paths.len().hash(&mut h);
     summary.points_to.edges.len().hash(&mut h);
     summary.points_to.overflow.hash(&mut h);
+    summary.points_to.returns_fresh_alloc.hash(&mut h);
     h.finish() as u32
 }
 
