@@ -116,6 +116,12 @@ jobs:
         with:
           tool: cargo-about@0.7.1
 
+      - name: Prime cargo registry cache
+        # cargo-about --offline propagates to cargo metadata, which needs
+        # every dependency already resolved in the local registry. Fetch
+        # first so --offline has something to read.
+        run: cargo fetch --locked
+
       - name: Regenerate license attribution
         # --offline skips clearlydefined.io so regeneration is deterministic.
         # Without this, cargo-about pulls harvested metadata from the network
