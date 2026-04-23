@@ -80,6 +80,81 @@ pub enum ScanMode {
     Taint,
 }
 
+/// Engine-depth profile that sets the full stack of analysis toggles
+/// in one shot.  Individual engine flags override the profile.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum EngineProfile {
+    /// AST + CFG + basic taint. Disables symex, abstract-interp,
+    /// context-sensitive, backwards-analysis, and SMT.
+    Fast,
+    /// AST + CFG + SSA taint + abstract interpretation + context-sensitive
+    /// inlining. Disables symex, backwards-analysis, and SMT.
+    /// (This is the default engine posture.)
+    Balanced,
+    /// Everything in `balanced` plus symex (including cross-file and
+    /// interprocedural) and backwards-analysis. Still disables SMT
+    /// (requires the `smt` cargo feature).
+    Deep,
+}
+
+impl EngineProfile {
+    /// Apply this profile to an `AnalysisOptions` struct, returning the
+    /// new options.  Individual CLI flags are layered on top by the
+    /// caller after this runs.
+    pub fn apply(&self, mut opts: crate::utils::analysis_options::AnalysisOptions) -> crate::utils::analysis_options::AnalysisOptions {
+        use crate::utils::analysis_options::SymexOptions;
+        match self {
+            EngineProfile::Fast => {
+                opts.constraint_solving = false;
+                opts.abstract_interpretation = false;
+                opts.context_sensitive = false;
+                opts.symex = SymexOptions {
+                    enabled: false,
+                    cross_file: false,
+                    interprocedural: false,
+                    smt: false,
+                };
+                opts.backwards_analysis = false;
+            }
+            EngineProfile::Balanced => {
+                opts.constraint_solving = true;
+                opts.abstract_interpretation = true;
+                opts.context_sensitive = true;
+                opts.symex = SymexOptions {
+                    enabled: false,
+                    cross_file: false,
+                    interprocedural: false,
+                    smt: false,
+                };
+                opts.backwards_analysis = false;
+            }
+            EngineProfile::Deep => {
+                opts.constraint_solving = true;
+                opts.abstract_interpretation = true;
+                opts.context_sensitive = true;
+                opts.symex = SymexOptions {
+                    enabled: true,
+                    cross_file: true,
+                    interprocedural: true,
+                    smt: false,
+                };
+                opts.backwards_analysis = true;
+            }
+        }
+        opts
+    }
+}
+
+impl std::fmt::Display for EngineProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EngineProfile::Fast => write!(f, "fast"),
+            EngineProfile::Balanced => write!(f, "balanced"),
+            EngineProfile::Deep => write!(f, "deep"),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Scan project for vulnerabilities
@@ -114,6 +189,18 @@ pub enum Commands {
         /// take precedence over profile values.
         #[arg(long)]
         profile: Option<String>,
+
+        /// Engine-depth shortcut: fast, balanced, or deep.  Sets the full
+        /// stack of analysis toggles at once; individual engine flags still
+        /// override this after application.
+        #[arg(long, value_enum)]
+        engine_profile: Option<EngineProfile>,
+
+        /// Print the effective engine configuration and exit without
+        /// scanning.  Useful for understanding how CLI flags and config
+        /// values resolve together.
+        #[arg(long)]
+        explain_engine: bool,
 
         /// Scan all targets (alias for --mode full)
         #[arg(long, hide = true)]

@@ -28,7 +28,8 @@ confidence, and modeled idioms.
 |------|-----------|----------------|
 | **Stable** | Python, JavaScript, TypeScript | Deep rule sets, gated sinks (argument-role-aware), framework detection, extensive fixtures, and the bulk of advanced-analysis (SSA, context-sensitivity, symbolic execution) coverage. Safe to depend on in CI gates. |
 | **Beta** | Go, Java, Ruby, PHP | Solid mid-depth rule sets with known narrower class coverage. No gated sinks yet. Cross-file flows work; some idioms (variable-typed method receivers, framework context, string interpolation) are incomplete. Usable in CI, but review FP/FN lists before tightening gates. |
-| **Experimental** | C, C++, Rust | Narrow rule sets relative to first-class languages. Known, documented weak spots. Appropriate for spot-checks and contribution but not yet recommended as a sole SAST dependency. |
+| **Preview** | C, C++ | Pattern-only coverage. Pointer aliasing, function pointers, array-element taint, and STL container flows are not modeled. Suitable for finding obvious unsafe API uses; do not use as a sole SAST gate. Pair with clang-tidy / Clang Static Analyzer / Infer. |
+| **Experimental** | Rust | Full source coverage relative to the framework ecosystem, but several FPs persist on adversarial safe cases pending engine work (match-arm guards, structural sinks with type facts). Appropriate for spot-checks and contribution but not yet recommended as a sole SAST dependency. |
 
 ---
 
@@ -125,7 +126,30 @@ confidence, and modeled idioms.
   detection is wired but its inner-argument propagation is narrower than
   function-call sinks.
 
-### Experimental tier
+### Preview tier
+
+C and C++ are labeled **Preview** (not Experimental) to convey a specific
+shape of limitation: the parser and existing rules produce useful findings
+on obvious unsafe-API uses, but the engine **structurally cannot model**
+several pervasive C/C++ constructs. Running Nyx on a C/C++ codebase and
+seeing a clean report should not be read as a clean audit. Pair Nyx with
+clang-tidy, the Clang Static Analyzer, or Infer for production use.
+
+**Not modeled** (common to both C and C++):
+
+- Pointer aliasing — taint through `*p`, `p->field`, arbitrary pointer
+  arithmetic, and aliased writes are not tracked.
+- Function pointers and callback dispatch — indirect calls through
+  `void (*fn)(char *)` resolve to no callee.
+- Array-element taint — writes to `buf[i]` do not propagate taint to `buf`
+  in the general case; structural taint chains involving `fgets` → array →
+  `system` have rule-ID matching issues (`c-cmdi-004`).
+- STL container operations (C++ only) — `std::vector`, `std::map`,
+  `std::string` methods are not taint-aware; `c_str()` breaks taint chains
+  (`cpp-cmdi-003`).
+- Lambdas and nested classes (C++ only) — not modeled.
+- Complex socket setup (C++ only) — e.g. `connect()` chains are not detected
+  (`cpp-ssrf-002`).
 
 #### C — 85.7% P / 100% R / 92.3% F1 *(20-case corpus)*
 
@@ -133,19 +157,17 @@ confidence, and modeled idioms.
   only), 5 sink matchers spanning Shell, File, SSRF, and Format-String.
 - **Known gaps**: no framework rules, no gated sinks. Path-validation via
   `strstr()` is not recognized as a guard (`c-safe-006`). Forward-declared
-  sanitizers are not tracked (`c-safe-008`). Structural taint chains
-  involving `fgets` → array → `system` have rule-ID matching issues
-  (`c-cmdi-004`).
+  sanitizers are not tracked (`c-safe-008`).
 
 #### C++ — 80.0% P / 100% R / 88.9% F1 *(20-case corpus)*
 
 - **Rule depth**: Clones the C ruleset (3 sources, 2 sanitizers, 5 sinks) and
   adds `std::cin` / `std::getline` sources.
-- **Known gaps**: same sanitizer-recognition gaps as C; additionally the
-  `c_str()` method breaks taint chains (`cpp-cmdi-003`), complex socket
-  setup (`connect()`) is not detected (`cpp-ssrf-002`), lambdas and
-  nested-class handling are not modeled, and container operations
-  (`std::vector`, `std::string` methods) are not taint-aware.
+- **Known gaps**: same sanitizer-recognition gaps as C. See the "Not
+  modeled" list above for structural gaps (STL containers, `c_str()`,
+  `connect()`, lambdas, nested classes).
+
+### Experimental tier
 
 #### Rust — 76.0% P / 100% R / 86.4% F1 *(31-case adversarial corpus)*
 
@@ -193,9 +215,17 @@ A language lands in **Beta** when benchmark F1 ≥ 90% but at least one of the
 Stable criteria fails — usually narrower cap coverage or absence of gated
 sinks.
 
+A language lands in **Preview** when the engine structurally cannot model
+constructs that are pervasive in typical codebases for that language
+(pointer aliasing, function pointers, array-element taint, STL containers
+for C/C++). Pattern-only coverage is useful but not sufficient as a sole
+SAST gate.
+
 A language lands in **Experimental** when rule depth is clearly narrower
 (≤ 5 sinks and ≤ 2 sanitizers), or benchmark F1 < 90%, or documented weak
-spots require engine changes rather than rule additions to close.
+spots require engine changes rather than rule additions to close, but the
+engine does not have the pervasive structural blind spots of the Preview
+tier.
 
 ---
 
@@ -203,8 +233,10 @@ spots require engine changes rather than rule additions to close.
 
 - **CI gates**: safe to set strict `--fail-on HIGH` gates on Stable-tier
   languages. On Beta-tier, expect occasional FP triage; the weak-spot lists
-  above tell you exactly what to skim for. On Experimental-tier, treat Nyx
-  findings as a starting point for manual review rather than authoritative.
+  above tell you exactly what to skim for. On Preview- and Experimental-tier,
+  treat Nyx findings as a starting point for manual review rather than
+  authoritative — Preview-tier languages in particular have structural
+  blind spots that a clean report will not disclose.
 - **Rule contributions**: the shortest path to raising a language's tier is
   contributing sink matchers and gated-sink registrations. Label files live
   at `src/labels/<lang>.rs`; benchmark cases live at

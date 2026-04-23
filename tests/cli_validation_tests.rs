@@ -161,3 +161,121 @@ fn scan_with_no_extra_flags_on_clean_target_succeeds() {
 
     cmd.assert().success();
 }
+
+/// `--explain-engine` short-circuits the scan path and prints the resolved
+/// engine configuration to stdout.  Exit code 0, non-empty stdout, and the
+/// "Effective engine configuration" header present.
+#[test]
+fn scan_with_explain_engine_prints_config_and_exits_zero() {
+    let home = tempfile::tempdir().unwrap();
+    let target = prepare_scan_target();
+    let (mut cmd, _) = scan_cmd(home.path(), target.path());
+    cmd.arg("--explain-engine");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Effective engine configuration"))
+        .stdout(predicate::str::contains("Abstract interpretation"))
+        .stdout(predicate::str::contains("Parse timeout"));
+}
+
+/// `--engine-profile` is a `ValueEnum`; valid values parse, invalid values
+/// fail at the clap layer.
+#[test]
+fn scan_with_valid_engine_profile_succeeds() {
+    for prof in &["fast", "balanced", "deep"] {
+        let home = tempfile::tempdir().unwrap();
+        let target = prepare_scan_target();
+        let (mut cmd, _) = scan_cmd(home.path(), target.path());
+        cmd.arg("--engine-profile").arg(prof);
+        cmd.arg("--explain-engine");
+        cmd.assert()
+            .success()
+            .stdout(predicate::str::contains(*prof));
+    }
+}
+
+#[test]
+fn scan_with_unknown_engine_profile_exits_nonzero() {
+    let home = tempfile::tempdir().unwrap();
+    let target = prepare_scan_target();
+    let (mut cmd, _) = scan_cmd(home.path(), target.path());
+    cmd.arg("--engine-profile").arg("bogus-profile-xyz");
+
+    cmd.assert().failure().stderr(
+        predicate::str::contains("engine-profile").and(
+            predicate::str::contains("possible values")
+                .or(predicate::str::contains("invalid value")),
+        ),
+    );
+}
+
+/// Engine-profile + individual flag layering: `--engine-profile fast` turns
+/// backwards analysis off, but a later `--backwards-analysis` flag wins.
+#[test]
+fn scan_engine_profile_is_overridden_by_individual_flag() {
+    let home = tempfile::tempdir().unwrap();
+    let target = prepare_scan_target();
+    let (mut cmd, _) = scan_cmd(home.path(), target.path());
+    cmd.arg("--engine-profile").arg("fast");
+    cmd.arg("--backwards-analysis");
+    cmd.arg("--explain-engine");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Backwards taint:         on"));
+}
+
+/// Scanning a directory that contains a C file emits the Preview-tier
+/// banner on stderr.  Banner text is asserted loosely to tolerate future
+/// wording changes without going brittle on the exact letter-for-letter
+/// string.
+#[test]
+fn scan_c_file_emits_preview_tier_banner() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("hello.c"),
+        b"#include <stdio.h>\nint main(void) { puts(\"hi\"); return 0; }\n",
+    )
+    .unwrap();
+
+    let (mut cmd, _) = scan_cmd(home.path(), dir.path());
+    cmd.assert().success().stderr(
+        predicate::str::contains("Preview for C/C++").and(
+            predicate::str::contains("Pointer aliasing")
+                .or(predicate::str::contains("clang-tidy")),
+        ),
+    );
+}
+
+/// `--quiet` must suppress the Preview-tier banner along with the rest of
+/// the status output.  Separate test so a regression in quiet-handling
+/// surfaces clearly.
+#[test]
+fn scan_quiet_suppresses_preview_banner() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("hello.c"), b"int main(void){return 0;}\n").unwrap();
+
+    let (mut cmd, _) = scan_cmd(home.path(), dir.path());
+    cmd.arg("--quiet");
+    cmd.assert()
+        .success()
+        .stderr(predicate::str::contains("Preview for C/C++").not());
+}
+
+/// JSON output format must not print the Preview banner either — machine-
+/// readable output has to stay clean on both stdout and stderr.
+#[test]
+fn scan_json_format_suppresses_preview_banner() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("hello.c"), b"int main(void){return 0;}\n").unwrap();
+
+    let (mut cmd, _) = scan_cmd(home.path(), dir.path());
+    cmd.arg("--format").arg("json");
+    cmd.assert()
+        .success()
+        .stderr(predicate::str::contains("Preview for C/C++").not());
+}

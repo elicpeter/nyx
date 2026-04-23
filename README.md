@@ -23,7 +23,7 @@ Rule depth and detection confidence differ meaningfully between languages — Py
 
 | Capability | Description |
 |---|---|
-| Multi-language support | 10 languages across three maturity tiers — see [Language Maturity](docs/language-maturity.md). Stable: Python, JavaScript, TypeScript. Beta: Go, Java, Ruby, PHP. Experimental: C, C++, Rust. |
+| Multi-language support | 10 languages across four maturity tiers — see [Language Maturity](docs/language-maturity.md). Stable: Python, JavaScript, TypeScript. Beta: Go, Java, Ruby, PHP. Preview: C, C++. Experimental: Rust. |
 | AST-level pattern matching | Language-specific queries written against precise parse trees |
 | Control-flow graph analysis | Auth gaps, unguarded sinks, unreachable security code, resource leaks, error fallthrough |
 | Cross-file taint via function summaries | Intra-procedural monotone forward dataflow from sources through sanitizers to sinks, with cross-file call resolution through summarized capabilities. Not full inter-procedural analysis — see the detail below. |
@@ -288,7 +288,8 @@ All 10 languages parse via tree-sitter and run through the full CFG + taint + AS
 |---|---|---|---|
 | **Stable** | Python, JavaScript, TypeScript | 96.8%–100.0% | Deep rule sets (20+ sinks, 7+ sanitizers), argument-role-aware gated sinks, framework detection (Flask/Django, Express/Koa/Fastify), majority of advanced-analysis (SSA / context-sensitive / symbolic-execution) fixtures. Safe to use as a CI gate. |
 | **Beta** | Go, Java, Ruby, PHP | 92.9%–97.0% | Solid mid-depth rule sets covering 7–8 vulnerability classes each. No gated sinks yet; some idioms (string interpolation, variable-typed method receivers, framework context) are incomplete. Usable in CI with light FP triage. |
-| **Experimental** | C, C++, Rust | 86.4%–92.3% | Narrower rule sets (C/C++: 5 sinks, 2 sanitizers). Rust has full source coverage but several FPs persist on adversarial safe cases pending engine work (match-arm guards, structural sinks with type facts). Treat findings as a starting point for review rather than authoritative. |
+| **Preview** | C, C++ | 88.9%–92.3% | Pattern-only coverage. Pointer aliasing, function pointers, array-element taint, and STL container flows are not modeled. Suitable for finding obvious unsafe API uses; do not use as a sole SAST gate. Pair with clang-tidy / Clang Static Analyzer / Infer. |
+| **Experimental** | Rust | 86.4% | Full source coverage but several FPs persist on adversarial safe cases pending engine work (match-arm guards, structural sinks with type facts). Treat findings as a starting point for review rather than authoritative. |
 
 Resource-leak detection is available for every tier where language-specific acquire/release pairs are defined.
 

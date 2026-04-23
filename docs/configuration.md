@@ -181,6 +181,7 @@ the stable path.
 | `constraint_solving` | bool | `true` | Path-constraint solving (prunes infeasible paths in taint) |
 | `abstract_interpretation` | bool | `true` | Interval / string / bit abstract domains carried through the SSA worklist |
 | `context_sensitive` | bool | `true` | k=1 context-sensitive callee inlining for intra-file calls |
+| `backwards_analysis` | bool | `false` | Demand-driven backwards taint walk from sinks (adds scan time; default off) |
 | `parse_timeout_ms` | int | `10000` | Per-file tree-sitter parse timeout; `0` disables the cap |
 
 **`[analysis.engine.symex]`** sub-section:
@@ -199,11 +200,16 @@ CLI flag map (each pair is `--enable / --no-enable`):
 | `constraint_solving` | `--constraint-solving` / `--no-constraint-solving` |
 | `abstract_interpretation` | `--abstract-interp` / `--no-abstract-interp` |
 | `context_sensitive` | `--context-sensitive` / `--no-context-sensitive` |
+| `backwards_analysis` | `--backwards-analysis` / `--no-backwards-analysis` |
 | `parse_timeout_ms` | `--parse-timeout-ms <N>` |
 | `symex.enabled` | `--symex` / `--no-symex` |
 | `symex.cross_file` | `--cross-file-symex` / `--no-cross-file-symex` |
 | `symex.interprocedural` | `--symex-interproc` / `--no-symex-interproc` |
 | `symex.smt` | `--smt` / `--no-smt` |
+
+**Engine-depth profile shortcut**: instead of flipping individual toggles, pass `--engine-profile {fast,balanced,deep}` to set the whole stack at once.  Individual flags override the profile, so `--engine-profile fast --backwards-analysis` runs the fast stack with backwards analysis on.  See `docs/cli.md` for the exact toggle matrix.
+
+**Explain effective engine**: pass `--explain-engine` to print the resolved engine configuration (profile + config + CLI overrides) and exit without scanning.
 
 ### `[analysis.languages.<slug>]`
 

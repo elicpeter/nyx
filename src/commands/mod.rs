@@ -6,7 +6,7 @@ pub mod scan;
 #[cfg(feature = "serve")]
 pub mod serve;
 
-use crate::cli::{Commands, IndexMode, ScanMode};
+use crate::cli::{Commands, EngineProfile, IndexMode, ScanMode};
 use crate::errors::NyxResult;
 use crate::patterns::{Severity, SeverityFilter};
 use crate::utils::config::{AnalysisMode, Config};
@@ -42,6 +42,8 @@ pub fn handle_command(
             severity,
             mode,
             profile,
+            engine_profile,
+            explain_engine,
             all_targets,
             keep_nonprod_severity,
             quiet,
@@ -183,7 +185,15 @@ pub fn handle_command(
             // ── Analysis engine toggles: resolve CLI → config ───────────
             // Each pair is a tri-state (flag set ⇒ true, no-flag set ⇒ false,
             // neither ⇒ inherit config default).
+            //
+            // Application order: profile first (wholesale reset), then
+            // individual flags layered on top so users can mix a profile
+            // with a targeted override (e.g. `--engine-profile fast
+            // --backwards-analysis`).
             let mut engine = config.analysis.engine;
+            if let Some(ref prof) = engine_profile {
+                engine = prof.apply(engine);
+            }
             if constraint_solving {
                 engine.constraint_solving = true;
             }
@@ -246,6 +256,12 @@ pub fn handle_command(
                 tracing::warn!(
                     "analysis-engine runtime already installed; CLI engine flags ignored"
                 );
+            }
+
+            // ── --explain-engine: print resolved config and exit ────────
+            if explain_engine {
+                print_engine_explanation(config, engine_profile);
+                return Ok(());
             }
 
             let effective_format = format.unwrap_or(config.output.default_format);
@@ -317,4 +333,94 @@ pub fn handle_command(
         }
     }
     Ok(())
+}
+
+/// Pretty-print the effective analysis-engine configuration for
+/// `nyx scan --explain-engine`.  Writes to stdout so it composes with
+/// standard shell redirection and process substitution.
+fn print_engine_explanation(config: &Config, engine_profile: Option<EngineProfile>) {
+    fn onoff(b: bool) -> &'static str {
+        if b { "on" } else { "off" }
+    }
+
+    let engine = config.analysis.engine;
+    let scanner = &config.scanner;
+    let profile_label = engine_profile
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "(none — using config defaults)".to_string());
+    let smt_compiled = cfg!(feature = "smt");
+
+    println!("Effective engine configuration:");
+    println!("  Engine profile:          {profile_label}");
+    println!("  AST patterns:            on");
+    println!(
+        "  CFG construction:        {}",
+        onoff(matches!(
+            config.scanner.mode,
+            AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
+        ))
+    );
+    println!(
+        "  CFG analysis:            {}",
+        onoff(matches!(
+            config.scanner.mode,
+            AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
+        ))
+    );
+    println!(
+        "  Taint (SSA):             {}",
+        onoff(matches!(
+            config.scanner.mode,
+            AnalysisMode::Full | AnalysisMode::Cfg | AnalysisMode::Taint
+        ))
+    );
+    println!(
+        "  Abstract interpretation: {}   (--abstract-interp / NYX_ABSTRACT_INTERP)",
+        onoff(engine.abstract_interpretation)
+    );
+    println!(
+        "  Context sensitivity:     {}   (--context-sensitive / NYX_CONTEXT_SENSITIVE, k=1)",
+        onoff(engine.context_sensitive)
+    );
+    println!(
+        "  Constraint solving:      {}   (--constraint-solving / NYX_CONSTRAINT)",
+        onoff(engine.constraint_solving)
+    );
+    println!(
+        "  Symbolic execution:      {}   (--symex / NYX_SYMEX)",
+        onoff(engine.symex.enabled)
+    );
+    println!(
+        "  Cross-file symex:        {}   (--cross-file-symex / NYX_CROSS_FILE_SYMEX)",
+        onoff(engine.symex.cross_file)
+    );
+    println!(
+        "  Interproc symex:         {}   (--symex-interproc / NYX_SYMEX_INTERPROC)",
+        onoff(engine.symex.interprocedural)
+    );
+    println!(
+        "  Backwards taint:         {}   (--backwards-analysis / NYX_BACKWARDS)",
+        onoff(engine.backwards_analysis)
+    );
+    println!(
+        "  SMT (Z3):                {}   (--smt{}; requires --features smt)",
+        onoff(engine.symex.smt && smt_compiled),
+        if smt_compiled {
+            ""
+        } else {
+            ", binary built WITHOUT smt feature"
+        }
+    );
+    println!(
+        "  State analysis:          {}   (scanner.enable_state_analysis)",
+        onoff(scanner.enable_state_analysis)
+    );
+    println!(
+        "  Auth analysis:           {}   (scanner.enable_auth_analysis)",
+        onoff(scanner.enable_auth_analysis)
+    );
+    println!(
+        "  Parse timeout:           {} ms  (--parse-timeout-ms / NYX_PARSE_TIMEOUT_MS; 0 disables)",
+        engine.parse_timeout_ms
+    );
 }

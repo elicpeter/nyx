@@ -53,7 +53,7 @@ nyx scan [PATH] [OPTIONS]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-f, --format <FMT>` | `console` | Output format: `console`, `json`, or `sarif` |
-| `--quiet` | off | Suppress status messages (stderr); stdout stays clean |
+| `--quiet` | off | Suppress status messages (stderr), including the Preview-tier banner for C/C++ scans |
 | `--no-rank` | off | Disable attack-surface ranking |
 
 ### Filtering
@@ -98,9 +98,30 @@ Override the corresponding `[analysis.engine]` values in `nyx.conf` for a single
 | `--cross-file-symex` / `--no-cross-file-symex` | `symex.cross_file` | Skip extracting / consulting cross-file SSA bodies |
 | `--symex-interproc` / `--no-symex-interproc` | `symex.interprocedural` | Cap symex frame stack at the entry function |
 | `--smt` / `--no-smt` | `symex.smt` | Skip the SMT backend (still a no-op without the `smt` feature) |
+| `--backwards-analysis` / `--no-backwards-analysis` | `backwards_analysis` | Demand-driven backwards taint walk from sinks (default **off**) |
 | `--parse-timeout-ms <N>` | `parse_timeout_ms` | Per-file tree-sitter parse timeout (ms); `0` disables the cap |
 
 See [configuration.md](configuration.md#analysisengine) for the full schema.
+
+### Engine-Depth Profile
+
+Individual engine toggles are fine-grained but hard to remember in combination.  The `--engine-profile` shortcut sets the whole stack in one shot, and individual flags are layered on top after the profile is applied.
+
+| Flag | What it sets |
+|------|--------------|
+| `--engine-profile fast` | AST + CFG + basic taint only.  Disables abstract interpretation, context-sensitive inlining, symex (all variants), backwards analysis, and SMT. |
+| `--engine-profile balanced` | AST + CFG + SSA taint + abstract interpretation + context-sensitive inlining.  Disables symex, backwards analysis, and SMT. (This is equivalent to the default posture without symex.) |
+| `--engine-profile deep` | Everything in `balanced` plus symex (with cross-file and interprocedural) and backwards analysis.  Still disables SMT (requires the `smt` cargo feature). |
+
+Individual flags override the profile.  For example, `--engine-profile fast --backwards-analysis` runs the fast stack but with backwards analysis on.
+
+### Explain Effective Engine
+
+`--explain-engine` prints the resolved engine configuration (profile + config + CLI overrides + env-var fallbacks) to stdout and exits without scanning.  Useful for sanity-checking a CI invocation.
+
+```bash
+nyx scan --engine-profile deep --no-smt --explain-engine
+```
 
 ### Examples
 

@@ -22,7 +22,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 fn make_progress_bar(len: u64, msg: &str, show: bool) -> ProgressBar {
@@ -235,6 +235,21 @@ pub(crate) fn ensure_framework_ctx(root: &Path, cfg: &Config) -> Option<Config> 
     Some(c)
 }
 
+/// Does `path` belong to a Preview-tier language (C or C++)?
+///
+/// Drives the one-time `preview-tier scan` banner in `handle()`.  Tracks
+/// the extensions `lang_for_path` in `ast.rs` maps to the `"c"` and `"cpp"`
+/// slugs — keep this aligned with that mapping.
+pub(crate) fn is_preview_tier_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("c" | "cpp")
+    )
+}
+
 /// Entry point called by the CLI.
 #[allow(clippy::too_many_arguments)]
 pub fn handle(
@@ -277,8 +292,20 @@ pub fn handle(
 
     let show_progress = !is_machine && !config.output.quiet;
 
+    // Preview-tier banner: driven by the walker output inside the scan
+    // functions below.  Set to true if any C / C++ file is enumerated.
+    let preview_tier_seen = Arc::new(AtomicBool::new(false));
+
     let mut diags: Vec<Diag> = if index_mode == IndexMode::Off {
-        scan_filesystem(&scan_path, config, show_progress)?
+        scan_filesystem_with_observer(
+            &scan_path,
+            config,
+            show_progress,
+            None,
+            None,
+            None,
+            Some(&preview_tier_seen),
+        )?
     } else {
         if index_mode == IndexMode::Rebuild || !db_path.exists() {
             tracing::debug!("Scanning filesystem index filesystem");
@@ -296,8 +323,36 @@ pub fn handle(
             let idx = Indexer::from_pool(&project_name, &pool)?;
             idx.vacuum()?;
         }
-        scan_with_index_parallel(&project_name, pool, config, show_progress, &scan_path)?
+        scan_with_index_parallel_observer(
+            &project_name,
+            pool,
+            config,
+            show_progress,
+            &scan_path,
+            None,
+            None,
+            None,
+            Some(&preview_tier_seen),
+        )?
     };
+
+    // Print the Preview-tier banner to stderr once, after file enumeration
+    // completes and before the console output.  Suppressed under --quiet and
+    // for machine-readable output formats (JSON / SARIF) that must keep both
+    // stdout and stderr clean of conversational text.
+    if !suppress_status && preview_tier_seen.load(Ordering::Relaxed) {
+        eprintln!(
+            "{}: Nyx is in Preview for C/C++. Pointer aliasing, function pointers,",
+            style("warning").yellow().bold()
+        );
+        eprintln!(
+            "array-element taint, and STL container flows are not modeled. Findings are"
+        );
+        eprintln!(
+            "a starting point for review; pair with clang-tidy or Clang Static Analyzer"
+        );
+        eprintln!("for production gates.\n");
+    }
 
     tracing::debug!("Found {:?} issues (pre-filter).", diags.len());
 
@@ -999,11 +1054,16 @@ pub(crate) fn scan_filesystem(
     cfg: &Config,
     show_progress: bool,
 ) -> NyxResult<Vec<Diag>> {
-    scan_filesystem_with_observer(root, cfg, show_progress, None, None, None)
+    scan_filesystem_with_observer(root, cfg, show_progress, None, None, None, None)
 }
 
 /// Walk the filesystem and perform a two-pass scan, optionally reporting
 /// progress and metrics through the supplied atomic structs.
+///
+/// When `preview_tier_seen` is supplied, the observer sets it to `true` once
+/// it encounters the first Preview-tier file (C / C++) in the walked set.
+/// Used by the CLI to drive the one-time Preview-tier banner.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn scan_filesystem_with_observer(
     root: &Path,
     cfg: &Config,
@@ -1011,6 +1071,7 @@ pub(crate) fn scan_filesystem_with_observer(
     progress: Option<&Arc<ScanProgress>>,
     metrics: Option<&Arc<ScanMetrics>>,
     logs: Option<&Arc<ScanLogCollector>>,
+    preview_tier_seen: Option<&Arc<AtomicBool>>,
 ) -> NyxResult<Vec<Diag>> {
     // Ensure framework context is available (handle sets it, but direct
     // callers like scan_no_index may not).
@@ -1036,6 +1097,12 @@ pub(crate) fn scan_filesystem_with_observer(
         paths
     };
     tracing::info!(file_count = all_paths.len(), "file walk complete");
+
+    if let Some(flag) = preview_tier_seen {
+        if all_paths.iter().any(|p| is_preview_tier_path(p)) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
 
     if let Some(p) = progress {
         p.record_walk_ms(walk_start.elapsed().as_millis() as u64);
@@ -1429,9 +1496,11 @@ pub fn scan_with_index_parallel(
         None,
         None,
         None,
+        None,
     )
 }
 
+/// See `scan_filesystem_with_observer` for `preview_tier_seen`.
 #[allow(clippy::too_many_arguments)]
 pub fn scan_with_index_parallel_observer(
     project: &str,
@@ -1442,6 +1511,7 @@ pub fn scan_with_index_parallel_observer(
     progress: Option<&Arc<ScanProgress>>,
     metrics: Option<&Arc<ScanMetrics>>,
     logs: Option<&Arc<ScanLogCollector>>,
+    preview_tier_seen: Option<&Arc<AtomicBool>>,
 ) -> NyxResult<Vec<Diag>> {
     // Match scan_filesystem_with_observer: auto-fill framework detection when
     // the caller didn't supply one.  Without this, directly-invoked indexed
@@ -1468,6 +1538,11 @@ pub fn scan_with_index_parallel_observer(
                 None,
                 Some(format!("{err:#?}")),
             );
+        }
+    }
+    if let Some(flag) = preview_tier_seen {
+        if files.iter().any(|p| is_preview_tier_path(p)) {
+            flag.store(true, Ordering::Relaxed);
         }
     }
     if let Some(p) = progress {
