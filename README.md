@@ -158,18 +158,6 @@ Or add rules interactively: `nyx config add-rule --lang javascript --matcher esc
 
 ---
 
-## What's new in 0.5.0
-
-- **Local web UI (`nyx serve`).** React + Vite frontend over an Axum server. Flow-path visualiser, triage workflow, scan history + diff, live config editor. Loopback-only, CSRF-enforced, triage state in `.nyx/triage.json`.
-- **SSA-based taint engine.** Taint runs over a pruned SSA IR for all 10 languages. Value-keyed lattice with per-predecessor phi merging, induction-variable pruning, targeted validation predicates. Replaces the legacy AST-level taint engine.
-- **Cross-file SCC fixed-point with points-to summaries.** Pass 2 walks call-graph SCCs in topological order and iterates until taint summaries converge. `SsaFuncSummary` carries parameter-granularity points-to data so heap-backed taint propagates across file boundaries.
-- **Demand-driven backwards taint (opt-in).** Enable with `--backwards-analysis` or `NYX_BACKWARDS=1`. Walks SSA backwards from candidate sinks to recover flows the forward solver gave up on.
-- **Symbolic execution with SMT (opt-in).** Interprocedural symbolic executor walks callee bodies as nested frames, models six string operations, can escalate to Z3 when built with `--features smt`.
-
-Full changelog: [`CHANGELOG.md`](CHANGELOG.md).
-
----
-
 ## Status
 
 Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 273-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
