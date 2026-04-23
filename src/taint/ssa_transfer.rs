@@ -1760,6 +1760,17 @@ fn compute_succ_states(
                 .map(|s| (*s, exit_state.clone()))
                 .collect()
         }
+        Terminator::Switch { .. } => {
+            // Switch: all targets and default receive the same input state.
+            // Per-target branch narrowing would require per-case literal
+            // metadata on the terminator (a follow-up); for now, uniform
+            // propagation across `block.succs` preserves soundness.
+            block
+                .succs
+                .iter()
+                .map(|s| (*s, exit_state.clone()))
+                .collect()
+        }
         Terminator::Return(_) | Terminator::Unreachable => {
             // `block.succs` is authoritative for analysis flow; the terminator
             // is advisory.  Lowering records finally/cleanup continuation

@@ -99,6 +99,20 @@ impl fmt::Display for SsaBody {
                     "  branch → B{} (true), B{} (false)",
                     true_blk.0, false_blk.0
                 )?,
+                Terminator::Switch {
+                    scrutinee,
+                    targets,
+                    default,
+                } => {
+                    write!(f, "  switch v{} → [", scrutinee.0)?;
+                    for (i, t) in targets.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "B{}", t.0)?;
+                    }
+                    writeln!(f, "] default B{}", default.0)?;
+                }
                 Terminator::Return(ret_val) => {
                     if let Some(v) = ret_val {
                         writeln!(f, "  return v{}", v.0)?

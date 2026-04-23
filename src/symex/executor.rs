@@ -672,6 +672,34 @@ fn run_path(
                 state.predecessor = Some(block_id);
                 state.current_block = *target;
             }
+            Terminator::Switch { .. } => {
+                // Switch is emitted only for guaranteed-exclusive dispatch
+                // (Go switch, Java arrow-switch, Rust match). The executor
+                // does not yet carry per-target case literals through the
+                // IR, so we follow the first reachable successor to keep
+                // the exploration deterministic. A follow-up can add
+                // per-target path constraints of the form `scrutinee ==
+                // case_value` once case literals are threaded through.
+                let next = block
+                    .succs
+                    .iter()
+                    .find(|s| reachable.contains(s))
+                    .copied();
+                match next {
+                    Some(target) => {
+                        state.predecessor = Some(block_id);
+                        state.current_block = target;
+                    }
+                    None => {
+                        let witness = try_extract_witness(state, finding, ssa, cfg);
+                        return Some(PathOutcome {
+                            verdict: Verdict::Inconclusive,
+                            constraints_checked: state.constraints_checked,
+                            witness,
+                        });
+                    }
+                }
+            }
             Terminator::Return(_) | Terminator::Unreachable => {
                 return Some(record_outcome(state, finding, ssa, cfg));
             }

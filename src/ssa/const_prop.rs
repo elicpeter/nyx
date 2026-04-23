@@ -385,6 +385,28 @@ fn process_terminator(
                 }
             }
         }
+        Terminator::Switch {
+            scrutinee,
+            targets,
+            default,
+        } => {
+            // Try to resolve scrutinee to a concrete integer literal; if
+            // we can match it against one of the case literals (not
+            // currently available on the SSA IR), mark just that target.
+            // Until per-case literals are threaded through, fall back to
+            // the sound "any successor executable" behavior, which mirrors
+            // the pre-Switch cascade.
+            let _ = (scrutinee, targets, default);
+            for &target in &block.succs {
+                mark_edge_executable(
+                    block.id,
+                    target,
+                    executable_edges,
+                    executable_blocks,
+                    cfg_worklist,
+                );
+            }
+        }
         Terminator::Return(_) | Terminator::Unreachable => {
             // `block.succs` is authoritative; the terminator is advisory.
             // Finally/cleanup continuation edges live on `succs` even when

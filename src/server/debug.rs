@@ -337,6 +337,19 @@ fn terminator_str(t: &Terminator) -> String {
                 .unwrap_or_else(|| "?".into());
             format!("branch {} -> B{}, B{}", cond_str, true_blk.0, false_blk.0)
         }
+        Terminator::Switch {
+            scrutinee,
+            targets,
+            default,
+        } => {
+            let ts: Vec<String> = targets.iter().map(|t| format!("B{}", t.0)).collect();
+            format!(
+                "switch v{} -> [{}] default B{}",
+                scrutinee.0,
+                ts.join(", "),
+                default.0,
+            )
+        }
         Terminator::Return(v) => match v {
             Some(val) => format!("return v{}", val.0),
             None => "return".into(),

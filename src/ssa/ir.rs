@@ -76,6 +76,24 @@ pub enum Terminator {
         /// lowering in taint transfer).
         condition: Option<Box<ConditionExpr>>,
     },
+    /// Multi-way switch dispatch.
+    ///
+    /// `targets` lists the per-case successor blocks (order matches the
+    /// source-order of cases in the switch); `default` is the fallback
+    /// branch taken when no case matches. Block `succs` remain the
+    /// authoritative flow set — the terminator is a structured summary.
+    ///
+    /// Emitted only for switch-like dispatch whose semantics are
+    /// guaranteed-exclusive across cases (e.g. Go `switch`, Java
+    /// arrow-switch, Rust `match`). Fall-through switches (C, C++, Java
+    /// classic switch without `break`) continue to use the cascaded
+    /// `Branch` lowering because the precision advantage only holds when
+    /// cases are mutually exclusive.
+    Switch {
+        scrutinee: SsaValue,
+        targets: SmallVec<[BlockId; 4]>,
+        default: BlockId,
+    },
     Return(Option<SsaValue>),
     Unreachable,
 }

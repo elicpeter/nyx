@@ -706,3 +706,170 @@ fn build_and_lower_all(path: &Path, cfg: &Config) -> usize {
     }
     n
 }
+
+// ── Phase 12.2: Catch-block orphan invariant ────────────────────────────
+//
+// Construct a synthetic SsaBody where a block carries `SsaOp::CatchParam`
+// but is neither reachable from entry via normal flow nor listed as a
+// target of any exception edge. The invariant must report the
+// orphan — this is the CFG-construction-bug signal the invariant is
+// designed to surface.
+//
+// The test stays on the pure-function `check_catch_block_reachability`
+// path to avoid the debug-build panic inside `lower_to_ssa`; it
+// exercises the release-build semantics (warn + error report) which
+// is what production bodies go through when compiled without
+// `debug_assertions`.
+
+#[test]
+fn orphan_catch_block_triggers_reachability_invariant() {
+    use nyx_scanner::ssa::invariants::check_catch_block_reachability;
+    use nyx_scanner::ssa::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator, ValueDef};
+    use petgraph::graph::NodeIndex;
+    use smallvec::smallvec;
+
+    let dummy_cfg = NodeIndex::new(0);
+
+    // Block 0: entry — does not reach block 1 via succs.
+    // Block 1: orphan — carries CatchParam, not listed in exception_edges.
+    let body = SsaBody {
+        blocks: vec![
+            SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![],
+                terminator: Terminator::Return(None),
+                preds: smallvec![],
+                succs: smallvec![],
+            },
+            SsaBlock {
+                id: BlockId(1),
+                phis: vec![],
+                body: vec![SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::CatchParam,
+                    cfg_node: dummy_cfg,
+                    var_name: Some("e".into()),
+                    span: (0, 0),
+                }],
+                terminator: Terminator::Return(None),
+                preds: smallvec![],
+                succs: smallvec![],
+            },
+        ],
+        entry: BlockId(0),
+        value_defs: vec![ValueDef {
+            var_name: Some("e".into()),
+            cfg_node: dummy_cfg,
+            block: BlockId(1),
+        }],
+        cfg_node_map: Default::default(),
+        exception_edges: vec![], // intentionally empty — the orphan condition
+    };
+
+    let err = check_catch_block_reachability(&body)
+        .expect_err("orphan catch block must fail the reachability invariant");
+    assert!(
+        err.messages.iter().any(|m| m.contains("catch-block orphan")),
+        "expected orphan-catch message, got: {:?}",
+        err.messages,
+    );
+}
+
+#[test]
+fn normally_reachable_catch_block_passes_invariant() {
+    // Regression guard: CatchParam in a block reached from entry via normal
+    // flow (not an exception edge) satisfies the invariant.
+    use nyx_scanner::ssa::invariants::check_catch_block_reachability;
+    use nyx_scanner::ssa::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator, ValueDef};
+    use petgraph::graph::NodeIndex;
+    use smallvec::smallvec;
+
+    let dummy_cfg = NodeIndex::new(0);
+
+    let body = SsaBody {
+        blocks: vec![
+            SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![],
+                terminator: Terminator::Goto(BlockId(1)),
+                preds: smallvec![],
+                succs: smallvec![BlockId(1)],
+            },
+            SsaBlock {
+                id: BlockId(1),
+                phis: vec![],
+                body: vec![SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::CatchParam,
+                    cfg_node: dummy_cfg,
+                    var_name: Some("e".into()),
+                    span: (0, 0),
+                }],
+                terminator: Terminator::Return(None),
+                preds: smallvec![BlockId(0)],
+                succs: smallvec![],
+            },
+        ],
+        entry: BlockId(0),
+        value_defs: vec![ValueDef {
+            var_name: Some("e".into()),
+            cfg_node: dummy_cfg,
+            block: BlockId(1),
+        }],
+        cfg_node_map: Default::default(),
+        exception_edges: vec![],
+    };
+
+    assert!(check_catch_block_reachability(&body).is_ok());
+}
+
+#[test]
+fn exception_edge_catch_block_passes_invariant() {
+    // A CatchParam-carrying block reached only via an exception edge
+    // (the typical try/catch shape) must pass the invariant.
+    use nyx_scanner::ssa::invariants::check_catch_block_reachability;
+    use nyx_scanner::ssa::{BlockId, SsaBlock, SsaBody, SsaInst, SsaOp, SsaValue, Terminator, ValueDef};
+    use petgraph::graph::NodeIndex;
+    use smallvec::smallvec;
+
+    let dummy_cfg = NodeIndex::new(0);
+
+    let body = SsaBody {
+        blocks: vec![
+            SsaBlock {
+                id: BlockId(0),
+                phis: vec![],
+                body: vec![],
+                terminator: Terminator::Return(None),
+                preds: smallvec![],
+                succs: smallvec![],
+            },
+            SsaBlock {
+                id: BlockId(1),
+                phis: vec![],
+                body: vec![SsaInst {
+                    value: SsaValue(0),
+                    op: SsaOp::CatchParam,
+                    cfg_node: dummy_cfg,
+                    var_name: Some("e".into()),
+                    span: (0, 0),
+                }],
+                terminator: Terminator::Return(None),
+                preds: smallvec![],
+                succs: smallvec![],
+            },
+        ],
+        entry: BlockId(0),
+        value_defs: vec![ValueDef {
+            var_name: Some("e".into()),
+            cfg_node: dummy_cfg,
+            block: BlockId(1),
+        }],
+        cfg_node_map: Default::default(),
+        exception_edges: vec![(BlockId(0), BlockId(1))],
+    };
+
+    assert!(check_catch_block_reachability(&body).is_ok());
+}

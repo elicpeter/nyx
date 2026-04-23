@@ -1,5 +1,12 @@
 //! Structural invariant checks for SSA bodies.
 //!
+//! In addition to the `Vec<String>` aggregation used by
+//! [`check_structural_invariants`], targeted checks that SSA *lowering* may
+//! want to query directly (e.g. to decide whether to panic in debug builds
+//! or warn + attach an engine note in release builds) return a
+//! [`Result<(), InvariantError>`] for a more ergonomic API.
+//!
+//!
 //! These checks prove that [`SsaBody`] instances are well-formed: single-
 //! assignment holds, pred/succ edges are mutually consistent, phi operands
 //! reference actual predecessors, terminators agree with the successor
@@ -52,6 +59,31 @@
 
 use super::ir::*;
 
+/// Errors returned by targeted invariant checks.
+///
+/// Wraps a list of human-readable violation messages — one per offending
+/// block — so callers can include every failure in a single panic /
+/// warning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvariantError {
+    pub messages: Vec<String>,
+}
+
+impl InvariantError {
+    /// Join every message onto its own line.
+    pub fn joined(&self) -> String {
+        self.messages.join("\n")
+    }
+}
+
+impl std::fmt::Display for InvariantError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.joined())
+    }
+}
+
+impl std::error::Error for InvariantError {}
+
 /// Aggregate invariant violations found in a single body.  An empty
 /// vector means the body is structurally well-formed.
 pub fn check_structural_invariants(body: &SsaBody) -> Vec<String> {
@@ -67,8 +99,89 @@ pub fn check_structural_invariants(body: &SsaBody) -> Vec<String> {
     check_value_def_coverage(body, &mut errors);
     check_cfg_node_map(body, &mut errors);
     check_reachability(body, &mut errors);
+    if let Err(e) = check_catch_block_reachability(body) {
+        errors.extend(e.messages);
+    }
 
     errors
+}
+
+/// Every block carrying an [`SsaOp::CatchParam`] — an exception-handler
+/// entry — must be reachable from either the function entry (via normal
+/// flow) or from at least one entry in [`SsaBody::exception_edges`].
+///
+/// When this fails, the CFG builder has produced an orphan catch block
+/// that should have been wired up as an exception successor but was not —
+/// a real construction bug that otherwise manifests as silent false
+/// negatives in resource-cleanup / exception-flow findings.
+pub fn check_catch_block_reachability(body: &SsaBody) -> Result<(), InvariantError> {
+    let n = body.blocks.len();
+    if n == 0 {
+        return Ok(());
+    }
+
+    // 1. Identify catch blocks: any block containing a CatchParam op in
+    //    either its phi or body lists.
+    let catch_blocks: Vec<BlockId> = body
+        .blocks
+        .iter()
+        .filter(|b| {
+            b.phis
+                .iter()
+                .chain(b.body.iter())
+                .any(|inst| matches!(inst.op, SsaOp::CatchParam))
+        })
+        .map(|b| b.id)
+        .collect();
+
+    if catch_blocks.is_empty() {
+        return Ok(());
+    }
+
+    // 2. BFS from entry via normal succs.
+    let mut reachable = vec![false; n];
+    let entry_idx = body.entry.0 as usize;
+    if entry_idx < n {
+        reachable[entry_idx] = true;
+        let mut stack: Vec<BlockId> = vec![body.entry];
+        while let Some(b) = stack.pop() {
+            for &s in &body.blocks[b.0 as usize].succs {
+                let sidx = s.0 as usize;
+                if sidx < n && !reachable[sidx] {
+                    reachable[sidx] = true;
+                    stack.push(s);
+                }
+            }
+        }
+    }
+
+    // 3. Collect exception-edge targets.
+    let exception_targets: std::collections::HashSet<BlockId> = body
+        .exception_edges
+        .iter()
+        .map(|(_, catch)| *catch)
+        .collect();
+
+    // 4. Each catch block must be normal-reachable OR an exception target.
+    let mut messages = Vec::new();
+    for bid in catch_blocks {
+        let idx = bid.0 as usize;
+        let normal = idx < n && reachable[idx];
+        let via_exception = exception_targets.contains(&bid);
+        if !normal && !via_exception {
+            messages.push(format!(
+                "catch-block orphan: block {:?} carries CatchParam but is neither \
+                 reachable from entry {:?} nor a target of any exception edge",
+                bid, body.entry
+            ));
+        }
+    }
+
+    if messages.is_empty() {
+        Ok(())
+    } else {
+        Err(InvariantError { messages })
+    }
 }
 
 // ── Individual invariant checks ─────────────────────────────────────────
@@ -165,6 +278,25 @@ fn check_terminator_succ_agreement(body: &SsaBody, errors: &mut Vec<String>) {
                     errors.push(format!(
                         "block {:?} Branch false target {:?} not in succs {:?}",
                         block.id, false_blk, block.succs
+                    ));
+                }
+            }
+            Terminator::Switch {
+                targets, default, ..
+            } => {
+                // Every Switch target and the default arm must be in succs.
+                for t in targets {
+                    if !block.succs.iter().any(|s| s == t) {
+                        errors.push(format!(
+                            "block {:?} Switch target {:?} not in succs {:?}",
+                            block.id, t, block.succs
+                        ));
+                    }
+                }
+                if !block.succs.iter().any(|s| s == default) {
+                    errors.push(format!(
+                        "block {:?} Switch default {:?} not in succs {:?}",
+                        block.id, default, block.succs
                     ));
                 }
             }
@@ -398,6 +530,7 @@ fn terminator_kind(t: &Terminator) -> &'static str {
     match t {
         Terminator::Goto(_) => "Goto",
         Terminator::Branch { .. } => "Branch",
+        Terminator::Switch { .. } => "Switch",
         Terminator::Return(_) => "Return",
         Terminator::Unreachable => "Unreachable",
     }

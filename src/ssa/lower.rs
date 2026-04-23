@@ -189,13 +189,77 @@ fn lower_to_ssa_inner(
         })
         .collect();
 
-    Ok(SsaBody {
+    let body = SsaBody {
         blocks: ssa_blocks,
         entry: BlockId(0),
         value_defs,
         cfg_node_map,
         exception_edges,
-    })
+    };
+
+    // 9. Catch-block reachability invariant (Phase 12.1).
+    //
+    // A CatchParam-carrying block that is neither reachable from entry nor
+    // listed as an exception target indicates a CFG construction bug. Debug
+    // builds panic loudly; release builds warn, record an engine note so
+    // downstream findings carry "SSA lowering bailed" provenance, and fall
+    // through to the existing orphan handling above (the "all definitions"
+    // fallback) which remains sound for taint reachability.
+    check_catch_block_reachability_gated(&body);
+
+    Ok(body)
+}
+
+/// Runtime gate around [`check_catch_block_reachability`] that panics in
+/// debug builds and warns + records an engine note in release builds.
+///
+/// The current lowering's orphan handling (`process_block` fallback in
+/// `rename_variables`) already widens to an "all definitions" conservative
+/// state for blocks without predecessors. That preserves soundness for
+/// taint reachability but masks CFG-builder bugs: this gate surfaces them.
+fn check_catch_block_reachability_gated(body: &SsaBody) {
+    let result = super::invariants::check_catch_block_reachability(body);
+    if let Err(err) = result {
+        #[cfg(debug_assertions)]
+        {
+            if !catch_invariant_do_not_panic() {
+                panic!(
+                    "SSA catch-block reachability invariant violated:\n{}",
+                    err.joined()
+                );
+            }
+        }
+        tracing::warn!(
+            violations = %err.joined(),
+            "SSA catch-block reachability invariant violated; proceeding with \
+             conservative orphan fallback"
+        );
+        crate::taint::ssa_transfer::record_engine_note(
+            crate::engine_notes::EngineNote::SsaLoweringBailed {
+                reason: format!("catch_block_orphan: {}", err.joined()),
+            },
+        );
+    }
+}
+
+// Test-only escape hatch: when set, `check_catch_block_reachability_gated`
+// takes the release-build path (warn + engine note, no panic) even under
+// `debug_assertions`. Used by the invariant test that constructs a
+// synthetic orphan catch body.
+#[cfg(debug_assertions)]
+thread_local! {
+    static CATCH_INVARIANT_DO_NOT_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(debug_assertions)]
+#[allow(dead_code)]
+pub(crate) fn set_catch_invariant_do_not_panic(on: bool) {
+    CATCH_INVARIANT_DO_NOT_PANIC.with(|c| c.set(on));
+}
+
+#[cfg(debug_assertions)]
+fn catch_invariant_do_not_panic() -> bool {
+    CATCH_INVARIANT_DO_NOT_PANIC.with(|c| c.get())
 }
 
 /// Collect reachable nodes (BFS from entry), filtering by scope and stripping exception edges.
@@ -1153,23 +1217,51 @@ fn rename_variables(
                 condition,
             }
         } else {
-            // More than 2 successors — collapse to Goto(first). The full
-            // successor list is preserved on `block.succs`; flow consumers
-            // that match `Terminator::Goto` must treat `succs` as
-            // authoritative (see `compute_succ_states` in
-            // src/taint/ssa_transfer.rs and `process_terminator` in
-            // src/ssa/const_prop.rs).
+            // More than 2 successors — model as a multi-way Switch.
             //
-            // TODO: introduce `Terminator::Switch(SmallVec<[BlockId; 4]>)`
-            // and retire this ad-hoc collapse so the structured terminator
-            // matches the CFG fanout exactly.
-            tracing::warn!(
+            // This replaces the previous `Goto(first)` collapse: the
+            // structured terminator now enumerates every target instead
+            // of hiding N-1 of them behind `block.succs`. Flow consumers
+            // (taint, const-prop, symex) still iterate `succs` as
+            // authoritative, but downstream tooling that inspects the
+            // terminator shape gets the full fanout.
+            //
+            // Note: today's switch-statement CFG construction decomposes
+            // cases into a cascade of binary `Branch` headers (see
+            // `build_switch` in src/cfg.rs), so real switch statements
+            // never reach this arm. Folding the cascade back into a
+            // single Switch node is a follow-up; in the meantime, this
+            // arm fires only on genuine multi-way CFG fanouts (e.g.
+            // future Go-switch / Java-arrow / Rust-match lowerings).
+            //
+            // Scrutinee: use the primary SSA value defined at the last
+            // node in this block when one exists; fall back to
+            // `SsaValue(0)` (a valid index — SSA numbering is 1-based
+            // only conceptually, and value 0 is always present in a
+            // non-empty body) when no value is defined. Downstream
+            // consumers that care about the scrutinee (abstract interp,
+            // symex per-case constraints) treat a missing/degenerate
+            // scrutinee as "unknown" rather than panicking.
+            let scrutinee = cfg_node_map
+                .get(&last_node)
+                .copied()
+                .unwrap_or(SsaValue(0));
+            let targets: SmallVec<[BlockId; 4]> = succs
+                .iter()
+                .skip(1)
+                .map(|&s| BlockId(s as u32))
+                .collect();
+            let default = BlockId(succs[0] as u32);
+            tracing::debug!(
                 block = block_idx,
                 num_succs = succs.len(),
-                "block has {} successors, collapsing to Goto(first) — succs authoritative for flow",
-                succs.len()
+                "emitting Terminator::Switch for ≥3-way fanout",
             );
-            Terminator::Goto(BlockId(succs[0] as u32))
+            Terminator::Switch {
+                scrutinee,
+                targets,
+                default,
+            }
         };
 
         // 4. Fill phi operands in successor blocks
@@ -2062,10 +2154,11 @@ mod tests {
     }
 
     #[test]
-    fn three_successor_collapse_produces_goto() {
-        // Build a CFG where a single node has 3 successors (unusual but possible
-        // via manual graph construction). The lowering should collapse to Goto(first)
-        // while preserving the full succ list on `block.succs`.
+    fn three_successor_collapse_produces_switch() {
+        // Build a CFG where a single node has 3 successors. Phase 12.4
+        // promotes the old `Goto(first)` collapse to a structured
+        // `Terminator::Switch` so every target is visible on the
+        // terminator shape (not only on `block.succs`).
         let mut cfg: Cfg = Graph::new();
         let entry = cfg.add_node(make_node(StmtKind::Entry));
         let branch = cfg.add_node(make_node(StmtKind::If));
@@ -2082,35 +2175,45 @@ mod tests {
         cfg.add_edge(s1, exit, EdgeKind::Seq);
         cfg.add_edge(s2, exit, EdgeKind::Seq);
 
-        // Should not panic — graceful fallback to Goto
         let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
         assert!(!ssa.blocks.is_empty());
 
-        // The block corresponding to the 3-successor node should have a Goto terminator
-        // (collapsed from 3 successors), not a Branch
-        let collapsed_block = ssa
+        let switch_block = ssa
             .blocks
             .iter()
-            .find(|b| matches!(b.terminator, Terminator::Goto(_)) && b.succs.len() >= 3)
-            .expect("expected a block with a Goto terminator and ≥3 succs");
+            .find(|b| matches!(b.terminator, Terminator::Switch { .. }) && b.succs.len() >= 3)
+            .expect("expected a block with a Switch terminator and ≥3 succs");
 
-        // Invariant: the CFG successor list must retain all three entries
-        // even though the terminator only records the first. Flow consumers
-        // (taint `compute_succ_states`, SCCP `process_terminator`) rely on
-        // `block.succs` being authoritative.
         assert_eq!(
-            collapsed_block.succs.len(),
+            switch_block.succs.len(),
             3,
-            "3-successor collapse must retain all succs on block.succs, got {:?}",
-            collapsed_block.succs
+            "≥3-successor lowering must retain all succs on block.succs, got {:?}",
+            switch_block.succs
         );
 
-        // And the Goto target must be the first succ (deterministic ordering).
-        if let Terminator::Goto(target) = collapsed_block.terminator {
+        if let Terminator::Switch {
+            targets, default, ..
+        } = &switch_block.terminator
+        {
+            // Default is the first succ (deterministic ordering); the
+            // remaining N-1 succs populate `targets` in order.
             assert_eq!(
-                target, collapsed_block.succs[0],
-                "Goto target must match succs[0] after collapse"
+                *default, switch_block.succs[0],
+                "Switch default must match succs[0]"
             );
+            assert_eq!(
+                targets.len(),
+                switch_block.succs.len() - 1,
+                "Switch targets must cover every succ except default"
+            );
+            for (i, t) in targets.iter().enumerate() {
+                assert_eq!(
+                    *t,
+                    switch_block.succs[i + 1],
+                    "Switch target[{i}] must match succs[{}]",
+                    i + 1
+                );
+            }
         }
     }
 

@@ -968,6 +968,24 @@ pub fn execute_callee(
                         }
                     }
                 }
+                Terminator::Switch { .. } => {
+                    // Multi-way dispatch: step into the first valid
+                    // successor. The callee walker refines witnesses only;
+                    // soundness of taint propagation for Switch is handled
+                    // by the taint engine which treats all succs uniformly.
+                    let next = block
+                        .succs
+                        .iter()
+                        .find(|s| body.ssa.blocks.get(s.0 as usize).is_some())
+                        .copied();
+                    match next {
+                        Some(target) => {
+                            path.predecessor = Some(path.current_block);
+                            path.current_block = target;
+                        }
+                        None => break,
+                    }
+                }
                 Terminator::Unreachable => {
                     break;
                 }
