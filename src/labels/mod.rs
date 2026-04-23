@@ -127,18 +127,23 @@ pub struct SinkGate {
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Cap: u16 {
-        const ENV_VAR      = 0b0000_0000_0000_0001;  // bit 0
-        const HTML_ESCAPE  = 0b0000_0000_0000_0010;  // bit 1
-        const SHELL_ESCAPE = 0b0000_0000_0000_0100;  // bit 2
-        const URL_ENCODE   = 0b0000_0000_0000_1000;  // bit 3
-        const JSON_PARSE   = 0b0000_0000_0001_0000;  // bit 4
-        const FILE_IO      = 0b0000_0000_0010_0000;  // bit 5
-        const FMT_STRING   = 0b0000_0000_0100_0000;  // bit 6
-        const SQL_QUERY    = 0b0000_0000_1000_0000;  // bit 7
-        const DESERIALIZE  = 0b0000_0001_0000_0000;  // bit 8
-        const SSRF         = 0b0000_0010_0000_0000;  // bit 9
-        const CODE_EXEC    = 0b0000_0100_0000_0000;  // bit 10
-        const CRYPTO       = 0b0000_1000_0000_0000;  // bit 11
+        const ENV_VAR         = 0b0000_0000_0000_0001;  // bit 0
+        const HTML_ESCAPE     = 0b0000_0000_0000_0010;  // bit 1
+        const SHELL_ESCAPE    = 0b0000_0000_0000_0100;  // bit 2
+        const URL_ENCODE      = 0b0000_0000_0000_1000;  // bit 3
+        const JSON_PARSE      = 0b0000_0000_0001_0000;  // bit 4
+        const FILE_IO         = 0b0000_0000_0010_0000;  // bit 5
+        const FMT_STRING      = 0b0000_0000_0100_0000;  // bit 6
+        const SQL_QUERY       = 0b0000_0000_1000_0000;  // bit 7
+        const DESERIALIZE     = 0b0000_0001_0000_0000;  // bit 8
+        const SSRF            = 0b0000_0010_0000_0000;  // bit 9
+        const CODE_EXEC       = 0b0000_0100_0000_0000;  // bit 10
+        const CRYPTO          = 0b0000_1000_0000_0000;  // bit 11
+        /// Request-bound, caller-supplied identifier that has not yet been
+        /// validated against an ownership/membership check.  Used as the
+        /// carrier cap for folding `auth_analysis` into the SSA/taint
+        /// engine.
+        const UNAUTHORIZED_ID = 0b0001_0000_0000_0000;  // bit 12
     }
 }
 
@@ -564,6 +569,7 @@ pub fn parse_cap(s: &str) -> Option<Cap> {
         "ssrf" => Some(Cap::SSRF),
         "code_exec" => Some(Cap::CODE_EXEC),
         "crypto" => Some(Cap::CRYPTO),
+        "unauthorized_id" => Some(Cap::UNAUTHORIZED_ID),
         "all" => Some(Cap::all()),
         _ => None,
     }
@@ -615,11 +621,26 @@ pub fn build_lang_rules(
         Vec::new()
     };
 
+    // Phase C: fold `auth_analysis` into the taint engine by injecting
+    // `Cap::UNAUTHORIZED_ID` sink/sanitizer rules.  Gated by config; default
+    // OFF so the standalone `auth_analysis` subsystem remains authoritative.
+    if config.scanner.enable_auth_as_taint {
+        extra_labels.extend(phase_c_auth_rules_for_lang(lang_slug));
+    }
+
     LangAnalysisRules {
         extra_labels,
         terminators,
         event_handlers,
         frameworks,
+    }
+}
+
+/// Return Phase C auth-as-taint rules for a given language (currently Rust-only).
+fn phase_c_auth_rules_for_lang(lang_slug: &str) -> Vec<RuntimeLabelRule> {
+    match lang_slug {
+        "rust" | "rs" => rust::phase_c_auth_rules(),
+        _ => Vec::new(),
     }
 }
 
@@ -1136,6 +1157,7 @@ pub fn cap_to_name(cap: Cap) -> &'static str {
         Cap::SSRF => "ssrf",
         Cap::CODE_EXEC => "code_exec",
         Cap::CRYPTO => "crypto",
+        Cap::UNAUTHORIZED_ID => "unauthorized_id",
         _ => "unknown",
     }
 }

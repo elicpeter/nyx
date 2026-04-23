@@ -1,7 +1,6 @@
-// Phase 7 regression: the Phase 7 dedup must preserve both a
-// validated flow and an unvalidated flow that share
-// (body_id, sink, source) rather than silently keeping only the
-// validated one.
+// Regression fixture: the dedup pass must preserve both a validated
+// flow and an unvalidated flow that share (body_id, sink, source)
+// rather than silently keeping only the validated one.
 //
 // Each exec() call is a distinct CFG node (so the historic
 // (body, sink, source) tuple already kept them apart), but the

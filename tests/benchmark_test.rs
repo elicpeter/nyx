@@ -192,7 +192,7 @@ struct BenchmarkResults {
 
 fn scan_corpus_file(corpus_root: &Path, relative_path: &str) -> Vec<Diag> {
     // `cve_corpus/*` cases live in a sibling of `corpus/` — see
-    // `tests/benchmark/cve_corpus/` and Phase 13 of the pre-release plan.
+    // `tests/benchmark/cve_corpus/`.
     let source = if relative_path.starts_with("cve_corpus/") {
         corpus_root
             .parent()

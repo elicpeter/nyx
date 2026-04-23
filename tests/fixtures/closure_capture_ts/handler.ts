@@ -1,4 +1,4 @@
-// Phase 8.1 regression: TypeScript arrow capturing a tainted variable
+// Regression fixture: TypeScript arrow capturing a tainted variable
 // with explicit type annotations.  Equivalent to the JS fixture; here we
 // also exercise the TS tree-sitter grammar path and any TypeScript-only
 // return-type/handler-signature differences.

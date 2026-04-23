@@ -1,4 +1,4 @@
-# Phase 8.1 regression: a nested def captures a tainted variable from
+# Regression fixture: a nested def captures a tainted variable from
 # its enclosing function and sinks it via subprocess.run(..., shell=True).
 #
 # The engine must follow the closure boundary — i.e. recognise that

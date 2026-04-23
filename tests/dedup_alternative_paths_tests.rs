@@ -1,4 +1,4 @@
-//! Phase 7 regression: the dedup pass at
+//! Regression guard: the dedup pass at
 //! [`nyx_scanner::taint::analyse_file`] must preserve distinct flows
 //! that share a source but differ on validation status or intermediate
 //! variables.  Historically the dedup collapsed all `(body_id, sink,
@@ -22,11 +22,10 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-/// With the Phase 7 richer dedup key, both the validated and the
-/// unvalidated `cp.exec(input)` flows must surface as taint findings.
-/// Under the historical `(body_id, sink, source)` dedup plus
-/// `!path_validated` ordering, one of the two would be silently
-/// dropped.
+/// With the richer dedup key, both the validated and the unvalidated
+/// `cp.exec(input)` flows must surface as taint findings.  Under the
+/// historical `(body_id, sink, source)` dedup plus `!path_validated`
+/// ordering, one of the two would be silently dropped.
 #[test]
 fn dedup_preserves_validated_and_unvalidated_flows() {
     let dir = fixture_path("dedup_alternative_paths");
@@ -45,9 +44,9 @@ fn dedup_preserves_validated_and_unvalidated_flows() {
     assert!(
         taint.len() >= 2,
         "expected >= 2 taint findings on the dedup_alternative_paths \
-         fixture; found {}. The Phase 7 dedup must preserve both the \
-         validated and the unvalidated flow rather than collapsing \
-         them to a single `path_validated=true` finding. \
+         fixture; found {}. The dedup must preserve both the validated \
+         and the unvalidated flow rather than collapsing them to a \
+         single `path_validated=true` finding. \
          Found: {:#?}",
         taint.len(),
         taint
@@ -74,15 +73,15 @@ fn dedup_preserves_validated_and_unvalidated_flows() {
 
     // Every taint finding must carry a stable `finding_id` that
     // downstream formatters can reference.  This is the plumbing that
-    // feeds Phase 7 alternative-path cross-linking — verify it is
-    // non-empty for every taint finding so regressions in
-    // `analyse_file`'s post-dedup `make_finding_id` pass surface here.
+    // feeds alternative-path cross-linking — verify it is non-empty
+    // for every taint finding so regressions in `analyse_file`'s
+    // post-dedup `make_finding_id` pass surface here.
     for d in &taint {
         assert!(
             !d.finding_id.is_empty(),
             "taint finding at {}:{} is missing a stable finding_id; \
-             Phase 7 wiring expects `make_finding_id` to populate every \
-             taint finding after dedup.",
+             `make_finding_id` must populate every taint finding after \
+             dedup.",
             d.line,
             d.col,
         );
@@ -107,7 +106,7 @@ fn dedup_preserves_validated_and_unvalidated_flows() {
     // recognise `isWhitelisted` as a predicate — the fixture is still
     // load-bearing because the `min_count: 2` in expectations.json
     // asserts both findings surface regardless of which is classified
-    // as validated.  Drop the assertion to avoid gating the Phase 7
-    // regression on the strength of allowlist-predicate inference.
+    // as validated.  Drop the assertion to avoid gating the regression
+    // on the strength of allowlist-predicate inference.
     let _ = validated;
 }

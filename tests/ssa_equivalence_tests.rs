@@ -707,7 +707,7 @@ fn build_and_lower_all(path: &Path, cfg: &Config) -> usize {
     n
 }
 
-// ── Phase 12.2: Catch-block orphan invariant ────────────────────────────
+// ── Catch-block orphan invariant ────────────────────────────────────────
 //
 // Construct a synthetic SsaBody where a block carries `SsaOp::CatchParam`
 // but is neither reachable from entry via normal flow nor listed as a

@@ -11,7 +11,7 @@ const g = f;
 g(process.env.INPUT); // VULN (if the engine resolves the chain)
 ```
 
-## Current engine behaviour (as of Phase 11)
+## Current engine behaviour
 **Known gap.** The scanner does not emit a `taint-unsanitised-flow`
 finding for this pattern — the callback-binding resolver is
 name-keyed and does not transitively walk assignments such as

@@ -45,8 +45,9 @@ pub async fn handle_create_comment(
     let user = auth::require_auth(&req, &ctx).await?;
     let db = Db;
 
-    // Authorization happens inside validate_target — Phase B4 lifts the
-    // per-param auth check so this covers `group_id`.
+    // Authorization happens inside validate_target — helper-summary
+    // lifting propagates the per-param auth check so this covers
+    // `group_id`.
     validate_target(&db, group_id, user.id).await?;
 
     let _ = body;

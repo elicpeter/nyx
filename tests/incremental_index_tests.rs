@@ -1,15 +1,15 @@
-//! Phase 6 regression guard: edit-and-rescan parity for anonymous functions.
+//! Regression guard: edit-and-rescan parity for anonymous functions.
 //!
 //! The scanner identifies anonymous / closure / lambda bodies by
-//! `FuncKey.disambig`.  Before Phase 6 that field was the function node's
-//! `start_byte`, so inserting a line *above* an unchanged anonymous
-//! function shifted its identity and invalidated persisted callback
-//! bindings and SSA summaries that referenced it — producing different
-//! diagnostics for semantically identical code.
+//! `FuncKey.disambig`.  An earlier implementation keyed that field on
+//! the function node's `start_byte`, so inserting a line *above* an
+//! unchanged anonymous function shifted its identity and invalidated
+//! persisted callback bindings and SSA summaries that referenced it —
+//! producing different diagnostics for semantically identical code.
 //!
-//! Phase 6 replaced the disambig with a depth-first preorder index over
-//! the file's function nodes.  That index is stable against edits that do
-//! not add or remove functions, so these tests assert:
+//! The disambig is now a depth-first preorder index over the file's
+//! function nodes.  That index is stable against edits that do not add
+//! or remove functions, so these tests assert:
 //!
 //!   * A local edit above an anonymous function leaves the finding set
 //!     unchanged modulo line-number shifts.

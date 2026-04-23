@@ -1,4 +1,4 @@
-# Phase 8.2 regression: asyncio coroutine with env-var source flowing
+# Regression fixture: asyncio coroutine with env-var source flowing
 # across an `await` boundary to a subprocess.run sink.
 #
 # Intended finding: taint-unsanitised-flow from os.environ["CMD"] to

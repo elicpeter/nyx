@@ -2290,6 +2290,26 @@ pub(super) fn transfer_inst(
                     }
                 }
                 return_bits &= !sanitizer_bits;
+
+                // Phase C auth-as-taint: the UNAUTHORIZED_ID cap models a
+                // caller-supplied identifier that must clear an ownership or
+                // membership guard before a state-changing sink.  Sanitizer
+                // calls for this cap (e.g. `authz::require_group_member(db,
+                // group_id, user.id)?`) do not pass their validated inputs
+                // through a return value — the ownership proof is the side
+                // effect.  So when a sanitizer carries the UNAUTHORIZED_ID
+                // bit, additionally strip it from each argument's SSA value
+                // so downstream uses see the cap cleared.  Kept isolated to
+                // UNAUTHORIZED_ID to preserve existing return-only semantics
+                // for every other cap.
+                if sanitizer_bits.contains(Cap::UNAUTHORIZED_ID) {
+                    strip_cap_from_call_args(
+                        args,
+                        receiver,
+                        state,
+                        Cap::UNAUTHORIZED_ID,
+                    );
+                }
             } else if !resolved_callee {
                 // Container operation propagation (push/pop/get/set/etc.)
                 // Try the primary callee first, then fall back to outer_callee
@@ -4036,6 +4056,40 @@ fn collect_args_taint(
     }
 
     (combined_caps, combined_origins)
+}
+
+/// Phase C auth-as-taint helper: strip a capability bit from every argument
+/// SSA value of a call.  Used by the [`DataLabel::Sanitizer`] arm in
+/// [`transfer_inst`] when the sanitizer covers [`Cap::UNAUTHORIZED_ID`] —
+/// ownership / membership guards model their proof as a side effect on the
+/// inputs rather than a cap stripped from the return value, so downstream
+/// uses of those SSA values should see the cap cleared.  Leaves origins and
+/// other caps untouched; purely a cap mask.
+fn strip_cap_from_call_args(
+    args: &[SmallVec<[SsaValue; 2]>],
+    receiver: &Option<SsaValue>,
+    state: &mut SsaTaintState,
+    cap: Cap,
+) {
+    let mut targets: SmallVec<[SsaValue; 8]> = SmallVec::new();
+    if let Some(rv) = receiver {
+        targets.push(*rv);
+    }
+    for arg_vals in args {
+        for &v in arg_vals {
+            targets.push(v);
+        }
+    }
+    for v in targets {
+        if let Some(current) = state.get(v) {
+            if !current.caps.contains(cap) {
+                continue;
+            }
+            let mut updated = current.clone();
+            updated.caps &= !cap;
+            state.set(v, updated);
+        }
+    }
 }
 
 /// Scoped libcurl special case: when `curl_easy_setopt(handle, CURLOPT_URL, value)`

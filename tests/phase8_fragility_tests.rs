@@ -1,4 +1,4 @@
-//! Phase 8 regression coverage: closure capture, async/await, and
+//! Regression coverage: closure capture, async/await, and
 //! container-element taint fixtures.
 //!
 //! Each fixture either asserts the intended taint finding (where the
@@ -9,22 +9,22 @@
 //! here and update the expectations.
 //!
 //! Fixture layout:
-//!   * 8.1 closure capture —
+//!   * closure capture —
 //!     - `closure_capture_py` (required)
 //!     - `closure_capture_js` (known gap)
 //!     - `closure_capture_ts` (known gap)
-//!   * 8.2 async/await —
+//!   * async/await —
 //!     - `async_python` (required)
 //!     - `async_rust`   (required — Tokio process coverage)
 //!     - `async_promise_chain_js` (known gap)
-//!   * 8.3 container-element taint —
+//!   * container-element taint —
 //!     - `container_taint_py` (required)
 //!     - `container_taint_js` (required)
 //!
-//! Phase 8 edit-and-rescan parity (8.5) is already guarded by
-//! `tests/incremental_index_tests.rs`, which was introduced in Phase 6.
-//! That file intentionally lives separately because it drives an
-//! SQLite-backed incremental scan rather than `scan_no_index`.
+//! Edit-and-rescan parity is already guarded by
+//! `tests/incremental_index_tests.rs`.  That file intentionally lives
+//! separately because it drives an SQLite-backed incremental scan
+//! rather than `scan_no_index`.
 
 mod common;
 

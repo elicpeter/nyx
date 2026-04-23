@@ -8,11 +8,11 @@ import (
 	"os/exec"
 )
 
-// Phase 12.6 fixture: a Go switch with 6+ cases, each dispatching to a
-// different sink. Designed to exercise multi-case taint propagation — we
-// assert the engine reports findings across distinct cases regardless of
+// Fixture: a Go switch with 6+ cases, each dispatching to a different
+// sink. Designed to exercise multi-case taint propagation — we assert
+// the engine reports findings across distinct cases regardless of
 // whether the SSA terminator uses the classic cascade or the
-// Terminator::Switch variant introduced in Phase 12.3.
+// Terminator::Switch variant.
 //
 // The user input `r.URL.Query().Get("q")` taints `action` and then flows
 // into a different dangerous sink per switch case. Cases are mutually

@@ -13,10 +13,10 @@ The sink (`subprocess.run(x, shell=True)`) is in `step_p.py`.
 
 ## Why this fixture exists
 
-Phase-E stretches the SCC fix-point loop to a depth well beyond what
-the pre-Phase-E cap of 3 could handle, and near what `64` allows
-comfortably.  The observed iteration count is the single strongest
-evidence that the production cap is sized correctly for deep chains.
+Stretches the SCC fix-point loop to a depth well beyond what an
+earlier cap of 3 could handle, and near what `64` allows comfortably.
+The observed iteration count is the single strongest evidence that the
+production cap is sized correctly for deep chains.
 
 ## Expected convergence
 
@@ -26,9 +26,9 @@ evidence that the production cap is sized correctly for deep chains.
 If this ever exceeds 32, the summary lattice is either non-monotone
 (a bug) or is growing more slowly per iteration than it should.
 
-## Relationship to the worklist (Phase B)
+## Relationship to the worklist
 
-Once Phase B lands, this fixture becomes the primary test case for
-proving the dependency-driven iteration reduces per-iteration cost
+A dependency-driven worklist will eventually reduce per-iteration cost
 without raising iteration count — i.e. the same 16 iterations, but
-with each iteration re-analysing only the dirty subset of files.
+with each iteration re-analysing only the dirty subset of files.  This
+fixture becomes the primary test case for proving that change.

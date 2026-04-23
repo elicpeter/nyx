@@ -3,7 +3,7 @@
 #include <string.h>
 
 /*
- * Phase 12.6 fixture: a C switch with explicit fall-through across cases.
+ * Fixture: a C switch with explicit fall-through across cases.
  *
  * C's switch semantics allow fall-through from one case body to the next
  * when `break` is omitted. The SSA lowering must preserve this as a

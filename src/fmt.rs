@@ -284,10 +284,10 @@ fn render_diag(d: &Diag, width: usize) -> String {
             ))
         })
         .unwrap_or_default();
-    // Alternative-path annotation (Phase 7).  When the Phase 7 dedup
-    // preserves sibling findings for the same `(body, sink, source)`
-    // that differ on validation status or traversed variables, mark
-    // the primary finding with a suffix naming the sibling count.
+    // Alternative-path annotation.  When dedup preserves sibling
+    // findings for the same `(body, sink, source)` that differ on
+    // validation status or traversed variables, mark the primary
+    // finding with a suffix naming the sibling count.
     let alt_count = d.alternative_finding_ids.len();
     let alt_suffix = if alt_count > 0 {
         format!(

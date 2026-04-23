@@ -198,14 +198,14 @@ pub fn build_sarif(diags: &[Diag], scan_root: &Path) -> Value {
                 props.insert("confidence".into(), json!(conf.to_string()));
             }
 
-            // Alternative-path cross-references (Phase 7).  When the
-            // dedup pass at `taint::analyse_file` preserves both a
-            // validated and an unvalidated flow for the same
-            // `(body, sink, source)`, or two flows that differ on the
-            // traversed intermediate variables, each finding carries
-            // its own stable ID plus the IDs of its siblings.  SARIF
-            // consumers can follow the links via
-            // `properties.finding_id` and `properties.relatedFindings`.
+            // Alternative-path cross-references.  When the dedup pass
+            // at `taint::analyse_file` preserves both a validated and
+            // an unvalidated flow for the same `(body, sink, source)`,
+            // or two flows that differ on the traversed intermediate
+            // variables, each finding carries its own stable ID plus
+            // the IDs of its siblings.  SARIF consumers can follow the
+            // links via `properties.finding_id` and
+            // `properties.relatedFindings`.
             if !d.finding_id.is_empty() {
                 props.insert("finding_id".into(), json!(d.finding_id));
             }

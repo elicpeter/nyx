@@ -1,4 +1,4 @@
-// Phase 8.1 regression: an arrow function captures a tainted variable
+// Regression fixture: an arrow function captures a tainted variable
 // from its enclosing scope and later sinks it via child_process.exec.
 //
 // The engine must follow the closure boundary — i.e. recognise that the

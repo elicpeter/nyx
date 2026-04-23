@@ -1,4 +1,4 @@
-//! Phase 8.4 regression: per-thread-count determinism.
+//! Regression guard: per-thread-count determinism.
 //!
 //! The scanner's two-pass pipeline runs rayon `par_iter` over files in
 //! both pass-1 (summary extraction) and pass-2 (rule evaluation), and

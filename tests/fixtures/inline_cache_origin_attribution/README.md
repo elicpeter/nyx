@@ -1,7 +1,7 @@
 # inline_cache_origin_attribution
 
 ## Purpose
-Phase 5 inline-cache origin attribution.
+Inline-cache origin attribution regression.
 
 ## Expectations
 - **required**: `taint-unsanitised-flow` (≥2)

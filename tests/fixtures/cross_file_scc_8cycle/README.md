@@ -15,13 +15,12 @@ iterations before `step_a`'s summary reflects the sink at `step_h`.
 
 ## Why this fixture exists
 
-Phase-E broadens the existing 4-cycle fixture to exercise the SCC
-fix-point loop at a depth that would have been silently truncated
-under *any* pre-Phase-E cap below 8.  This proves the current
-`SCC_FIXPOINT_SAFETY_CAP = 64` actually covers the ≥8 range in
-practice (and, once Phase B lands, that the worklist reduces
-per-iteration cost enough to absorb the extra iterations without
-wall-clock regression).
+Broadens the existing 4-cycle fixture to exercise the SCC fix-point
+loop at a depth that would have been silently truncated under any cap
+below 8.  This proves the current `SCC_FIXPOINT_SAFETY_CAP = 64`
+actually covers the ≥8 range in practice (and, once the worklist is
+dependency-driven, that per-iteration cost absorbs the extra
+iterations without wall-clock regression).
 
 ## Expected convergence
 

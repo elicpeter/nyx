@@ -8,8 +8,7 @@ process-spawn sink.
 
 ## Note on `docs/language-maturity.md`
 The maturity doc previously listed Tokio process variants as a known
-gap for Rust.  As of Phase 8 the engine actually does surface this
-flow, so the fixture is codified with `required_findings` and will
-regression-guard that coverage going forward.  If the maturity doc
-still claims this gap, it should be updated alongside any future
-refactor that reopens it.
+gap for Rust.  The engine now surfaces this flow, so the fixture is
+codified with `required_findings` and will regression-guard that
+coverage going forward.  If the maturity doc still claims this gap, it
+should be updated alongside any future refactor that reopens it.

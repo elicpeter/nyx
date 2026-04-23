@@ -1,9 +1,9 @@
-//! Regression tests for the `EngineNote` provenance system (Phase 3 of
-//! `PRE_RELEASE_PLAN.md`).  Each test forces a specific cap-site to fire
-//! on a tiny fixture by overriding the engine's safety cap, then asserts
-//! either that the corresponding observability counter moved *or* that
-//! the note propagated to a produced finding — whichever is the more
-//! stable signal for that cap.
+//! Regression tests for the `EngineNote` provenance system.  Each
+//! test forces a specific cap-site to fire on a tiny fixture by
+//! overriding the engine's safety cap, then asserts either that the
+//! corresponding observability counter moved *or* that the note
+//! propagated to a produced finding — whichever is the more stable
+//! signal for that cap.
 
 mod common;
 

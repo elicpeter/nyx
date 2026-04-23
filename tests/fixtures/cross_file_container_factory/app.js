@@ -1,4 +1,4 @@
-// Phase 11 cross-file factory caller: taints an environment variable,
+// Cross-file factory caller: taints an environment variable,
 // stores it into a container produced by a cross-file factory helper,
 // and sinks a subsequent read of the container through `exec`.
 const factory = require('./factory.js');

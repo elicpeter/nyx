@@ -1,7 +1,7 @@
 # dedup_alternative_paths
 
 ## Purpose
-Phase 7 dedup: alternative-path linking.
+Dedup: alternative-path linking.
 
 ## Expectations
 - **required**: `taint-unsanitised-flow` (≥2)

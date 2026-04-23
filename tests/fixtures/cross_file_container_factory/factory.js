@@ -1,4 +1,4 @@
-// Phase 11 cross-file container factory: a fresh container is allocated
+// Cross-file container factory: a fresh container is allocated
 // inside `makeBag()` and returned to the caller.  `fillBag()` mutates
 // that container through its first argument and returns the same
 // container.  Together they exercise the PointsToSummary.returns_fresh_alloc

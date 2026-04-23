@@ -1,14 +1,15 @@
-// Phase B2 regression: `let conn = rusqlite::Connection::open(..).unwrap();`
+// Regression fixture: `let conn = rusqlite::Connection::open(..).unwrap();`
 // produces a `DatabaseConnection` via SSA `constructor_type` (through
 // `peel_identity_suffix`, which strips `.unwrap()` before matching).  The
 // handler then calls `conn.execute(..)`, a callee name that appears in
 // neither `mutation_indicator_names` nor `read_indicator_names` for Rust —
-// B1's name-based classification returns `None`, so the ownership gate
-// already cannot flag the call.  B2 should *still* leave the call
-// unflagged (the type map produces `DbMutation`, but there is no scoped
-// subject on the operation, so the ownership check does not fire either
-// way).  This fixture is therefore a non-regression witness: adding B2's
-// SSA-type classification must not introduce a false positive.
+// name-based classification returns `None`, so the ownership gate
+// already cannot flag the call.  The type-map refinement should *still*
+// leave the call unflagged (the type map produces `DbMutation`, but
+// there is no scoped subject on the operation, so the ownership check
+// does not fire either way).  This fixture is therefore a
+// non-regression witness: adding SSA-type classification must not
+// introduce a false positive.
 
 struct Ctx;
 struct Req;

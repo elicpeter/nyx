@@ -9,7 +9,7 @@
 stores a tainted environment value into it, and `exec(bag[0])` sinks the
 tainted subscript read as a shell command.
 
-## Why this fixture exists (Phase 11)
+## Why this fixture exists
 Covers the factory-pattern cross-file container gap closed by
 `PointsToSummary.returns_fresh_alloc`:
 
@@ -20,8 +20,8 @@ Covers the factory-pattern cross-file container gap closed by
 
 Without the fresh-alloc channel the caller's `bag` has no heap identity,
 `fillBag`'s `param_to_container_store` replay finds no heap cell to
-write into, and `bag[0]` reads back nothing — a false negative that
-Phase 11 closes.
+write into, and `bag[0]` reads back nothing — a false negative that the
+fresh-alloc channel closes.
 
 Expected finding: `taint-unsanitised-flow` from `process.env.INPUT`
 (Source) to `child_process.exec` (Sink) via the cross-file factory +

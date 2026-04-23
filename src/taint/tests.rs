@@ -5414,7 +5414,7 @@ function helper(x) {
     assert_eq!(body_count, 2, "callee-body cache must also keep both defs");
 }
 
-// ── Phase 7: alternative-path dedup and linking ─────────────────────────
+// ── alternative-path dedup and linking ─────────────────────────────────
 
 /// Build a bare Finding suitable for feeding into `link_alternative_paths`.
 /// Only the fields consulted by that pass are populated; the rest use the

@@ -1,4 +1,4 @@
-//! Phase 12.6 fixture coverage.
+//! Switch-lowering fixture coverage.
 //!
 //! * `large_switch_go` — Go switch with 6+ mutually exclusive cases
 //!   dispatching to distinct sinks. Exercises multi-case taint flow;

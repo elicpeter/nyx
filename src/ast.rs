@@ -385,16 +385,27 @@ fn build_taint_diag(
         })
         .fold(0u16, |acc, b| acc | b);
 
+    // Phase C: when the sink's required caps include UNAUTHORIZED_ID — and
+    // the finding actually reached that sink via the taint engine — use a
+    // dedicated auth rule id so the finding is namespaced alongside the
+    // standalone `auth_analysis` subsystem's output instead of being folded
+    // into the generic `taint-unsanitised-flow` bucket.
+    let diag_id = if sink_caps_bits & crate::labels::Cap::UNAUTHORIZED_ID.bits() != 0 {
+        "rs.auth.missing_ownership_check.taint".to_string()
+    } else {
+        format!(
+            "taint-unsanitised-flow (source {}:{})",
+            source_point.row + 1,
+            source_point.column + 1
+        )
+    };
+
     let mut diag = Diag {
         path: primary_path.clone(),
         line: primary_line,
         col: primary_col,
         severity: severity_for_source_kind(finding.source_kind),
-        id: format!(
-            "taint-unsanitised-flow (source {}:{})",
-            source_point.row + 1,
-            source_point.column + 1
-        ),
+        id: diag_id,
         category: FindingCategory::Security,
         path_validated: finding.path_validated,
         guard_kind: finding.guard_kind.map(|k| format!("{k:?}")),
@@ -1167,10 +1178,10 @@ impl<'a> ParsedFile<'a> {
 
     /// Run AST-backed authorization analyses that do not require CFG construction.
     fn run_auth_analyses(&self, cfg: &Config) -> Vec<Diag> {
-        // Phase B2: harvest SSA-derived variable types across every body
-        // in the file so `run_auth_analysis` can refine sink
-        // classification by receiver type (e.g. `HttpClient::send` →
-        // `OutboundNetwork`, `HashMap::new`-bound var → `InMemoryLocal`).
+        // Harvest SSA-derived variable types across every body in the
+        // file so `run_auth_analysis` can refine sink classification by
+        // receiver type (e.g. `HttpClient::send` → `OutboundNetwork`,
+        // `HashMap::new`-bound var → `InMemoryLocal`).
         let var_types = self.collect_file_var_types();
         auth_analysis::run_auth_analysis(
             &self.source.tree,

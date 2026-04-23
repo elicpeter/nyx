@@ -1,12 +1,12 @@
-//! Phase 5 regression guard: inline-analysis cache origin attribution.
+//! Regression guard: inline-analysis cache origin attribution.
 //!
 //! Two call sites to the same helper function share an `ArgTaintSig`
 //! (caps-only cache key) but carry different taint sources.  The engine
 //! must re-attribute origins at each cache hit so the two resulting
-//! findings point to distinct source lines.  Before Phase 5, the cached
-//! `VarTaint.origins` baked in whichever caller first populated the
-//! entry, causing the second caller's finding to mis-attribute its
-//! source.
+//! findings point to distinct source lines.  An earlier implementation
+//! baked in whichever caller first populated the cached
+//! `VarTaint.origins`, causing the second caller's finding to
+//! mis-attribute its source.
 //!
 //! A failure of this test implies a `taint-unsanitised-flow` finding is
 //! naming the wrong source file/line — a credibility-killer for users
@@ -89,9 +89,9 @@ fn two_call_sites_get_distinct_source_attributions() {
     //   16: const sourceA = process.env.USER_INPUT;   (call site 1 source)
     //   21: const sourceB = process.env.OTHER_INPUT;  (call site 2 source)
     //
-    // The critical assertion is inequality — before Phase 5 both findings
-    // would report the FIRST-cached caller's source line (the cache baked
-    // in `VarTaint.origins` from whichever call fired first during
+    // The critical assertion is inequality — a naive cache would report
+    // the FIRST-cached caller's source line on both findings (baking in
+    // `VarTaint.origins` from whichever call fired first during
     // traversal).  We also pin the exact expected lines so a silent
     // shift in attribution logic doesn't quietly pass.
     assert_ne!(
@@ -115,9 +115,9 @@ fn two_call_sites_get_distinct_source_attributions() {
 
 #[test]
 fn inline_cache_reused_note_fires_on_second_call() {
-    // Phase 5.5 observability: the `InlineCacheReused` engine note is
-    // recorded on cache-hit apply.  At least one of the two call sites
-    // must carry it — whichever call loses the miss/hit race.
+    // Observability: the `InlineCacheReused` engine note is recorded
+    // on cache-hit apply.  At least one of the two call sites must
+    // carry it — whichever call loses the miss/hit race.
     //
     // The note is informational only: `EngineNote::InlineCacheReused`
     // returns `false` from `lowers_confidence()`, so its presence never

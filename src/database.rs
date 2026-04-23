@@ -170,11 +170,10 @@ pub mod index {
     ///
     /// History:
     /// * `"1"` — initial.
-    /// * `"2"` — Phase 6 (0.5.0): `FuncKey.disambig` changed from the
-    ///   function-node byte offset to a depth-first structural index.
-    ///   Pre-0.5.0 caches store byte-offset disambigs and would fail to
-    ///   match bodies built by the new engine, so they are silently
-    ///   rebuilt on open.
+    /// * `"2"` — 0.5.0: `FuncKey.disambig` changed from the function-node
+    ///   byte offset to a depth-first structural index.  Pre-0.5.0 caches
+    ///   store byte-offset disambigs and would fail to match bodies built
+    ///   by the new engine, so they are silently rebuilt on open.
     pub const SCHEMA_VERSION: &str = "2";
 
     // TODO: ADD CLEANS FOR EACH TABLE BASED ON PROJECT WHICH RUNS ON CLEAN

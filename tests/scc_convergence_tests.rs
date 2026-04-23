@@ -279,12 +279,10 @@ fn scc_8cycle_converges_within_bound() {
     );
 }
 
-/// Phase-E stress fixture: 16-function SCC chain across 16 files.
+/// Stress fixture: 16-function SCC chain across 16 files.
 ///
 /// At this depth the iteration count dominates per-iteration cost, so
-/// this is the fixture most sensitive to Phase-B worklist
-/// optimisation. Once Phase B lands, this test's wall-clock budget
-/// will tighten.
+/// this is the fixture most sensitive to worklist optimisation.
 #[test]
 fn scc_16cycle_converges_within_bound() {
     let _guard = SCC_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());

@@ -286,3 +286,91 @@ pub fn framework_rules(ctx: &FrameworkContext) -> Vec<RuntimeLabelRule> {
 
     rules
 }
+
+/// Phase C: auth-as-taint label rules for Rust.  Gated by
+/// `config.scanner.enable_auth_as_taint`; appended to the runtime rule set
+/// when the flag is enabled.  These declare **sinks** (state-changing or
+/// outbound operations that should not be reached by an un-checked
+/// request-bound id) and **sanitizers** (ownership/membership guards that
+/// validate a caller-supplied id).
+pub fn phase_c_auth_rules() -> Vec<RuntimeLabelRule> {
+    vec![
+        // ── Sinks requiring Cap::UNAUTHORIZED_ID ──
+        // Realtime / pub-sub: broadcasting on a caller-supplied group/channel
+        // id without first verifying membership is the canonical cross-tenant
+        // leak.
+        RuntimeLabelRule {
+            matchers: vec![
+                "realtime::publish".into(),
+                "realtime::publish_to_group".into(),
+                "realtime::publish_to_channel".into(),
+                "realtime::broadcast".into(),
+                "broadcaster::send".into(),
+                "broadcaster::publish".into(),
+                "pubsub::publish".into(),
+            ],
+            label: DataLabel::Sink(Cap::UNAUTHORIZED_ID),
+            case_sensitive: false,
+        },
+        // Database mutations keyed by caller-supplied id.  These overlay the
+        // existing SQL_QUERY sink declarations (multi-label composition) so
+        // a bare id carrying only UNAUTHORIZED_ID still fires.
+        RuntimeLabelRule {
+            matchers: vec![
+                "rusqlite::Connection.execute".into(),
+                "postgres::Client.execute".into(),
+                "sqlx::query".into(),
+                "sqlx::query_as".into(),
+                "diesel::insert_into".into(),
+                "diesel::update".into(),
+                "diesel::delete".into(),
+                // Type-qualified (receiver typed as DatabaseConnection)
+                "DatabaseConnection.execute".into(),
+                "DatabaseConnection.query".into(),
+            ],
+            label: DataLabel::Sink(Cap::UNAUTHORIZED_ID),
+            case_sensitive: false,
+        },
+        // Outbound cache writes.
+        RuntimeLabelRule {
+            matchers: vec![
+                "redis::cmd".into(),
+                "cache::set".into(),
+                "cache::set_ex".into(),
+                "cache::insert".into(),
+            ],
+            label: DataLabel::Sink(Cap::UNAUTHORIZED_ID),
+            case_sensitive: false,
+        },
+        // ── Sanitizers clearing Cap::UNAUTHORIZED_ID ──
+        // Ownership and membership guards from the auth_analysis default
+        // `authorization_check_names` list.  Phase C consumes these via
+        // call-site argument sanitization (see
+        // `is_auth_as_taint_arg_sanitizer` in ssa_transfer).
+        RuntimeLabelRule {
+            matchers: vec![
+                "check_ownership".into(),
+                "has_ownership".into(),
+                "require_ownership".into(),
+                "ensure_ownership".into(),
+                "is_owner".into(),
+                "authorize".into(),
+                "verify_access".into(),
+                "has_permission".into(),
+                "can_access".into(),
+                "can_manage".into(),
+                "require_group_member".into(),
+                "require_org_member".into(),
+                "require_workspace_member".into(),
+                "require_tenant_member".into(),
+                "require_team_member".into(),
+                "require_membership".into(),
+                "check_membership".into(),
+                "authz::require".into(),
+                "authz::check".into(),
+            ],
+            label: DataLabel::Sanitizer(Cap::UNAUTHORIZED_ID),
+            case_sensitive: false,
+        },
+    ]
+}

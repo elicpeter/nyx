@@ -304,7 +304,7 @@ mod inline_cache_epoch_tests {
         assert_eq!(*fp.get(&(key("f"), sig())).unwrap(), 0);
     }
 
-    // ── apply_cached_shape: origin re-attribution (Phase 5) ─────────────
+    // ── apply_cached_shape: origin re-attribution ──────────────────────
 
     use crate::labels::SourceKind;
     use petgraph::graph::NodeIndex;

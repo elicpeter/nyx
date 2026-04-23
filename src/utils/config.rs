@@ -72,6 +72,8 @@ pub enum CapName {
     Ssrf,
     CodeExec,
     Crypto,
+    /// Request-bound identifier not yet ownership-checked.
+    UnauthorizedId,
     All,
 }
 
@@ -91,6 +93,7 @@ impl CapName {
             Self::Ssrf => Cap::SSRF,
             Self::CodeExec => Cap::CODE_EXEC,
             Self::Crypto => Cap::CRYPTO,
+            Self::UnauthorizedId => Cap::UNAUTHORIZED_ID,
             Self::All => Cap::all(),
         }
     }
@@ -111,6 +114,7 @@ impl fmt::Display for CapName {
             Self::Ssrf => write!(f, "ssrf"),
             Self::CodeExec => write!(f, "code_exec"),
             Self::Crypto => write!(f, "crypto"),
+            Self::UnauthorizedId => write!(f, "unauthorized_id"),
             Self::All => write!(f, "all"),
         }
     }
@@ -132,11 +136,12 @@ impl FromStr for CapName {
             "ssrf" => Ok(Self::Ssrf),
             "code_exec" => Ok(Self::CodeExec),
             "crypto" => Ok(Self::Crypto),
+            "unauthorized_id" => Ok(Self::UnauthorizedId),
             "all" => Ok(Self::All),
             _ => Err(format!(
                 "invalid cap name: {s:?} (expected env_var, html_escape, shell_escape, \
                  url_encode, json_parse, file_io, fmt_string, sql_query, deserialize, \
-                 ssrf, code_exec, crypto, all)"
+                 ssrf, code_exec, crypto, unauthorized_id, all)"
             )),
         }
     }
@@ -200,6 +205,15 @@ pub struct ScannerConfig {
     /// false: a panic aborts the scan, preserving existing behaviour for
     /// users who want to catch engine bugs loudly.
     pub enable_panic_recovery: bool,
+
+    /// Fold `auth_analysis` into the SSA/taint engine using the
+    /// `Cap::UNAUTHORIZED_ID` cap.  When true, request-bound handler
+    /// parameters seed `UNAUTHORIZED_ID` into the taint state and a
+    /// complementary set of sink / sanitizer rules participates in the
+    /// flow.  Default `false` while the standalone `auth_analysis`
+    /// subsystem still carries the stable detection; flipping to `true`
+    /// enables the taint-based path alongside it.
+    pub enable_auth_as_taint: bool,
 }
 impl Default for ScannerConfig {
     fn default() -> Self {
@@ -236,6 +250,7 @@ impl Default for ScannerConfig {
             enable_state_analysis: true,
             enable_auth_analysis: true,
             enable_panic_recovery: false,
+            enable_auth_as_taint: false,
         }
     }
 }
@@ -921,6 +936,7 @@ fn merge_configs(mut default: Config, user: Config) -> Config {
     default.scanner.enable_state_analysis = user.scanner.enable_state_analysis;
     default.scanner.enable_auth_analysis = user.scanner.enable_auth_analysis;
     default.scanner.enable_panic_recovery = user.scanner.enable_panic_recovery;
+    default.scanner.enable_auth_as_taint = user.scanner.enable_auth_as_taint;
 
     // Merge exclusion lists (default ⊔ user), then sort & dedupe
     default

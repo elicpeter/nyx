@@ -1,4 +1,4 @@
-// Phase 8.2 regression: Rust async flow through `tokio::process::Command`.
+// Regression fixture: Rust async flow through `tokio::process::Command`.
 //
 // Per docs/language-maturity.md, Rust's Tokio process variants are not
 // yet covered — the Tokio async process APIs are a known gap.  The

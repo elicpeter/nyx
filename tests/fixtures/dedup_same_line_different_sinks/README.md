@@ -1,7 +1,7 @@
 # dedup_same_line_different_sinks
 
 ## Purpose
-Phase 7 dedup: same-line different sinks kept distinct.
+Dedup: same-line different sinks kept distinct.
 
 ## Expectations
 - **required**: `taint-unsanitised-flow` (≥2)

@@ -1,10 +1,10 @@
-// Phase 5 regression fixture: two call sites to the same helper function,
+// Regression fixture: two call sites to the same helper function,
 // each followed by its own downstream sink.  Both argument chains carry
 // the same arg-cap signature (Cap::all() from process.env), so the
 // inline-analysis cache reuses the cached return shape across the two
-// calls.  Origin identity MUST be re-attributed per call site — before
-// Phase 5 the second call's return taint would carry whichever source
-// the cache was populated with first.
+// calls.  Origin identity MUST be re-attributed per call site — a
+// naive cache would make the second call's return taint carry whichever
+// source the cache was populated with first.
 const child_process = require('child_process');
 const fs = require('fs');
 

@@ -1,4 +1,4 @@
-// Phase 8.2 regression: promise-chain taint flow.  The env var read
+// Regression fixture: promise-chain taint flow.  The env var read
 // inside a `.then(...)` callback is concatenated with fetched text and
 // forwarded through two more `.then` stages before being sunk via
 // `child_process.exec`.

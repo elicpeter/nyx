@@ -406,7 +406,7 @@ pub fn handle(
         }
     }
 
-    // ── Phase A1 convergence telemetry flush ────────────────────────────
+    // ── Convergence telemetry flush ─────────────────────────────────────
     // When `NYX_CONVERGENCE_TELEMETRY=1` is set the SCC and JS/TS pass-2
     // loops have been pushing per-iteration records into the
     // `convergence_telemetry` collector.  Flush them to a JSONL sidecar
@@ -1160,7 +1160,7 @@ fn run_topo_batches(
             }
             LAST_SCC_MAX_ITERATIONS.fetch_max(iters_used, Ordering::Relaxed);
 
-            // Phase A1: emit per-batch telemetry record (no-op unless
+            // Emit per-batch telemetry record (no-op unless
             // NYX_CONVERGENCE_TELEMETRY=1).  Recorded regardless of
             // converged / cap-hit so the downstream distribution
             // analysis sees early-convergence runs too.
