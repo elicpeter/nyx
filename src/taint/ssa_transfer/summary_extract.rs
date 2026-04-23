@@ -14,7 +14,7 @@ use super::events::extract_sink_arg_positions;
 use super::state::{BindingKey, SsaTaintState};
 use super::{SsaTaintEvent, SsaTaintTransfer, run_ssa_taint_full, transfer_block, transfer_inst};
 
-use crate::cfg::{Cfg, FuncSummaries};
+use crate::cfg::{BodyId, Cfg, FuncSummaries};
 use crate::labels::{Cap, SourceKind};
 use crate::ssa::ir::{SsaBody, SsaOp, SsaValue, Terminator};
 use crate::summary::GlobalSummaries;
@@ -126,7 +126,11 @@ pub fn extract_ssa_func_summary(
             local_summaries,
             global_summaries,
             interop_edges: &[],
+            owner_body_id: BodyId(0),
+            parent_body_id: None,
             global_seed: seed_ref,
+            param_seed: None,
+            receiver_seed: None,
             const_values: None,
             type_facts: None,
             ssa_summaries: None,
@@ -302,7 +306,7 @@ pub fn extract_ssa_func_summary(
             source_span: None,
         };
         seed.insert(
-            BindingKey::new(var_name.as_str()),
+            BindingKey::new(var_name.as_str(), BodyId(0)),
             VarTaint {
                 caps: Cap::all(),
                 origins: SmallVec::from_elem(origin, 1),
@@ -429,7 +433,11 @@ pub fn extract_ssa_func_summary(
             local_summaries,
             global_summaries,
             interop_edges: &[],
+            owner_body_id: BodyId(0),
+            parent_body_id: None,
             global_seed: None,
+            param_seed: None,
+            receiver_seed: None,
             const_values: None,
             type_facts: None,
             ssa_summaries: None,

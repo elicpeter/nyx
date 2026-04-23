@@ -11,6 +11,7 @@
 //! * The merge-join helpers used by [`Lattice::join`] / [`Lattice::leq`].
 
 use crate::abstract_interp::{self, AbstractState};
+use crate::cfg::BodyId;
 use crate::constraint;
 use crate::ssa::heap::HeapState;
 use crate::ssa::ir::SsaValue;
@@ -149,87 +150,41 @@ pub(crate) fn take_body_engine_notes() -> SmallVec<[crate::engine_notes::EngineN
 /// `SymbolId` remains body-local for intra-body analysis; `BindingKey`
 /// is used when taint crosses body boundaries via `global_seed`.
 ///
-/// The optional `body_id` disambiguates same-named bindings across
-/// scopes.  When `body_id` is `None`, the key matches by name alone
-/// (backward-compatible wildcard); when `Some`, it scopes the binding
-/// to a specific body.  Use [`BindingKey::matches`] and [`seed_lookup`]
-/// for body-id-aware comparison.
+/// The `body_id` scopes the binding to a specific body.  Same-named
+/// bindings across different bodies never alias.  Callers that write
+/// into the seed map always specify the owning body's id; readers look
+/// up by the scope they know they want (typically their own
+/// `parent_body_id`, with a fallback to `BodyId(0)` for entries that
+/// the JS/TS two-level solve has re-keyed onto the top-level scope —
+/// see [`crate::taint::ssa_transfer::filter_seed_to_toplevel`]).
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct BindingKey {
     pub name: String,
-    /// Owning body id.  `None` = scope-unaware (matches any body).
-    pub body_id: Option<u32>,
+    /// Owning body id.
+    pub body_id: BodyId,
 }
 
 impl BindingKey {
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>, body_id: BodyId) -> Self {
         Self {
             name: name.into(),
-            body_id: None,
-        }
-    }
-
-    pub fn with_body_id(name: impl Into<String>, body_id: u32) -> Self {
-        Self {
-            name: name.into(),
-            body_id: Some(body_id),
-        }
-    }
-
-    /// Body-id-aware matching: `None` on either side matches by name alone.
-    pub fn matches(&self, other: &BindingKey) -> bool {
-        if self.name != other.name {
-            return false;
-        }
-        match (self.body_id, other.body_id) {
-            (Some(a), Some(b)) => a == b,
-            _ => true, // None on either side → name-only match
+            body_id,
         }
     }
 }
 
-/// Look up a binding in a seed map with body-id-aware fallback.
+/// Look up a binding in a seed map.
 ///
-/// 1. Exact HashMap lookup (name + body_id).  On hit, returns a clone.
-/// 2. Wildcard fallback: when the exact lookup misses, scan for every
-///    entry where [`BindingKey::matches`] succeeds and **union** their
-///    caps + origins.  Unioning (rather than returning the first match)
-///    makes the read deterministic and complete when multiple writers
-///    have contributed same-named entries with different body_ids — e.g.
-///    the JS/TS two-level solve's `combined_exit`, where taint from
-///    several function bodies is joined into a single seed before a
-///    callee reads it.
-pub fn seed_lookup(
-    seed: &HashMap<BindingKey, VarTaint>,
+/// Thin wrapper over [`HashMap::get`] retained for call-site readability
+/// — every seed entry is now exactly scoped to a single `(name,
+/// BodyId)`, so the lookup is O(1) with no fallback.  Writers that want
+/// cross-scope reachability must explicitly re-key their entries (see
+/// [`crate::taint::ssa_transfer::filter_seed_to_toplevel`]).
+pub fn seed_lookup<'a>(
+    seed: &'a HashMap<BindingKey, VarTaint>,
     key: &BindingKey,
-) -> Option<VarTaint> {
-    // Fast path: exact match (name + body_id identical).
-    if let Some(taint) = seed.get(key) {
-        return Some(taint.clone());
-    }
-    // Slow path: wildcard match when body_ids differ.  Union across
-    // every entry whose BindingKey matches by name (accounting for
-    // `None` on either side).  Origins are deduplicated by node.
-    let mut unioned: Option<VarTaint> = None;
-    for (k, v) in seed.iter() {
-        if !k.matches(key) {
-            continue;
-        }
-        match unioned.as_mut() {
-            None => unioned = Some(v.clone()),
-            Some(acc) => {
-                acc.caps |= v.caps;
-                for orig in &v.origins {
-                    if acc.origins.iter().any(|o| o.node == orig.node) {
-                        continue;
-                    }
-                    acc.origins.push(*orig);
-                }
-                acc.uses_summary |= v.uses_summary;
-            }
-        }
-    }
-    unioned
+) -> Option<&'a VarTaint> {
+    seed.get(key)
 }
 
 // ── SSA Taint State ─────────────────────────────────────────────────────

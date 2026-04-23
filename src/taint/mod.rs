@@ -568,7 +568,11 @@ fn analyse_body_with_seed(
                 local_summaries,
                 global_summaries,
                 interop_edges,
+                owner_body_id: body.meta.id,
+                parent_body_id: body.meta.parent_body_id,
                 global_seed: seed,
+                param_seed: None,
+                receiver_seed: None,
                 const_values: Some(&opt.const_values),
                 type_facts: Some(&opt.type_facts),
                 ssa_summaries,
@@ -666,7 +670,7 @@ fn analyse_body_with_seed(
                 &ssa_body,
                 cfg,
                 &transfer,
-                body_id.0,
+                body_id,
             );
             (findings, Some(exit_state))
         }
@@ -779,15 +783,18 @@ fn analyse_multi_body(
         let top = file_cfg.toplevel();
         let top_cfg = &top.graph;
 
-        // Collect top-level binding keys for seed filtering.
+        // Collect top-level binding keys for seed filtering.  Always
+        // keyed under `BodyId(0)` — `filter_seed_to_toplevel` matches
+        // by name and re-keys every surviving entry to `BodyId(0)`
+        // anyway, so the body_id on the probe keys is informational.
         let toplevel_keys: HashSet<ssa_transfer::BindingKey> = {
             let mut keys = HashSet::new();
             for (_idx, info) in top_cfg.node_references() {
                 if let Some(ref d) = info.taint.defines {
-                    keys.insert(ssa_transfer::BindingKey::new(d.as_str()));
+                    keys.insert(ssa_transfer::BindingKey::new(d.as_str(), BodyId(0)));
                 }
                 for u in &info.taint.uses {
-                    keys.insert(ssa_transfer::BindingKey::new(u.as_str()));
+                    keys.insert(ssa_transfer::BindingKey::new(u.as_str(), BodyId(0)));
                 }
             }
             keys

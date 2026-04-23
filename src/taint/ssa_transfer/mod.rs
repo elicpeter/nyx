@@ -14,6 +14,9 @@ mod inline;
 mod state;
 mod summary_extract;
 
+#[cfg(test)]
+mod tests;
+
 pub use events::{SsaTaintEvent, ssa_events_to_findings};
 pub(crate) use inline::{ArgTaintSig, InlineCache};
 use inline::{CachedInlineShape, InlineResult, MAX_INLINE_BLOCKS, ReturnShape};
@@ -34,7 +37,7 @@ pub use summary_extract::extract_ssa_func_summary;
 
 use crate::abstract_interp::AbstractState;
 use crate::callgraph::{callee_container_hint, callee_leaf_name};
-use crate::cfg::{Cfg, FuncSummaries, NodeInfo};
+use crate::cfg::{BodyId, Cfg, FuncSummaries, NodeInfo};
 use crate::constraint;
 use crate::interop::InteropEdge;
 use crate::labels::{Cap, DataLabel, RuntimeLabelRule, SourceKind};
@@ -49,24 +52,7 @@ use crate::taint::path_state::{PredicateKind, classify_condition_with_target};
 use petgraph::graph::NodeIndex;
 use smallvec::SmallVec;
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
-
-/// Derive a stable synthetic `body_id` tag for a callee being inlined.
-///
-/// Used exclusively to scope [`BindingKey`] entries in the per-call
-/// `param_seed` so same-named formal parameters across different
-/// callees cannot silently alias if seeds ever co-mingle in the
-/// future.  The high bit is set to keep the value disjoint from real
-/// `BodyId(u32)` values (which are small indices into `FileCfg.bodies`).
-fn callee_seed_body_id(key: &FuncKey) -> u32 {
-    let mut h = DefaultHasher::new();
-    key.hash(&mut h);
-    let v = h.finish();
-    let folded = (v as u32) ^ ((v >> 32) as u32);
-    folded | 0x8000_0000
-}
 
 // ── SSA Taint Transfer ──────────────────────────────────────────────────
 
@@ -78,11 +64,37 @@ pub struct SsaTaintTransfer<'a> {
     pub local_summaries: &'a FuncSummaries,
     pub global_summaries: Option<&'a GlobalSummaries>,
     pub interop_edges: &'a [InteropEdge],
+    /// The [`BodyId`] of the body currently being analysed.  Used as the
+    /// owning scope when writing seed entries that leave this body
+    /// (e.g. [`extract_ssa_exit_state`]) and as the identity recorded on
+    /// engine notes.  Defaults to [`BodyId(0)`] (top-level) for inline
+    /// probes and unit tests that analyse a single synthetic body.
+    pub owner_body_id: BodyId,
+    /// The [`BodyId`] of this body's lexical parent, if any.  Drives the
+    /// `Param`-op reader's lookup into [`Self::global_seed`]: we read
+    /// from the parent's scope first (the seed entries produced by
+    /// [`extract_ssa_exit_state`] on the parent body), then fall back to
+    /// [`BodyId(0)`] to pick up JS/TS two-level re-keyed entries (see
+    /// [`filter_seed_to_toplevel`]).  `None` for the top-level body and
+    /// for probes with no surrounding scope.
+    pub parent_body_id: Option<BodyId>,
     /// Taint from enclosing/parent body scope, keyed by [`BindingKey`].
     /// Read-only fallback for `Param` ops representing captured or
     /// module-scope variables.  Used in multi-body analysis for lexical
     /// containment propagation (top-level → function → closure).
     pub global_seed: Option<&'a HashMap<BindingKey, VarTaint>>,
+    /// Per-call-site parameter seed for context-sensitive inline
+    /// analysis.  Indexed by callee's formal [`SsaOp::Param`] index: a
+    /// `Some(taint)` at index `i` seeds the callee's formal param `i`
+    /// with the caller's argument taint.  Out-of-range indices (e.g.
+    /// synthetic capture params emitted by scoped lowering) fall back
+    /// to [`Self::global_seed`].
+    pub param_seed: Option<&'a [Option<VarTaint>]>,
+    /// Per-call-site receiver seed for context-sensitive inline
+    /// analysis.  Mirrors [`Self::param_seed`] for [`SsaOp::SelfParam`]
+    /// reads — seeds the callee's implicit `this` / `self` slot with
+    /// the caller's method-receiver taint.
+    pub receiver_seed: Option<&'a VarTaint>,
     /// Per-SSA-value constant lattice from constant propagation.
     /// Used for SSA-level literal suppression at sinks.
     pub const_values: Option<&'a HashMap<SsaValue, crate::ssa::const_prop::ConstLattice>>,
@@ -476,15 +488,15 @@ pub fn run_ssa_taint(ssa: &SsaBody, cfg: &Cfg, transfer: &SsaTaintTransfer) -> V
 /// for seeding child bodies via `global_seed`.
 ///
 /// `owner_body_id` is the id of the body being summarised; it tags
-/// every key via [`BindingKey::with_body_id`] so that same-named
-/// bindings from different bodies do not silently alias when the
-/// seed is later merged (e.g. in the JS/TS two-level solve).
+/// every key via [`BindingKey::new`] so that same-named bindings from
+/// different bodies do not silently alias when the seed is later
+/// merged (e.g. in the JS/TS two-level solve).
 pub fn extract_ssa_exit_state(
     block_states: &[Option<SsaTaintState>],
     ssa: &SsaBody,
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
-    owner_body_id: u32,
+    owner_body_id: BodyId,
 ) -> HashMap<BindingKey, VarTaint> {
     // Compute exit states by replaying transfer on converged entry states
     let empty_induction = HashSet::new();
@@ -512,7 +524,7 @@ pub fn extract_ssa_exit_state(
             .get(val.0 as usize)
             .and_then(|vd| vd.var_name.as_deref());
         if let Some(name) = var_name {
-            let key = BindingKey::with_body_id(name, owner_body_id);
+            let key = BindingKey::new(name, owner_body_id);
             result
                 .entry(key)
                 .and_modify(|existing| {
@@ -571,18 +583,47 @@ pub fn join_seed_maps(
     result
 }
 
-/// Filter seed map to only include bindings in the given set.
+/// Filter a per-body exit seed map down to the top-level scope.
 ///
-/// Uses [`BindingKey::matches`] so that toplevel keys with `body_id=None`
-/// match seed entries regardless of their body_id.
+/// `toplevel` is the set of binding names that appear syntactically at
+/// the top level (always keyed with `BodyId(0)`).  Every matching entry
+/// in `seed` is kept but **re-keyed** to `BodyId(0)` so the resulting
+/// map is single-scope: same-name entries from different bodies merge
+/// via the normal OR-and-push-origins path in
+/// [`join_seed_maps`] instead of coexisting as distinct keys.
+///
+/// This is the one legitimate place where a binding's owning scope
+/// changes: the JS/TS two-level solve joins exit states from many
+/// sibling function bodies into a single `combined_exit`, and each
+/// sibling's surviving bindings conceptually belong to the top-level
+/// scope they all write into.  Every other writer in the pipeline
+/// preserves the owner's id.
 pub fn filter_seed_to_toplevel(
     seed: &HashMap<BindingKey, VarTaint>,
     toplevel: &HashSet<BindingKey>,
 ) -> HashMap<BindingKey, VarTaint> {
-    seed.iter()
-        .filter(|(key, _)| toplevel.iter().any(|tk| tk.matches(key)))
-        .map(|(key, taint)| (key.clone(), taint.clone()))
-        .collect()
+    let toplevel_names: HashSet<&str> = toplevel.iter().map(|k| k.name.as_str()).collect();
+    let mut out: HashMap<BindingKey, VarTaint> = HashMap::new();
+    for (key, taint) in seed.iter() {
+        if !toplevel_names.contains(key.name.as_str()) {
+            continue;
+        }
+        let rekeyed = BindingKey::new(key.name.clone(), BodyId(0));
+        out.entry(rekeyed)
+            .and_modify(|existing| {
+                existing.caps |= taint.caps;
+                for orig in &taint.origins {
+                    if existing.origins.len() < effective_max_origins()
+                        && !existing.origins.iter().any(|o| o.node == orig.node)
+                    {
+                        existing.origins.push(*orig);
+                    }
+                }
+                existing.uses_summary |= taint.uses_summary;
+            })
+            .or_insert_with(|| taint.clone());
+    }
+    out
 }
 
 // ── Loop Induction Variable Detection ────────────────────────────────────
@@ -1268,99 +1309,70 @@ fn inline_analyse_callee(
         }
     }
 
-    // Build per-parameter seed from actual argument taint.
-    // Map callee's Param var_name → caller's argument taint via BindingKey.
-    // Tag every entry with a synthetic callee-scoped body id so same-named
-    // formal parameters across different callees cannot silently alias
-    // should these seeds ever be merged or observed jointly.
-    let callee_body_id = callee_seed_body_id(&callee_key);
-    let mut param_seed: HashMap<BindingKey, VarTaint> = HashMap::new();
+    // Build per-call-site seed from actual argument taint, indexed by the
+    // callee's formal parameter position (not by name).  A caller with N
+    // arguments produces an N-entry `Vec<Option<VarTaint>>`; the callee's
+    // `Param { index }` read picks up slot `index` directly via
+    // `SsaTaintTransfer::param_seed`.  Receiver taint is carried on a
+    // separate channel (`SsaTaintTransfer::receiver_seed`) consumed by
+    // `SelfParam`.  Name-based keying is not needed here — the callee
+    // analysis is scoped to this one call site and cannot merge with
+    // another callee's param seed.
 
-    for block in &callee_body.ssa.blocks {
-        for inst in block.phis.iter().chain(block.body.iter()) {
-            // Seed caps for positional params and for the receiver (SelfParam)
-            // via separate channels — args[i] ↔ Param{index=i}, receiver ↔ SelfParam.
-            let source_values: Option<&SmallVec<[SsaValue; 2]>> = match &inst.op {
-                SsaOp::Param { index } => args.get(*index),
-                SsaOp::SelfParam => {
-                    // receiver is a single optional SsaValue — wrap for uniform iteration.
-                    // We match it in a separate branch below since it isn't a slice.
-                    None
-                }
-                _ => continue,
-            };
-            let Some(var_name) = inst.var_name.as_ref() else {
-                continue;
-            };
-            let mut combined_caps = Cap::empty();
-            let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
-
-            // Cross-file note: `populate_span` lazily fills
-            // `source_span` from the *caller's* CFG before the origin
-            // crosses into the callee.  The Param-op branch of
-            // `transfer_inst` remaps `node` to the callee's own
-            // `cfg_node` and preserves only `source_span`, so without
-            // this pre-fill cross-file inline would lose the caller's
-            // source line entirely (finding emission in `ast.rs` uses
-            // `source_span` first, falls back to indexing the caller's
-            // CFG at `node` — which is now the callee's NodeIndex and
-            // resolves to a wrong or missing span).  Intra-file inline
-            // also benefits: the caller-scoped anchor stays canonical.
-            let populate_span = |mut o: TaintOrigin| -> TaintOrigin {
-                if o.source_span.is_none() {
-                    if let Some(info) = cfg.node_weight(o.node) {
-                        o.source_span = Some(info.classification_span());
-                    }
-                }
-                o
-            };
-
-            match &inst.op {
-                SsaOp::Param { .. } => {
-                    if let Some(arg_vals) = source_values {
-                        for v in arg_vals {
-                            if let Some(taint) = state.get(*v) {
-                                combined_caps |= taint.caps;
-                                for orig in &taint.origins {
-                                    if combined_origins.len() < effective_max_origins()
-                                        && !combined_origins.iter().any(|o| o.node == orig.node)
-                                    {
-                                        combined_origins.push(populate_span(*orig));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                SsaOp::SelfParam => {
-                    if let Some(rv) = receiver {
-                        if let Some(taint) = state.get(*rv) {
-                            combined_caps |= taint.caps;
-                            for orig in &taint.origins {
-                                if combined_origins.len() < effective_max_origins()
-                                    && !combined_origins.iter().any(|o| o.node == orig.node)
-                                {
-                                    combined_origins.push(populate_span(*orig));
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => unreachable!(),
-            }
-
-            if !combined_caps.is_empty() {
-                param_seed.insert(
-                    BindingKey::with_body_id(var_name.as_str(), callee_body_id),
-                    VarTaint {
-                        caps: combined_caps,
-                        origins: combined_origins,
-                        uses_summary: false,
-                    },
-                );
+    // Cross-file note: `populate_span` lazily fills `source_span` from
+    // the *caller's* CFG before the origin crosses into the callee.  The
+    // Param-op branch of `transfer_inst` remaps `node` to the callee's
+    // own `cfg_node` and preserves only `source_span`, so without this
+    // pre-fill cross-file inline would lose the caller's source line
+    // entirely (finding emission in `ast.rs` uses `source_span` first,
+    // falls back to indexing the caller's CFG at `node` — which is now
+    // the callee's NodeIndex and resolves to a wrong or missing span).
+    let populate_span = |mut o: TaintOrigin| -> TaintOrigin {
+        if o.source_span.is_none() {
+            if let Some(info) = cfg.node_weight(o.node) {
+                o.source_span = Some(info.classification_span());
             }
         }
-    }
+        o
+    };
+    let combine_taint = |arg_vals: &SmallVec<[SsaValue; 2]>| -> Option<VarTaint> {
+        let mut combined_caps = Cap::empty();
+        let mut combined_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
+        for v in arg_vals {
+            if let Some(taint) = state.get(*v) {
+                combined_caps |= taint.caps;
+                for orig in &taint.origins {
+                    if combined_origins.len() < effective_max_origins()
+                        && !combined_origins.iter().any(|o| o.node == orig.node)
+                    {
+                        combined_origins.push(populate_span(*orig));
+                    }
+                }
+            }
+        }
+        if combined_caps.is_empty() {
+            None
+        } else {
+            Some(VarTaint {
+                caps: combined_caps,
+                origins: combined_origins,
+                uses_summary: false,
+            })
+        }
+    };
+
+    let param_seed: Vec<Option<VarTaint>> = args.iter().map(combine_taint).collect();
+    let receiver_seed: Option<VarTaint> = receiver.and_then(|rv| {
+        state.get(rv).map(|taint| VarTaint {
+            caps: taint.caps,
+            origins: taint
+                .origins
+                .iter()
+                .map(|o| populate_span(*o))
+                .collect(),
+            uses_summary: false,
+        })
+    });
 
     // Detect callback arguments: when a call argument refers to a known function
     // name (resolvable to a FuncKey in the local summaries index), record the
@@ -1410,15 +1422,15 @@ fn inline_analyse_callee(
         }
     }
 
-    let seed_ref = if param_seed.is_empty() {
-        None
-    } else {
-        Some(&param_seed)
-    };
     let cb_ref = if callback_bindings.is_empty() {
         None
     } else {
         Some(&callback_bindings)
+    };
+    let param_seed_slice: Option<&[Option<VarTaint>]> = if param_seed.is_empty() {
+        None
+    } else {
+        Some(param_seed.as_slice())
     };
     let child_transfer = SsaTaintTransfer {
         lang: transfer.lang,
@@ -1427,7 +1439,11 @@ fn inline_analyse_callee(
         local_summaries: transfer.local_summaries,
         global_summaries: transfer.global_summaries,
         interop_edges: transfer.interop_edges,
-        global_seed: seed_ref,
+        owner_body_id: BodyId(0),
+        parent_body_id: None,
+        global_seed: None,
+        param_seed: param_seed_slice,
+        receiver_seed: receiver_seed.as_ref(),
         const_values: Some(&callee_body.opt.const_values),
         type_facts: Some(&callee_body.opt.type_facts),
         ssa_summaries: transfer.ssa_summaries,
@@ -2844,43 +2860,102 @@ pub(super) fn transfer_inst(
         }
 
         SsaOp::Param { .. } | SsaOp::SelfParam => {
-            // Seed from enclosing/parent body scope (multi-body analysis).
-            // Look up via BindingKey (name-based, interner-independent).
+            // Seeding order for inbound taint on this body's param:
+            //   1. Per-call-site seed (inline analysis only).
+            //      `param_seed[index]` for `Param { index }`, or
+            //      `receiver_seed` for `SelfParam`.  Takes precedence
+            //      because it reflects the exact caller argument taint
+            //      for this specific call.
+            //   2. Lexical-scope seed (`global_seed`), read in ancestor
+            //      order: parent body first, then the top-level scope
+            //      (`BodyId(0)`) to pick up re-keyed JS/TS combined_exit
+            //      entries (see `filter_seed_to_toplevel`).
             //
             // `SelfParam` receives the same treatment as positional `Param`:
             // both represent inbound values whose taint comes from the
-            // surrounding scope via the global seed map.
+            // surrounding scope.
             let mut seeded_from_scope = false;
-            if let Some(seed) = &transfer.global_seed {
-                if let Some(var_name) = ssa
-                    .value_defs
-                    .get(inst.value.0 as usize)
-                    .and_then(|vd| vd.var_name.as_deref())
-                {
-                    let key = BindingKey::new(var_name);
-                    if let Some(taint) = seed_lookup(seed, &key) {
-                        // Remap origins to this body's Param cfg_node:
-                        // the meaningful anchor where taint enters this body.
-                        // Preserve source_span from the original origin for
-                        // diagnostics (captured in extract_ssa_exit_state).
-                        let remapped_origins: SmallVec<[TaintOrigin; 2]> = taint
-                            .origins
-                            .iter()
-                            .map(|o| TaintOrigin {
-                                node: inst.cfg_node,
-                                source_kind: o.source_kind,
-                                source_span: o.source_span,
-                            })
-                            .collect();
-                        state.set(
-                            inst.value,
-                            VarTaint {
-                                caps: taint.caps,
-                                origins: remapped_origins,
-                                uses_summary: true,
-                            },
-                        );
-                        seeded_from_scope = true;
+
+            // Step 1: per-call-site seed for inline analysis.
+            let per_call_taint: Option<&VarTaint> = match &inst.op {
+                SsaOp::Param { index } => transfer
+                    .param_seed
+                    .and_then(|ps| ps.get(*index))
+                    .and_then(|slot| slot.as_ref()),
+                SsaOp::SelfParam => transfer.receiver_seed,
+                _ => None,
+            };
+            if let Some(taint) = per_call_taint {
+                let remapped_origins: SmallVec<[TaintOrigin; 2]> = taint
+                    .origins
+                    .iter()
+                    .map(|o| TaintOrigin {
+                        node: inst.cfg_node,
+                        source_kind: o.source_kind,
+                        source_span: o.source_span,
+                    })
+                    .collect();
+                state.set(
+                    inst.value,
+                    VarTaint {
+                        caps: taint.caps,
+                        origins: remapped_origins,
+                        uses_summary: true,
+                    },
+                );
+                seeded_from_scope = true;
+            }
+
+            // Step 2: lexical-scope seed via ancestor-chain lookup.
+            if !seeded_from_scope {
+                if let Some(seed) = &transfer.global_seed {
+                    if let Some(var_name) = ssa
+                        .value_defs
+                        .get(inst.value.0 as usize)
+                        .and_then(|vd| vd.var_name.as_deref())
+                    {
+                        // Ancestor chain: parent body first (for direct
+                        // lexical captures), then BodyId(0) (for JS/TS
+                        // pass-2 re-keyed entries).  Deduplicated so a
+                        // body whose parent is already the top-level
+                        // only looks up once.
+                        let mut ancestors: SmallVec<[BodyId; 2]> = SmallVec::new();
+                        if let Some(pid) = transfer.parent_body_id {
+                            ancestors.push(pid);
+                        }
+                        if !ancestors.contains(&BodyId(0)) {
+                            ancestors.push(BodyId(0));
+                        }
+
+                        for body_id in ancestors {
+                            let key = BindingKey::new(var_name, body_id);
+                            if let Some(taint) = seed_lookup(seed, &key) {
+                                // Remap origins to this body's Param cfg_node:
+                                // the meaningful anchor where taint enters
+                                // this body.  Preserve source_span for
+                                // diagnostics (captured in
+                                // extract_ssa_exit_state).
+                                let remapped_origins: SmallVec<[TaintOrigin; 2]> = taint
+                                    .origins
+                                    .iter()
+                                    .map(|o| TaintOrigin {
+                                        node: inst.cfg_node,
+                                        source_kind: o.source_kind,
+                                        source_span: o.source_span,
+                                    })
+                                    .collect();
+                                state.set(
+                                    inst.value,
+                                    VarTaint {
+                                        caps: taint.caps,
+                                        origins: remapped_origins,
+                                        uses_summary: true,
+                                    },
+                                );
+                                seeded_from_scope = true;
+                                break;
+                            }
+                        }
                     }
                 }
             }
