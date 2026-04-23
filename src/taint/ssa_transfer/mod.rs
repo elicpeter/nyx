@@ -2303,12 +2303,7 @@ pub(super) fn transfer_inst(
                 // UNAUTHORIZED_ID to preserve existing return-only semantics
                 // for every other cap.
                 if sanitizer_bits.contains(Cap::UNAUTHORIZED_ID) {
-                    strip_cap_from_call_args(
-                        args,
-                        receiver,
-                        state,
-                        Cap::UNAUTHORIZED_ID,
-                    );
+                    strip_cap_from_call_args(args, receiver, state, Cap::UNAUTHORIZED_ID);
                 }
             } else if !resolved_callee {
                 // Container operation propagation (push/pop/get/set/etc.)
