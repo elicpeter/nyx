@@ -1547,6 +1547,13 @@ pub(crate) fn scan_filesystem_with_observer(
                                 local_gs.insert_body(key, body);
                             }
 
+                            // Insert per-function auth-check summaries so
+                            // pass 2's `run_auth_analysis` can lift helpers
+                            // defined in other files.
+                            for (key, auth_sum) in r.auth_summaries {
+                                local_gs.insert_auth(key, auth_sum);
+                            }
+
                             // Record language for progress
                             if let Some(p) = progress {
                                 if let Some(ref lang) = first_lang {
@@ -1600,9 +1607,10 @@ pub(crate) fn scan_filesystem_with_observer(
     if let Some(l) = logs {
         l.info(
             format!(
-                "Pass 1 complete in {}ms ({} cross-file SSA bodies)",
+                "Pass 1 complete in {}ms ({} cross-file SSA bodies, {} auth summaries)",
                 pass1_start.elapsed().as_millis(),
-                global_summaries.bodies_len()
+                global_summaries.bodies_len(),
+                global_summaries.auth_len(),
             ),
             None,
         );
@@ -1924,7 +1932,7 @@ pub fn scan_with_index_parallel_observer(
                                 )
                             },
                         ) {
-                            Ok((func_sums, ssa_sums, ssa_bodies)) => {
+                            Ok((func_sums, ssa_sums, ssa_bodies, auth_sums)) => {
                                 if let Some(p) = &progress_ref {
                                     p.inc_parsed(1);
                                     if let Some(lang) = func_sums.first().map(|s| s.lang.as_str()) {
@@ -1990,6 +1998,35 @@ pub fn scan_with_index_parallel_observer(
                                             format!("SSA bodies {}: {e}", path.display()),
                                         );
                                     }
+                                }
+                                // Persist per-function auth-check summaries.
+                                // Empty-lifts are skipped; an empty input
+                                // list still clears any stale entry for
+                                // this file so a helper that lost its
+                                // ownership check no longer leaks lifts
+                                // into subsequent pass-2 runs.
+                                let auth_rows: Vec<_> = auth_sums
+                                    .into_iter()
+                                    .map(|(key, sum)| {
+                                        (
+                                            key.name,
+                                            key.arity.unwrap_or(0),
+                                            key.lang.as_str().to_string(),
+                                            key.namespace,
+                                            key.container,
+                                            key.disambig,
+                                            key.kind,
+                                            sum,
+                                        )
+                                    })
+                                    .collect();
+                                if let Err(e) =
+                                    idx.replace_auth_summaries_for_file(path, &hash, &auth_rows)
+                                {
+                                    record_persist_error(
+                                        &persist_errors_ref,
+                                        format!("auth summaries {}: {e}", path.display()),
+                                    );
                                 }
                             }
                             Err(e) => {
@@ -2129,6 +2166,51 @@ pub fn scan_with_index_parallel_observer(
             0
         };
 
+        // Load per-function auth-check summaries so pass 2's
+        // `run_auth_analysis` can lift helpers defined in other files.
+        let auth_rows = idx.load_all_auth_summaries()?;
+        let auth_count = auth_rows.len();
+        if !auth_rows.is_empty() {
+            tracing::info!(
+                auth_summaries = auth_rows.len(),
+                "loaded auth summaries from DB"
+            );
+            for (
+                file_path,
+                name,
+                lang_str,
+                arity,
+                namespace,
+                container,
+                disambig,
+                kind,
+                auth_sum,
+            ) in auth_rows
+            {
+                let lang =
+                    crate::symbol::Lang::from_slug(&lang_str).unwrap_or(crate::symbol::Lang::Rust);
+                let ns = if namespace.is_empty() {
+                    crate::symbol::normalize_namespace(&file_path, Some(&root_str))
+                } else {
+                    namespace
+                };
+                let key = crate::symbol::FuncKey {
+                    lang,
+                    namespace: ns,
+                    container,
+                    name,
+                    arity: if arity >= 0 {
+                        Some(arity as usize)
+                    } else {
+                        None
+                    },
+                    disambig,
+                    kind,
+                };
+                gs.insert_auth(key, auth_sum);
+            }
+        }
+
         // Same observability as the non-indexed scan path so callers
         // see a uniform "cross-file bodies available" signal regardless
         // of which scan path populated GlobalSummaries.
@@ -2139,10 +2221,11 @@ pub fn scan_with_index_parallel_observer(
         if let Some(l) = logs {
             l.info(
                 format!(
-                    "Loaded {} coarse summaries, {} SSA summaries, {} SSA bodies from DB",
+                    "Loaded {} coarse summaries, {} SSA summaries, {} SSA bodies, {} auth summaries from DB",
                     gs.snapshot_caps().len(),
                     ssa_count,
-                    body_count
+                    body_count,
+                    auth_count,
                 ),
                 None,
             );

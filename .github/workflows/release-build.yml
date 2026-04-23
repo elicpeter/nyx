@@ -29,7 +29,7 @@ jobs:
 
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -92,7 +92,7 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "ASSET=$Archive"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: dist/${{ env.ASSET }}
@@ -110,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -167,10 +167,23 @@ jobs:
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+
+      # Generate the SBOM from the source tree BEFORE downloading
+      # artifacts. Syft scans `path: .` recursively; if release-artifacts/
+      # exists at scan time, it would walk into the zipped binaries and
+      # produce a polluted manifest.
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: nyx-${{ github.event.release.tag_name }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           pattern: release-*
@@ -210,37 +223,25 @@ jobs:
         run: |
           echo "::warning::GPG_PRIVATE_KEY secret not configured; SHA256SUMS will ship unsigned. Add GPG_PRIVATE_KEY (ASCII-armored) and optional GPG_PASSPHRASE to repository secrets to enable signed checksums."
 
-      # Generate a CycloneDX SBOM from the source tree (Syft reads
-      # Cargo.lock to enumerate the full transitive dependency graph).
-      # Scoped to the publish job so it runs once, not per matrix target.
-      - name: Generate CycloneDX SBOM
-        uses: anchore/sbom-action@v0
-        with:
-          path: .
-          format: cyclonedx-json
-          output-file: release-artifacts/nyx-${{ github.event.release.tag_name }}.cdx.json
-          upload-artifact: false
-          upload-release-assets: false
-
       # SLSA v1 build provenance: signed attestation that these exact
       # bytes were produced by this workflow run from this commit.
       # Attestations are stored in the GitHub attestations API and can
       # be verified with `gh attestation verify <file> --repo <repo>`.
       - name: Generate SLSA build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             release-artifacts/*.zip
             release-artifacts/SHA256SUMS
-            release-artifacts/nyx-${{ github.event.release.tag_name }}.cdx.json
+            nyx-${{ github.event.release.tag_name }}.cdx.json
 
       - name: Upload to the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release-artifacts/*.zip
             release-artifacts/SHA256SUMS
             release-artifacts/SHA256SUMS.asc
-            release-artifacts/nyx-*.cdx.json
+            nyx-${{ github.event.release.tag_name }}.cdx.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

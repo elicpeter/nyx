@@ -8,6 +8,8 @@ use crate::commands::scan::Diag;
 use crate::evidence::{Confidence, Evidence, SpanEvidence};
 use crate::patterns::FindingCategory;
 use crate::ssa::type_facts::TypeKind;
+use crate::summary::GlobalSummaries;
+use crate::symbol::{FuncKey, Lang, normalize_namespace};
 use crate::utils::Config;
 use std::collections::HashMap;
 use std::path::Path;
@@ -34,6 +36,8 @@ pub fn run_auth_analysis(
     file_path: &Path,
     cfg: &Config,
     var_types: Option<&VarTypes>,
+    global_summaries: Option<&GlobalSummaries>,
+    scan_root: Option<&Path>,
 ) -> Vec<Diag> {
     let rules = config::build_auth_rules(cfg, lang);
     if !rules.enabled {
@@ -59,9 +63,10 @@ pub fn run_auth_analysis(
     // Lift per-function auth-check summaries and synthesise call-site
     // `AuthCheck`s in callers, so a handler that delegates to a helper
     // which internally validates ownership is recognised as
-    // auth-checked.  Single-file scope: only units present in this
-    // model are considered; cross-file lifting is future work.
-    apply_helper_lifting(&mut model);
+    // auth-checked.  Iterated to a small fixpoint so transitive helper
+    // chains are also covered; consults `global_summaries.auth_by_key`
+    // (when provided) for cross-file helpers that live in other files.
+    apply_helper_lifting(&mut model, lang, file_path, scan_root, global_summaries);
 
     if model.routes.is_empty() && model.units.is_empty() {
         return Vec::new();
@@ -71,6 +76,122 @@ pub fn run_auth_analysis(
         .into_iter()
         .map(|finding| auth_finding_to_diag(&finding, tree, file_path))
         .collect()
+}
+
+/// Build per-function [`model::AuthCheckSummary`] entries for every
+/// unit in `model`, keyed by a canonical [`FuncKey`] derived from the
+/// enclosing file's path and the unit's leaf name + arity.
+///
+/// Used by pass 1 to persist per-file auth summaries for cross-file
+/// helper lifting.  Only returns summaries for units whose body
+/// already proves at least one positional parameter under ownership /
+/// membership / admin / authorization check — i.e. the exact
+/// single-file lift set, so the cross-file variant does not widen what
+/// counts as a helper.
+pub fn extract_auth_summaries_by_key(
+    tree: &Tree,
+    source: &[u8],
+    lang: &str,
+    file_path: &Path,
+    cfg: &Config,
+    scan_root: Option<&Path>,
+) -> Vec<(FuncKey, model::AuthCheckSummary)> {
+    let rules = config::build_auth_rules(cfg, lang);
+    if !rules.enabled {
+        return Vec::new();
+    }
+    let model = extract::extract_authorization_model(
+        lang,
+        cfg.framework_ctx.as_ref(),
+        tree,
+        source,
+        file_path,
+        &rules,
+    );
+    summaries_keyed_by_func(&model, lang, file_path, scan_root)
+}
+
+/// Convert an already-built [`model::AuthorizationModel`] into a
+/// canonical `(FuncKey, AuthCheckSummary)` list suitable for
+/// persistence.  Shares the per-unit summary-building logic with
+/// [`build_helper_summaries`] so single-file and cross-file lifts
+/// accept the exact same set of helpers.
+fn summaries_keyed_by_func(
+    model: &model::AuthorizationModel,
+    lang: &str,
+    file_path: &Path,
+    scan_root: Option<&Path>,
+) -> Vec<(FuncKey, model::AuthCheckSummary)> {
+    let Some(lang_enum) = Lang::from_slug(lang) else {
+        return Vec::new();
+    };
+    let path_str = file_path.to_string_lossy();
+    let root_str = scan_root.map(|r| r.to_string_lossy().into_owned());
+    let namespace = normalize_namespace(&path_str, root_str.as_deref());
+
+    let mut out = Vec::new();
+    for unit in &model.units {
+        let Some(name) = unit.name.as_deref() else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let Some(summary) = build_unit_summary(unit) else {
+            continue;
+        };
+        let leaf = name.rsplit('.').next().unwrap_or(name).to_string();
+        let key = FuncKey {
+            lang: lang_enum,
+            namespace: namespace.clone(),
+            container: String::new(),
+            name: leaf,
+            arity: Some(unit.params.len()),
+            disambig: None,
+            kind: crate::symbol::FuncKind::Function,
+        };
+        out.push((key, summary));
+    }
+    out
+}
+
+/// Build an [`model::AuthCheckSummary`] for a single
+/// [`model::AnalysisUnit`].  Returns `None` when the unit produces no
+/// usable param → auth-kind mapping, so callers can cheaply skip
+/// persisting empty entries.
+fn build_unit_summary(unit: &model::AnalysisUnit) -> Option<model::AuthCheckSummary> {
+    use model::{AuthCheckKind, AuthCheckSummary};
+    if unit.params.is_empty() {
+        return None;
+    }
+    let mut summary = AuthCheckSummary::default();
+    for check in &unit.auth_checks {
+        if matches!(
+            check.kind,
+            AuthCheckKind::LoginGuard | AuthCheckKind::TokenExpiry | AuthCheckKind::TokenRecipient
+        ) {
+            continue;
+        }
+        for subject in &check.subjects {
+            let Some(candidate) = subject_lift_key(subject) else {
+                continue;
+            };
+            if let Some(idx) = unit.params.iter().position(|p| p == &candidate) {
+                summary
+                    .param_auth_kinds
+                    .entry(idx)
+                    .and_modify(|existing| {
+                        *existing = stronger_check_kind(*existing, check.kind);
+                    })
+                    .or_insert(check.kind);
+            }
+        }
+    }
+    if summary.param_auth_kinds.is_empty() {
+        None
+    } else {
+        Some(summary)
+    }
 }
 
 /// Walk every `SensitiveOperation` in the model and, when the call's
@@ -143,13 +264,32 @@ fn sink_class_for_type(
 /// caller's value-refs from the corresponding positional argument.
 /// `auth_check_covers_subject` then matches them against downstream
 /// sensitive operations exactly like a real prior auth check.
-fn apply_helper_lifting(model: &mut model::AuthorizationModel) {
+///
+/// When `global_summaries` is `Some`, cross-file helpers are looked up
+/// via [`GlobalSummaries::get_auth`] after the same-file summary
+/// gather — this recovers the handler-in-file-A calling
+/// `require_owner`-in-file-B case that single-file lifting cannot see.
+fn apply_helper_lifting(
+    model: &mut model::AuthorizationModel,
+    lang: &str,
+    file_path: &Path,
+    scan_root: Option<&Path>,
+    global_summaries: Option<&GlobalSummaries>,
+) {
     use std::collections::HashSet;
+
+    let caller_lang = Lang::from_slug(lang);
+    let path_str = file_path.to_string_lossy();
+    let root_str = scan_root.map(|r| r.to_string_lossy().into_owned());
+    let caller_namespace = normalize_namespace(&path_str, root_str.as_deref());
 
     const MAX_ROUNDS: usize = 4;
     for _ in 0..MAX_ROUNDS {
         let summaries = build_helper_summaries(model);
-        if summaries.is_empty() {
+        let have_same_file = !summaries.is_empty();
+        let have_cross_file =
+            global_summaries.is_some_and(|gs| gs.auth_by_key().is_some()) && caller_lang.is_some();
+        if !have_same_file && !have_cross_file {
             return;
         }
         let mut added = false;
@@ -161,7 +301,21 @@ fn apply_helper_lifting(model: &mut model::AuthorizationModel) {
             .units
             .iter()
             .enumerate()
-            .map(|(idx, unit)| (idx, synthesise_checks_for_unit(unit, &summaries)))
+            .map(|(idx, unit)| {
+                let mut out = synthesise_checks_for_unit(unit, &summaries);
+                if have_cross_file
+                    && let (Some(gs), Some(lang_enum)) = (global_summaries, caller_lang)
+                {
+                    out.extend(synthesise_cross_file_checks_for_unit(
+                        unit,
+                        &summaries,
+                        gs,
+                        lang_enum,
+                        &caller_namespace,
+                    ));
+                }
+                (idx, out)
+            })
             .collect();
         let mut existing_keys_per_unit: Vec<HashSet<((usize, usize), model::AuthCheckKind)>> =
             model
@@ -364,6 +518,84 @@ fn call_site_line(unit: &model::AnalysisUnit, call: &model::CallSite) -> Option<
         }
     }
     None
+}
+
+/// Cross-file variant of [`synthesise_checks_for_unit`] — for each
+/// call site in `unit`, resolve the callee against `GlobalSummaries`
+/// and look up an `AuthCheckSummary` that was persisted by some other
+/// file's pass-1 extraction.  Skips call sites already handled by the
+/// single-file map (`same_file_summaries`) so we do not double-lift
+/// the same call.
+///
+/// The synthesised check carries the same shape as the single-file
+/// version: subjects come from `call.args_value_refs[K]` at each
+/// auth-checked param position K, effective kind is the strongest
+/// check kind across those positions, and the `(lifted cross-file
+/// <name>)` callee string distinguishes cross-file lifts in
+/// diagnostics.
+fn synthesise_cross_file_checks_for_unit(
+    unit: &model::AnalysisUnit,
+    same_file_summaries: &std::collections::HashMap<String, model::AuthCheckSummary>,
+    gs: &GlobalSummaries,
+    caller_lang: Lang,
+    caller_namespace: &str,
+) -> Vec<model::AuthCheck> {
+    let mut out = Vec::new();
+    for call in &unit.call_sites {
+        let last = call.name.rsplit('.').next().unwrap_or(&call.name);
+        if unit.name.as_deref() == Some(last) {
+            continue;
+        }
+        // Skip if the single-file map already handled this callee —
+        // that path has richer same-file context (existing
+        // summaries from sibling units in this model) and its
+        // synthesised check is strictly more precise.
+        if same_file_summaries.contains_key(last) {
+            continue;
+        }
+
+        let arity_hint = Some(call.args.len());
+        let key = match gs.resolve_callee_key(last, caller_lang, caller_namespace, arity_hint) {
+            crate::summary::CalleeResolution::Resolved(key) => key,
+            _ => continue,
+        };
+        // Auth summaries are persisted with a canonical key:
+        // `disambig=None`, `container=""`, `kind=Function`.  Normalise
+        // the resolver's key to that canonical shape before looking up
+        // so a byte-offset or DFS-index `disambig` on the resolved key
+        // doesn't cause a trivial miss.
+        let mut canonical = key.clone();
+        canonical.disambig = None;
+        canonical.container = String::new();
+        canonical.kind = crate::symbol::FuncKind::Function;
+        let Some(summary) = gs.get_auth(&canonical) else {
+            continue;
+        };
+
+        let mut subjects: Vec<model::ValueRef> = Vec::new();
+        let mut effective_kind = model::AuthCheckKind::Other;
+        for (param_idx, kind) in &summary.param_auth_kinds {
+            let Some(arg_refs) = call.args_value_refs.get(*param_idx) else {
+                continue;
+            };
+            subjects.extend(arg_refs.iter().cloned());
+            effective_kind = stronger_check_kind(effective_kind, *kind);
+        }
+        if subjects.is_empty() {
+            continue;
+        }
+        let line = call_site_line(unit, call).unwrap_or(unit.line);
+        out.push(model::AuthCheck {
+            kind: effective_kind,
+            callee: format!("(lifted cross-file {})", call.name),
+            subjects,
+            span: call.span,
+            line,
+            args: call.args.clone(),
+            condition_text: None,
+        });
+    }
+    out
 }
 
 fn auth_finding_to_diag(finding: &checks::AuthFinding, tree: &Tree, file_path: &Path) -> Diag {

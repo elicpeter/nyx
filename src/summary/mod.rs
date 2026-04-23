@@ -289,14 +289,15 @@ where
 ///   This is essential for chains like `let y = transform(tainted_x); sink(y);`.
 ///   The legacy boolean `propagates_taint` is kept for deserialising old JSON.
 ///
-/// * **`callees`** are recorded for future call‑graph construction
-///   (topological analysis, approach 2) but are not used in pass‑1/pass‑2
-///   taint resolution yet.
+/// * **`callees`** drive call‑graph construction in `callgraph.rs`, which
+///   yields the topological order and SCC batches used between pass 1 and
+///   pass 2 (see `scan::run_topo_batches` and `scc_file_batches_with_metadata`).
 ///
 /// * **`tainted_sink_params`** marks which parameter *positions* flow to
-///   internal sinks.  Today the taint engine treats the whole call as a
-///   single "tainted or not" question; this field future‑proofs the summary
-///   for per‑argument precision.
+///   internal sinks and is consumed by SSA callee resolution
+///   (`ssa_transfer::mod.rs` `resolve_callee`) to build the per-parameter
+///   `param_to_sink` list, so caller-side sink propagation fires on the
+///   specific argument positions rather than the whole call.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FuncSummary {
     /// Function name as it appears in the source (`my_func`, not the full path).
@@ -555,6 +556,12 @@ pub struct GlobalSummaries {
     /// Cross-file callee bodies for interprocedural symbolic execution.
     /// Keyed by `FuncKey` (same identity model as SSA summaries).
     bodies_by_key: HashMap<FuncKey, crate::taint::ssa_transfer::CalleeSsaBody>,
+    /// Per-function auth-check summaries for cross-file helper lifting.
+    /// Keyed by `FuncKey` so a call-site resolver can go from a resolved
+    /// callee name to the helper's auth-check signature.  Populated in
+    /// pass 1 and consumed by
+    /// [`crate::auth_analysis::run_auth_analysis`] during pass 2.
+    auth_by_key: HashMap<FuncKey, crate::auth_analysis::model::AuthCheckSummary>,
 }
 
 impl GlobalSummaries {
@@ -847,6 +854,10 @@ impl GlobalSummaries {
         for (key, body) in other.bodies_by_key {
             self.bodies_by_key.insert(key, body);
         }
+        // Auth summaries: last-writer-wins (exact-key replacement)
+        for (key, auth_sum) in other.auth_by_key {
+            self.auth_by_key.insert(key, auth_sum);
+        }
     }
 
     /// Insert an SSA summary.
@@ -870,6 +881,46 @@ impl GlobalSummaries {
     /// Exact lookup of an SSA summary by fully-qualified key.
     pub fn get_ssa(&self, key: &FuncKey) -> Option<&SsaFuncSummary> {
         self.ssa_by_key.get(key)
+    }
+
+    /// Insert an `AuthCheckSummary` for cross-file helper lifting.
+    ///
+    /// Last-writer-wins: re-analysing a file produces a fresh summary
+    /// that fully replaces any earlier entry.  No compatibility
+    /// reconciliation is needed because `AuthCheckSummary` carries no
+    /// identity-sensitive signal beyond the key itself.
+    pub fn insert_auth(
+        &mut self,
+        key: FuncKey,
+        summary: crate::auth_analysis::model::AuthCheckSummary,
+    ) {
+        self.auth_by_key.insert(key, summary);
+    }
+
+    /// Exact lookup of an `AuthCheckSummary` by fully-qualified key.
+    pub fn get_auth(
+        &self,
+        key: &FuncKey,
+    ) -> Option<&crate::auth_analysis::model::AuthCheckSummary> {
+        self.auth_by_key.get(key)
+    }
+
+    /// Direct access to the auth-summary map.  `None` when empty so
+    /// callers can distinguish "no cross-file auth summaries loaded"
+    /// from "some were loaded but none matched the call site".
+    pub fn auth_by_key(
+        &self,
+    ) -> Option<&HashMap<FuncKey, crate::auth_analysis::model::AuthCheckSummary>> {
+        if self.auth_by_key.is_empty() {
+            None
+        } else {
+            Some(&self.auth_by_key)
+        }
+    }
+
+    /// Count of cross-file auth summaries currently loaded.
+    pub fn auth_len(&self) -> usize {
+        self.auth_by_key.len()
     }
 
     /// Insert a cross-file callee body.
@@ -931,7 +982,7 @@ impl GlobalSummaries {
 
     #[allow(dead_code)] // used by tests and future call-graph consumers
     pub fn is_empty(&self) -> bool {
-        self.by_key.is_empty() && self.ssa_by_key.is_empty()
+        self.by_key.is_empty() && self.ssa_by_key.is_empty() && self.auth_by_key.is_empty()
     }
 
     /// Iterate over all (key, summary) pairs.
@@ -1320,6 +1371,7 @@ impl std::fmt::Debug for GlobalSummaries {
             .field("len", &self.by_key.len())
             .field("ssa_len", &self.ssa_by_key.len())
             .field("bodies_len", &self.bodies_by_key.len())
+            .field("auth_len", &self.auth_by_key.len())
             .finish()
     }
 }

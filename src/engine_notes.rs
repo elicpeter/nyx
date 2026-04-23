@@ -292,6 +292,17 @@ pub enum EngineNote {
     /// re-attribution helps explain why origin locations move between
     /// runs that share a body signature.
     InlineCacheReused,
+    /// Points-to analysis dropped heap object members when an
+    /// intra-procedural points-to set exceeded
+    /// `analysis.engine.max_pointsto` (default 32).
+    /// Direction: [`LossDirection::UnderReport`] — stores and loads
+    /// that flow through the truncated set miss the dropped abstract
+    /// heap objects, so any taint into those objects via this alias
+    /// path will not reach downstream sinks.  Other aliasing paths to
+    /// the same objects still propagate normally, so the counter is a
+    /// strict lower bound on under-reporting.  Raise `max_pointsto`
+    /// if operators observe this note on factory-heavy codebases.
+    PointsToTruncated { dropped: u32 },
 }
 
 impl EngineNote {
@@ -320,6 +331,7 @@ impl EngineNote {
             EngineNote::PredicateStateWidened => LossDirection::OverReport,
             EngineNote::PathEnvCapped => LossDirection::OverReport,
             EngineNote::InlineCacheReused => LossDirection::Informational,
+            EngineNote::PointsToTruncated { .. } => LossDirection::UnderReport,
         }
     }
 
@@ -420,6 +432,10 @@ mod tests {
                 reason: CapHitReason::Unknown,
             }
             .direction(),
+            LossDirection::UnderReport
+        );
+        assert_eq!(
+            EngineNote::PointsToTruncated { dropped: 1 }.direction(),
             LossDirection::UnderReport
         );
 

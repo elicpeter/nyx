@@ -715,6 +715,27 @@ fn transitive_helper_is_clean() {
 }
 
 #[test]
+fn cross_file_helper_is_clean() {
+    // `require_owner(&user, &row)` is declared in
+    // `cross_file_helper_authz.rs` and called from
+    // `cross_file_helper_handler.rs`. Cross-file helper-summary
+    // lifting must synthesise an AuthCheck at the handler's call
+    // site covering `row`, so the downstream `db.update(..)` must
+    // NOT flag as `rs.auth.missing_ownership_check`.
+    assert_absent(
+        "cross_file_helper_handler.rs",
+        "rs.auth.missing_ownership_check",
+    );
+    // The helper itself is a free function returning `Result<(), ()>`;
+    // it performs no sensitive operation and should produce no auth
+    // findings.
+    assert_absent(
+        "cross_file_helper_authz.rs",
+        "rs.auth.missing_ownership_check",
+    );
+}
+
+#[test]
 fn sql_no_acl_join_flags() {
     // Regression guard: a JOIN against a non-ACL table (`audit_log`,
     // not in the configured ACL list) does NOT prove caller ownership

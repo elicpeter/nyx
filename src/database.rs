@@ -69,6 +69,23 @@ pub mod index {
             UNIQUE(project, file_path, name, container, arity, disambig, kind)
         );
 
+        CREATE TABLE IF NOT EXISTS auth_check_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_hash BLOB NOT NULL,
+            name TEXT NOT NULL,
+            arity INTEGER NOT NULL DEFAULT -1,
+            lang TEXT NOT NULL,
+            namespace TEXT NOT NULL DEFAULT '',
+            container TEXT NOT NULL DEFAULT '',
+            disambig INTEGER,
+            kind TEXT NOT NULL DEFAULT 'fn',
+            summary TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(project, file_path, name, container, arity, disambig, kind)
+        );
+
         CREATE TABLE IF NOT EXISTS ssa_function_bodies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project TEXT NOT NULL,
@@ -334,6 +351,25 @@ pub mod index {
                     conn.execute_batch(SCHEMA)?;
                 }
 
+                // Ensure the auth_check_summaries table exists for DBs
+                // created before this column set was introduced.  The
+                // `CREATE TABLE IF NOT EXISTS` in SCHEMA handles new DBs;
+                // this branch only fires when the table is missing
+                // entirely from a pre-existing DB.
+                let auth_exists: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM sqlite_master
+                         WHERE type = 'table' AND name = 'auth_check_summaries'",
+                        [],
+                        |_| Ok(true),
+                    )
+                    .optional()?
+                    .unwrap_or(false);
+                if !auth_exists {
+                    tracing::info!("creating auth_check_summaries table");
+                    conn.execute_batch(SCHEMA)?;
+                }
+
                 // Schema version check: invalidate cached summary tables
                 // when the on-disk artefact layout has changed in an
                 // incompatible way, independently of the engine version.
@@ -379,6 +415,7 @@ pub mod index {
                         "DELETE FROM function_summaries;
                          DELETE FROM ssa_function_summaries;
                          DELETE FROM ssa_function_bodies;
+                         DELETE FROM auth_check_summaries;
                          DELETE FROM files;",
                     )?;
                     conn.execute(
@@ -418,6 +455,7 @@ pub mod index {
                         "DELETE FROM function_summaries;
                          DELETE FROM ssa_function_summaries;
                          DELETE FROM ssa_function_bodies;
+                         DELETE FROM auth_check_summaries;
                          DELETE FROM files;",
                     )?;
 
@@ -1176,6 +1214,152 @@ pub mod index {
             }
         }
 
+        /// Atomically replace all `AuthCheckSummary` rows for a single file.
+        ///
+        /// Mirrors [`Self::replace_ssa_summaries_for_file`].  Each input tuple
+        /// is `(name, arity, lang, namespace, container, disambig, kind, summary)`
+        /// — the full identity needed to reconstruct the callee's
+        /// [`crate::symbol::FuncKey`] on load.
+        pub fn replace_auth_summaries_for_file(
+            &mut self,
+            file_path: &Path,
+            file_hash: &[u8],
+            summaries: &[(
+                String,
+                usize,
+                String,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::auth_analysis::model::AuthCheckSummary,
+            )],
+        ) -> NyxResult<()> {
+            let tx = self.conn.transaction()?;
+            let path_str = file_path.to_string_lossy();
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+            tx.execute(
+                "DELETE FROM auth_check_summaries WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str],
+            )?;
+
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO auth_check_summaries
+                        (project, file_path, file_hash, name, arity, lang, namespace,
+                         container, disambig, kind, summary, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
+
+                for (name, arity, lang, namespace, container, disambig, kind, summary) in summaries
+                {
+                    let json = serde_json::to_string(summary)
+                        .map_err(|e| NyxError::Msg(format!("auth summary serialise: {e}")))?;
+                    let disambig_sql = disambig.map(|d| d as i64);
+                    stmt.execute(params![
+                        self.project,
+                        path_str,
+                        file_hash,
+                        name,
+                        *arity as i64,
+                        lang,
+                        namespace,
+                        container,
+                        disambig_sql,
+                        kind.as_str(),
+                        json,
+                        now
+                    ])?;
+                }
+            }
+
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Load every `AuthCheckSummary` for this project.
+        ///
+        /// Returns rows with full metadata for `FuncKey` reconstruction:
+        /// `(file_path, name, lang, arity, namespace, container, disambig, kind, AuthCheckSummary)`.
+        pub fn load_all_auth_summaries(
+            &self,
+        ) -> NyxResult<
+            Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<u32>,
+                crate::symbol::FuncKind,
+                crate::auth_analysis::model::AuthCheckSummary,
+            )>,
+        > {
+            let mut stmt = self.c().prepare(
+                "SELECT file_path, name, lang, arity, namespace,
+                        container, disambig, kind, summary
+                 FROM auth_check_summaries WHERE project = ?1",
+            )?;
+
+            let rows: Vec<(
+                String,
+                String,
+                String,
+                i64,
+                String,
+                String,
+                Option<i64>,
+                String,
+                String,
+            )> = stmt
+                .query_map([&self.project], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                })?
+                .filter_map(|r| match r {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("failed to read auth summary row: {e}");
+                        None
+                    }
+                })
+                .collect();
+
+            let mut out = Vec::with_capacity(rows.len());
+            for (fp, name, lang, arity, ns, container, disambig, kind, json) in &rows {
+                match serde_json::from_str::<crate::auth_analysis::model::AuthCheckSummary>(json) {
+                    Ok(s) => {
+                        out.push((
+                            fp.clone(),
+                            name.clone(),
+                            lang.clone(),
+                            *arity,
+                            ns.clone(),
+                            container.clone(),
+                            disambig.map(|d| d as u32),
+                            crate::symbol::FuncKind::from_slug(kind),
+                            s,
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::warn!("failed to deserialize auth summary JSON: {e}");
+                    }
+                }
+            }
+            Ok(out)
+        }
+
         /// Remove a file and all derived persisted state for this project.
         ///
         /// This deletes the file row, issues, and all persisted summary rows so
@@ -1207,6 +1391,10 @@ pub mod index {
             )?;
             tx.execute(
                 "DELETE FROM ssa_function_bodies WHERE project = ?1 AND file_path = ?2",
+                params![self.project, path_str.as_ref()],
+            )?;
+            tx.execute(
+                "DELETE FROM auth_check_summaries WHERE project = ?1 AND file_path = ?2",
                 params![self.project, path_str.as_ref()],
             )?;
 

@@ -184,14 +184,24 @@ pub struct SsaFuncSummary {
     /// (caller_param_index, sink_arg_position, sink_caps).
     #[serde(default)]
     pub param_to_sink_param: Vec<(usize, usize, Cap)>,
-    /// [STUB – future inter-procedural heap analysis] Parameter indices whose
-    /// container identity flows to the return value (e.g., function returns
-    /// the same container it received as input).
+    /// Parameter indices whose container identity flows to the return value
+    /// (e.g., function returns the same container it received as input).
+    ///
+    /// Populated by
+    /// [`crate::taint::ssa_transfer::summary_extract::extract_container_flow_summary`]
+    /// and applied at cross-file call sites to propagate the caller's
+    /// points-to set for that argument onto the call's return SSA value.
     #[serde(default)]
     pub param_container_to_return: Vec<usize>,
-    /// [STUB – future inter-procedural heap analysis] (src_param, container_param)
-    /// pairs: indicates that src_param's taint is stored into container_param's
-    /// container contents.
+    /// `(src_param, container_param)` pairs: `src_param`'s taint is stored
+    /// into `container_param`'s container contents inside this function
+    /// (e.g., `fn storeInto(value, arr) { arr.push(value); }` → `[(0, 1)]`).
+    ///
+    /// Populated by
+    /// [`crate::taint::ssa_transfer::summary_extract::extract_container_flow_summary`]
+    /// and applied at cross-file call sites by writing the caller's taint on
+    /// the `src_param` argument into the heap objects pointed to by the
+    /// `container_param` argument.
     #[serde(default)]
     pub param_to_container_store: Vec<(usize, usize)>,
     /// Inferred return type of the function, when determinable from constructor

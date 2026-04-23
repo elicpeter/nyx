@@ -7,7 +7,11 @@
 //!
 //! Key design:
 //! - HeapObjectId is keyed by allocation-site SsaValue (deterministic, zero-cost)
-//! - PointsToSet is bounded to MAX_POINTSTO entries (widening on overflow)
+//! - PointsToSet is bounded to `analysis.engine.max_pointsto` entries
+//!   (default 32, widening on overflow — see [`effective_max_pointsto`]).
+//!   Overflow drops emit an [`crate::engine_notes::EngineNote::PointsToTruncated`]
+//!   note and increment [`POINTSTO_TRUNCATION_COUNT`] so operators can
+//!   tell when the cap is firing on their corpus.
 //! - HeapState tracks per-(heap-object, slot) taint (monotone lattice)
 //!   - HeapSlot::Index(u64) for constant-index container access (proven by const propagation)
 //!   - HeapSlot::Elements for coarse element access (push/pop, dynamic index, overflow)
@@ -28,14 +32,79 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
-/// Maximum heap objects tracked per SSA value's points-to set.
-pub const MAX_POINTSTO: usize = 8;
-
 // Heap origin cap used to be `const MAX_HEAP_ORIGINS: usize = 4` — now
 // governed by the shared `analysis.engine.max_origins` knob through
 // `crate::taint::ssa_transfer::push_origin_bounded`.  Unifying the two
 // lattices behind a single tunable means operators raise *one* value to
 // eliminate silent truncation everywhere.
+
+/// Test-only override for the points-to cap.  `cap = 0` restores the
+/// runtime-configured default (see [`effective_max_pointsto`]).  Used to
+/// force `PointsToTruncated` emission on small fixtures.
+static MAX_POINTSTO_OVERRIDE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Total heap-object members dropped by [`PointsToSet`] truncation since
+/// the last reset.  Captured from `insert`/`union` so tests (and
+/// operators inspecting scan output) can detect truncation events that
+/// don't propagate to a finding — e.g. when the cap is tight enough
+/// that no taint flow survives to emit a sink event.
+pub(crate) static POINTSTO_TRUNCATION_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Test-only hook: pin the effective `max_pointsto` cap.  `cap = 0`
+/// clears the override.
+#[doc(hidden)]
+pub fn set_max_pointsto_override(cap: usize) {
+    MAX_POINTSTO_OVERRIDE.store(cap, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Resolve the live points-to cap.
+///
+/// Precedence (highest first):
+/// 1. The test-only `MAX_POINTSTO_OVERRIDE` atomic
+///    ([`set_max_pointsto_override`]).
+/// 2. The runtime `analysis.engine.max_pointsto` option, which itself
+///    resolves through the installed runtime → `NYX_MAX_POINTSTO` →
+///    [`crate::utils::analysis_options::DEFAULT_MAX_POINTSTO`].
+///
+/// The runtime path clamps to
+/// [`crate::utils::analysis_options::MIN_MAX_POINTSTO`] on ingest, so the
+/// engine always carries at least one heap-object slot.
+pub fn effective_max_pointsto() -> usize {
+    let o = MAX_POINTSTO_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    if o != 0 {
+        return o;
+    }
+    crate::utils::analysis_options::current().max_pointsto as usize
+}
+
+/// Observability: total heap-object members dropped by the points-to
+/// analysis since the most recent [`reset_points_to_observability`]
+/// call.  Monotone-increasing; `0` when no truncation happened.
+pub fn points_to_truncation_count() -> usize {
+    POINTSTO_TRUNCATION_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Reset the points-to truncation counter.  Intended for tests.
+pub fn reset_points_to_observability() {
+    POINTSTO_TRUNCATION_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Record `dropped` truncated heap-object members on the counter and on
+/// the active body's engine-note collector.  Called from the two
+/// [`PointsToSet`] cap sites (insert/union).
+fn record_pointsto_truncation(dropped: usize) {
+    if dropped == 0 {
+        return;
+    }
+    POINTSTO_TRUNCATION_COUNT.fetch_add(dropped, std::sync::atomic::Ordering::Relaxed);
+    crate::taint::ssa_transfer::record_engine_note(
+        crate::engine_notes::EngineNote::PointsToTruncated {
+            dropped: dropped as u32,
+        },
+    );
+}
 
 /// Maximum distinct `Index(n)` slots tracked per heap object.
 /// When exceeded, all indexed entries for that object collapse into `Elements`.
@@ -95,47 +164,82 @@ impl PointsToSet {
         Self { ids }
     }
 
-    /// Bounded union of two points-to sets. Truncates to MAX_POINTSTO.
+    /// Bounded union of two points-to sets.
+    ///
+    /// Truncates to [`effective_max_pointsto`]; any heap-object member
+    /// that would be admitted after the cap is reached is dropped and
+    /// counted via [`record_pointsto_truncation`].  Truncation is
+    /// deterministic: the merge proceeds in sorted order, so survivors
+    /// are always the smallest `HeapObjectId`s across the two inputs.
     pub fn union(&self, other: &Self) -> Self {
-        let mut result = SmallVec::new();
+        let cap = effective_max_pointsto();
+        let mut result: SmallVec<[HeapObjectId; 4]> = SmallVec::new();
+        let mut dropped = 0usize;
         let (mut i, mut j) = (0, 0);
-        while i < self.ids.len() && j < other.ids.len() && result.len() < MAX_POINTSTO {
+        while i < self.ids.len() && j < other.ids.len() {
             match self.ids[i].cmp(&other.ids[j]) {
                 std::cmp::Ordering::Less => {
-                    result.push(self.ids[i]);
+                    if result.len() < cap {
+                        result.push(self.ids[i]);
+                    } else {
+                        dropped += 1;
+                    }
                     i += 1;
                 }
                 std::cmp::Ordering::Greater => {
-                    result.push(other.ids[j]);
+                    if result.len() < cap {
+                        result.push(other.ids[j]);
+                    } else {
+                        dropped += 1;
+                    }
                     j += 1;
                 }
                 std::cmp::Ordering::Equal => {
-                    result.push(self.ids[i]);
+                    if result.len() < cap {
+                        result.push(self.ids[i]);
+                    } else {
+                        // The same id is in both sides; count as a single drop.
+                        dropped += 1;
+                    }
                     i += 1;
                     j += 1;
                 }
             }
         }
-        while i < self.ids.len() && result.len() < MAX_POINTSTO {
-            result.push(self.ids[i]);
+        while i < self.ids.len() {
+            if result.len() < cap {
+                result.push(self.ids[i]);
+            } else {
+                dropped += 1;
+            }
             i += 1;
         }
-        while j < other.ids.len() && result.len() < MAX_POINTSTO {
-            result.push(other.ids[j]);
+        while j < other.ids.len() {
+            if result.len() < cap {
+                result.push(other.ids[j]);
+            } else {
+                dropped += 1;
+            }
             j += 1;
         }
+        record_pointsto_truncation(dropped);
         Self { ids: result }
     }
 
     /// Insert a single HeapObjectId, maintaining sorted order and bound.
+    ///
+    /// When the set is already at [`effective_max_pointsto`], the new id
+    /// is dropped and the drop is counted via
+    /// [`record_pointsto_truncation`].
     pub fn insert(&mut self, id: HeapObjectId) {
         match self.ids.binary_search(&id) {
             Ok(_) => {} // already present
             Err(pos) => {
-                if self.ids.len() < MAX_POINTSTO {
+                if self.ids.len() < effective_max_pointsto() {
                     self.ids.insert(pos, id);
+                } else {
+                    record_pointsto_truncation(1);
                 }
-                // else: overflow — drop (widening)
             }
         }
     }
@@ -718,6 +822,13 @@ mod tests {
     use super::*;
     use crate::labels::SourceKind;
     use petgraph::graph::NodeIndex;
+    use std::sync::Mutex;
+
+    /// Serializes tests that touch [`MAX_POINTSTO_OVERRIDE`] or
+    /// [`POINTSTO_TRUNCATION_COUNT`].  Both are process-wide atomics, so
+    /// parallel tests would otherwise race on the counter and the
+    /// override.
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
 
     fn origin(idx: u32) -> TaintOrigin {
         TaintOrigin {
@@ -757,17 +868,122 @@ mod tests {
 
     #[test]
     fn pts_union_overflow() {
-        // Build a set with MAX_POINTSTO entries
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        // Tight override so the test runs deterministically against the
+        // configured default.
+        set_max_pointsto_override(8);
+        reset_points_to_observability();
+
+        // Build a set with `cap` entries.
+        let cap = effective_max_pointsto();
         let mut big = PointsToSet::empty();
-        for i in 0..MAX_POINTSTO as u32 {
+        for i in 0..cap as u32 {
             big.insert(HeapObjectId(SsaValue(i)));
         }
-        assert_eq!(big.len(), MAX_POINTSTO);
+        assert_eq!(big.len(), cap);
 
-        // Union with one more should not grow
+        // Union with one more should not grow, and should count the drop.
         let extra = PointsToSet::singleton(HeapObjectId(SsaValue(100)));
         let result = big.union(&extra);
-        assert_eq!(result.len(), MAX_POINTSTO);
+        assert_eq!(result.len(), cap);
+        assert_eq!(points_to_truncation_count(), 1);
+
+        set_max_pointsto_override(0);
+        reset_points_to_observability();
+    }
+
+    #[test]
+    fn pts_insert_overflow_counts_drops() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_max_pointsto_override(4);
+        reset_points_to_observability();
+
+        let mut s = PointsToSet::empty();
+        // First 4 fit.
+        for i in 0..4u32 {
+            s.insert(HeapObjectId(SsaValue(i)));
+        }
+        assert_eq!(s.len(), 4);
+        assert_eq!(points_to_truncation_count(), 0);
+
+        // Next 3 are dropped; counter records each drop.
+        for i in 4..7u32 {
+            s.insert(HeapObjectId(SsaValue(i)));
+        }
+        assert_eq!(s.len(), 4);
+        assert_eq!(points_to_truncation_count(), 3);
+
+        // Duplicates of existing entries are *not* drops.
+        s.insert(HeapObjectId(SsaValue(0)));
+        assert_eq!(points_to_truncation_count(), 3);
+
+        set_max_pointsto_override(0);
+        reset_points_to_observability();
+    }
+
+    #[test]
+    fn pts_union_overflow_counts_exact_drops() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_max_pointsto_override(4);
+        reset_points_to_observability();
+
+        // a = {0,1,2,3}, b = {4,5,6} — union wants 7 members; cap is 4
+        // so 3 members are dropped.  Deterministic order: smallest
+        // ids survive.
+        let mut a = PointsToSet::empty();
+        for i in 0..4u32 {
+            a.insert(HeapObjectId(SsaValue(i)));
+        }
+        let mut b = PointsToSet::empty();
+        for i in 4..7u32 {
+            b.insert(HeapObjectId(SsaValue(i)));
+        }
+        // Sanity: the pre-union sets should not themselves have triggered
+        // truncation (both are ≤ cap).
+        assert_eq!(points_to_truncation_count(), 0);
+
+        let c = a.union(&b);
+        assert_eq!(c.len(), 4);
+        assert!(c.contains(HeapObjectId(SsaValue(0))));
+        assert!(c.contains(HeapObjectId(SsaValue(3))));
+        assert!(!c.contains(HeapObjectId(SsaValue(6))));
+        assert_eq!(points_to_truncation_count(), 3);
+
+        set_max_pointsto_override(0);
+        reset_points_to_observability();
+    }
+
+    #[test]
+    fn pts_reset_observability_clears_counter() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        set_max_pointsto_override(2);
+        reset_points_to_observability();
+
+        let mut s = PointsToSet::empty();
+        s.insert(HeapObjectId(SsaValue(0)));
+        s.insert(HeapObjectId(SsaValue(1)));
+        s.insert(HeapObjectId(SsaValue(2))); // dropped
+        assert_eq!(points_to_truncation_count(), 1);
+
+        reset_points_to_observability();
+        assert_eq!(points_to_truncation_count(), 0);
+
+        set_max_pointsto_override(0);
+    }
+
+    #[test]
+    fn pts_effective_cap_defaults_to_runtime() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        // With no override, the cap comes from the installed runtime
+        // (which defaults to `DEFAULT_MAX_POINTSTO` in tests).
+        set_max_pointsto_override(0);
+        assert_eq!(
+            effective_max_pointsto(),
+            crate::utils::analysis_options::DEFAULT_MAX_POINTSTO as usize
+        );
+        set_max_pointsto_override(5);
+        assert_eq!(effective_max_pointsto(), 5);
+        set_max_pointsto_override(0);
     }
 
     #[test]

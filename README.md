@@ -115,7 +115,7 @@ Requires stable Rust 1.88+. The frontend is compiled and embedded in the binary 
 
 ## Languages
 
-All 10 languages parse via tree-sitter and run through the full pipeline, but rule depth is uneven. Tiers reflect benchmark F1 on the 295-case corpus at [`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json):
+All 10 languages parse via tree-sitter and run through the full pipeline, but rule depth is uneven. Tiers reflect benchmark F1 on the 305-case corpus at [`tests/benchmark/ground_truth.json`](tests/benchmark/ground_truth.json):
 
 | Tier | Languages | F1 | Use as a CI gate? |
 |---|---|---|---|
@@ -157,7 +157,7 @@ Two passes over the filesystem, with an optional SQLite index to skip unchanged 
 
 1. **Pass 1**: parse each file via tree-sitter, build an intra-procedural CFG (petgraph), lower to pruned SSA (Cytron phi insertion over dominance frontiers), and export per-function summaries (source/sanitizer/sink caps, taint transforms, points-to, callees).
 2. **Summary merge**: union all per-file summaries into a `GlobalSummaries` map.
-3. **Pass 2**: re-analyze each file with full cross-file context. A forward dataflow worklist propagates taint through the SSA lattice with guaranteed convergence. Call-graph SCCs iterate to fixed-point so mutually recursive functions get accurate summaries.
+3. **Pass 2**: re-analyze each file with cross-file context under bounded context sensitivity (k=1 inlining for intra-file callees, SCC fixpoint capped at 64 iterations, and summary fallback for callees above the inline body-size cap). A forward dataflow worklist propagates taint through the SSA lattice with guaranteed convergence. Call-graph SCCs iterate to fixed-point (within the cap) so mutually recursive functions get accurate summaries.
 4. **Rank, dedupe, emit**: findings are scored by severity × evidence strength × source-kind exploitability, then emitted to console, JSON, or SARIF.
 
 Detector families: taint (cross-file source→sink), CFG structural (auth gaps, unguarded sinks, resource leaks), state model (use-after-close, double-close, must-leak, unauthed-access), AST patterns (tree-sitter structural match). Full detector docs: [`docs/detectors.md`](docs/detectors.md).
@@ -191,7 +191,7 @@ Or add rules interactively: `nyx config add-rule --lang javascript --matcher esc
 
 ## Status
 
-Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 295-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
+Under active development. APIs, detector behavior, and configuration options may change between releases. Rule-level F1 on the 305-case corpus is the CI regression floor; per-language detail lives in [`tests/benchmark/RESULTS.md`](tests/benchmark/RESULTS.md).
 
 Taint analysis is interprocedural. Persisted per-function SSA summaries carry per-return-path transforms and parameter-granularity points-to, and call-graph SCCs (including SCCs that span files) iterate to a joint fixed-point. The default `balanced` profile also runs k=1 context-sensitive inlining for intra-file callees. Symex (with cross-file and interprocedural frames) and the demand-driven backwards walk are opt-in. Enable them individually with `--symex` and `--backwards-analysis`, or together with `--engine-profile deep`.
 

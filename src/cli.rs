@@ -366,6 +366,16 @@ pub enum Commands {
         #[arg(long)]
         max_origins: Option<u32>,
 
+        /// Maximum abstract heap objects retained per points-to set (default: 32).
+        ///
+        /// When an intra-procedural points-to set would exceed this cap,
+        /// the largest-keyed heap objects are dropped and a
+        /// `PointsToTruncated` engine note is recorded on affected findings.
+        /// Raise for factory-heavy codebases where truncation is observed;
+        /// lower only when points-to width is a measured bottleneck.
+        #[arg(long)]
+        max_pointsto: Option<u32>,
+
         // ── Deprecated aliases (hidden) ─────────────────────────────────
         /// Deprecated: use --index off
         #[arg(long, hide = true)]

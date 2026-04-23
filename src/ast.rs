@@ -1177,7 +1177,12 @@ impl<'a> ParsedFile<'a> {
     }
 
     /// Run AST-backed authorization analyses that do not require CFG construction.
-    fn run_auth_analyses(&self, cfg: &Config) -> Vec<Diag> {
+    fn run_auth_analyses(
+        &self,
+        cfg: &Config,
+        global_summaries: Option<&GlobalSummaries>,
+        scan_root: Option<&Path>,
+    ) -> Vec<Diag> {
         // Harvest SSA-derived variable types across every body in the
         // file so `run_auth_analysis` can refine sink classification by
         // receiver type (e.g. `HttpClient::send` → `OutboundNetwork`,
@@ -1190,6 +1195,8 @@ impl<'a> ParsedFile<'a> {
             self.source.path,
             cfg,
             var_types.as_ref(),
+            global_summaries,
+            scan_root,
         )
     }
 
@@ -1321,15 +1328,28 @@ pub fn extract_all_summaries_from_bytes(
         crate::symbol::FuncKey,
         crate::taint::ssa_transfer::CalleeSsaBody,
     )>,
+    Vec<(
+        crate::symbol::FuncKey,
+        auth_analysis::model::AuthCheckSummary,
+    )>,
 )> {
     let _span = tracing::debug_span!("extract_all_summaries", file = %path.display()).entered();
     let Some(source) = ParsedSource::try_new(bytes, path)? else {
-        return Ok((vec![], vec![], vec![]));
+        return Ok((vec![], vec![], vec![], vec![]));
     };
+    let lang_slug = source.lang_slug;
     let parsed = ParsedFile::from_source(source, cfg);
     let func_summaries = parsed.export_summaries_with_root(scan_root);
     let (ssa_summaries, ssa_bodies) = parsed.extract_ssa_artifacts(None, scan_root);
-    Ok((func_summaries, ssa_summaries, ssa_bodies))
+    let auth_summaries = auth_analysis::extract_auth_summaries_by_key(
+        &parsed.source.tree,
+        parsed.source.bytes,
+        lang_slug,
+        parsed.source.path,
+        cfg,
+        scan_root,
+    );
+    Ok((func_summaries, ssa_summaries, ssa_bodies, auth_summaries))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1656,14 +1676,14 @@ pub fn run_rules_on_bytes(
             );
         }
         if cfg.scanner.mode == AnalysisMode::Full {
-            out.extend(parsed.run_auth_analyses(cfg));
+            out.extend(parsed.run_auth_analyses(cfg, global_summaries, scan_root));
         }
         parsed.source.finalize_diags(&mut out, cfg);
     } else {
         // AST-only: no CFG construction (fast path preserved)
         out.extend(source.run_ast_queries(cfg));
         let parsed = ParsedFile::from_source(source, cfg);
-        out.extend(parsed.run_auth_analyses(cfg));
+        out.extend(parsed.run_auth_analyses(cfg, global_summaries, scan_root));
         parsed.source.finalize_diags(&mut out, cfg);
     }
 
@@ -1703,6 +1723,15 @@ pub struct FusedResult {
         crate::symbol::FuncKey,
         crate::taint::ssa_transfer::CalleeSsaBody,
     )>,
+    /// Per-function auth-check summaries for cross-file helper
+    /// lifting.  One entry per analysis unit whose body proves at
+    /// least one positional parameter under an ownership / membership
+    /// / admin / authorization check; empty for files with no such
+    /// helpers.
+    pub auth_summaries: Vec<(
+        crate::symbol::FuncKey,
+        auth_analysis::model::AuthCheckSummary,
+    )>,
 }
 
 /// Parse the file once, build the CFG once, and produce both function
@@ -1737,6 +1766,7 @@ pub fn analyse_file_fused(
             ssa_summaries: vec![],
             cfg_nodes: 0,
             ssa_bodies: vec![],
+            auth_summaries: vec![],
         });
     };
 
@@ -1772,9 +1802,22 @@ pub fn analyse_file_fused(
         } else {
             out.extend(ast_findings);
         }
-        out.extend(parsed.run_auth_analyses(cfg));
+        out.extend(parsed.run_auth_analyses(cfg, global_summaries, scan_root));
     }
     parsed.source.finalize_diags(&mut out, cfg);
+
+    let auth_summaries = if cfg.scanner.mode == AnalysisMode::Full {
+        auth_analysis::extract_auth_summaries_by_key(
+            &parsed.source.tree,
+            parsed.source.bytes,
+            parsed.source.lang_slug,
+            parsed.source.path,
+            cfg,
+            scan_root,
+        )
+    } else {
+        Vec::new()
+    };
 
     Ok(FusedResult {
         summaries,
@@ -1782,6 +1825,7 @@ pub fn analyse_file_fused(
         ssa_summaries,
         cfg_nodes,
         ssa_bodies,
+        auth_summaries,
     })
 }
 

@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -35,7 +36,7 @@ pub enum AnalysisUnitKind {
     Function,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AuthCheckKind {
     LoginGuard,
     AdminGuard,
@@ -193,9 +194,45 @@ pub struct AnalysisUnit {
 /// function with `subject` at position K, and the summary says param
 /// K has an auth check of kind `kind`, the caller's subject is
 /// considered covered as if it were checked at the call site.
-#[derive(Debug, Clone, Default)]
+///
+/// Serialises as a `Vec<(usize, AuthCheckKind)>` so same-shape on-disk
+/// rows survive across HashMap iteration-order changes; the in-memory
+/// type stays a HashMap for point-lookup efficiency.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuthCheckSummary {
+    #[serde(
+        serialize_with = "serialize_param_auth_kinds",
+        deserialize_with = "deserialize_param_auth_kinds"
+    )]
     pub param_auth_kinds: HashMap<usize, AuthCheckKind>,
+}
+
+fn serialize_param_auth_kinds<S>(
+    map: &HashMap<usize, AuthCheckKind>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeSeq;
+    let mut entries: Vec<(usize, AuthCheckKind)> =
+        map.iter().map(|(idx, kind)| (*idx, *kind)).collect();
+    entries.sort_by_key(|(idx, _)| *idx);
+    let mut seq = serializer.serialize_seq(Some(entries.len()))?;
+    for entry in entries {
+        seq.serialize_element(&entry)?;
+    }
+    seq.end()
+}
+
+fn deserialize_param_auth_kinds<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<usize, AuthCheckKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let entries: Vec<(usize, AuthCheckKind)> = Vec::deserialize(deserializer)?;
+    Ok(entries.into_iter().collect())
 }
 
 #[derive(Debug, Clone)]

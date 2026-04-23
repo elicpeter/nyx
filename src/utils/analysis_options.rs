@@ -37,6 +37,19 @@ pub const DEFAULT_MAX_ORIGINS: u32 = 32;
 /// at least `1` so production scans always carry *some* provenance.
 pub const MIN_MAX_ORIGINS: u32 = 1;
 
+/// Default upper bound on the number of abstract heap objects tracked per
+/// intra-procedural points-to set.  Set to `32` — high enough that
+/// realistic factory/builder/DI patterns (routine 10–30 allocation sites
+/// aliased into one variable) stay precise, low enough to keep
+/// `HeapState` join/clone cost bounded in the worklist.  Tunable via
+/// [`AnalysisOptions::max_pointsto`] — see
+/// `src/ssa/heap.rs::effective_max_pointsto`.
+pub const DEFAULT_MAX_POINTSTO: u32 = 32;
+
+/// Minimum permitted `max_pointsto` value.  A cap of `0` would make
+/// points-to tracking impossible; runtime config clamps to at least `1`.
+pub const MIN_MAX_POINTSTO: u32 = 1;
+
 /// Options for the symbolic-execution pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -102,6 +115,18 @@ pub struct AnalysisOptions {
     /// chance of silent under-reporting at the cost of slightly wider
     /// lattice values.  See [`DEFAULT_MAX_ORIGINS`].
     pub max_origins: u32,
+    /// Maximum abstract heap objects retained per intra-procedural
+    /// points-to set.
+    ///
+    /// When an allocation-site union would exceed this bound, the
+    /// largest-keyed heap objects are dropped and an
+    /// [`crate::engine_notes::EngineNote::PointsToTruncated`] note is
+    /// recorded.  Taint flows that should have reached the dropped
+    /// objects via this aliasing path are lost (under-report).  Raise
+    /// for factory-heavy codebases where truncation is observed; lower
+    /// only when points-to width is a measured bottleneck.  See
+    /// [`DEFAULT_MAX_POINTSTO`].
+    pub max_pointsto: u32,
 }
 
 impl Default for AnalysisOptions {
@@ -114,6 +139,7 @@ impl Default for AnalysisOptions {
             backwards_analysis: false,
             parse_timeout_ms: DEFAULT_PARSE_TIMEOUT_MS,
             max_origins: DEFAULT_MAX_ORIGINS,
+            max_pointsto: DEFAULT_MAX_POINTSTO,
         }
     }
 }
@@ -176,6 +202,8 @@ pub fn current() -> AnalysisOptions {
         backwards_analysis: env_bool_default("NYX_BACKWARDS", false),
         parse_timeout_ms: env_u64_default("NYX_PARSE_TIMEOUT_MS", DEFAULT_PARSE_TIMEOUT_MS),
         max_origins: env_u32_default("NYX_MAX_ORIGINS", DEFAULT_MAX_ORIGINS).max(MIN_MAX_ORIGINS),
+        max_pointsto: env_u32_default("NYX_MAX_POINTSTO", DEFAULT_MAX_POINTSTO)
+            .max(MIN_MAX_POINTSTO),
     }
 }
 
@@ -217,6 +245,7 @@ mod tests {
         assert!(!opts.backwards_analysis, "backwards analysis defaults off");
         assert_eq!(opts.parse_timeout_ms, DEFAULT_PARSE_TIMEOUT_MS);
         assert_eq!(opts.max_origins, DEFAULT_MAX_ORIGINS);
+        assert_eq!(opts.max_pointsto, DEFAULT_MAX_POINTSTO);
     }
 
     #[test]
@@ -234,6 +263,7 @@ mod tests {
             backwards_analysis: true,
             parse_timeout_ms: 5_000,
             max_origins: 64,
+            max_pointsto: 48,
         };
         let s = toml::to_string(&opts).unwrap();
         let back: AnalysisOptions = toml::from_str(&s).unwrap();

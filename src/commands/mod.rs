@@ -80,6 +80,7 @@ pub fn handle_command(
             no_backwards_analysis,
             parse_timeout_ms,
             max_origins,
+            max_pointsto,
             // Deprecated aliases
             no_index,
             rebuild_index,
@@ -253,6 +254,9 @@ pub fn handle_command(
             }
             if let Some(n) = max_origins {
                 engine.max_origins = n.max(crate::utils::analysis_options::MIN_MAX_ORIGINS);
+            }
+            if let Some(n) = max_pointsto {
+                engine.max_pointsto = n.max(crate::utils::analysis_options::MIN_MAX_POINTSTO);
             }
             config.analysis.engine = engine;
             if engine.parse_timeout_ms == 0 {
@@ -435,5 +439,9 @@ fn print_engine_explanation(config: &Config, engine_profile: Option<EngineProfil
     println!(
         "  Max taint origins:       {}      (--max-origins / NYX_MAX_ORIGINS; per-lattice-value cap)",
         engine.max_origins
+    );
+    println!(
+        "  Max points-to set:       {}      (--max-pointsto / NYX_MAX_POINTSTO; per-variable heap-object cap)",
+        engine.max_pointsto
     );
 }
