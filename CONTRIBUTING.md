@@ -306,6 +306,8 @@ cargo clippy --all -- -D warnings
 
 6. **Include test cases** for any new detection rules.
 
+7. **Disclose material AI assistance** in the PR description if the change was drafted, generated, or substantially refactored by an AI tool. One line is enough. See [AI-POLICY.md](AI-POLICY.md) for the full policy and the bar we hold AI-assisted contributions to.
+
 ---
 
 ## Bug Reports
@@ -348,4 +350,25 @@ Please do **not** open public issues for security-sensitive bugs. See [SECURITY.
 
 ## License
 
-By contributing to Nyx, you agree that your contributions will be licensed under the [GPL-3.0](./LICENSE).
+### Contributions are released under GPL-3.0
+
+By submitting a pull request, patch, or other contribution to Nyx, you agree that your contribution will be released under the [GPL-3.0](./LICENSE), the same license as the project.
+
+### Developer Certificate of Origin
+
+All commits must be signed off with the [Developer Certificate of Origin](https://developercertificate.org/) by adding a `Signed-off-by:` trailer to your commit messages. Use `git commit -s` to add this automatically. By signing off, you certify that you wrote the code yourself, or that you otherwise have the right to submit it under the project license.
+
+### Contributor License Grant
+
+In addition to licensing your contribution under GPL-3.0, and for each contribution you submit, you grant to the Nyx project and to any entity that maintains or succeeds it a perpetual, worldwide, non-exclusive, royalty-free, irrevocable license, with the right to sublicense, to:
+
+1. Use, copy, modify, prepare derivative works of, publicly display, publicly perform, distribute, and sublicense your contribution and any derivative works of it, and
+2. Relicense your contribution, in whole or in part, under terms other than GPL-3.0 if the maintainers choose to do so in the future. This includes, for example, dual-licensing under a commercial license, combining the contribution with proprietary components, or moving the project to a different open source license.
+
+You represent that you have the legal right to grant this license, and that to the best of your knowledge your contribution does not infringe any third party's copyright, patent, trade secret, or other intellectual property rights. If your contribution includes a patentable invention that you own or control, you grant a patent license under the same terms.
+
+**You retain copyright to your contribution.** This grant does not transfer ownership. Its purpose is to give the project flexibility to evolve its licensing over time without needing to track down every past contributor and ask for permission on a case-by-case basis.
+
+If you are contributing on behalf of your employer or on company time, you represent that your employer has authorized you to make the contribution and to grant this license, or that the contribution is otherwise outside the scope of your employment. If you are unsure, please check with your employer before submitting.
+
+If you do not agree to these terms, please do not submit contributions to Nyx.
