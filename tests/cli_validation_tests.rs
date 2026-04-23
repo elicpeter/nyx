@@ -50,10 +50,12 @@ fn scan_with_nonexistent_path_exits_nonzero() {
         predicate::str::contains(fake.to_string_lossy().as_ref()).or(
             // On some platforms the error wraps the path inside an IO error
             // message; accept either direct mention or a canonicalize-shaped
-            // error so the assertion isn't brittle to errno text.
+            // error so the assertion isn't brittle to errno text. Windows
+            // reports ERROR_PATH_NOT_FOUND as "cannot find the path specified".
             predicate::str::contains("canonicalize")
                 .or(predicate::str::contains("No such file"))
-                .or(predicate::str::contains("not found")),
+                .or(predicate::str::contains("not found"))
+                .or(predicate::str::contains("cannot find")),
         ),
     );
 }
