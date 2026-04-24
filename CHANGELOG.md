@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-## [0.5.0] - 2026-04-23
+## [0.5.0] - 2026-04-24
 
 **Note**: 0.5.0 introduces an SSA-based taint engine and major cross-file improvements. If you upgrade and see new false positives or regressions on cross-file flows, please open an issue with a minimal reproduction.
 
