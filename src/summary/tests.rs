@@ -796,7 +796,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
             },
             string: StringFact::top(),
             bits: BitFact::top(),
-        path: PathFact::top(),
+            path: PathFact::top(),
         }),
         source_to_callback: vec![],
 
@@ -3445,13 +3445,13 @@ fn cf4_merge_return_paths_joins_abstract_contribution_on_collision() {
         interval: IntervalFact::exact(0),
         string: StringFact::top(),
         bits: BitFact::top(),
-    path: PathFact::top(),
+        path: PathFact::top(),
     };
     let av_b = AbstractValue {
         interval: IntervalFact::exact(10),
         string: StringFact::top(),
         bits: BitFact::top(),
-    path: PathFact::top(),
+        path: PathFact::top(),
     };
 
     let mut first = rpt(TaintTransform::Identity, 42, 0, 0);

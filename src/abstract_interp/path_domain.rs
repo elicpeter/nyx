@@ -576,9 +576,7 @@ fn rightmost_segment(s: &str) -> &str {
 }
 
 fn callee_contains_segment(callee: &str, seg: &str) -> bool {
-    callee
-        .split([':', '.'])
-        .any(|s| s == seg)
+    callee.split([':', '.']).any(|s| s == seg)
 }
 
 /// Extract the string argument passed to `receiver.contains("...")`.
@@ -1020,7 +1018,12 @@ mod tests {
     fn rejection_axes_deduplicates() {
         let axes = classify_path_rejection_axes("a.starts_with('/') || b.starts_with(\"\\\\\")");
         // Two absolute-slash clauses collapse to a single axis.
-        assert_eq!(axes.iter().filter(|a| matches!(a, PathRejection::AbsoluteSlash)).count(), 1);
+        assert_eq!(
+            axes.iter()
+                .filter(|a| matches!(a, PathRejection::AbsoluteSlash))
+                .count(),
+            1
+        );
     }
 
     #[test]

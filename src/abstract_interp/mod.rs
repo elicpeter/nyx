@@ -363,7 +363,7 @@ impl AbstractTransfer {
             interval: self.interval.apply(&input.interval),
             string: self.string.apply(&input.string),
             bits: BitFact::top(),
-        path: PathFact::top(),
+            path: PathFact::top(),
         }
     }
 
@@ -519,13 +519,13 @@ mod tests {
             interval: IntervalFact::exact(1),
             string: StringFact::from_prefix("https://a.com/"),
             bits: BitFact::top(),
-        path: PathFact::top(),
+            path: PathFact::top(),
         };
         let b = AbstractValue {
             interval: IntervalFact::exact(5),
             string: StringFact::from_prefix("https://b.com/"),
             bits: BitFact::top(),
-        path: PathFact::top(),
+            path: PathFact::top(),
         };
         let j = a.join(&b);
         assert_eq!(j.interval.lo, Some(1));
@@ -542,7 +542,7 @@ mod tests {
             },
             string: StringFact::from_prefix("hello"),
             bits: BitFact::top(),
-        path: PathFact::top(),
+            path: PathFact::top(),
         };
         let new = AbstractValue {
             interval: IntervalFact {
@@ -551,7 +551,7 @@ mod tests {
             },
             string: StringFact::from_prefix("hello"),
             bits: BitFact::top(),
-        path: PathFact::top(),
+            path: PathFact::top(),
         };
         let w = old.widen(&new);
         assert_eq!(w.interval.lo, Some(0)); // stable
@@ -572,7 +572,7 @@ mod tests {
             interval: IntervalFact::exact(10),
             string: StringFact::top(),
             bits: BitFact::top(),
-        path: PathFact::top(),
+            path: PathFact::top(),
         };
         state.set(SsaValue(1), val.clone());
         assert_eq!(state.get(SsaValue(1)), val);
@@ -587,7 +587,7 @@ mod tests {
                 interval: IntervalFact::exact(5),
                 string: StringFact::top(),
                 bits: BitFact::top(),
-            path: PathFact::top(),
+                path: PathFact::top(),
             },
         );
         assert!(!state.get(SsaValue(1)).is_top());
@@ -605,7 +605,7 @@ mod tests {
                 interval: IntervalFact::exact(3),
                 string: StringFact::top(),
                 bits: BitFact::top(),
-            path: PathFact::top(),
+                path: PathFact::top(),
             },
         );
         a.set(
@@ -614,7 +614,7 @@ mod tests {
                 interval: IntervalFact::exact(10),
                 string: StringFact::top(),
                 bits: BitFact::top(),
-            path: PathFact::top(),
+                path: PathFact::top(),
             },
         );
 
@@ -625,7 +625,7 @@ mod tests {
                 interval: IntervalFact::exact(7),
                 string: StringFact::top(),
                 bits: BitFact::top(),
-            path: PathFact::top(),
+                path: PathFact::top(),
             },
         );
         // SsaValue(2) not in b → join drops it (Top)
@@ -651,7 +651,7 @@ mod tests {
                 },
                 string: StringFact::top(),
                 bits: BitFact::top(),
-            path: PathFact::top(),
+                path: PathFact::top(),
             },
         );
 
@@ -665,7 +665,7 @@ mod tests {
                 },
                 string: StringFact::top(),
                 bits: BitFact::top(),
-            path: PathFact::top(),
+                path: PathFact::top(),
             },
         );
 

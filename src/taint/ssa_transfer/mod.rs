@@ -246,7 +246,9 @@ fn run_ssa_taint_internal(
     if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
         if let Some(ref mut abs) = entry_state.abstract_state {
             if let Some(cv) = transfer.const_values {
-                use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, PathFact, StringFact};
+                use crate::abstract_interp::{
+                    AbstractValue, BitFact, IntervalFact, PathFact, StringFact,
+                };
                 use crate::ssa::const_prop::ConstLattice;
                 for (v, cl) in cv {
                     match cl {
@@ -257,7 +259,7 @@ fn run_ssa_taint_internal(
                                     interval: IntervalFact::exact(*n),
                                     string: StringFact::top(),
                                     bits: BitFact::from_const(*n),
-                                path: PathFact::top(),
+                                    path: PathFact::top(),
                                 },
                             );
                         }
@@ -268,7 +270,7 @@ fn run_ssa_taint_internal(
                                     interval: IntervalFact::top(),
                                     string: StringFact::exact(s),
                                     bits: BitFact::top(),
-                                path: PathFact::top(),
+                                    path: PathFact::top(),
                                 },
                             );
                         }
@@ -1832,7 +1834,9 @@ fn extract_inline_return_taint(
                 } else {
                     for pred in &block.preds {
                         let pred_idx = pred.0 as usize;
-                        if let Some(pred_exit) = block_exit_states.get(pred_idx).and_then(|o| o.as_ref()) {
+                        if let Some(pred_exit) =
+                            block_exit_states.get(pred_idx).and_then(|o| o.as_ref())
+                        {
                             let per_pred_exit = transfer_block(
                                 block,
                                 cfg,
@@ -1894,7 +1898,8 @@ fn extract_inline_return_taint(
         (param_caps, param_internal, param_params, param_receiver)
     };
 
-    let return_path_fact = return_path_fact_acc.unwrap_or_else(crate::abstract_interp::PathFact::top);
+    let return_path_fact =
+        return_path_fact_acc.unwrap_or_else(crate::abstract_interp::PathFact::top);
 
     // Even when the callee produces no return taint and no param/receiver
     // provenance, a non-Top PathFact on the return is still meaningful
@@ -3334,7 +3339,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                         interval: IntervalFact::exact(n),
                         string: StringFact::top(),
                         bits: BitFact::from_const(n),
-                    path: PathFact::top(),
+                        path: PathFact::top(),
                     },
                 );
             } else if is_string_const(trimmed) {
@@ -3345,7 +3350,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                         interval: IntervalFact::top(),
                         string: StringFact::exact(&s),
                         bits: BitFact::top(),
-                    path: PathFact::top(),
+                        path: PathFact::top(),
                     },
                 );
             }
@@ -3367,7 +3372,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                     interval: IntervalFact::top(),
                     string: StringFact::from_prefix(prefix),
                     bits: BitFact::top(),
-                path: PathFact::top(),
+                    path: PathFact::top(),
                 },
             );
         }
@@ -3389,7 +3394,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                     interval: IntervalFact::top(),
                     string: StringFact::from_prefix(prefix),
                     bits: BitFact::top(),
-                path: PathFact::top(),
+                    path: PathFact::top(),
                 },
             );
         }
@@ -3406,7 +3411,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                     interval: IntervalFact::exact(const_val),
                     string: StringFact::top(),
                     bits: BitFact::from_const(const_val),
-                path: PathFact::top(),
+                    path: PathFact::top(),
                 };
                 let result_interval = match bin_op {
                     BinOp::Add => var_abs.interval.add(&const_abs.interval),
@@ -3441,7 +3446,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                     interval: result_interval,
                     string: StringFact::top(),
                     bits: result_bits,
-                path: PathFact::top(),
+                    path: PathFact::top(),
                 };
                 if !val.is_top() {
                     abs.set(inst.value, val);
@@ -3502,7 +3507,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                     interval: result_interval,
                     string: result_string,
                     bits: result_bits,
-                path: PathFact::top(),
+                    path: PathFact::top(),
                 };
                 if !val.is_top() {
                     abs.set(inst.value, val);
@@ -3518,7 +3523,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                             interval: IntervalFact::top(),
                             string: string_result,
                             bits: BitFact::top(),
-                        path: PathFact::top(),
+                            path: PathFact::top(),
                         },
                     );
                 }
@@ -3538,7 +3543,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                     },
                     string: StringFact::top(),
                     bits: BitFact::top(),
-                path: PathFact::top(),
+                    path: PathFact::top(),
                 },
             );
         }

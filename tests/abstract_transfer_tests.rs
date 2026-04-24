@@ -290,7 +290,7 @@ fn transfer_apply_combines_subdomains() {
         interval: IntervalFact::exact(8080),
         string: StringFact::from_prefix("http://untrusted/"),
         bits: BitFact::top(),
-    path: PathFact::top(),
+        path: PathFact::top(),
     };
     let out = t.apply(&input);
     // Interval identity forwards the caller-known bound.

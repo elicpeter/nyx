@@ -29,6 +29,7 @@ fn byte_offset_to_point(tree: &Tree, byte: usize) -> tree_sitter::Point {
 /// safe — the sink gate just falls back to name-based classification).
 pub type VarTypes = HashMap<String, TypeKind>;
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_auth_analysis(
     tree: &Tree,
     source: &[u8],

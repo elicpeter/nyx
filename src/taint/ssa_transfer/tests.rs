@@ -254,7 +254,7 @@ mod inline_cache_epoch_tests {
             param_provenance: 0,
             receiver_provenance: false,
             uses_summary: false,
-        return_path_fact: crate::abstract_interp::PathFact::top(),
+            return_path_fact: crate::abstract_interp::PathFact::top(),
         }))
     }
 
@@ -327,7 +327,7 @@ mod inline_cache_epoch_tests {
             param_provenance: 1u64 << 0,
             receiver_provenance: false,
             uses_summary: true,
-        return_path_fact: crate::abstract_interp::PathFact::top(),
+            return_path_fact: crate::abstract_interp::PathFact::top(),
         }));
 
         // Caller A: argument carries an env-source origin.
@@ -393,7 +393,7 @@ mod inline_cache_epoch_tests {
             param_provenance: 0,
             receiver_provenance: false,
             uses_summary: true,
-        return_path_fact: crate::abstract_interp::PathFact::top(),
+            return_path_fact: crate::abstract_interp::PathFact::top(),
         }));
 
         let state = SsaTaintState::initial();
@@ -1124,7 +1124,10 @@ mod goto_succ_propagation_tests {
         assert_eq!(fact.dotdot, crate::abstract_interp::Tri::No);
         // true branch (rejection path) unchanged.
         let true_abs = true_state.abstract_state.as_ref().unwrap();
-        assert_eq!(true_abs.get(SsaValue(0)).path.dotdot, crate::abstract_interp::Tri::Maybe);
+        assert_eq!(
+            true_abs.get(SsaValue(0)).path.dotdot,
+            crate::abstract_interp::Tri::Maybe
+        );
     }
 
     #[test]
@@ -1141,7 +1144,12 @@ mod goto_succ_propagation_tests {
             &ssa,
         );
 
-        let fact = false_state.abstract_state.as_ref().unwrap().get(SsaValue(0)).path;
+        let fact = false_state
+            .abstract_state
+            .as_ref()
+            .unwrap()
+            .get(SsaValue(0))
+            .path;
         assert_eq!(fact.absolute, crate::abstract_interp::Tri::No);
     }
 
@@ -1159,7 +1167,12 @@ mod goto_succ_propagation_tests {
             &ssa,
         );
 
-        let fact = false_state.abstract_state.as_ref().unwrap().get(SsaValue(0)).path;
+        let fact = false_state
+            .abstract_state
+            .as_ref()
+            .unwrap()
+            .get(SsaValue(0))
+            .path;
         assert_eq!(fact.absolute, crate::abstract_interp::Tri::No);
     }
 
@@ -1177,7 +1190,12 @@ mod goto_succ_propagation_tests {
             &ssa,
         );
 
-        let fact = true_state.abstract_state.as_ref().unwrap().get(SsaValue(0)).path;
+        let fact = true_state
+            .abstract_state
+            .as_ref()
+            .unwrap()
+            .get(SsaValue(0))
+            .path;
         assert_eq!(
             fact.prefix_lock.as_deref(),
             Some("/var/app/uploads/"),
