@@ -12,7 +12,7 @@ use crate::cfg::{Cfg, EdgeKind, StmtKind};
 use petgraph::algo::dominators::{Dominators, simple_fast};
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
-use petgraph::visit::{Bfs, EdgeRef};
+use petgraph::visit::EdgeRef;
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
@@ -375,7 +375,24 @@ fn form_blocks(
         has_branching_in.entry(*node).or_insert(false);
     }
 
+    // CFG construction wires every Return / Throw node to the synthetic
+    // function-exit node via a `Seq` edge so the underlying graph is a single
+    // connected component.  Those edges are bookkeeping only: control flow
+    // does not actually fall through a Return into the exit block.  Treating
+    // them as block successors causes an early-return block to share its
+    // post-exit body with the function's fall-through tail, silently merging
+    // two distinct paths into one (the "merged-return" defect).  Strip them
+    // here so block-level adjacency reflects real control flow; the SSA
+    // terminator for the containing block becomes Return / Unreachable
+    // instead of Goto(exit).
+    let is_terminating = |n: NodeIndex| -> bool {
+        matches!(cfg[n].kind, StmtKind::Return | StmtKind::Throw)
+    };
+
     for &(src, tgt, kind) in filtered_edges {
+        if is_terminating(src) {
+            continue;
+        }
         successors.entry(src).or_default().push((tgt, kind));
         *in_degree.entry(tgt).or_insert(0) += 1;
         if matches!(kind, EdgeKind::True | EdgeKind::False | EdgeKind::Back) {
@@ -417,13 +434,62 @@ fn form_blocks(
     let mut leader_visited: HashSet<NodeIndex> = HashSet::new();
     leader_visited.insert(entry);
 
-    // Also need BFS to discover leaders in order
+    // Discover leaders in BFS order over `cfg`, but skip edges whose
+    // source is a terminating (Return / Throw) node.  Walking the raw
+    // `cfg` directly here would re-introduce the bookkeeping
+    // Return/Throw → fn_exit edges we just stripped — fn_exit (or any
+    // post-return join) would be discovered through them and assigned a
+    // block ID before its true block-level predecessors, breaking the
+    // BFS-forward-pred invariant (`debug_assert_bfs_ordering`).
+    //
+    // We can't simply BFS our `successors` map because that excludes
+    // exception edges entirely (collect_reachable strips them and records
+    // them separately in `exception_edges`).  Catch-block nodes are still
+    // in `reachable` and must be discoverable as leaders via the
+    // try-body → catch path — only the terminating-source bookkeeping
+    // edges are bogus.
     {
-        let mut bfs = Bfs::new(cfg, entry);
-        while let Some(node) = bfs.next(cfg) {
+        let mut bfs_queue: VecDeque<NodeIndex> = VecDeque::new();
+        let mut bfs_seen: HashSet<NodeIndex> = HashSet::new();
+        bfs_queue.push_back(entry);
+        bfs_seen.insert(entry);
+        while let Some(node) = bfs_queue.pop_front() {
             if reachable.contains(&node) && is_leader.contains(&node) && leader_visited.insert(node)
             {
                 leader_queue.push_back(node);
+            }
+            if is_terminating(node) {
+                continue;
+            }
+            for edge in cfg.edges(node) {
+                let tgt = edge.target();
+                if reachable.contains(&tgt) && bfs_seen.insert(tgt) {
+                    bfs_queue.push_back(tgt);
+                }
+            }
+        }
+
+        // Belt-and-braces: any leader still unvisited gets appended in
+        // CFG-node-index order so block-ID assignment remains
+        // deterministic.  We do NOT include the synthetic function-exit
+        // node when it is unreachable through filtered edges — that
+        // happens whenever every path in the body terminates explicitly
+        // (e.g. a function whose only return is `return buf.toString()`
+        // at the tail).  Including it would emit an orphan SSA block
+        // with no real predecessors and no semantic meaning, which the
+        // structural reachability invariant correctly rejects.
+        // Genuine orphan handlers (catch blocks reached via stripped
+        // exception edges) keep their entries here.
+        let mut orphan_leaders: Vec<NodeIndex> = is_leader
+            .iter()
+            .copied()
+            .filter(|n| !leader_visited.contains(n))
+            .filter(|n| !matches!(cfg[*n].kind, StmtKind::Exit))
+            .collect();
+        orphan_leaders.sort_by_key(|n| n.index());
+        for n in orphan_leaders {
+            if leader_visited.insert(n) {
+                leader_queue.push_back(n);
             }
         }
     }
@@ -468,6 +534,11 @@ fn form_blocks(
     let mut block_preds: Vec<Vec<usize>> = vec![vec![]; num_blocks];
 
     for &(src, tgt, _kind) in filtered_edges {
+        // Mirror the adjacency-construction filter above: edges out of
+        // Return/Throw CFG nodes are not real successors at the block level.
+        if is_terminating(src) {
+            continue;
+        }
         if let (Some(&src_blk), Some(&tgt_blk)) = (block_of_node.get(&src), block_of_node.get(&tgt))
         {
             if src_blk != tgt_blk && !block_succs[src_blk].contains(&tgt_blk) {
@@ -1110,59 +1181,93 @@ fn rename_variables(
         // 3. Set terminator
         let succs = &block_succs[block_idx];
         let last_node = *blocks_nodes[block_idx].last().unwrap();
-        let last_info = &cfg[last_node];
 
         ssa_blocks[block_idx].terminator = if succs.is_empty() {
-            // Check if this block contains a Return node with no uses (constant
-            // or void return). The Return node may not be the last_node — Exit
-            // often follows Return in the same block.
-            let has_const_return = blocks_nodes[block_idx].iter().any(|&n| {
-                let info = &cfg[n];
-                info.kind == StmtKind::Return && info.taint.uses.is_empty()
-            });
+            // A block with no successors at the block level is one of:
+            //   (1) a block containing a Throw — terminates with an
+            //       exception; no normal fall-through.
+            //   (2) a block containing a Return — terminates with a value
+            //       (or void).  After form_blocks strips the bookkeeping
+            //       Seq edge from Return → fn_exit, every explicit-return
+            //       block lands here, including `if cond { return X; }`
+            //       early returns.
+            //   (3) the function-exit (fn_exit) block itself when the
+            //       function falls off the end (implicit return).
+            //
+            // Distinguish them by inspecting the block's CFG nodes.
+            let return_node = blocks_nodes[block_idx]
+                .iter()
+                .copied()
+                .find(|&n| cfg[n].kind == StmtKind::Return);
+            let has_throw_node = blocks_nodes[block_idx]
+                .iter()
+                .any(|&n| cfg[n].kind == StmtKind::Throw);
 
-            if has_const_return {
-                // Return with no uses: the return expression is a constant literal
-                // or the return is void. Emit a synthetic Const instruction so that
-                // Return(Some(v_const)) correctly has no taint entry — preventing
-                // the last body instruction (which may be an unrelated tainted
-                // value) from being treated as the return value.
+            if has_throw_node && return_node.is_none() {
+                // Throw terminates control flow with an exception.  No
+                // structured Throw terminator exists today; downstream
+                // analyses rely on `exception_edges` (recorded separately)
+                // for catch-block dispatch.  Mark the normal-flow exit as
+                // Unreachable so successor consumers do not invent a
+                // synthetic fall-through edge.
+                Terminator::Unreachable
+            } else if let Some(rn) = return_node {
+                let return_info = &cfg[rn];
+                // Return-value resolution.  Mirror the legacy
+                // `has_const_return` path so callers see exactly the same
+                // SSA shape they did before the merged-return fix — only
+                // the *terminator* changes (Goto(exit) → Return(_)), not
+                // the value selection.
                 //
-                // Carry the literal text through when `cfg` captured it
-                // on the Return node (populated by `extract_literal_rhs`
-                // for `return []`, `return {}`, etc.).  Downstream
-                // container-literal detection — including the
-                // fresh-container-factory detector in
-                // [`crate::ssa::param_points_to`] — depends on that text
-                // surviving into `SsaOp::Const(Some(text))`.
-                let return_node = blocks_nodes[block_idx]
-                    .iter()
-                    .copied()
-                    .find(|&n| {
-                        let info = &cfg[n];
-                        info.kind == StmtKind::Return && info.taint.uses.is_empty()
-                    })
-                    .unwrap_or(last_node);
-                let const_text = cfg[return_node].taint.const_text.clone();
-                let const_v = SsaValue(*next_value);
-                *next_value += 1;
-                let block_id = BlockId(block_idx as u32);
-                value_defs.push(ValueDef {
-                    var_name: None,
-                    cfg_node: last_node,
-                    block: block_id,
-                });
-                ssa_blocks[block_idx].body.push(SsaInst {
-                    value: const_v,
-                    op: SsaOp::Const(const_text),
-                    cfg_node: last_node,
-                    var_name: None,
-                    span: last_info.ast.span,
-                });
-                Terminator::Return(Some(const_v))
+                //   (a) Literal return (`return 'x'`, `return None`,
+                //       `return []`, `return;`).  Marked by
+                //       `taint.uses.is_empty()` on the Return CFG node.
+                //       Emit a synthetic Const inst so taint never leaks
+                //       from an unrelated inst earlier in the same block
+                //       (regression guard: C-1 inline-return precision).
+                //   (b) Computed / passthrough return — last non-Nop body
+                //       inst.  Covers `return foo()` (Call sits before the
+                //       Return Nop), `return x + y` (Assign), and the
+                //       implicit tail expression collapsed into a single
+                //       block by the leader-following loop.  When the
+                //       Return carries identifier uses (`return req`,
+                //       `return { req.session, ... }`), the SSA defs for
+                //       those identifiers are already on the body as
+                //       Param / Assign / Source insts — picking the last
+                //       one matches pre-fix behaviour exactly.
+                //   (c) Void / unresolved — `Return(None)`.
+                if return_info.taint.uses.is_empty() {
+                    let const_text = return_info.taint.const_text.clone();
+                    let const_v = SsaValue(*next_value);
+                    *next_value += 1;
+                    let block_id = BlockId(block_idx as u32);
+                    value_defs.push(ValueDef {
+                        var_name: None,
+                        cfg_node: rn,
+                        block: block_id,
+                    });
+                    ssa_blocks[block_idx].body.push(SsaInst {
+                        value: const_v,
+                        op: SsaOp::Const(const_text),
+                        cfg_node: rn,
+                        var_name: None,
+                        span: return_info.ast.span,
+                    });
+                    Terminator::Return(Some(const_v))
+                } else {
+                    let from_body = ssa_blocks[block_idx]
+                        .body
+                        .iter()
+                        .rev()
+                        .find(|inst| !matches!(inst.op, SsaOp::Nop))
+                        .map(|inst| inst.value);
+                    Terminator::Return(from_body)
+                }
             } else {
-                // Find the return value: last non-Nop body instruction that defines
-                // a meaningful value.
+                // (3) fn_exit / true fall-off — no Return CFG node in this
+                // block.  Use the last non-Nop body instruction as the
+                // implicit return value (e.g. the function's tail-position
+                // expression in Rust).
                 let ret_val = ssa_blocks[block_idx]
                     .body
                     .iter()
@@ -2484,6 +2589,110 @@ mod tests {
         assert!(
             has_branch,
             "normal 2-successor case must produce Branch, not Goto"
+        );
+    }
+
+    /// Regression: a block containing an explicit Return CFG node must
+    /// terminate with [`Terminator::Return`], never [`Terminator::Goto`]
+    /// to a synthetic exit block.  Previously, the bookkeeping
+    /// `Return → fn_exit` `Seq` edge made early-return blocks fall into
+    /// the single-successor `Goto` arm, and the fall-through tail
+    /// expression's body got merged into the shared exit block — every
+    /// early-return path therefore appeared to also execute the tail.
+    /// Mirrors the `if cond { return X; } Y` shape that motivated the fix.
+    #[test]
+    fn early_return_block_terminates_with_return_not_goto_to_exit() {
+        let mut cfg: Cfg = Graph::new();
+        let entry = cfg.add_node(make_node(StmtKind::Entry));
+        // Param-style external use (x is read by the if condition).
+        let if_node = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::If)
+        });
+        // True branch: return constant.  uses=[] + const_text=Some triggers
+        // the literal-return path, ensuring the block emits a synthetic
+        // Const + Return(Some(_)) — the same shape `return None` /
+        // `return String::new()` produces in real Rust code.
+        let early_ret = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                const_text: Some("\"\"".to_string()),
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Return)
+        });
+        // False branch: tail expression that defines `y` (the implicit
+        // function return value).
+        let tail = cfg.add_node(NodeInfo {
+            taint: TaintMeta {
+                defines: Some("y".into()),
+                uses: vec!["x".into()],
+                ..Default::default()
+            },
+            ..make_node(StmtKind::Seq)
+        });
+        let exit = cfg.add_node(make_node(StmtKind::Exit));
+
+        cfg.add_edge(entry, if_node, EdgeKind::Seq);
+        cfg.add_edge(if_node, early_ret, EdgeKind::True);
+        cfg.add_edge(if_node, tail, EdgeKind::False);
+        // Bookkeeping wire-up the real CFG construction performs in
+        // `build_cfg` — Return / Throw → fn_exit via Seq — so the SSA
+        // lowering has to handle it.
+        cfg.add_edge(early_ret, exit, EdgeKind::Seq);
+        cfg.add_edge(tail, exit, EdgeKind::Seq);
+
+        let ssa = lower_to_ssa(&cfg, entry, None, true).unwrap();
+
+        // Locate the block containing the early-return CFG node and
+        // assert it terminates with Return — not Goto(_) into the
+        // shared exit block.
+        let early_block = ssa
+            .blocks
+            .iter()
+            .find(|b| {
+                b.body
+                    .iter()
+                    .chain(b.phis.iter())
+                    .any(|inst| inst.cfg_node == early_ret)
+            })
+            .expect("early-return CFG node must live in some SSA block");
+        assert!(
+            matches!(early_block.terminator, Terminator::Return(_)),
+            "early-return block must terminate with Return, got {:?}",
+            early_block.terminator
+        );
+        assert!(
+            early_block.succs.is_empty(),
+            "early-return block must have no successors at the block level, \
+             got succs = {:?}",
+            early_block.succs
+        );
+
+        // The fall-through (tail) block must NOT have the early-return
+        // block as a predecessor.  Pre-fix, both the early-return path
+        // and the tail path merged into the shared fn_exit block, so the
+        // tail's body was reachable from the early-return path — that's
+        // the merged-return defect.
+        let tail_block = ssa
+            .blocks
+            .iter()
+            .find(|b| {
+                b.body
+                    .iter()
+                    .chain(b.phis.iter())
+                    .any(|inst| inst.cfg_node == tail)
+            })
+            .expect("tail CFG node must live in some SSA block");
+        let early_block_id = early_block.id;
+        assert!(
+            !tail_block.preds.contains(&early_block_id),
+            "tail block must not have early-return block as a predecessor; \
+             merged-return defect would re-emerge.  tail.preds = {:?}, \
+             early_block_id = {:?}",
+            tail_block.preds, early_block_id
         );
     }
 }

@@ -25,7 +25,7 @@ nyx serve          # opens http://localhost:9700 in your browser
 
 Everything stays on your machine: loopback-only bind, host-header enforcement, CSRF on every mutation, no telemetry, no login.
 
-<!-- SCREENSHOT: assets/screenshots/overview.png: OverviewPage dashboard (top findings, stats, engine profile) -->
+<p align="center"><img src="assets/screenshots/overview.png" alt="Overview dashboard after two scans: 2 findings remaining (down from 5), 3 fixed, a findings-over-time line trending down, plus severity/language/category breakdowns and top affected files" width="900"/></p>
 
 ---
 
@@ -42,9 +42,12 @@ Everything stays on your machine: loopback-only bind, host-header enforcement, C
 | **Rules** | Built-in and custom rules per language; add rules from the UI |
 | **Config** | Live config editor; reload without restart |
 
-<!-- SCREENSHOT: assets/screenshots/finding-detail.png: FindingDetailPage flow visualiser (THIS is the money shot) -->
-<!-- SCREENSHOT: assets/screenshots/triage.png: TriagePage bulk actions + audit log -->
-<!-- SCREENSHOT: assets/screenshots/explorer.png: ExplorerPage file tree + symbol list -->
+
+[//]: # (<p align="center"><img src="assets/screenshots/finding-detail.png" alt="Finding detail: HIGH taint-unsanitised-flow with numbered source → call → sink steps, file locations, and code snippets" width="900"/></p>)
+
+[//]: # (<p align="center"><img src="assets/screenshots/triage.png" alt="Triage page: 2 findings need attention, severity split, Findings/Suppression rules/Audit log tabs, rule filter chips, Investigate buttons" width="900"/></p>)
+
+[//]: # (<p align="center"><img src="assets/screenshots/explorer.png" alt="Explorer page: file tree with per-file finding counts, syntax-highlighted source with sink marker, right-side file summary + symbols + findings panel" width="900"/></p>)
 
 `nyx serve` flags: `--port <N>` (default `9700`), `--host <addr>` (loopback only: `127.0.0.1`, `localhost`, or `::1`), `--no-browser`. See `[server]` in `nyx.conf` for persistent settings.
 
@@ -53,6 +56,8 @@ Everything stays on your machine: loopback-only bind, host-header enforcement, C
 ## CLI for CI
 
 The same engine runs headless for CI pipelines. SARIF output uploads directly to GitHub Code Scanning.
+
+<p align="center"><img src="assets/screenshots/cli-scan.png" alt="nyx scan console output: HIGH taint findings across a JS and Python file with source → sink arrows" width="820"/></p>
 
 ```bash
 # Fail the job on medium or higher, emit SARIF
