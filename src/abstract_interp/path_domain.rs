@@ -517,6 +517,66 @@ pub fn classify_path_assertion(text: &str) -> PathAssertion {
     PathAssertion::None
 }
 
+/// Recognise a *structural* one-argument enum-variant constructor.
+///
+/// Returns `true` when `callee` matches Rust's grammar for a variant
+/// constructor call: the leaf (last path segment after `::` / `.`)
+/// starts with an uppercase ASCII letter, and the callee has no method
+/// receiver portion past a single terminal identifier.  Callers combine
+/// this with a structural "single-argument call, no receiver" gate; the
+/// classification is deliberately name-agnostic and does not hard-code
+/// `Some` / `Ok` / `Err` / `Box::new` / …, so user-defined enum variants
+/// participate on the same footing as stdlib ones.
+///
+/// The heuristic is intentionally conservative:
+///   * Must be non-empty.
+///   * The leaf segment must begin with an ASCII uppercase letter
+///     (Rust's variant / struct / type grammar).
+///   * The leaf segment must be ASCII alphanumeric / underscore — no
+///     method call noise (parentheses, argument lists) survives here
+///     because callees arrive in their normalised scoped-identifier
+///     form.
+///
+/// Callers that use this as a PathFact passthrough must still verify
+/// the call has exactly one argument (or one argument past a receiver-
+/// less structural gate); the leaf check alone does not constrain
+/// arity.
+pub fn is_structural_variant_ctor(callee: &str) -> bool {
+    let trimmed = callee.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Accept either form by inspecting both the leaf and (for scoped
+    // callees) the penultimate segment.  A bare identifier whose leaf is
+    // upper-camel-case names an enum variant or tuple struct (`Some`,
+    // `Ok`, `MyResult`).  A scoped identifier whose *penultimate*
+    // segment is upper-camel-case names an associated constructor on
+    // that type — `Box::new`, `Cell::from`, `PathBuf::with_capacity`,
+    // etc.  The latter is the lower-leaf-case shape we want to admit
+    // alongside the bare-variant shape.
+    let segments: smallvec::SmallVec<[&str; 4]> =
+        trimmed.split("::").filter(|s| !s.is_empty()).collect();
+    let is_upper_ident = |s: &str| -> bool {
+        match s.chars().next() {
+            Some(c) if c.is_ascii_uppercase() => {
+                s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            }
+            _ => false,
+        }
+    };
+    if segments.is_empty() {
+        return false;
+    }
+    if segments.len() == 1 {
+        return is_upper_ident(segments[0]);
+    }
+    // Scoped: accept either upper-camel-case leaf (`Module::Variant`)
+    // or upper-camel-case penultimate (`Type::associated_fn`).
+    let leaf = segments[segments.len() - 1];
+    let parent = segments[segments.len() - 2];
+    is_upper_ident(leaf) || is_upper_ident(parent)
+}
+
 /// Recognise a Rust path-producing primitive call by canonical callee name,
 /// and return its PathFact effect on the result.  `input_fact` is the
 /// PathFact of the receiver/first argument (the value being sanitised);
@@ -1116,6 +1176,139 @@ mod tests {
     fn primitive_unknown_returns_none() {
         assert!(classify_path_primitive("unknown_fn", &PathFact::top()).is_none());
         assert!(classify_path_primitive("vec::new", &PathFact::top()).is_none());
+    }
+
+    // ── Structural variant-ctor classifier ─────────────────────────────
+
+    #[test]
+    fn variant_ctor_recognises_upper_camel_leaf() {
+        assert!(is_structural_variant_ctor("Some"));
+        assert!(is_structural_variant_ctor("Ok"));
+        assert!(is_structural_variant_ctor("Err"));
+        assert!(is_structural_variant_ctor("Box::new"));
+        assert!(is_structural_variant_ctor("std::option::Option::Some"));
+        // User-defined upper-camel-case variant name participates the
+        // same way — name list is not part of the contract.
+        assert!(is_structural_variant_ctor("MyResult::Ok"));
+        assert!(is_structural_variant_ctor("Wrapper"));
+    }
+
+    #[test]
+    fn variant_ctor_rejects_lowercase_leaf() {
+        assert!(!is_structural_variant_ctor("foo"));
+        assert!(!is_structural_variant_ctor("bar::baz"));
+        assert!(!is_structural_variant_ctor("std::env::var"));
+        assert!(!is_structural_variant_ctor("to_string"));
+    }
+
+    #[test]
+    fn variant_ctor_rejects_empty_or_garbled() {
+        assert!(!is_structural_variant_ctor(""));
+        assert!(!is_structural_variant_ctor("::"));
+        assert!(!is_structural_variant_ctor("123"));
+    }
+
+    // ── PathFactReturnEntry merge / dedup ───────────────────────────────
+
+    #[test]
+    fn merge_path_fact_dedups_by_predicate_hash() {
+        use crate::summary::ssa_summary::{PathFactReturnEntry, merge_path_fact_return_paths};
+        use smallvec::SmallVec;
+        let mut acc: SmallVec<[PathFactReturnEntry; 2]> = SmallVec::new();
+        let f1 = PathFact::top().with_dotdot_cleared();
+        let f2 = PathFact::top().with_absolute_cleared();
+        merge_path_fact_return_paths(
+            &mut acc,
+            &[PathFactReturnEntry {
+                predicate_hash: 42,
+                known_true: 0,
+                known_false: 0,
+                path_fact: f1.clone(),
+                variant_inner_fact: None,
+            }],
+        );
+        merge_path_fact_return_paths(
+            &mut acc,
+            &[PathFactReturnEntry {
+                predicate_hash: 42,
+                known_true: 0,
+                known_false: 0,
+                path_fact: f2.clone(),
+                variant_inner_fact: None,
+            }],
+        );
+        assert_eq!(acc.len(), 1, "same predicate hash collapses to one entry");
+        let joined = f1.join(&f2);
+        assert_eq!(
+            acc[0].path_fact, joined,
+            "facts join on predicate-hash collision"
+        );
+    }
+
+    #[test]
+    fn merge_path_fact_distinct_hashes_kept_separate() {
+        use crate::summary::ssa_summary::{PathFactReturnEntry, merge_path_fact_return_paths};
+        use smallvec::SmallVec;
+        let mut acc: SmallVec<[PathFactReturnEntry; 2]> = SmallVec::new();
+        merge_path_fact_return_paths(
+            &mut acc,
+            &[
+                PathFactReturnEntry {
+                    predicate_hash: 1,
+                    known_true: 0,
+                    known_false: 0,
+                    path_fact: PathFact::top().with_dotdot_cleared(),
+                    variant_inner_fact: None,
+                },
+                PathFactReturnEntry {
+                    predicate_hash: 2,
+                    known_true: 0,
+                    known_false: 0,
+                    path_fact: PathFact::top(),
+                    variant_inner_fact: Some(PathFact::top().with_absolute_cleared()),
+                },
+            ],
+        );
+        assert_eq!(acc.len(), 2);
+    }
+
+    #[test]
+    fn merge_path_fact_overflow_caps_at_bound() {
+        use crate::summary::ssa_summary::{
+            MAX_PATH_FACT_RETURN_ENTRIES, PathFactReturnEntry, merge_path_fact_return_paths,
+        };
+        use smallvec::SmallVec;
+        let mut acc: SmallVec<[PathFactReturnEntry; 2]> = SmallVec::new();
+        // Push twice as many distinct predicate hashes as the cap so
+        // overflow collapse fires repeatedly.  Each collapse compacts
+        // the accumulator back to a single Top-predicate entry; the
+        // next insert lands fresh on top.  The invariant we care
+        // about is bounded growth: the final length must not exceed
+        // `MAX_PATH_FACT_RETURN_ENTRIES`.
+        for i in 0..(MAX_PATH_FACT_RETURN_ENTRIES * 2) {
+            merge_path_fact_return_paths(
+                &mut acc,
+                &[PathFactReturnEntry {
+                    predicate_hash: i as u64 + 100,
+                    known_true: 0,
+                    known_false: 0,
+                    path_fact: PathFact::top().with_dotdot_cleared(),
+                    variant_inner_fact: None,
+                }],
+            );
+        }
+        assert!(
+            acc.len() <= MAX_PATH_FACT_RETURN_ENTRIES,
+            "overflow growth stays bounded: got {}",
+            acc.len()
+        );
+        // Whichever of the post-collapse entries survives, at least
+        // one carries the unguarded (predicate_hash == 0) collapse
+        // sentinel from a previous overflow.
+        assert!(
+            acc.iter().any(|e| e.predicate_hash == 0),
+            "collapse sentinel must persist"
+        );
     }
 
     #[test]

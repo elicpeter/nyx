@@ -141,6 +141,33 @@ jobs:
         # still has CR; the tr step above is the primary fix.
         run: diff -u --strip-trailing-cr THIRDPARTY-LICENSES.html /tmp/THIRDPARTY-LICENSES.html
 
+  docs-fresh:
+    # Regenerate the per-language AST-pattern tables in docs/rules.md
+    # (between the AUTOGEN sentinel comments) and fail if the committed
+    # markdown is stale. Run this whenever a Pattern is added/edited
+    # in src/patterns/<lang>.rs:
+    #   cargo run --features docgen --bin nyx-docgen
+    # then commit the regenerated docs/rules.md.
+    name: docs-fresh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Regenerate rule reference
+        run: cargo run --features docgen --bin nyx-docgen
+
+      - name: Verify docs/rules.md is fresh
+        run: |
+          if ! git diff --exit-code docs/rules.md; then
+            echo "::error::docs/rules.md is stale. Run 'cargo run --features docgen --bin nyx-docgen' and commit the result."
+            exit 1
+          fi
+
   rust-beta-build:
     name: rust-beta-build
     runs-on: ubuntu-latest

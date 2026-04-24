@@ -1753,6 +1753,15 @@ fn extract_inline_return_taint(
     // path proves it.
     let mut return_path_fact_acc: Option<crate::abstract_interp::PathFact> = None;
 
+    // Per-return-block PathFact observations.  Each entry records one
+    // return block's PathFact under its own predicate gate so match-arm-
+    // sensitive callers can pick the arm-specific fact.  The joined
+    // fallback in `return_path_fact_acc` stays the default for callers
+    // that cannot distinguish paths.
+    let mut per_return_path_entries: SmallVec<
+        [crate::summary::ssa_summary::PathFactReturnEntry; 2],
+    > = SmallVec::new();
+
     let classify_and_push = |orig: &TaintOrigin,
                              internal: &mut SmallVec<[TaintOrigin; 2]>,
                              provenance: &mut u64,
@@ -1822,14 +1831,20 @@ fn extract_inline_return_taint(
                 // carries that path's narrowing.  The per-predecessor facts
                 // are then joined to describe the callee-intrinsic
                 // (Top-seeded) return narrowing.
+                //
+                // Additionally collect per-block observations
+                // (`block_fact`, `variant_inner_fact`) so the cached
+                // shape's `return_path_facts` lets match-arm-sensitive
+                // callers pick one path's fact without going through the
+                // dilutive join.
                 let single_pred = block.preds.len() <= 1;
+                let mut block_outer_fact: Option<crate::abstract_interp::PathFact> = None;
+                let mut block_variant_inner: Option<crate::abstract_interp::PathFact> = None;
                 if single_pred {
                     if let Some(ref abs) = exit.abstract_state {
                         let fact = abs.get(rv).path;
-                        return_path_fact_acc = Some(match return_path_fact_acc.clone() {
-                            None => fact,
-                            Some(prev) => prev.join(&fact),
-                        });
+                        block_outer_fact = Some(fact);
+                        block_variant_inner = detect_variant_inner_fact(rv, ssa, &exit);
                     }
                 } else {
                     for pred in &block.preds {
@@ -1848,13 +1863,82 @@ fn extract_inline_return_taint(
                             );
                             if let Some(ref abs) = per_pred_exit.abstract_state {
                                 let fact = abs.get(rv).path;
-                                return_path_fact_acc = Some(match return_path_fact_acc.clone() {
+                                block_outer_fact = Some(match block_outer_fact {
                                     None => fact,
                                     Some(prev) => prev.join(&fact),
                                 });
+                                let inner_this = detect_variant_inner_fact(rv, ssa, &per_pred_exit);
+                                block_variant_inner = match (block_variant_inner, inner_this) {
+                                    (Some(a), Some(b)) => Some(a.join(&b)),
+                                    (Some(a), None) => Some(a),
+                                    (None, Some(b)) => Some(b),
+                                    (None, None) => None,
+                                };
                             }
                         }
                     }
+                }
+
+                // Pick this block's contribution to the joined
+                // `return_path_fact`.  When the rv is a one-arg variant
+                // constructor (structurally: upper-camel-case leaf, 1 arg,
+                // no receiver), the *inner* fact is what a destructuring
+                // caller would see on the match-bound variable — the outer
+                // variant-wrapper fact is semantically irrelevant because
+                // `Option<String>` / `Result<String, _>` / `Box<String>`
+                // values are not themselves path values.  Summary-level
+                // unwrapping keeps the joined fact precise for the common
+                // "`sanitize(...) -> Option<String>`; `let safe = match …
+                // { Some(s) => s, None => return }`" idiom without
+                // teaching the CFG/SSA layer about per-arm path
+                // narrowing.
+                //
+                // Additionally, a return path whose rv carries no data
+                // (nullary variant like `None`, or a constant `null` /
+                // `nil`) is skipped from the joined fact: a
+                // destructuring caller cannot extract a path value
+                // from that path, so it is semantically unreachable at
+                // any path-typed sink.  Skipping avoids diluting an
+                // otherwise proven narrowing on the data-producing
+                // arms.
+                let rv_carries_no_data = is_non_data_return(rv, ssa);
+                let block_contribution = if rv_carries_no_data {
+                    None
+                } else {
+                    block_variant_inner
+                        .clone()
+                        .or_else(|| block_outer_fact.clone())
+                };
+                if let Some(fact) = block_contribution {
+                    return_path_fact_acc = Some(match return_path_fact_acc.clone() {
+                        None => fact,
+                        Some(prev) => prev.join(&fact),
+                    });
+                }
+
+                // Emit a per-return-path entry when we have a fact for
+                // this block.  The predicate hash and known-true/false
+                // come from the *entry* predicate gate (the exit
+                // replay's predicates describe the gate under which
+                // this return is reached).  Per-path entries carry both
+                // the outer `path_fact` and the optional
+                // `variant_inner_fact` so match-arm-sensitive callers
+                // can distinguish the two.
+                if let Some(outer) = block_outer_fact {
+                    let (predicate_hash, known_true, known_false) =
+                        summary_extract::summarise_return_predicates(&exit);
+
+                    let entry = crate::summary::ssa_summary::PathFactReturnEntry {
+                        predicate_hash,
+                        known_true,
+                        known_false,
+                        path_fact: outer,
+                        variant_inner_fact: block_variant_inner,
+                    };
+                    crate::summary::ssa_summary::merge_path_fact_return_paths(
+                        &mut per_return_path_entries,
+                        &[entry],
+                    );
                 }
             } else {
                 // Return(None): implicit return / empty body.
@@ -1901,6 +1985,21 @@ fn extract_inline_return_taint(
     let return_path_fact =
         return_path_fact_acc.unwrap_or_else(crate::abstract_interp::PathFact::top);
 
+    // Only keep per-return-path entries when at least one entry carries
+    // meaningful signal (non-Top path_fact or a variant_inner_fact).  A
+    // list of all-Top entries adds bytes on disk without helping a
+    // caller pick a path.  Additionally require ≥2 distinct entries —
+    // a single-entry list is no finer than the joined `return_path_fact`.
+    let return_path_facts = if per_return_path_entries.len() >= 2
+        && per_return_path_entries
+            .iter()
+            .any(|e| !e.path_fact.is_top() || e.variant_inner_fact.is_some())
+    {
+        per_return_path_entries
+    } else {
+        SmallVec::new()
+    };
+
     // Even when the callee produces no return taint and no param/receiver
     // provenance, a non-Top PathFact on the return is still meaningful
     // (it tells callers "this helper's return is sanitised along a path
@@ -1910,6 +2009,7 @@ fn extract_inline_return_taint(
         && !final_receiver
         && final_internal.is_empty()
         && return_path_fact.is_top()
+        && return_path_facts.is_empty()
     {
         return CachedInlineShape(None);
     }
@@ -1921,7 +2021,147 @@ fn extract_inline_return_taint(
         receiver_provenance: final_receiver,
         uses_summary: true, // inline analysis is a form of summary
         return_path_fact,
+        return_path_facts,
     }))
+}
+
+/// Structural predicate: does `rv` represent a "non-data" return —
+/// a value that cannot carry path-typed content on this return path?
+///
+/// Recognises the common failure-arm idioms without hard-coding
+/// specific identifier names:
+///   * [`SsaOp::Const`] whose text is a recognised nullary tag
+///     (`None`, `null`, `nil`, `NULL`, `()`, `Err`, `Nothing`, …) —
+///     tree-sitter-rust emits `None` as a constant path identifier
+///     rather than a call; across other languages `null` / `nil`
+///     cover the equivalents.
+///   * [`SsaOp::Call`] with *zero* arguments and no receiver whose
+///     callee leaf segment looks like a Rust-grammar variant /
+///     struct constructor (ASCII upper-case start, alphanumeric /
+///     underscore body) — covers user-defined nullary variants like
+///     `Nothing` or `Default` without naming them.  Zero-arg
+///     constructors carry no attacker-controlled content by
+///     definition, so they are provably not a path-typed payload.
+///
+/// Returns `false` for taint-carrying returns (calls with arguments,
+/// string literals that could be interpreted as paths, identifiers
+/// that resolve to user input, etc.); skipping them would lose
+/// soundness of path-safety narrowing.
+fn is_non_data_return(rv: SsaValue, ssa: &SsaBody) -> bool {
+    for block in &ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            if inst.value != rv {
+                continue;
+            }
+            match &inst.op {
+                SsaOp::Const(Some(text)) => {
+                    // Match the nullary sentinels used across the
+                    // supported languages.  Intentionally narrow —
+                    // any non-sentinel constant may be a path
+                    // literal that must participate in the join.
+                    let trimmed = text.trim();
+                    return matches!(
+                        trimmed,
+                        "None"
+                            | "NONE"
+                            | "null"
+                            | "NULL"
+                            | "nil"
+                            | "undefined"
+                            | "Nothing"
+                            | "()"
+                            | ""
+                    );
+                }
+                SsaOp::Call {
+                    callee,
+                    args,
+                    receiver,
+                } => {
+                    if receiver.is_none()
+                        && args.is_empty()
+                        && crate::abstract_interp::path_domain::is_structural_variant_ctor(callee)
+                    {
+                        return true;
+                    }
+                    return false;
+                }
+                _ => return false,
+            }
+        }
+    }
+    false
+}
+
+/// Structural detector for "return value is a one-argument variant
+/// constructor" at the callee's exit.
+///
+/// Returns `Some(inner_fact)` when:
+///   * `rv` is defined by [`SsaOp::Call`] in `ssa`;
+///   * the call's callee leaf segment is a Rust-grammar variant / type
+///     constructor (upper-camel-case start, alphanumeric/underscore
+///     tail — see
+///     [`crate::abstract_interp::path_domain::is_structural_variant_ctor`]);
+///   * the call has no receiver and exactly one positional argument
+///     group whose size is 1 (a single SSA value);
+///
+/// where `inner_fact` is the [`PathFact`] on that inner argument's SSA
+/// value at the callee's exit state.  Name-agnostic: `Some`, `Ok`,
+/// `Err`, `Box::new`, and any user-defined single-field enum variant
+/// or tuple struct constructor all participate on the same footing.
+pub(super) fn detect_variant_inner_fact(
+    rv: SsaValue,
+    ssa: &SsaBody,
+    exit: &state::SsaTaintState,
+) -> Option<crate::abstract_interp::PathFact> {
+    for block in &ssa.blocks {
+        for inst in block.phis.iter().chain(block.body.iter()) {
+            if inst.value != rv {
+                continue;
+            }
+            let SsaOp::Call {
+                callee,
+                args,
+                receiver,
+            } = &inst.op
+            else {
+                return None;
+            };
+            if receiver.is_some() {
+                return None;
+            }
+            if !crate::abstract_interp::path_domain::is_structural_variant_ctor(callee) {
+                return None;
+            }
+            // Single positional argument in the first group.  SSA
+            // lowering appends an implicit chained-call uses group
+            // after the positional ones, so we cannot read positional
+            // arity from `args.len()` alone — however the *first*
+            // group still captures the positional arg 0's contributing
+            // SsaValues.  Join PathFacts across every value in that
+            // group so chained inner calls (`Some(s.to_string())`
+            // surfaces both `s` and `s.to_string`'s result) contribute
+            // their most precise narrowing.
+            let group = args.first()?;
+            if group.is_empty() {
+                return None;
+            }
+            let abs = exit.abstract_state.as_ref()?;
+            let mut joined: Option<crate::abstract_interp::PathFact> = None;
+            for &v in group {
+                let fact = abs.get(v).path;
+                if fact.is_top() {
+                    continue;
+                }
+                joined = Some(match joined {
+                    None => fact,
+                    Some(prev) => prev.join(&fact),
+                });
+            }
+            return joined;
+        }
+    }
+    None
 }
 
 /// Re-attribute a [`CachedInlineShape`] to a specific call site.
@@ -1954,6 +2194,7 @@ fn apply_cached_shape(
         return InlineResult {
             return_taint: None,
             return_path_fact: crate::abstract_interp::PathFact::top(),
+            return_path_facts: SmallVec::new(),
         };
     };
 
@@ -2035,6 +2276,7 @@ fn apply_cached_shape(
     InlineResult {
         return_taint,
         return_path_fact: ret.return_path_fact.clone(),
+        return_path_facts: ret.return_path_facts.clone(),
     }
 }
 
@@ -3584,6 +3826,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                 // StringFact (exact value), which `SsaOp::Const` seeds for
                 // string literals during the same pass.
                 let leaf = crate::callgraph::callee_leaf_name(callee);
+                let mut handled = false;
                 if leaf == "replace" {
                     if let Some(first_arg) = args.first().and_then(|g| g.first()) {
                         let arg_string = abs.get(*first_arg).string;
@@ -3603,9 +3846,81 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
                             }
                             if narrowed {
                                 abs.set(inst.value, AbstractValue::with_path_fact(new_fact));
+                                handled = true;
                             }
                         }
                     }
+                }
+
+                // Structural variant-wrapper transparency.  When a call is
+                // a one-positional-argument variant / type constructor
+                // (receiver-less; callee leaf begins with ASCII upper-case
+                // — the
+                // [`crate::abstract_interp::path_domain::is_structural_variant_ctor`]
+                // gate), its result inherits the joined PathFact of every
+                // SSA value the lowering recorded for that single
+                // positional argument.  Covers `Some(s)`, `Ok(s)`,
+                // `Err(s)`, `Box::new(s)`, and user-defined single-field
+                // variants / tuple structs alike — the classification is
+                // deliberately name-agnostic, so a freshly introduced
+                // wrapper variant participates without code change.
+                //
+                // Positional arity is read from the CFG's
+                // `info.call.arg_uses` (the authoritative list), not
+                // from `args.len()`: SSA lowering appends an implicit
+                // group of chained-call uses after the positional
+                // groups, so `args.len()` over-counts.  For the
+                // positional group itself we join the PathFacts across
+                // all contributing SsaValues — chained calls inside the
+                // argument (`Some(s.to_string())`) surface every uses'
+                // value; the join picks the most precise axis each
+                // value proves.
+                if !handled
+                    && receiver.is_none()
+                    && info.call.arg_uses.len() == 1
+                    && crate::abstract_interp::path_domain::is_structural_variant_ctor(callee)
+                {
+                    if let Some(group) = args.first() {
+                        let mut joined_inner: Option<PathFact> = None;
+                        for &v in group {
+                            let f = abs.get(v).path;
+                            if f.is_top() {
+                                continue;
+                            }
+                            joined_inner = Some(match joined_inner {
+                                None => f,
+                                Some(prev) => prev.join(&f),
+                            });
+                        }
+                        if let Some(inner_fact) = joined_inner {
+                            abs.set(inst.value, AbstractValue::with_path_fact(inner_fact));
+                            handled = true;
+                        }
+                    }
+                }
+
+                // Structural zero-argument allocator / constructor.
+                // Callee is a Rust scoped identifier (contains `::`) whose
+                // parent segment (e.g. `String` in `String::new`) begins
+                // with ASCII upper-case, the call has no receiver and no
+                // arguments, and the node carries no Source label —
+                // i.e. the helper is a fresh-allocation entry point, not
+                // an external-input read.  Zero inputs ⇒ the result
+                // carries no attacker-controlled path content and is
+                // provably free of `..` components and absolute roots.
+                // This closes the early-return path of sanitisers whose
+                // rejection returns `String::new()` / `PathBuf::new()` /
+                // etc., without a hard-coded allocator name list.
+                if !handled
+                    && receiver.is_none()
+                    && args.is_empty()
+                    && has_typeprefix_upper_scoped(callee)
+                    && !has_source_label_on_node(info)
+                {
+                    let fact = PathFact::top()
+                        .with_dotdot_cleared()
+                        .with_absolute_cleared();
+                    abs.set(inst.value, AbstractValue::with_path_fact(fact));
                 }
             }
         }
@@ -3621,6 +3936,70 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: O
 /// Re-export from type_facts for use in transfer_abstract.
 fn is_int_producing_callee(callee: &str) -> bool {
     crate::ssa::type_facts::is_int_producing_callee(callee)
+}
+
+/// Structural check: does `callee` look like a Rust scoped identifier
+/// whose parent segment is a type (upper-camel-case)?
+///
+/// Used by the zero-argument-allocator arm of `transfer_abstract` to
+/// recognise `Type::new` / `Type::default` / `Type::with_capacity` /
+/// `Type::empty` — and any user-defined associated allocator — as a
+/// fresh-allocation site without hard-coding the leaf name.  The check
+/// is deliberately conservative:
+///
+///   * Must contain at least one `::` separator.
+///   * The segment *before* the final leaf must start with an ASCII
+///     upper-case letter and contain only ASCII alphanumeric / `_`
+///     characters — Rust's grammar for type identifiers.  (Module-only
+///     paths like `std::env` don't qualify; the gate fires only on
+///     type paths like `String::new`.)
+///
+/// Returns `false` on empty input or bare function calls.
+fn has_typeprefix_upper_scoped(callee: &str) -> bool {
+    // `peel_identity_suffix` strips trailing `.unwrap()` etc. so
+    // `String::new.unwrap` normalises to `String::new`.  Fallback to the
+    // raw callee when peeling produces an empty string.
+    let normalised = crate::ssa::type_facts::peel_identity_suffix(callee);
+    let normalised = if normalised.is_empty() {
+        callee
+    } else {
+        normalised.as_str()
+    };
+    let mut segments: smallvec::SmallVec<[&str; 4]> =
+        normalised.split("::").filter(|s| !s.is_empty()).collect();
+    if segments.len() < 2 {
+        return false;
+    }
+    // Drop trailing method-style `.ident` noise from the leaf segment.
+    if let Some(leaf) = segments.last_mut() {
+        if let Some(dot_idx) = leaf.find('.') {
+            *leaf = &leaf[..dot_idx];
+        }
+    }
+    // Parent is the second-to-last segment.
+    let parent = segments[segments.len() - 2];
+    let Some(first) = parent.chars().next() else {
+        return false;
+    };
+    if !first.is_ascii_uppercase() {
+        return false;
+    }
+    parent
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// True when `info` carries any [`DataLabel::Source`] label.
+///
+/// Guards the zero-argument-allocator arm of `transfer_abstract` against
+/// mis-classifying external-input readers (e.g. an environment-variable
+/// getter that happens to have a scoped upper-camel-case parent
+/// segment) as empty allocations.
+fn has_source_label_on_node(info: &NodeInfo) -> bool {
+    info.taint
+        .labels
+        .iter()
+        .any(|l| matches!(l, DataLabel::Source(_)))
 }
 
 /// Check if a constant text is a string literal (quoted).
@@ -5903,7 +6282,24 @@ fn trace_single_leaf(
                         .any(|l| matches!(l, crate::labels::DataLabel::Source(_)))
                 })
                 .unwrap_or(false);
-            if is_source {
+            // PathFact-proven sanitisation: when the abstract state has
+            // recorded a non-Top [`PathFact`] on this Call's result —
+            // typically because cross-function inline analysis narrowed
+            // the return path's `dotdot` / `absolute` axis — the Call
+            // is the *proof point*.  Tracing past it would land on the
+            // upstream source (whose PathFact is still Top) and defeat
+            // the narrowing.  Push the Call result as a leaf so
+            // `is_path_safe_for_sink` reads the proven fact directly.
+            //
+            // Strictly additive — only fires when the abstract domain
+            // proves a non-Top fact, so source-labeled Calls (already
+            // caught above) and unrelated calls fall back to the
+            // existing trace-through-args behaviour.
+            let proves_path_safe = state.abstract_state.as_ref().is_some_and(|abs_state| {
+                let f = abs_state.get(v).path;
+                !f.is_top() && f.is_path_safe()
+            });
+            if is_source || proves_path_safe {
                 leaves.push(v);
             } else {
                 let mut found = false;

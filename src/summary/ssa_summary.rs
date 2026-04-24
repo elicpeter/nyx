@@ -1,4 +1,4 @@
-use crate::abstract_interp::{AbstractTransfer, AbstractValue};
+use crate::abstract_interp::{AbstractTransfer, AbstractValue, PathFact};
 use crate::labels::Cap;
 use crate::ssa::type_facts::TypeKind;
 use crate::summary::SinkSite;
@@ -268,6 +268,141 @@ pub struct SsaFuncSummary {
     /// each other or the return value.
     #[serde(default, skip_serializing_if = "PointsToSummary::is_empty")]
     pub points_to: PointsToSummary,
+    /// Per-return-path abstract [`PathFact`] decomposition.
+    ///
+    /// When non-empty, supplies per-predicate-gate facts finer than the
+    /// aggregate `return_abstract.path` (which is the join over all
+    /// return blocks and loses narrowing on any block whose rv is Top).
+    /// Each entry records the fact on one distinct predicate gate and,
+    /// when the rv is a structural one-arg variant constructor, the
+    /// inner fact so match-arm-sensitive callers can pick the arm-
+    /// specific fact.
+    ///
+    /// Empty for callees whose return blocks produce no non-Top fact,
+    /// or whose single return path makes the aggregate already precise.
+    /// Cross-file callers that cannot pick a specific path fall back to
+    /// joining the entries — equivalent to the pre-decomposition
+    /// behaviour.
+    #[serde(default, skip_serializing_if = "SmallVec::is_empty")]
+    pub return_path_facts: SmallVec<[PathFactReturnEntry; 2]>,
+}
+
+/// A per-return-path [`PathFact`] entry.
+///
+/// `SsaFuncSummary.param_return_paths` decomposes taint transforms by
+/// predicate hash; `PathFactReturnEntry` records the matching decomposition
+/// for the abstract [`PathFact`] on the return SSA value.  Each entry keys
+/// on the same `predicate_hash` so the two vectors can be joined at the
+/// call site.
+///
+/// `variant_inner_fact` captures the *inner* fact when the return value on
+/// this path is a recognised one-argument variant constructor (e.g.
+/// `Some(s)` / `Ok(s)`).  Callers that destructure the call result via a
+/// `match` or `if let` use the inner fact in the matching arm instead of
+/// the outer wrapper's fact.  `None` when the return rv is not a variant
+/// wrapper.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathFactReturnEntry {
+    /// Deterministic hash of the predicate gate at this return block.
+    /// `0` = unguarded return.  Shares the same hash space as
+    /// [`ReturnPathTransform::path_predicate_hash`] so the two tables
+    /// align per-path.
+    pub predicate_hash: u64,
+    /// `PredicateSummary::known_true` bits that hold on every path into
+    /// this return (same encoding as
+    /// [`ReturnPathTransform::known_true`]).
+    pub known_true: u8,
+    /// `PredicateSummary::known_false` bits at this return.
+    pub known_false: u8,
+    /// The return value's [`PathFact`] on this path.
+    pub path_fact: PathFact,
+    /// Inner [`PathFact`] when the rv on this path is a one-arg variant
+    /// constructor; [`None`] otherwise.  Match-arm-sensitive callers
+    /// consume this in the variant-binding arm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_inner_fact: Option<PathFact>,
+}
+
+impl PathFactReturnEntry {
+    /// Dedup key.  Two entries with identical `(predicate_hash,
+    /// path_fact, variant_inner_fact)` describe the same abstract return
+    /// under the same predicate gate and collapse losslessly.
+    pub fn dedup_key(&self) -> (u64, &PathFact, Option<&PathFact>) {
+        (
+            self.predicate_hash,
+            &self.path_fact,
+            self.variant_inner_fact.as_ref(),
+        )
+    }
+}
+
+/// Maximum per-summary [`PathFactReturnEntry`] count.
+///
+/// Mirrors [`MAX_RETURN_PATHS`]: a return-heavy callee pays bounded space
+/// while still preserving the typical 2-4 path decomposition.
+pub const MAX_PATH_FACT_RETURN_ENTRIES: usize = 8;
+
+/// Merge `incoming` into `existing`, deduping by
+/// [`PathFactReturnEntry::dedup_key`].  Entries whose
+/// `predicate_hash` matches but whose facts differ are joined
+/// (component-wise fact join) so the resulting entry over-approximates
+/// both paths.  Caps the result at
+/// [`MAX_PATH_FACT_RETURN_ENTRIES`]; overflow collapses into a single
+/// Top-predicate entry whose fact is the join of all dropped entries'
+/// facts.
+pub fn merge_path_fact_return_paths(
+    existing: &mut SmallVec<[PathFactReturnEntry; 2]>,
+    incoming: &[PathFactReturnEntry],
+) {
+    for new_entry in incoming {
+        if let Some(slot) = existing
+            .iter_mut()
+            .find(|e| e.predicate_hash == new_entry.predicate_hash)
+        {
+            // Same predicate gate: join facts (component-wise over-approximation).
+            slot.path_fact = slot.path_fact.join(&new_entry.path_fact);
+            slot.variant_inner_fact = match (
+                slot.variant_inner_fact.take(),
+                &new_entry.variant_inner_fact,
+            ) {
+                (Some(a), Some(b)) => Some(a.join(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b.clone()),
+                (None, None) => None,
+            };
+            // Intersect known_true / known_false: only bits proved on
+            // every path into this predicate gate survive.
+            slot.known_true &= new_entry.known_true;
+            slot.known_false &= new_entry.known_false;
+        } else {
+            existing.push(new_entry.clone());
+        }
+    }
+    if existing.len() > MAX_PATH_FACT_RETURN_ENTRIES {
+        let mut joined_fact = PathFact::bottom();
+        let mut joined_inner: Option<PathFact> = None;
+        let mut kt = u8::MAX;
+        let mut kf = u8::MAX;
+        for e in existing.iter() {
+            joined_fact = joined_fact.join(&e.path_fact);
+            joined_inner = match (joined_inner, &e.variant_inner_fact) {
+                (None, None) => None,
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b.clone()),
+                (Some(a), Some(b)) => Some(a.join(b)),
+            };
+            kt &= e.known_true;
+            kf &= e.known_false;
+        }
+        existing.clear();
+        existing.push(PathFactReturnEntry {
+            predicate_hash: 0,
+            known_true: kt,
+            known_false: kf,
+            path_fact: joined_fact,
+            variant_inner_fact: joined_inner,
+        });
+    }
 }
 
 /// Union-merge two `param_return_paths` lists keyed by parameter

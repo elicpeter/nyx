@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 308
+    "corpus_size": 316
   },
   "cases": [
     {
@@ -10034,6 +10034,225 @@
       ],
       "disabled": false,
       "notes": "Phase B4: `validate_target` helper internally calls `require_membership(group_id, user.id)` — handler-level call lifts the auth check transparently"
+    },
+    {
+      "case_id": "rs-safe-014",
+      "file": "rust/safe/safe_option_sanitizer.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-regression",
+        "path-sanitizer",
+        "variant-wrapper"
+      ],
+      "disabled": false,
+      "notes": "Option-returning sanitizer: `sanitize_path(s) -> Option<String>` with match-arm Some-binding extraction. Per-return-path PathFact decomposition + structural variant unwrapping closes the FP."
+    },
+    {
+      "case_id": "rs-safe-016",
+      "file": "rust/safe/safe_cross_function_dotdot.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-regression",
+        "path-sanitizer",
+        "cross-function"
+      ],
+      "disabled": false,
+      "notes": "Cross-function bool-returning validator with `if !validate(&raw) { return; }` rejection. Per-return-path summary lifts the helper's `dotdot/absolute` narrowing across the call boundary."
+    },
+    {
+      "case_id": "cve-rs-2018-20997-vulnerable",
+      "file": "cve_corpus/rust/CVE-2018-20997/vulnerable.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "cve",
+        "tar-rs",
+        "zip-slip"
+      ],
+      "disabled": false,
+      "notes": "CVE-2018-20997 / RUSTSEC-2018-0003: tar-rs zip-slip vulnerability — entry path interpolated into File::create without `..` rejection. MIT OR Apache-2.0"
+    },
+    {
+      "case_id": "cve-rs-2018-20997-patched",
+      "file": "cve_corpus/rust/CVE-2018-20997/patched.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "tar-rs",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2018-20997 patched counterpart: `sanitize_path` rejects `..` traversal and absolute paths. Regression guard that Nyx does not refire on the fix."
+    },
+    {
+      "case_id": "cve-rs-2022-36113-vulnerable",
+      "file": "cve_corpus/rust/CVE-2022-36113/vulnerable.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "cve",
+        "cargo",
+        "symlink"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-36113: cargo `.cargo-ok` symlink follow — crate name interpolated into File::create without separator/dotdot rejection. MIT OR Apache-2.0"
+    },
+    {
+      "case_id": "cve-rs-2022-36113-patched",
+      "file": "cve_corpus/rust/CVE-2022-36113/patched.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "cargo",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2022-36113 patched counterpart: `sanitize_crate_name` + `OpenOptions::create_new`. Regression guard that Nyx does not refire on the fix."
+    },
+    {
+      "case_id": "cve-rs-2024-24576-vulnerable",
+      "file": "cve_corpus/rust/CVE-2024-24576/vulnerable.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "cmdi",
+      "cwe": "CWE-78",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "cve",
+        "rust-stdlib",
+        "batbadbut"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-24576 / RUSTSEC-2024-0003: BatBadBut — argument injection into Windows .bat via `Command::new(...).arg`. MIT OR Apache-2.0"
+    },
+    {
+      "case_id": "cve-rs-2024-24576-patched",
+      "file": "cve_corpus/rust/CVE-2024-24576/patched.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "N/A",
+      "provenance": "real_cve",
+      "equivalence_tier": "exact",
+      "match_mode": "file_presence",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": null,
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "cve",
+        "rust-stdlib",
+        "patched",
+        "negative"
+      ],
+      "disabled": false,
+      "notes": "CVE-2024-24576 patched counterpart: cmd.exe-aware allowlist filters argv before reaching update.bat. Regression guard that Nyx does not refire on the fix."
     }
   ]
 }

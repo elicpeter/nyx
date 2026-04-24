@@ -3,4 +3,5 @@
 /frontend/node_modules
 /src/server/assets/dist
 /.nyx
+/book
 .DS_Store

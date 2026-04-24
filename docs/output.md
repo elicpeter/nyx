@@ -312,4 +312,4 @@ Suppressed findings do **not** trigger `--fail-on`. A scan with only suppressed 
 | `state-*` | State model | `state-use-after-close`, `state-resource-leak` |
 | `<lang>.*.*` | AST patterns | `rs.memory.transmute`, `js.code_exec.eval` |
 
-See the [Rule Reference](rules/index.md) for a complete listing.
+See the [Rule Reference](rules.md) for a complete listing.

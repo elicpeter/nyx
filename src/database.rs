@@ -2175,6 +2175,7 @@ fn ssa_summaries_round_trip() {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         ),
         (
@@ -2206,6 +2207,7 @@ fn ssa_summaries_round_trip() {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         ),
     ];
@@ -2240,6 +2242,99 @@ fn ssa_summaries_round_trip() {
     );
     assert_eq!(sum2.param_to_sink_caps(), vec![(0, Cap::SQL_QUERY)]);
     assert_eq!(sum2.source_caps, Cap::ENV_VAR);
+}
+
+/// Round-trip test for [`crate::summary::ssa_summary::PathFactReturnEntry`]:
+/// asserts that `return_path_facts` survive serialise → SQLite persist →
+/// load → deserialise.  Regression guard for the per-return-path PathFact
+/// decomposition that closes the rs-safe-014 / tar-rs / rs-safe-016 FP
+/// cluster — without this round-trip working, cross-file callers lose
+/// the per-arm narrowing and inline-only callees regain the joined-fact
+/// dilution.
+#[test]
+fn ssa_summaries_round_trip_preserves_return_path_facts() {
+    use crate::abstract_interp::PathFact;
+    use crate::summary::ssa_summary::{PathFactReturnEntry, SsaFuncSummary, TaintTransform};
+    use smallvec::smallvec;
+
+    let td = tempfile::tempdir().unwrap();
+    let db = td.path().join("nyx.sqlite");
+    let f = td.path().join("sanitize.rs");
+    std::fs::write(&f, "// sanitizer body").unwrap();
+
+    let pool = index::Indexer::init(&db).unwrap();
+    let mut idx = index::Indexer::from_pool("proj", &pool).unwrap();
+
+    let hash = index::Indexer::digest_bytes(b"// sanitizer body");
+    let return_path_facts = smallvec![
+        PathFactReturnEntry {
+            predicate_hash: 0,
+            known_true: 0,
+            known_false: 0,
+            path_fact: PathFact::top(),
+            variant_inner_fact: None,
+        },
+        PathFactReturnEntry {
+            predicate_hash: 17,
+            known_true: 0,
+            known_false: 0,
+            path_fact: PathFact::top(),
+            variant_inner_fact: Some(
+                PathFact::top()
+                    .with_dotdot_cleared()
+                    .with_absolute_cleared(),
+            ),
+        },
+    ];
+    let summary = SsaFuncSummary {
+        param_to_return: vec![(0, TaintTransform::Identity)],
+        return_path_facts: return_path_facts.clone(),
+        ..Default::default()
+    };
+    let row = (
+        "sanitize_path".to_string(),
+        1_usize,
+        "rust".to_string(),
+        "sanitize.rs".to_string(),
+        String::new(),
+        None,
+        crate::symbol::FuncKind::Function,
+        summary,
+    );
+
+    idx.replace_ssa_summaries_for_file(&f, &hash, &[row])
+        .unwrap();
+
+    let loaded = idx.load_all_ssa_summaries().unwrap();
+    assert_eq!(loaded.len(), 1);
+    let (_, name, _, _, _, _, _, _, sum) = &loaded[0];
+    assert_eq!(name, "sanitize_path");
+    assert_eq!(
+        sum.return_path_facts.len(),
+        2,
+        "two distinct return paths must round-trip"
+    );
+    // Find each entry by predicate hash so order doesn't matter.
+    let none_arm = sum
+        .return_path_facts
+        .iter()
+        .find(|e| e.predicate_hash == 0)
+        .expect("unguarded entry");
+    assert!(none_arm.path_fact.is_top());
+    assert!(none_arm.variant_inner_fact.is_none());
+    let some_arm = sum
+        .return_path_facts
+        .iter()
+        .find(|e| e.predicate_hash == 17)
+        .expect("guarded entry");
+    let inner = some_arm
+        .variant_inner_fact
+        .as_ref()
+        .expect("inner fact survives round-trip");
+    assert!(
+        inner.is_path_safe(),
+        "Some arm's inner fact stays path-safe"
+    );
 }
 
 #[test]
@@ -2282,6 +2377,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            return_path_facts: smallvec::SmallVec::new(),
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v1, &sums_v1)
@@ -2315,6 +2411,7 @@ fn ssa_summaries_hash_rescan_replaces_stale() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            return_path_facts: smallvec::SmallVec::new(),
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash_v2, &sums_v2)
@@ -2369,6 +2466,7 @@ fn clear_drops_ssa_summaries_table() {
             abstract_transfer: vec![],
             param_return_paths: vec![],
             points_to: Default::default(),
+            return_path_facts: smallvec::SmallVec::new(),
         },
     )];
     idx.replace_ssa_summaries_for_file(&f, &hash, &sums)
@@ -2635,6 +2733,7 @@ fn make_test_ssa_summary() -> crate::summary::ssa_summary::SsaFuncSummary {
         abstract_transfer: vec![],
         param_return_paths: vec![],
         points_to: Default::default(),
+        return_path_facts: smallvec::SmallVec::new(),
     }
 }
 

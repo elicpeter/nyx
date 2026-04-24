@@ -32,6 +32,7 @@
 
 use crate::labels::Cap;
 use crate::ssa::ir::{SsaBody, Terminator};
+use crate::summary::ssa_summary::PathFactReturnEntry;
 use crate::symbol::FuncKey;
 use crate::taint::domain::{TaintOrigin, VarTaint};
 use petgraph::graph::NodeIndex;
@@ -72,6 +73,17 @@ pub(crate) struct InlineResult {
     /// helper.  Top when the callee produces no narrowing — matches
     /// pre-PathFact behaviour exactly.
     pub(super) return_path_fact: crate::abstract_interp::PathFact,
+    /// Per-return-path decomposition of [`Self::return_path_fact`].
+    ///
+    /// Non-empty when the callee has ≥2 distinct return blocks whose
+    /// predicate gates differ.  Match-arm-sensitive callers pick the
+    /// entry whose `variant_inner_fact` matches the arm binding's
+    /// variant; path-resolvable callers may refuse infeasible entries.
+    /// Callers unable to distinguish paths still consult
+    /// [`Self::return_path_fact`] (the join of all entries) and see
+    /// pre-decomposition behaviour.
+    #[allow(dead_code)]
+    pub(super) return_path_facts: SmallVec<[PathFactReturnEntry; 2]>,
 }
 
 /// Structural (callsite-agnostic) summary of an inline-analyzed callee.
@@ -121,6 +133,14 @@ pub(crate) struct ReturnShape {
     /// narrowing of the argument's PathFact.  Top when the callee does
     /// not narrow.
     pub(super) return_path_fact: crate::abstract_interp::PathFact,
+    /// Per-return-path [`PathFact`] decomposition of the return value.
+    ///
+    /// Populated alongside [`Self::return_path_fact`] when the callee
+    /// has ≥2 distinct return blocks with different predicate gates.
+    /// Cache-safe for the same reason as `return_path_fact`: entries
+    /// describe callee-intrinsic narrowing under Top-seeded Params.
+    /// Empty when no per-path distinction was observed.
+    pub(super) return_path_facts: SmallVec<[PathFactReturnEntry; 2]>,
 }
 
 impl CachedInlineShape {

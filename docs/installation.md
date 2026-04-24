@@ -1,42 +1,42 @@
 # Installation
 
-## Install from crates.io
+For the happy path (`cargo install nyx-scanner`, release binary on PATH), see the README. This page covers platform-specific notes and upgrade paths.
+
+## Supported platforms
+
+Release binaries are published for:
+
+| Platform | Archive |
+|---|---|
+| Linux x86_64 | `nyx-x86_64-unknown-linux-gnu.zip` |
+| macOS Intel | `nyx-x86_64-apple-darwin.zip` |
+| macOS Apple Silicon | `nyx-aarch64-apple-darwin.zip` |
+| Windows x86_64 | `nyx-x86_64-pc-windows-msvc.zip` |
+
+Build from source works on any stable Rust 1.88+ target (edition 2024).
+
+## Verify the download
+
+Each release attaches a `SHA256SUMS` file. When the maintainer signs the release, a detached `SHA256SUMS.asc` is published alongside it.
 
 ```bash
-cargo install nyx-scanner
+# Verify the checksum file's signature (skip if .asc isn't present)
+gpg --verify SHA256SUMS.asc SHA256SUMS
+
+# Then check your archive against it
+sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-This installs the `nyx` binary into `~/.cargo/bin/`.
+If `sha256sum` is missing on macOS, `shasum -a 256 -c SHA256SUMS --ignore-missing` is equivalent.
 
-## Install from GitHub releases
+## Windows
 
-1. Go to the [Releases](https://github.com/elicpeter/nyx/releases) page.
-2. Download the binary for your platform:
-
-   | Platform | Archive |
-   |----------|---------|
-   | Linux x86_64 | `nyx-x86_64-unknown-linux-gnu.zip` |
-   | macOS Intel | `nyx-x86_64-apple-darwin.zip` |
-   | macOS Apple Silicon | `nyx-aarch64-apple-darwin.zip` |
-   | Windows x86_64 | `nyx-x86_64-pc-windows-msvc.zip` |
-
-3. Extract and install:
-
-   ```bash
-   # Linux / macOS
-   unzip nyx-*.zip
-   chmod +x nyx
-   sudo mv nyx /usr/local/bin/
-
-   # Windows (PowerShell)
-   Expand-Archive -Path nyx-*.zip -DestinationPath .
-   Move-Item -Path .\nyx.exe -Destination "C:\Program Files\Nyx\"
-   ```
-
-4. Verify:
-   ```bash
-   nyx --version
-   ```
+```powershell
+Expand-Archive -Path nyx-x86_64-pc-windows-msvc.zip -DestinationPath .
+Move-Item -Path .\nyx.exe -Destination "C:\Program Files\Nyx\"
+# Add C:\Program Files\Nyx to PATH in System Properties → Environment Variables
+nyx --version
+```
 
 ## Build from source
 
@@ -44,33 +44,34 @@ This installs the `nyx` binary into `~/.cargo/bin/`.
 git clone https://github.com/elicpeter/nyx.git
 cd nyx
 cargo build --release
-cargo install --path .
+# Binary at target/release/nyx
 ```
 
-Requires **Rust 1.88+** (edition 2024).
+The frontend is built and embedded into the binary during `cargo build`, so there's no separate step for `nyx serve`. Node is only required if you're working on the frontend itself; see `CONTRIBUTING.md`.
 
-## CI Integration
+Optional features:
 
-### GitHub Actions
+| Flag | Adds |
+|---|---|
+| `--features smt` | Bundles Z3 for stronger path-constraint solving. MIT-licensed; distributors should include Z3's license in their attribution |
+| `--features smt-system-z3` | Links against a system-installed Z3 instead of bundling |
 
-```yaml
-- name: Install Nyx
-  run: cargo install nyx-scanner
+## Upgrading
 
-- name: Run security scan
-  run: nyx scan . --format sarif --fail-on medium > results.sarif
+Nyx stores its scanner version in the project's index database. When the binary's version differs from the stored version, the index is wiped on the next scan and rebuilt against the new engine. You'll see one info-level log line:
 
-- name: Upload SARIF
-  uses: github/codeql-action/upload-sarif@v3
-  with:
-    sarif_file: results.sarif
+```
+engine version changed (0.4.0 → 0.5.0), rebuilding index
 ```
 
-### Generic CI
+No flag needed. If you see this on *every* scan, the metadata row isn't being persisted; file an issue.
+
+## Corrupt database recovery
+
+If the SQLite file itself is damaged (killed scan, full disk), delete it and let the next scan rebuild from scratch:
 
 ```bash
-# Fail the build if any High or Medium finding is detected
-nyx scan . --severity ">=MEDIUM" --fail-on medium --quiet --format json
+rm "$(nyx config path)"/<project>.sqlite*
 ```
 
-The `--fail-on` flag causes Nyx to exit with code **1** if any finding meets or exceeds the given severity. Exit code **0** means no findings matched.
+Only the named project's rows are affected.

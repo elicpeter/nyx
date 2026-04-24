@@ -12,7 +12,10 @@
 
 use super::events::extract_sink_arg_positions;
 use super::state::{BindingKey, SsaTaintState};
-use super::{SsaTaintEvent, SsaTaintTransfer, run_ssa_taint_full, transfer_block, transfer_inst};
+use super::{
+    SsaTaintEvent, SsaTaintTransfer, detect_variant_inner_fact, run_ssa_taint_full, transfer_block,
+    transfer_inst,
+};
 
 use crate::cfg::{BodyId, Cfg, FuncSummaries};
 use crate::labels::{Cap, SourceKind};
@@ -106,6 +109,13 @@ pub fn extract_ssa_func_summary(
         /// Abstract fact on the return SSA value at this return (None
         /// when Top or abstract interp disabled).
         abstract_value: Option<crate::abstract_interp::AbstractValue>,
+        /// [`crate::abstract_interp::PathFact`] on the return SSA value
+        /// at this block's exit.  Top when abstract interp is disabled
+        /// or no narrowing was proved on this path.
+        path_fact: crate::abstract_interp::PathFact,
+        /// Inner [`PathFact`] when the rv on this path is a one-arg
+        /// variant constructor; [`None`] otherwise.
+        variant_inner_fact: Option<crate::abstract_interp::PathFact>,
     }
 
     // Helper: run a taint probe with a given global_seed and return
@@ -230,6 +240,8 @@ pub fn extract_ssa_func_summary(
                 // Abstract return: use terminator's return value when available,
                 // fall back to last instruction heuristic for Return(None).
                 let mut block_abs: Option<crate::abstract_interp::AbstractValue> = None;
+                let mut block_path_fact = crate::abstract_interp::PathFact::top();
+                let mut block_variant_inner: Option<crate::abstract_interp::PathFact> = None;
                 if let Some(ref abs) = exit.abstract_state {
                     let abs_rv = ret_val.or_else(|| {
                         ssa.blocks[bid]
@@ -240,6 +252,7 @@ pub fn extract_ssa_func_summary(
                     });
                     if let Some(rv) = abs_rv {
                         let av = abs.get(rv);
+                        block_path_fact = av.path.clone();
                         if !av.is_top() {
                             block_abs = Some(av.clone());
                             return_abstract = Some(match return_abstract {
@@ -247,6 +260,7 @@ pub fn extract_ssa_func_summary(
                                 Some(prev) => prev.join(&av),
                             });
                         }
+                        block_variant_inner = detect_variant_inner_fact(rv, ssa, &exit);
                     }
                 }
 
@@ -262,6 +276,8 @@ pub fn extract_ssa_func_summary(
                     known_true,
                     known_false,
                     abstract_value: block_abs,
+                    path_fact: block_path_fact,
+                    variant_inner_fact: block_variant_inner,
                 });
             }
         }
@@ -282,9 +298,46 @@ pub fn extract_ssa_func_summary(
     // Probe with no params tainted → detect source_caps + return abstract.
     // Abstract values don't depend on taint seeding, so the baseline probe
     // captures the function's intrinsic abstract return value.
-    let (baseline_return_caps, _baseline_events, return_abstract, _baseline_obs) =
+    let (baseline_return_caps, _baseline_events, return_abstract, baseline_obs) =
         run_probe(HashMap::new());
     let source_caps = baseline_return_caps;
+
+    // Per-return-path PathFact decomposition derived from the baseline
+    // probe (no seeded taint).  Abstract facts on the return rv are
+    // independent of taint seeding — they describe the function's
+    // intrinsic narrowing, so the baseline run captures them without
+    // per-param noise.
+    //
+    // Emitted only when ≥2 return-block entries have distinct predicate
+    // hashes *and* at least one entry carries non-Top signal (fact or
+    // variant_inner_fact).  A uniform all-Top list adds bytes without
+    // helping any caller.
+    let mut return_path_facts: SmallVec<[crate::summary::ssa_summary::PathFactReturnEntry; 2]> =
+        SmallVec::new();
+    if baseline_obs.len() >= 2 {
+        let mut merged: SmallVec<[crate::summary::ssa_summary::PathFactReturnEntry; 2]> =
+            SmallVec::new();
+        for obs in &baseline_obs {
+            let entry = crate::summary::ssa_summary::PathFactReturnEntry {
+                predicate_hash: obs.predicate_hash,
+                known_true: obs.known_true,
+                known_false: obs.known_false,
+                path_fact: obs.path_fact.clone(),
+                variant_inner_fact: obs.variant_inner_fact.clone(),
+            };
+            crate::summary::ssa_summary::merge_path_fact_return_paths(&mut merged, &[entry]);
+        }
+        let distinct_hashes = merged
+            .iter()
+            .map(|e| e.predicate_hash)
+            .collect::<std::collections::HashSet<_>>();
+        let has_signal = merged
+            .iter()
+            .any(|e| !e.path_fact.is_top() || e.variant_inner_fact.is_some());
+        if distinct_hashes.len() >= 2 && has_signal {
+            return_path_facts = merged;
+        }
+    }
 
     // Probe each param
     let mut param_to_return = Vec::new();
@@ -496,6 +549,7 @@ pub fn extract_ssa_func_summary(
         receiver_to_sink: Cap::empty(),
         abstract_transfer,
         param_return_paths,
+        return_path_facts,
         points_to,
     }
 }
@@ -510,7 +564,7 @@ pub fn extract_ssa_func_summary(
 /// hold on every path into each return block.
 ///
 /// Returns `(0, 0, 0)` for a Top state (no predicates tracked).
-fn summarise_return_predicates(state: &SsaTaintState) -> (u64, u8, u8) {
+pub(super) fn summarise_return_predicates(state: &SsaTaintState) -> (u64, u8, u8) {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 

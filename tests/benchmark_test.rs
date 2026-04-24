@@ -667,19 +667,24 @@ fn benchmark_evaluation() {
     println!("\nResults written to: {}", results_path.display());
     println!("=== Benchmark complete ===\n");
 
-    // ── Regression thresholds (current baseline minus 5pp) ─────────
-    // Baseline (2026-04-20): P=0.911 R=0.994 F1=0.951 on the 262-case
-    // corpus (TP=154 FP=15 FN=1 TN=91).  Floors sit 5pp below that
-    // baseline: a single-case flip is ~0.6pp on this corpus, so 5pp is
-    // generous enough to avoid churn on honest FP↔TN trades while still
-    // catching a real regression in a vulnerability class.
+    // ── Regression thresholds (current baseline minus ~5pp) ────────
+    // Baseline (2026-04-24, post per-return-path PathFact landing):
+    // Rule-level P=0.947 R=0.994 F1=0.970 on the 316-case corpus
+    // (TP=179 FP=10 FN=1 TN=125).  Adds 8 cases from the path-sanitiser
+    // FP cluster (rs-safe-014, rs-safe-016, CVE-2018-20997 +
+    // CVE-2022-36113 + CVE-2024-24576 patched/vulnerable pairs).  Rust
+    // language F1 stayed at 1.000.
     //
-    // When you land a durable, measurable improvement, tighten these
-    // floors — do not relax them to paper over a regression.
+    // Floors sit ~5pp below that baseline: a single-case flip is ~0.3pp
+    // on this corpus, so 5pp is generous enough to absorb honest
+    // FP↔TN trades while still catching a real regression in a
+    // vulnerability class.  When you land a durable, measurable
+    // improvement, tighten these floors — do not relax them to paper
+    // over a regression.
     let rule = &results.aggregate_rule_level;
     assert!(
-        rule.precision >= 0.861,
-        "Rule-level precision {:.3} fell below threshold 0.861 (baseline 0.911)",
+        rule.precision >= 0.897,
+        "Rule-level precision {:.3} fell below threshold 0.897 (baseline 0.947)",
         rule.precision,
     );
     assert!(
@@ -688,8 +693,8 @@ fn benchmark_evaluation() {
         rule.recall,
     );
     assert!(
-        rule.f1 >= 0.901,
-        "Rule-level F1 {:.3} fell below threshold 0.901 (baseline 0.951)",
+        rule.f1 >= 0.920,
+        "Rule-level F1 {:.3} fell below threshold 0.920 (baseline 0.970)",
         rule.f1,
     );
 }

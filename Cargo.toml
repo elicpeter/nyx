@@ -27,6 +27,7 @@ exclude = [
     ".nyx/",
     ".z3-trace",
     "target/",
+    "book/",
 ]
 
 autoexamples = false
@@ -36,6 +37,11 @@ default = ["serve"]
 serve = ["dep:axum", "dep:tokio", "dep:tokio-stream", "dep:tower-http"]
 smt = ["dep:z3", "z3/bundled"]
 smt-system-z3 = ["dep:z3"]
+# Build switch for the internal `nyx-docgen` tool. Empty on purpose: it
+# only gates the [[bin]] target so consumers of `cargo install nyx-scanner`
+# don't pick up the docgen binary. Maintainers run it via
+# `cargo run --features docgen --bin nyx-docgen`.
+docgen = []
 
 [lib]
 name = "nyx_scanner"
@@ -44,6 +50,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "nyx"
 path = "src/main.rs"
+
+[[bin]]
+name = "nyx-docgen"
+path = "tools/docgen/main.rs"
+required-features = ["docgen"]
 
 [[bench]]
 name = "scan_bench"

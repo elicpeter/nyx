@@ -43,13 +43,7 @@ Everything stays on your machine: loopback-only bind, host-header enforcement, C
 | **Config** | Live config editor; reload without restart |
 
 
-[//]: # (<p align="center"><img src="assets/screenshots/finding-detail.png" alt="Finding detail: HIGH taint-unsanitised-flow with numbered source → call → sink steps, file locations, and code snippets" width="900"/></p>)
-
-[//]: # (<p align="center"><img src="assets/screenshots/triage.png" alt="Triage page: 2 findings need attention, severity split, Findings/Suppression rules/Audit log tabs, rule filter chips, Investigate buttons" width="900"/></p>)
-
-[//]: # (<p align="center"><img src="assets/screenshots/explorer.png" alt="Explorer page: file tree with per-file finding counts, syntax-highlighted source with sink marker, right-side file summary + symbols + findings panel" width="900"/></p>)
-
-`nyx serve` flags: `--port <N>` (default `9700`), `--host <addr>` (loopback only: `127.0.0.1`, `localhost`, or `::1`), `--no-browser`. See `[server]` in `nyx.conf` for persistent settings.
+`nyx serve` flags: `--port <N>` (default `9700`), `--host <addr>` (loopback only: `127.0.0.1`, `localhost`, or `::1`), `--no-browser`. See `[server]` in `nyx.conf` for persistent settings, and [`docs/serve.md`](docs/serve.md) for the page-by-page UI tour and security model.
 
 ---
 
@@ -190,7 +184,7 @@ kind     = "sanitizer"
 cap      = "html_escape"
 ```
 
-Or add rules interactively: `nyx config add-rule --lang javascript --matcher escapeHtml --kind sanitizer --cap html_escape`. Full schema: [`docs/configuration.md`](docs/configuration.md).
+Or add rules interactively: `nyx config add-rule --lang javascript --matcher escapeHtml --kind sanitizer --cap html_escape`. Caps: `env_var`, `html_escape`, `shell_escape`, `url_encode`, `json_parse`, `file_io`, `fmt_string`, `sql_query`, `deserialize`, `ssrf`, `code_exec`, `crypto`, `unauthorized_id`, `all`. Full schema: [`docs/configuration.md`](docs/configuration.md).
 
 ---
 
@@ -202,19 +196,19 @@ Taint analysis is interprocedural. Persisted per-function SSA summaries carry pe
 
 Limitations:
 - Interprocedural precision is bounded rather than unlimited. Context-sensitive inlining is k=1 with a callee body-size cap, and SCC fixed-point has an iteration cap. When the engine hits a bound it falls back to summaries and records an `engine_note` on the finding.
-- Cross-language interop edges (FFI, subprocess, WASM) must be configured explicitly.
-- Not all language features are modeled (macros, most dynamic dispatch, aliased imports, reflection).
-- Rust is experimental tier, and C/C++ are preview tier. Pair them with a clang-based tool before using as a hard CI gate.
+- Cross-language calls (FFI, subprocess, WASM) are not traversed. Each language is analysed independently.
+- Several language features are not modeled: macros, most dynamic dispatch, aliased imports, reflection.
+- Rust is experimental tier; C/C++ are preview tier. Pair them with a clang-based tool before using as a hard CI gate.
 - Results may contain false positives or false negatives; manual review is expected.
 
 ---
 
 ## Documentation
 
-- [Installation](docs/installation.md) · [Quick Start](docs/quickstart.md) · [CLI Reference](docs/cli.md)
-- [Configuration](docs/configuration.md) · [Output Formats](docs/output.md)
-- [Detectors](docs/detectors.md): [Taint](docs/detectors/taint.md), [CFG](docs/detectors/cfg.md), [State](docs/detectors/state.md), [AST Patterns](docs/detectors/patterns.md)
-- [Rule Reference](docs/rules/index.md) · [Language Maturity](docs/language-maturity.md) · [Advanced Analysis](docs/advanced-analysis.md)
+- [Quick Start](docs/quickstart.md) · [CLI Reference](docs/cli.md) · [Installation](docs/installation.md)
+- [`nyx serve`](docs/serve.md) · [Output Formats](docs/output.md) · [Configuration](docs/configuration.md)
+- [How it works](docs/how-it-works.md) · [Detectors](docs/detectors.md) ([Taint](docs/detectors/taint.md), [CFG](docs/detectors/cfg.md), [State](docs/detectors/state.md), [AST Patterns](docs/detectors/patterns.md))
+- [Rule Reference](docs/rules.md) · [Language Maturity](docs/language-maturity.md) · [Advanced Analysis](docs/advanced-analysis.md) · [Auth Analysis](docs/auth.md)
 
 ---
 

@@ -1,6 +1,8 @@
 # Configuration
 
-Nyx uses TOML configuration files. A default config is auto-generated on first run.
+Nyx uses TOML configuration files. A default config is auto-generated on first run. If you'd rather edit settings and rules from the browser, the [Config page in `nyx serve`](serve.md#config) is a live editor that writes back to `nyx.local`:
+
+<p align="center"><img src="../assets/screenshots/docs/serve-config.png" alt="Nyx config page: General settings, Triage Sync toggle, Sources panel with language/matcher/capability dropdowns and a per-language matcher table" width="900"/></p>
 
 ## File Locations
 
@@ -49,9 +51,9 @@ excluded_extensions = ["foo", "jpg"]
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mode` | `"full"` \| `"ast"` \| `"taint"` | `"full"` | Analysis mode |
+| `mode` | `"full"` \| `"ast"` \| `"cfg"` \| `"taint"` | `"full"` | Analysis mode |
 | `min_severity` | `"Low"` \| `"Medium"` \| `"High"` | `"Low"` | Minimum severity to report |
-| `max_file_size_mb` | int \| null | 16 | Max file size in MiB; null = unlimited. Default is a safe ceiling for untrusted repos — lift explicitly when scanning trusted codebases with large generated files |
+| `max_file_size_mb` | int \| null | 16 | Max file size in MiB; null = unlimited. Default is a safe ceiling for untrusted repos; lift explicitly when scanning trusted codebases with large generated files |
 | `excluded_extensions` | [string] | `["jpg", "png", "gif", "mp4", ...]` | File extensions to skip |
 | `excluded_directories` | [string] | `["node_modules", ".git", "target", ...]` | Directories to skip |
 | `excluded_files` | [string] | `[]` | Specific files to skip |
@@ -134,7 +136,7 @@ Configuration for scan run persistence and history.
 
 Named scan presets that override scan-related config. Activate with `--profile <name>`.
 
-All fields are optional — omitted fields inherit from the base config.
+All fields are optional; omitted fields inherit from the base config.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -363,8 +365,8 @@ State analysis requires `mode = "full"` or `mode = "taint"`. It has no effect in
 ### Engine-version mismatch is handled automatically
 
 Nyx stores the scanner's `CARGO_PKG_VERSION` in the project index database.
-When the version recorded in the DB differs from the running binary — or the
-row is missing entirely — every cached summary, SSA body, and file-hash row
+When the version recorded in the DB differs from the running binary; or the
+row is missing entirely; every cached summary, SSA body, and file-hash row
 is wiped on the next open so the next scan rebuilds the index against the new
 engine. No flag is needed; CI pipelines keep working across upgrades.
 
@@ -375,7 +377,7 @@ engine version changed (0.4.0 → 0.5.0), rebuilding index
 ```
 
 If you see this once per upgrade it is working as intended. If you see it on
-every scan, the metadata row is not being persisted — file an issue.
+every scan, the metadata row is not being persisted; file an issue.
 
 ### Forcing a reindex
 
@@ -408,4 +410,4 @@ On the next scan Nyx builds a fresh index from scratch.
 
 ## Reserved Fields
 
-Some config fields are defined but not yet implemented. They are marked `(RESERVED)` in the default config and accept values without effect. This allows forward-compatible config files — settings will activate when the feature is implemented without requiring config changes.
+Some config fields are defined but not yet implemented. They are marked `(RESERVED)` in the default config and accept values without effect. This allows forward-compatible config files; settings will activate when the feature is implemented without requiring config changes.

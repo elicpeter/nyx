@@ -385,9 +385,8 @@ fn form_blocks(
     // here so block-level adjacency reflects real control flow; the SSA
     // terminator for the containing block becomes Return / Unreachable
     // instead of Goto(exit).
-    let is_terminating = |n: NodeIndex| -> bool {
-        matches!(cfg[n].kind, StmtKind::Return | StmtKind::Throw)
-    };
+    let is_terminating =
+        |n: NodeIndex| -> bool { matches!(cfg[n].kind, StmtKind::Return | StmtKind::Throw) };
 
     for &(src, tgt, kind) in filtered_edges {
         if is_terminating(src) {
@@ -2692,7 +2691,8 @@ mod tests {
             "tail block must not have early-return block as a predecessor; \
              merged-return defect would re-emerge.  tail.preds = {:?}, \
              early_block_id = {:?}",
-            tail_block.preds, early_block_id
+            tail_block.preds,
+            early_block_id
         );
     }
 }

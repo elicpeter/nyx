@@ -255,6 +255,7 @@ mod inline_cache_epoch_tests {
             receiver_provenance: false,
             uses_summary: false,
             return_path_fact: crate::abstract_interp::PathFact::top(),
+            return_path_facts: SmallVec::new(),
         }))
     }
 
@@ -328,6 +329,7 @@ mod inline_cache_epoch_tests {
             receiver_provenance: false,
             uses_summary: true,
             return_path_fact: crate::abstract_interp::PathFact::top(),
+            return_path_facts: SmallVec::new(),
         }));
 
         // Caller A: argument carries an env-source origin.
@@ -394,6 +396,7 @@ mod inline_cache_epoch_tests {
             receiver_provenance: false,
             uses_summary: true,
             return_path_fact: crate::abstract_interp::PathFact::top(),
+            return_path_facts: SmallVec::new(),
         }));
 
         let state = SsaTaintState::initial();
@@ -1246,5 +1249,66 @@ mod goto_succ_propagation_tests {
         // Only dotdot is cleared — absolute stays Maybe → not path-safe.
         let half_fact = PathFact::default().with_dotdot_cleared();
         assert!(!half_fact.is_path_safe());
+    }
+
+    // ── is_non_data_return + detect_variant_inner_fact ──────────────────
+
+    fn make_body_with_const_return(text: &str) -> SsaBody {
+        // A trivial body with one block that returns a Const-defined SSA
+        // value.  Built by hand because the public lowering pipeline
+        // requires a full Cfg + analysis context.
+        use crate::ssa::ir::{BlockId, SsaBlock, SsaInst, SsaOp, Terminator};
+        use petgraph::graph::NodeIndex;
+        let v = SsaValue(0);
+        SsaBody {
+            blocks: vec![SsaBlock {
+                id: BlockId(0),
+                preds: smallvec::SmallVec::new(),
+                succs: smallvec::SmallVec::new(),
+                phis: vec![],
+                body: vec![SsaInst {
+                    value: v,
+                    op: SsaOp::Const(Some(text.to_string())),
+                    cfg_node: NodeIndex::new(0),
+                    var_name: None,
+                    span: (0, 0),
+                }],
+                terminator: Terminator::Return(Some(v)),
+            }],
+            entry: BlockId(0),
+            value_defs: vec![crate::ssa::ir::ValueDef {
+                var_name: None,
+                cfg_node: NodeIndex::new(0),
+                block: BlockId(0),
+            }],
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        }
+    }
+
+    #[test]
+    fn is_non_data_return_recognises_none_constant() {
+        let body = make_body_with_const_return("None");
+        assert!(super::super::is_non_data_return(SsaValue(0), &body));
+    }
+
+    #[test]
+    fn is_non_data_return_recognises_null_and_nil_aliases() {
+        for tag in ["null", "nil", "NULL", "undefined", "()"] {
+            let body = make_body_with_const_return(tag);
+            assert!(
+                super::super::is_non_data_return(SsaValue(0), &body),
+                "expected {tag} to be recognised as non-data return"
+            );
+        }
+    }
+
+    #[test]
+    fn is_non_data_return_rejects_string_literals() {
+        let body = make_body_with_const_return("\"some/path\"");
+        assert!(
+            !super::super::is_non_data_return(SsaValue(0), &body),
+            "string literals must participate in path-safety join (could be unsafe)"
+        );
     }
 }

@@ -1286,6 +1286,7 @@ function consume() {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
 

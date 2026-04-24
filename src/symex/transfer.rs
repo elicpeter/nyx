@@ -1558,6 +1558,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1622,6 +1623,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1686,6 +1688,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1745,6 +1748,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1804,6 +1808,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
         let ctx = make_summary_ctx(&gs);
@@ -1995,6 +2000,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
 
@@ -2069,6 +2075,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
 
@@ -2144,6 +2151,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
         // Second "send" — in ns B, also with same arity → ambiguous bare-name
@@ -2170,6 +2178,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
         // Also register the type-qualified name so Attempt 1 can find it
@@ -2196,6 +2205,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
 
@@ -2270,6 +2280,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
 
@@ -2346,6 +2357,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
         insert_java_summary(
@@ -2371,6 +2383,7 @@ mod tests {
                 abstract_transfer: vec![],
                 param_return_paths: vec![],
                 points_to: Default::default(),
+                return_path_facts: smallvec::SmallVec::new(),
             },
         );
         // No "HttpClient.send" summary registered — disambiguation has 0 exact matches

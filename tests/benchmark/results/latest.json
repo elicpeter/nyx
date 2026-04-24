@@ -1,6 +1,6 @@
 {
   "benchmark_version": "1.0",
-  "timestamp": "2026-04-24T07:22:38Z",
+  "timestamp": "2026-04-24T22:28:39Z",
   "scanner_version": "0.5.0",
   "scanner_config": {
     "analysis_mode": "Full",
@@ -9,9 +9,9 @@
     "state_analysis_enabled": true,
     "worker_threads": 1
   },
-  "ground_truth_hash": "sha256:14586d57954f77ff5c2c3ee41a38c9f8841dfaf0854559333d43fadb818bd1fd",
-  "corpus_size": 308,
-  "cases_run": 307,
+  "ground_truth_hash": "sha256:04f70fe6fed37fbf198c35aaf0335384e21e1c7b5c34723688424184b7cd552c",
+  "corpus_size": 316,
+  "cases_run": 315,
   "cases_skipped": 1,
   "outcomes": [
     {
@@ -1223,6 +1223,119 @@
       ],
       "security_finding_count": 1,
       "non_security_finding_count": 0
+    },
+    {
+      "case_id": "cve-rs-2018-20997-patched",
+      "file": "cve_corpus/rust/CVE-2018-20997/patched.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "cve-rs-2018-20997-vulnerable",
+      "file": "cve_corpus/rust/CVE-2018-20997/vulnerable.rs",
+      "language": "rust",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 27:22)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 27:22)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "cve-rs-2022-36113-patched",
+      "file": "cve_corpus/rust/CVE-2022-36113/patched.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "cve-rs-2022-36113-vulnerable",
+      "file": "cve_corpus/rust/CVE-2022-36113/vulnerable.rs",
+      "language": "rust",
+      "vuln_class": "path_traversal",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 29:22)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 29:22)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "cve-rs-2024-24576-patched",
+      "file": "cve_corpus/rust/CVE-2024-24576/patched.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 2
+    },
+    {
+      "case_id": "cve-rs-2024-24576-vulnerable",
+      "file": "cve_corpus/rust/CVE-2024-24576/vulnerable.rs",
+      "language": "rust",
+      "vuln_class": "cmdi",
+      "is_vulnerable": true,
+      "outcome_file_level": "TP",
+      "outcome_rule_level": "TP",
+      "outcome_location_level": null,
+      "matched_rule_ids": [
+        "taint-unsanitised-flow (source 27:16)"
+      ],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap",
+        "rs.quality.unwrap",
+        "taint-unsanitised-flow (source 27:16)"
+      ],
+      "security_finding_count": 1,
+      "non_security_finding_count": 2
     },
     {
       "case_id": "cve-ts-2023-26159-patched",
@@ -4509,8 +4622,42 @@
       "non_security_finding_count": 1
     },
     {
+      "case_id": "rs-safe-014",
+      "file": "rust/safe/safe_option_sanitizer.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
       "case_id": "rs-safe-015",
       "file": "rust/safe/safe_path_is_absolute.rs",
+      "language": "rust",
+      "vuln_class": "safe",
+      "is_vulnerable": false,
+      "outcome_file_level": "TN",
+      "outcome_rule_level": "TN",
+      "outcome_location_level": null,
+      "matched_rule_ids": [],
+      "unexpected_rule_ids": [],
+      "all_finding_ids": [
+        "rs.quality.unwrap"
+      ],
+      "security_finding_count": 0,
+      "non_security_finding_count": 1
+    },
+    {
+      "case_id": "rs-safe-016",
+      "file": "rust/safe/safe_cross_function_dotdot.rs",
       "language": "rust",
       "vuln_class": "safe",
       "is_vulnerable": false,
@@ -5703,22 +5850,22 @@
     }
   ],
   "aggregate_file_level": {
-    "tp": 177,
+    "tp": 180,
     "fp": 10,
     "fn_": 0,
-    "tn": 120,
-    "precision": 0.946524064171123,
+    "tn": 125,
+    "precision": 0.9473684210526315,
     "recall": 1.0,
-    "f1": 0.9725274725274725
+    "f1": 0.972972972972973
   },
   "aggregate_rule_level": {
-    "tp": 176,
+    "tp": 179,
     "fp": 10,
     "fn_": 1,
-    "tn": 120,
-    "precision": 0.946236559139785,
-    "recall": 0.9943502824858758,
-    "f1": 0.9696969696969697
+    "tn": 125,
+    "precision": 0.9470899470899471,
+    "recall": 0.9944444444444445,
+    "f1": 0.970189701897019
   },
   "by_language": {
     "c": {
@@ -5794,10 +5941,10 @@
       "f1": 0.962962962962963
     },
     "rust": {
-      "tp": 26,
+      "tp": 29,
       "fp": 0,
       "fn_": 0,
-      "tn": 22,
+      "tn": 27,
       "precision": 1.0,
       "recall": 1.0,
       "f1": 1.0
@@ -5832,7 +5979,7 @@
       "f1": 1.0
     },
     "cmdi": {
-      "tp": 49,
+      "tp": 50,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -5913,7 +6060,7 @@
       "f1": 1.0
     },
     "path_traversal": {
-      "tp": 19,
+      "tp": 21,
       "fp": 0,
       "fn_": 0,
       "tn": 0,
@@ -5934,7 +6081,7 @@
       "tp": 0,
       "fp": 10,
       "fn_": 0,
-      "tn": 120,
+      "tn": 125,
       "precision": 0.0,
       "recall": 1.0,
       "f1": 0.0
@@ -5978,31 +6125,31 @@
   },
   "by_confidence": {
     ">=High": {
-      "tp": 90,
-      "fp": 73,
-      "fn_": 87,
-      "tn": 57,
-      "precision": 0.5521472392638037,
-      "recall": 0.5084745762711864,
-      "f1": 0.5294117647058824
+      "tp": 92,
+      "fp": 79,
+      "fn_": 88,
+      "tn": 56,
+      "precision": 0.5380116959064327,
+      "recall": 0.5111111111111111,
+      "f1": 0.5242165242165242
     },
     ">=Low": {
-      "tp": 90,
-      "fp": 77,
-      "fn_": 87,
-      "tn": 53,
-      "precision": 0.5389221556886228,
-      "recall": 0.5084745762711864,
-      "f1": 0.5232558139534884
+      "tp": 92,
+      "fp": 84,
+      "fn_": 88,
+      "tn": 51,
+      "precision": 0.5227272727272727,
+      "recall": 0.5111111111111111,
+      "f1": 0.5168539325842696
     },
     ">=Medium": {
-      "tp": 90,
-      "fp": 77,
-      "fn_": 87,
-      "tn": 53,
-      "precision": 0.5389221556886228,
-      "recall": 0.5084745762711864,
-      "f1": 0.5232558139534884
+      "tp": 92,
+      "fp": 84,
+      "fn_": 88,
+      "tn": 51,
+      "precision": 0.5227272727272727,
+      "recall": 0.5111111111111111,
+      "f1": 0.5168539325842696
     }
   }
 }
