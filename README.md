@@ -229,6 +229,7 @@ Pull requests welcome. Run `cargo fmt`, `cargo clippy --all -- -D warnings`, and
 - **Engine code** (taint, SSA, CFG, call graph, abstract interp, symbolic exec): predominantly human-written. AI was used selectively for refactors and boilerplate, with all merges human-reviewed.
 - **Docs and most of this README**: AI-generated from the code and hand-edited. Report doc/code drift as a bug.
 - **Test fixtures and `expected.yaml` files**: AI-assisted drafting, human-audited before landing.
+- **Frontend UI** (React app): built with AI assistance, human-reviewed.
 
 As with any static analyzer, validate findings against your own corpus before using Nyx as a CI gate.
 
