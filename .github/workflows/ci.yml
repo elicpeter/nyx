@@ -97,11 +97,6 @@ jobs:
         run: cargo deny check advisories licenses bans sources
 
   third-party-licenses:
-    # Regenerate the third-party license attribution bundle and diff it
-    # against the committed copy. If any dependency changes the set of
-    # transitive licenses, THIRDPARTY-LICENSES.html must be regenerated
-    # and committed as part of that change. Pinned to a specific
-    # cargo-about version so generator drift can't silently break the diff.
     name: third-party-licenses
     runs-on: ubuntu-latest
     steps:
@@ -117,37 +112,15 @@ jobs:
           tool: cargo-about@0.7.1
 
       - name: Prime cargo registry cache
-        # cargo-about --offline propagates to cargo metadata, which needs
-        # every dependency already resolved in the local registry. Fetch
-        # first so --offline has something to read.
         run: cargo fetch --locked
 
       - name: Regenerate license attribution
-        # --offline skips clearlydefined.io so regeneration is deterministic.
-        # Without this, cargo-about pulls harvested metadata from the network
-        # and the output drifts as that service updates, breaking the diff.
-        # The committed THIRDPARTY-LICENSES.html must also be generated with
-        # --offline — see scripts/regen-licenses or the README contributor guide.
-        #
-        # tr -d '\r' normalizes line endings. Some crates (r2d2_sqlite, vcpkg,
-        # etc.) ship LICENSE files with CRLF; cargo-about inlines them verbatim,
-        # but git's core.autocrlf=input strips CR on commit. Without this
-        # normalization the diff sees CRLF in /tmp and LF in the committed file
-        # and flags every line of those sections.
         run: cargo about generate --offline about.hbs | tr -d '\r' > /tmp/THIRDPARTY-LICENSES.html
 
       - name: Diff against committed file
-        # --strip-trailing-cr is a belt-and-suspenders guard in case one side
-        # still has CR; the tr step above is the primary fix.
         run: diff -u --strip-trailing-cr THIRDPARTY-LICENSES.html /tmp/THIRDPARTY-LICENSES.html
 
   docs-fresh:
-    # Regenerate the per-language AST-pattern tables in docs/rules.md
-    # (between the AUTOGEN sentinel comments) and fail if the committed
-    # markdown is stale. Run this whenever a Pattern is added/edited
-    # in src/patterns/<lang>.rs:
-    #   cargo run --features docgen --bin nyx-docgen
-    # then commit the regenerated docs/rules.md.
     name: docs-fresh
     runs-on: ubuntu-latest
     steps:
@@ -199,12 +172,6 @@ jobs:
         run: cargo nextest run --all-features
 
   cross-platform-smoke:
-    # Confirm the binary still builds and a focused subset of tests pass on
-    # the platforms for which we distribute release artifacts. Full test
-    # suites stay on Linux for cost/speed; these three files exercise CLI
-    # argument parsing, tree-sitter parsing, and pattern matching, which
-    # together catch the platform-sensitive regressions (path handling,
-    # endianness-adjacent serde, tree-sitter cdylib loading).
     name: cross-platform-smoke
     strategy:
       fail-fast: false
@@ -244,17 +211,6 @@ jobs:
         run: cargo nextest run --all-features
 
   benchmark-gate:
-    # Accuracy + performance regression gate.
-    #
-    # Accuracy: runs the ground-truth corpus (~262 cases across 10 languages) and
-    # asserts rule-level Precision/Recall/F1 stay within the thresholds encoded
-    # in tests/benchmark_test.rs.  Deterministic — no wall-clock component.
-    #
-    # Performance: runs tests/perf_tests.rs under NYX_CI_BENCH=1 so each fixture
-    # checks against its `performance_expectations` budget with the lenient CI
-    # multiplier applied in-file.  Release build keeps budgets stable across
-    # runners; the per-fixture budgets live beside each fixture's
-    # expectations.json and can be adjusted without touching CI.
     name: benchmark-gate
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -265,8 +221,6 @@ jobs:
         with:
           toolchain: stable
           cache: true
-          # Give the release build its own cache bucket so it doesn't
-          # thrash the debug cache shared by the other test jobs.
           cache-key: benchmark-gate-release
 
       - name: Accuracy regression gate (P/R/F1)
