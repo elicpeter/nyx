@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 305
+    "corpus_size": 308
   },
   "cases": [
     {
@@ -7060,6 +7060,90 @@
       ],
       "disabled": false,
       "notes": "Input parsed to u16 before use as Command arg \u2014 type-narrowed"
+    },
+    {
+      "case_id": "rs-safe-012",
+      "file": "rust/safe/safe_path_contains_dotdot.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-regression",
+        "path-sanitizer"
+      ],
+      "disabled": false,
+      "notes": "Intraprocedural .contains(\"..\") + .starts_with('/') rejection \u2014 PathFact narrows dotdot and absolute axes on the sanitised branch"
+    },
+    {
+      "case_id": "rs-safe-015",
+      "file": "rust/safe/safe_path_is_absolute.rs",
+      "language": "rust",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": null,
+      "expected_category": null,
+      "expected_sink_lines": null,
+      "expected_source_lines": null,
+      "tags": [
+        "pathfact-regression",
+        "path-sanitizer"
+      ],
+      "disabled": false,
+      "notes": "Path::new(x).is_absolute() rejection + .contains(\"..\") \u2014 PathFact narrows both axes via typed check and substring rejection"
+    },
+    {
+      "case_id": "rs-path-006",
+      "file": "rust/traversal/traversal_no_sanitizer.rs",
+      "language": "rust",
+      "is_vulnerable": true,
+      "vuln_class": "path_traversal",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "exact",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "MEDIUM",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "tags": [
+        "pathfact-regression",
+        "negative-guard"
+      ],
+      "disabled": false,
+      "notes": "No sanitiser applied \u2014 PathFact stays Top, FILE_IO sink must fire (guards against over-suppression)"
     },
     {
       "case_id": "rs-safe-cross-001",

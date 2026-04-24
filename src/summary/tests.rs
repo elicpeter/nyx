@@ -779,7 +779,7 @@ fn ssa_summary_backward_compat_missing_container_fields() {
 
 #[test]
 fn ssa_summary_serde_round_trip_return_abstract() {
-    use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, StringFact};
+    use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, PathFact, StringFact};
 
     let summary = SsaFuncSummary {
         param_to_return: vec![(0, TaintTransform::Identity)],
@@ -796,6 +796,7 @@ fn ssa_summary_serde_round_trip_return_abstract() {
             },
             string: StringFact::top(),
             bits: BitFact::top(),
+        path: PathFact::top(),
         }),
         source_to_callback: vec![],
 
@@ -3438,17 +3439,19 @@ fn cf4_merge_return_paths_overflow_with_mixed_kinds() {
 
 #[test]
 fn cf4_merge_return_paths_joins_abstract_contribution_on_collision() {
-    use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, StringFact};
+    use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, PathFact, StringFact};
 
     let av_a = AbstractValue {
         interval: IntervalFact::exact(0),
         string: StringFact::top(),
         bits: BitFact::top(),
+    path: PathFact::top(),
     };
     let av_b = AbstractValue {
         interval: IntervalFact::exact(10),
         string: StringFact::top(),
         bits: BitFact::top(),
+    path: PathFact::top(),
     };
 
     let mut first = rpt(TaintTransform::Identity, 42, 0, 0);

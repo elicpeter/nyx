@@ -60,6 +60,18 @@ pub(crate) struct ArgTaintSig(pub(super) SmallVec<[(usize, u16); 4]>);
 pub(crate) struct InlineResult {
     /// Taint on the return value after inline analysis.
     pub(super) return_taint: Option<VarTaint>,
+    /// PathFact on the return value after inline analysis.
+    ///
+    /// Non-top when the callee's body provably narrows the
+    /// [`crate::abstract_interp::PathFact`] of the value it returns (for
+    /// example, a `sanitize_path(s) -> Option<String>` helper that
+    /// early-returns on `s.contains("..")` / `s.starts_with('/')`).  At
+    /// apply time the caller sets its call-result SSA value's PathFact to
+    /// this narrowed fact, so downstream FILE_IO sinks see the sanitised
+    /// axis regardless of whether a named label-rule exists for the
+    /// helper.  Top when the callee produces no narrowing — matches
+    /// pre-PathFact behaviour exactly.
+    pub(super) return_path_fact: crate::abstract_interp::PathFact,
 }
 
 /// Structural (callsite-agnostic) summary of an inline-analyzed callee.
@@ -100,6 +112,15 @@ pub(crate) struct ReturnShape {
     pub(super) receiver_provenance: bool,
     /// Whether the applied `VarTaint` should be tagged `uses_summary`.
     pub(super) uses_summary: bool,
+    /// PathFact of the return value observed from the callee's exit
+    /// abstract state.  Cache-safe because the callee is inline-analysed
+    /// with [`crate::abstract_interp::PathFact::top`] Param seeds — the
+    /// resulting fact describes the callee's intrinsic narrowing (e.g.
+    /// the `Some` arm of a `sanitize(..) -> Option<String>` body
+    /// proves `dotdot = No`) and does not depend on caller-side
+    /// narrowing of the argument's PathFact.  Top when the callee does
+    /// not narrow.
+    pub(super) return_path_fact: crate::abstract_interp::PathFact,
 }
 
 impl CachedInlineShape {

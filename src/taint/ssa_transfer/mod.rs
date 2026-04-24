@@ -246,7 +246,7 @@ fn run_ssa_taint_internal(
     if let Some(ref mut entry_state) = block_states[ssa.entry.0 as usize] {
         if let Some(ref mut abs) = entry_state.abstract_state {
             if let Some(cv) = transfer.const_values {
-                use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, StringFact};
+                use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, PathFact, StringFact};
                 use crate::ssa::const_prop::ConstLattice;
                 for (v, cl) in cv {
                     match cl {
@@ -257,6 +257,7 @@ fn run_ssa_taint_internal(
                                     interval: IntervalFact::exact(*n),
                                     string: StringFact::top(),
                                     bits: BitFact::from_const(*n),
+                                path: PathFact::top(),
                                 },
                             );
                         }
@@ -267,6 +268,7 @@ fn run_ssa_taint_internal(
                                     interval: IntervalFact::top(),
                                     string: StringFact::exact(s),
                                     bits: BitFact::top(),
+                                path: PathFact::top(),
                                 },
                             );
                         }
@@ -945,6 +947,23 @@ fn compute_succ_states(
                     transfer.interner,
                 );
 
+                // PathFact branch narrowing (Rust only):
+                //   `x.contains("..")` / `x.starts_with('/')` / `x.is_absolute()`
+                //   → rejection on the true branch; narrow axis on the false
+                //   branch (or on the enclosing fall-through when the true
+                //   branch unconditionally terminates).
+                //   `x.starts_with("<literal_root>")` → on the true branch,
+                //   attach `prefix_lock = Some(root)`.
+                if matches!(transfer.lang, Lang::Rust) {
+                    apply_path_fact_branch_narrowing(
+                        &mut true_state,
+                        &mut false_state,
+                        cond_text,
+                        &effective_vars,
+                        ssa,
+                    );
+                }
+
                 // Constraint refinement
                 //
                 // `lower_condition` returns a ConditionExpr that represents the
@@ -1096,6 +1115,101 @@ fn apply_branch_predicates(
                     Ok(idx) => state.predicates[idx].1 = summary,
                     Err(idx) => state.predicates.insert(idx, (sym, summary)),
                 }
+            }
+        }
+    }
+}
+
+/// Apply Rust path-rejection / path-assertion branch narrowing to the
+/// true/false branch states produced by `compute_succ_states`.
+///
+/// Looks up each SSA value in the per-branch `abstract_state` whose
+/// `var_name` matches one of the `effective_vars` (the condition's target
+/// variables) and updates its [`PathFact`] according to the classified
+/// rejection / assertion idiom.
+///
+/// Gated on `transfer.lang == Lang::Rust` by the caller.
+fn apply_path_fact_branch_narrowing(
+    true_state: &mut SsaTaintState,
+    false_state: &mut SsaTaintState,
+    cond_text: &str,
+    effective_vars: &[String],
+    ssa: &SsaBody,
+) {
+    use crate::abstract_interp::PathFact;
+    use crate::abstract_interp::path_domain::{
+        PathAssertion, PathRejection, classify_path_assertion, classify_path_rejection_axes,
+    };
+
+    let rejection_axes = classify_path_rejection_axes(cond_text);
+    let assertion = classify_path_assertion(cond_text);
+
+    if rejection_axes.is_empty() && matches!(assertion, PathAssertion::None) {
+        return;
+    }
+
+    // Collect SSA values whose `var_name` appears in `effective_vars`.  We
+    // pick the *highest-index* matching value (latest definition by SSA
+    // ordering — closest to the current program point).  Absent an
+    // explicit name table, iterating `ssa.value_defs` is the only way to
+    // recover the mapping from name → SsaValue.
+    let mut targets: smallvec::SmallVec<[SsaValue; 2]> = smallvec::SmallVec::new();
+    for var_name in effective_vars {
+        let mut latest: Option<SsaValue> = None;
+        for (idx, vd) in ssa.value_defs.iter().enumerate() {
+            if vd.var_name.as_deref() == Some(var_name.as_str()) {
+                latest = Some(SsaValue(idx as u32));
+            }
+        }
+        if let Some(v) = latest {
+            targets.push(v);
+        }
+    }
+    if targets.is_empty() {
+        return;
+    }
+
+    // Apply rejection: true branch = reject (widen to Top / leave alone),
+    // false branch = narrow the axis.  The plan's polarity rule about
+    // whether the enclosing block inherits the narrowing when the true
+    // branch terminates is enforced by the existing CFG successor graph —
+    // when the true branch returns/panics, only the false state reaches
+    // subsequent blocks and the narrowed fact propagates naturally.
+    let narrow_false = |fact: &mut PathFact| {
+        for axis in rejection_axes.iter() {
+            match axis {
+                PathRejection::DotDot => {
+                    fact.dotdot = crate::abstract_interp::Tri::No;
+                }
+                PathRejection::AbsoluteSlash | PathRejection::IsAbsolute => {
+                    fact.absolute = crate::abstract_interp::Tri::No;
+                }
+                PathRejection::None => {}
+            }
+        }
+    };
+
+    // Apply assertion (positive): true branch narrows prefix_lock.
+    let narrow_true = |fact: &mut PathFact| {
+        if let PathAssertion::PrefixLock(ref root) = assertion {
+            let updated = fact.clone().with_prefix_lock(root);
+            *fact = updated;
+        }
+    };
+
+    for v in &targets {
+        if let Some(ref mut abs) = false_state.abstract_state {
+            let mut av = abs.get(*v);
+            narrow_false(&mut av.path);
+            if !av.is_top() {
+                abs.set(*v, av);
+            }
+        }
+        if let Some(ref mut abs) = true_state.abstract_state {
+            let mut av = abs.get(*v);
+            narrow_true(&mut av.path);
+            if !av.is_top() {
+                abs.set(*v, av);
             }
         }
     }
@@ -1462,16 +1576,22 @@ fn inline_analyse_callee(
     // Use the callee's own body graph for inline analysis (per-body CFGs
     // have body-local NodeIndex spaces, so the caller's graph is wrong).
     let callee_cfg = callee_body.body_graph.as_ref().unwrap_or(cfg);
-    let (_, callee_block_states) =
-        run_ssa_taint_full(&callee_body.ssa, callee_cfg, &child_transfer);
+    let (_, callee_block_states, callee_block_exit_states) =
+        run_ssa_taint_full_with_exits(&callee_body.ssa, callee_cfg, &child_transfer);
 
-    // Extract the structural return shape from return-block exit states
+    // Extract the structural return shape from return-block exit states.
+    // `block_exit_states` lets the extractor consult each return-block
+    // predecessor's own exit state, which is needed to recover PathFacts
+    // that would otherwise be diluted by the return-block entry join
+    // (see the "merged return block" pattern the Rust SSA lowering
+    // produces for `if cond { return X } Y`).
     let empty_induction = HashSet::new();
     let shape = extract_inline_return_taint(
         &callee_body.ssa,
         callee_cfg,
         &child_transfer,
         &callee_block_states,
+        &callee_block_exit_states,
         &empty_induction,
     );
 
@@ -1535,6 +1655,7 @@ fn extract_inline_return_taint(
     cfg: &Cfg,
     transfer: &SsaTaintTransfer,
     block_states: &[Option<SsaTaintState>],
+    block_exit_states: &[Option<SsaTaintState>],
     induction_vars: &HashSet<SsaValue>,
 ) -> CachedInlineShape {
     // Collect all param SSA values to separate from derived values
@@ -1623,6 +1744,13 @@ fn extract_inline_return_taint(
     let mut param_params: u64 = 0;
     let mut param_receiver: bool = false;
 
+    // Join of the return value's [`PathFact`] across every return block.
+    // Seeded with `None` (no observation) and widened conservatively to
+    // [`PathFact::top`] if any return block gives Top or the value is
+    // unobservable.  Only set to a non-Top fact when every observed return
+    // path proves it.
+    let mut return_path_fact_acc: Option<crate::abstract_interp::PathFact> = None;
+
     let classify_and_push = |orig: &TaintOrigin,
                              internal: &mut SmallVec<[TaintOrigin; 2]>,
                              provenance: &mut u64,
@@ -1681,6 +1809,49 @@ fn extract_inline_return_taint(
                         }
                     }
                 }
+                // Collect the return value's PathFact.  For return blocks
+                // with a single predecessor (or no predecessors) the
+                // replayed `exit` state is sufficient.  For multi-predecessor
+                // return blocks the entry state's AbstractState has already
+                // been diluted by the join, so we additionally replay
+                // `transfer_block` once per predecessor seeded from that
+                // predecessor's `block_exit_states` entry — yielding a
+                // predecessor-specific exit whose PathFact on `rv` still
+                // carries that path's narrowing.  The per-predecessor facts
+                // are then joined to describe the callee-intrinsic
+                // (Top-seeded) return narrowing.
+                let single_pred = block.preds.len() <= 1;
+                if single_pred {
+                    if let Some(ref abs) = exit.abstract_state {
+                        let fact = abs.get(rv).path;
+                        return_path_fact_acc = Some(match return_path_fact_acc.clone() {
+                            None => fact,
+                            Some(prev) => prev.join(&fact),
+                        });
+                    }
+                } else {
+                    for pred in &block.preds {
+                        let pred_idx = pred.0 as usize;
+                        if let Some(pred_exit) = block_exit_states.get(pred_idx).and_then(|o| o.as_ref()) {
+                            let per_pred_exit = transfer_block(
+                                block,
+                                cfg,
+                                ssa,
+                                transfer,
+                                pred_exit.clone(),
+                                induction_vars,
+                                None,
+                            );
+                            if let Some(ref abs) = per_pred_exit.abstract_state {
+                                let fact = abs.get(rv).path;
+                                return_path_fact_acc = Some(match return_path_fact_acc.clone() {
+                                    None => fact,
+                                    Some(prev) => prev.join(&fact),
+                                });
+                            }
+                        }
+                    }
+                }
             } else {
                 // Return(None): implicit return / empty body.
                 // Fall back to collecting all live values.
@@ -1723,7 +1894,18 @@ fn extract_inline_return_taint(
         (param_caps, param_internal, param_params, param_receiver)
     };
 
-    if final_caps.is_empty() && final_params == 0 && !final_receiver && final_internal.is_empty() {
+    let return_path_fact = return_path_fact_acc.unwrap_or_else(crate::abstract_interp::PathFact::top);
+
+    // Even when the callee produces no return taint and no param/receiver
+    // provenance, a non-Top PathFact on the return is still meaningful
+    // (it tells callers "this helper's return is sanitised along a path
+    // axis").  Keep the shape when *any* of the four signals is present.
+    if final_caps.is_empty()
+        && final_params == 0
+        && !final_receiver
+        && final_internal.is_empty()
+        && return_path_fact.is_top()
+    {
         return CachedInlineShape(None);
     }
 
@@ -1733,6 +1915,7 @@ fn extract_inline_return_taint(
         param_provenance: final_params,
         receiver_provenance: final_receiver,
         uses_summary: true, // inline analysis is a form of summary
+        return_path_fact,
     }))
 }
 
@@ -1763,7 +1946,10 @@ fn apply_cached_shape(
     call_site_node: NodeIndex,
 ) -> InlineResult {
     let Some(ret) = shape.0.as_ref() else {
-        return InlineResult { return_taint: None };
+        return InlineResult {
+            return_taint: None,
+            return_path_fact: crate::abstract_interp::PathFact::top(),
+        };
     };
 
     let cap = effective_max_origins();
@@ -1828,12 +2014,22 @@ fn apply_cached_shape(
         record_engine_note(crate::engine_notes::EngineNote::OriginsTruncated { dropped });
     }
 
-    InlineResult {
-        return_taint: Some(VarTaint {
+    // If the return taint is empty (no caps, no origins) we still need to
+    // surface the PathFact contribution; represent "no return taint" with
+    // `None` to preserve the existing InlineResult invariant while letting
+    // callers apply the path fact regardless.
+    let return_taint = if ret.caps.is_empty() && origins.is_empty() {
+        None
+    } else {
+        Some(VarTaint {
             caps: ret.caps,
             origins,
             uses_summary: ret.uses_summary,
-        }),
+        })
+    };
+    InlineResult {
+        return_taint,
+        return_path_fact: ret.return_path_fact.clone(),
     }
 }
 
@@ -1986,6 +2182,28 @@ pub(super) fn transfer_inst(
                         return_bits |= ret.caps;
                         for orig in &ret.origins {
                             push_origin_bounded(&mut return_origins, *orig);
+                        }
+                    }
+                    // PathFact propagation from inline analysis: when the
+                    // callee's body narrowed its return value's [`PathFact`]
+                    // (e.g. a `sanitize(s) -> Option<String>` helper whose
+                    // `Some` arm is gated by `s.contains("..")` rejection),
+                    // meet that fact into the call-result's abstract state
+                    // so downstream FILE_IO sinks see the sanitised axis.
+                    //
+                    // Uses meet rather than set so any caller-side narrowing
+                    // from constant propagation or local transfer wins over
+                    // callee-derived Top axes.
+                    if !result.return_path_fact.is_top() {
+                        if let Some(ref mut abs) = state.abstract_state {
+                            let mut av = abs.get(inst.value);
+                            av.path = <crate::abstract_interp::PathFact as crate::state::lattice::AbstractDomain>::meet(
+                                &av.path,
+                                &result.return_path_fact,
+                            );
+                            if !av.is_top() {
+                                abs.set(inst.value, av);
+                            }
                         }
                     }
                 }
@@ -3078,7 +3296,7 @@ pub(super) fn transfer_inst(
 
     // Forward abstract value transfer
     if let Some(ref mut abs) = state.abstract_state {
-        transfer_abstract(inst, cfg, abs);
+        transfer_abstract(inst, cfg, abs, Some(transfer.lang));
     }
 
     // Cross-file abstract return injection.
@@ -3096,8 +3314,12 @@ pub(super) fn transfer_inst(
 /// Propagates interval and string domain facts forward through constants,
 /// copies, binary arithmetic, and concatenation. Conservative (Top) for
 /// unknown operations (calls, sources, params).
-fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
-    use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, StringFact};
+///
+/// `lang` is consulted only for language-specific transfer rules (currently
+/// Rust path primitives — `fs::canonicalize`, `.starts_with`, etc.); `None`
+/// disables them and matches the pre-PathFact behaviour exactly.
+fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState, lang: Option<Lang>) {
+    use crate::abstract_interp::{AbstractValue, BitFact, IntervalFact, PathFact, StringFact};
     use crate::cfg::BinOp;
 
     let info = &cfg[inst.cfg_node];
@@ -3112,6 +3334,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
                         interval: IntervalFact::exact(n),
                         string: StringFact::top(),
                         bits: BitFact::from_const(n),
+                    path: PathFact::top(),
                     },
                 );
             } else if is_string_const(trimmed) {
@@ -3122,6 +3345,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
                         interval: IntervalFact::top(),
                         string: StringFact::exact(&s),
                         bits: BitFact::top(),
+                    path: PathFact::top(),
                     },
                 );
             }
@@ -3143,6 +3367,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
                     interval: IntervalFact::top(),
                     string: StringFact::from_prefix(prefix),
                     bits: BitFact::top(),
+                path: PathFact::top(),
                 },
             );
         }
@@ -3164,6 +3389,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
                     interval: IntervalFact::top(),
                     string: StringFact::from_prefix(prefix),
                     bits: BitFact::top(),
+                path: PathFact::top(),
                 },
             );
         }
@@ -3180,6 +3406,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
                     interval: IntervalFact::exact(const_val),
                     string: StringFact::top(),
                     bits: BitFact::from_const(const_val),
+                path: PathFact::top(),
                 };
                 let result_interval = match bin_op {
                     BinOp::Add => var_abs.interval.add(&const_abs.interval),
@@ -3214,6 +3441,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
                     interval: result_interval,
                     string: StringFact::top(),
                     bits: result_bits,
+                path: PathFact::top(),
                 };
                 if !val.is_top() {
                     abs.set(inst.value, val);
@@ -3274,6 +3502,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
                     interval: result_interval,
                     string: result_string,
                     bits: result_bits,
+                path: PathFact::top(),
                 };
                 if !val.is_top() {
                     abs.set(inst.value, val);
@@ -3289,6 +3518,7 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
                             interval: IntervalFact::top(),
                             string: string_result,
                             bits: BitFact::top(),
+                        path: PathFact::top(),
                         },
                     );
                 }
@@ -3308,8 +3538,71 @@ fn transfer_abstract(inst: &SsaInst, cfg: &Cfg, abs: &mut AbstractState) {
                     },
                     string: StringFact::top(),
                     bits: BitFact::top(),
+                path: PathFact::top(),
                 },
             );
+        }
+
+        // Rust path-primitive calls — `fs::canonicalize(p)`, `p.canonicalize()`,
+        // `Path::new(s)`, `PathBuf::from(s)` — produce a PathFact on the
+        // result derived from the input string/path's own PathFact.  See
+        // `crate::abstract_interp::path_domain::classify_path_primitive`.
+        //
+        // Separately, `s.replace("..", "")` clears the `..` axis and
+        // `s.replace("/", …)` / `s.replace("\\", …)` clear `absolute`.
+        // These are modelled as pure transfers on the Call result.
+        SsaOp::Call {
+            callee,
+            args,
+            receiver,
+        } if matches!(lang, Some(Lang::Rust)) => {
+            // Determine the "input" SSA value: receiver for method calls,
+            // first positional arg for free-function calls.
+            let input_val = receiver
+                .as_ref()
+                .copied()
+                .or_else(|| args.first().and_then(|g| g.first().copied()));
+            let input_fact = input_val
+                .map(|v| abs.get(v).path)
+                .unwrap_or_else(PathFact::top);
+
+            // Primary path-producing primitives.
+            if let Some(pf) =
+                crate::abstract_interp::path_domain::classify_path_primitive(callee, &input_fact)
+            {
+                abs.set(inst.value, AbstractValue::with_path_fact(pf));
+            } else {
+                // `.replace(...)` sanitiser on a string receiver.  The Call
+                // result re-binds the sanitised string; downstream
+                // `Path::new` / `PathBuf::from` carries the cleared axis.
+                // The literal needle is read from the first argument's
+                // StringFact (exact value), which `SsaOp::Const` seeds for
+                // string literals during the same pass.
+                let leaf = crate::callgraph::callee_leaf_name(callee);
+                if leaf == "replace" {
+                    if let Some(first_arg) = args.first().and_then(|g| g.first()) {
+                        let arg_string = abs.get(*first_arg).string;
+                        let needle = arg_string
+                            .domain
+                            .as_ref()
+                            .and_then(|d| (d.len() == 1).then(|| d[0].clone()));
+                        if let Some(needle) = needle {
+                            let mut new_fact = input_fact.clone();
+                            let mut narrowed = false;
+                            if needle == ".." {
+                                new_fact = new_fact.with_dotdot_cleared();
+                                narrowed = true;
+                            } else if needle == "/" || needle == "\\" {
+                                new_fact = new_fact.with_absolute_cleared();
+                                narrowed = true;
+                            }
+                            if narrowed {
+                                abs.set(inst.value, AbstractValue::with_path_fact(new_fact));
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         SsaOp::Source | SsaOp::CatchParam | SsaOp::Param { .. } => {
@@ -5354,7 +5647,37 @@ fn is_abstract_safe_for_sink(
         }
     }
 
+    // PathFact gate: FILE_IO with every tainted leaf's PathFact
+    // proving `dotdot = No && absolute = No`.  Sanitisers documented in
+    // rs-safe-0** (Rust `.contains("..")` rejection, `fs::canonicalize`
+    // + `starts_with` guard, `Component::Normal` iterator filter) flow
+    // through to the leaf values via PathFact; this check is the single
+    // point at which the axis conjunction suppresses the sink.
+    if sink_caps.intersects(Cap::FILE_IO) && is_path_safe_for_sink(inst, state, ssa, cfg, abs) {
+        return true;
+    }
+
     false
+}
+
+/// Check every tainted leaf flowing into `inst`'s used values carries a
+/// PathFact proving it is dotdot-free and non-absolute.
+///
+/// Core gate for the rs-safe-0** FP closure (see [`PathFact::is_path_safe`]).
+/// Traces through Assign chains so `Path::new(sanitised)` still resolves
+/// to the sanitised string's fact.
+fn is_path_safe_for_sink(
+    inst: &SsaInst,
+    state: &SsaTaintState,
+    ssa: &SsaBody,
+    cfg: &Cfg,
+    abs: &AbstractState,
+) -> bool {
+    let leaves = trace_tainted_leaf_values(inst, state, ssa, cfg);
+    if leaves.is_empty() {
+        return false;
+    }
+    leaves.iter().all(|v| abs.get(*v).path.is_path_safe())
 }
 
 /// Check if call arguments prove a sink is safe via abstract domain.
@@ -5426,6 +5749,12 @@ fn is_call_abstract_safe(
                 return true;
             }
         }
+    }
+
+    // PathFact gate (Call path): mirrors non-Call suppression so the gate
+    // fires regardless of which sink-detection branch produces the event.
+    if sink_caps.intersects(Cap::FILE_IO) && is_path_safe_for_sink(inst, state, ssa, cfg, abs) {
+        return true;
     }
 
     false

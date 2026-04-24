@@ -16,7 +16,7 @@
 
 use nyx_scanner::abstract_interp::{
     AbstractTransfer, AbstractValue, BitFact, IntervalFact, IntervalTransfer,
-    MAX_LITERAL_PREFIX_LEN, StringFact, StringTransfer,
+    MAX_LITERAL_PREFIX_LEN, PathFact, StringFact, StringTransfer,
 };
 
 // ── Serde round-trip ───────────────────────────────────────────────────
@@ -290,6 +290,7 @@ fn transfer_apply_combines_subdomains() {
         interval: IntervalFact::exact(8080),
         string: StringFact::from_prefix("http://untrusted/"),
         bits: BitFact::top(),
+    path: PathFact::top(),
     };
     let out = t.apply(&input);
     // Interval identity forwards the caller-known bound.

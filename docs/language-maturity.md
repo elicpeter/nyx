@@ -180,21 +180,28 @@ clang-tidy, the Clang Static Analyzer, or Infer for production use.
   `diesel`, `postgres`), new Deserialization class (`serde_yaml`,
   `bincode`, `rmp_serde`, `ciborium`, `ron`, `toml`), expanded file I/O
   (`fs::remove_file/dir/rename/copy`), `reqwest` SSRF builder chain.
-- **Known gaps (6 FPs persist on adversarial safe cases)**:
+- **Known gaps**:
   - `rs-safe-003`: structural `cfg-unguarded-sink` fires when a tainted
     variable is *declared* in scope but not used in the sink — intentional
     for high-risk sinks.
-  - `rs-safe-007`: `.replace("..", "")` chains are not credited as
-    path-traversal sanitizers (conservative).
-  - `rs-safe-008`: negative-validation return pattern
-    (`if input.contains(";") { return; }`) not modeled.
   - `rs-safe-009`: match-arm guards don't surface as `StmtKind::If`, so
     `classify_condition` never sees the character-class validation.
-  - `rs-safe-010`: `HashMap::get(key).copied().unwrap_or(literal)` not
-    modeled as a static-lookup sanitizer.
-  - `rs-safe-011`: `cfg-unguarded-sink` structural detector has no access
-    to type facts, so `parse::<u16>()` type-narrowing doesn't suppress the
-    structural finding on `Command::new(...).arg(port.to_string())`.
+  - `rs-safe-014` (Option-returning user sanitiser) and the patched
+    `tar-rs` CVE-2018-20997 pair remain open: the SSA lowering collapses
+    `if cond { return X } Y` into a shared merged-return block whose
+    entry AbstractState joins across every return edge, diluting the
+    [`PathFact`] narrowing produced on the fall-through path.  Closing
+    these needs pred-sensitive return-state extraction (see
+    [`project_pathfact_landed.md`] in the project memory for the
+    follow-up sketch).
+- **Closed by the 2026-04-23 PathFact domain**
+  (`src/abstract_interp/path_domain.rs`): `rs-safe-007` (`.replace("..",
+  "")` sanitiser), `rs-safe-008` (negative-validation return pattern),
+  `rs-safe-010` (static-map lookup — still handled by the dedicated
+  static-map analysis, but PathFact does not interfere), new `rs-safe-012`
+  (`.contains("..")` + `.starts_with('/')` intraprocedural rejection),
+  new `rs-safe-015` (`Path::new(p).is_absolute()` typed rejection), plus a
+  new `rs-path-006` negative-guard to prevent over-suppression.
 - **Not yet covered**: unsafe FFI / `std::mem::transmute` (no rules), Tokio
   `process::Command` async variants (not distinguished from sync),
   `hyper` / `surf` / `ureq` SSRF clients (reqwest family only), and Rocket /

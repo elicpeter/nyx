@@ -18,10 +18,12 @@
 
 pub mod bit_domain;
 pub mod interval;
+pub mod path_domain;
 pub mod string_domain;
 
 pub use bit_domain::BitFact;
 pub use interval::IntervalFact;
+pub use path_domain::{PathFact, Tri};
 pub use string_domain::StringFact;
 
 use crate::ssa::ir::SsaValue;
@@ -51,6 +53,12 @@ pub struct AbstractValue {
     pub interval: IntervalFact,
     pub string: StringFact,
     pub bits: BitFact,
+    #[serde(default, skip_serializing_if = "path_fact_is_top")]
+    pub path: PathFact,
+}
+
+fn path_fact_is_top(p: &PathFact) -> bool {
+    p.is_top()
 }
 
 impl AbstractValue {
@@ -59,6 +67,7 @@ impl AbstractValue {
             interval: IntervalFact::top(),
             string: StringFact::top(),
             bits: BitFact::top(),
+            path: PathFact::top(),
         }
     }
 
@@ -67,15 +76,30 @@ impl AbstractValue {
             interval: IntervalFact::bottom(),
             string: StringFact::bottom(),
             bits: BitFact::bottom(),
+            path: PathFact::bottom(),
+        }
+    }
+
+    /// Construct a value with a specific [`PathFact`] and every other
+    /// subdomain at Top.  Used by the Rust path-primitive transfer rules.
+    pub fn with_path_fact(path: PathFact) -> Self {
+        Self {
+            interval: IntervalFact::top(),
+            string: StringFact::top(),
+            bits: BitFact::top(),
+            path,
         }
     }
 
     pub fn is_top(&self) -> bool {
-        self.interval.is_top() && self.string.is_top() && self.bits.is_top()
+        self.interval.is_top() && self.string.is_top() && self.bits.is_top() && self.path.is_top()
     }
 
     pub fn is_bottom(&self) -> bool {
-        self.interval.is_bottom() && self.string.is_bottom() && self.bits.is_bottom()
+        self.interval.is_bottom()
+            && self.string.is_bottom()
+            && self.bits.is_bottom()
+            && self.path.is_bottom()
     }
 
     pub fn join(&self, other: &Self) -> Self {
@@ -83,6 +107,7 @@ impl AbstractValue {
             interval: self.interval.join(&other.interval),
             string: self.string.join(&other.string),
             bits: self.bits.join(&other.bits),
+            path: self.path.join(&other.path),
         }
     }
 
@@ -91,6 +116,7 @@ impl AbstractValue {
             interval: self.interval.meet(&other.interval),
             string: self.string.meet(&other.string),
             bits: <BitFact as AbstractDomain>::meet(&self.bits, &other.bits),
+            path: <PathFact as AbstractDomain>::meet(&self.path, &other.path),
         }
     }
 
@@ -99,6 +125,7 @@ impl AbstractValue {
             interval: self.interval.widen(&other.interval),
             string: self.string.widen(&other.string),
             bits: self.bits.widen(&other.bits),
+            path: self.path.widen(&other.path),
         }
     }
 
@@ -106,6 +133,7 @@ impl AbstractValue {
         self.interval.leq(&other.interval)
             && self.string.leq(&other.string)
             && self.bits.leq(&other.bits)
+            && self.path.leq(&other.path)
     }
 }
 
@@ -335,6 +363,7 @@ impl AbstractTransfer {
             interval: self.interval.apply(&input.interval),
             string: self.string.apply(&input.string),
             bits: BitFact::top(),
+        path: PathFact::top(),
         }
     }
 
@@ -490,11 +519,13 @@ mod tests {
             interval: IntervalFact::exact(1),
             string: StringFact::from_prefix("https://a.com/"),
             bits: BitFact::top(),
+        path: PathFact::top(),
         };
         let b = AbstractValue {
             interval: IntervalFact::exact(5),
             string: StringFact::from_prefix("https://b.com/"),
             bits: BitFact::top(),
+        path: PathFact::top(),
         };
         let j = a.join(&b);
         assert_eq!(j.interval.lo, Some(1));
@@ -511,6 +542,7 @@ mod tests {
             },
             string: StringFact::from_prefix("hello"),
             bits: BitFact::top(),
+        path: PathFact::top(),
         };
         let new = AbstractValue {
             interval: IntervalFact {
@@ -519,6 +551,7 @@ mod tests {
             },
             string: StringFact::from_prefix("hello"),
             bits: BitFact::top(),
+        path: PathFact::top(),
         };
         let w = old.widen(&new);
         assert_eq!(w.interval.lo, Some(0)); // stable
@@ -539,6 +572,7 @@ mod tests {
             interval: IntervalFact::exact(10),
             string: StringFact::top(),
             bits: BitFact::top(),
+        path: PathFact::top(),
         };
         state.set(SsaValue(1), val.clone());
         assert_eq!(state.get(SsaValue(1)), val);
@@ -553,6 +587,7 @@ mod tests {
                 interval: IntervalFact::exact(5),
                 string: StringFact::top(),
                 bits: BitFact::top(),
+            path: PathFact::top(),
             },
         );
         assert!(!state.get(SsaValue(1)).is_top());
@@ -570,6 +605,7 @@ mod tests {
                 interval: IntervalFact::exact(3),
                 string: StringFact::top(),
                 bits: BitFact::top(),
+            path: PathFact::top(),
             },
         );
         a.set(
@@ -578,6 +614,7 @@ mod tests {
                 interval: IntervalFact::exact(10),
                 string: StringFact::top(),
                 bits: BitFact::top(),
+            path: PathFact::top(),
             },
         );
 
@@ -588,6 +625,7 @@ mod tests {
                 interval: IntervalFact::exact(7),
                 string: StringFact::top(),
                 bits: BitFact::top(),
+            path: PathFact::top(),
             },
         );
         // SsaValue(2) not in b → join drops it (Top)
@@ -613,6 +651,7 @@ mod tests {
                 },
                 string: StringFact::top(),
                 bits: BitFact::top(),
+            path: PathFact::top(),
             },
         );
 
@@ -626,6 +665,7 @@ mod tests {
                 },
                 string: StringFact::top(),
                 bits: BitFact::top(),
+            path: PathFact::top(),
             },
         );
 

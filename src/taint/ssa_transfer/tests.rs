@@ -254,6 +254,7 @@ mod inline_cache_epoch_tests {
             param_provenance: 0,
             receiver_provenance: false,
             uses_summary: false,
+        return_path_fact: crate::abstract_interp::PathFact::top(),
         }))
     }
 
@@ -326,6 +327,7 @@ mod inline_cache_epoch_tests {
             param_provenance: 1u64 << 0,
             receiver_provenance: false,
             uses_summary: true,
+        return_path_fact: crate::abstract_interp::PathFact::top(),
         }));
 
         // Caller A: argument carries an env-source origin.
@@ -391,6 +393,7 @@ mod inline_cache_epoch_tests {
             param_provenance: 0,
             receiver_provenance: false,
             uses_summary: true,
+        return_path_fact: crate::abstract_interp::PathFact::top(),
         }));
 
         let state = SsaTaintState::initial();
@@ -1076,5 +1079,154 @@ mod goto_succ_propagation_tests {
         let succ_states = compute_succ_states(&block, &cfg, &ssa, &transfer, &exit_state);
         assert_eq!(succ_states.len(), 1);
         assert_eq!(succ_states[0].0, BlockId(1));
+    }
+
+    // ── PathFact branch-narrowing smoke tests ─────────────────────────────
+
+    /// Build a minimal `SsaBody` with a single value def named `var_name`.
+    /// Used to drive `apply_path_fact_branch_narrowing` without a full CFG.
+    fn ssa_body_with_named_value(var_name: &str) -> SsaBody {
+        SsaBody {
+            blocks: vec![],
+            entry: BlockId(0),
+            value_defs: vec![crate::ssa::ir::ValueDef {
+                var_name: Some(var_name.into()),
+                cfg_node: NodeIndex::new(0),
+                block: BlockId(0),
+            }],
+            cfg_node_map: std::collections::HashMap::new(),
+            exception_edges: vec![],
+        }
+    }
+
+    fn initial_state_with_abstract() -> SsaTaintState {
+        let mut s = SsaTaintState::initial();
+        s.abstract_state = Some(crate::abstract_interp::AbstractState::empty());
+        s
+    }
+
+    #[test]
+    fn path_fact_contains_dotdot_narrows_false_branch() {
+        let ssa = ssa_body_with_named_value("user");
+        let mut true_state = initial_state_with_abstract();
+        let mut false_state = initial_state_with_abstract();
+
+        super::super::apply_path_fact_branch_narrowing(
+            &mut true_state,
+            &mut false_state,
+            "user.contains(\"..\")",
+            &["user".to_string()],
+            &ssa,
+        );
+
+        let abs = false_state.abstract_state.as_ref().unwrap();
+        let fact = abs.get(SsaValue(0)).path;
+        assert_eq!(fact.dotdot, crate::abstract_interp::Tri::No);
+        // true branch (rejection path) unchanged.
+        let true_abs = true_state.abstract_state.as_ref().unwrap();
+        assert_eq!(true_abs.get(SsaValue(0)).path.dotdot, crate::abstract_interp::Tri::Maybe);
+    }
+
+    #[test]
+    fn path_fact_starts_with_slash_narrows_false_branch() {
+        let ssa = ssa_body_with_named_value("p");
+        let mut true_state = initial_state_with_abstract();
+        let mut false_state = initial_state_with_abstract();
+
+        super::super::apply_path_fact_branch_narrowing(
+            &mut true_state,
+            &mut false_state,
+            "p.starts_with('/')",
+            &["p".to_string()],
+            &ssa,
+        );
+
+        let fact = false_state.abstract_state.as_ref().unwrap().get(SsaValue(0)).path;
+        assert_eq!(fact.absolute, crate::abstract_interp::Tri::No);
+    }
+
+    #[test]
+    fn path_fact_is_absolute_narrows_false_branch() {
+        let ssa = ssa_body_with_named_value("p");
+        let mut true_state = initial_state_with_abstract();
+        let mut false_state = initial_state_with_abstract();
+
+        super::super::apply_path_fact_branch_narrowing(
+            &mut true_state,
+            &mut false_state,
+            "p.is_absolute()",
+            &["p".to_string()],
+            &ssa,
+        );
+
+        let fact = false_state.abstract_state.as_ref().unwrap().get(SsaValue(0)).path;
+        assert_eq!(fact.absolute, crate::abstract_interp::Tri::No);
+    }
+
+    #[test]
+    fn path_fact_starts_with_literal_sets_prefix_lock_on_true_branch() {
+        let ssa = ssa_body_with_named_value("p");
+        let mut true_state = initial_state_with_abstract();
+        let mut false_state = initial_state_with_abstract();
+
+        super::super::apply_path_fact_branch_narrowing(
+            &mut true_state,
+            &mut false_state,
+            "p.starts_with(\"/var/app/uploads/\")",
+            &["p".to_string()],
+            &ssa,
+        );
+
+        let fact = true_state.abstract_state.as_ref().unwrap().get(SsaValue(0)).path;
+        assert_eq!(
+            fact.prefix_lock.as_deref(),
+            Some("/var/app/uploads/"),
+            "positive starts_with(literal) must attach prefix_lock on true branch"
+        );
+    }
+
+    #[test]
+    fn path_fact_no_match_leaves_state_untouched() {
+        let ssa = ssa_body_with_named_value("x");
+        let mut true_state = initial_state_with_abstract();
+        let mut false_state = initial_state_with_abstract();
+
+        super::super::apply_path_fact_branch_narrowing(
+            &mut true_state,
+            &mut false_state,
+            "x == 5",
+            &["x".to_string()],
+            &ssa,
+        );
+
+        // No path-idiom → both abstract_states remain empty (no writes).
+        let tabs = true_state.abstract_state.as_ref().unwrap();
+        let fabs = false_state.abstract_state.as_ref().unwrap();
+        assert!(tabs.get(SsaValue(0)).path.is_top());
+        assert!(fabs.get(SsaValue(0)).path.is_top());
+    }
+
+    #[test]
+    fn is_path_safe_for_sink_proven_safe_returns_true() {
+        use crate::abstract_interp::{AbstractState, AbstractValue, PathFact};
+
+        let mut abs = AbstractState::empty();
+        let v = SsaValue(0);
+        // Mark v as proven path-safe via the builder API.
+        let safe_fact = PathFact::default()
+            .with_dotdot_cleared()
+            .with_absolute_cleared();
+        abs.set(v, AbstractValue::with_path_fact(safe_fact.clone()));
+        assert!(safe_fact.is_path_safe());
+        assert_eq!(abs.get(v).path, safe_fact);
+    }
+
+    #[test]
+    fn is_path_safe_for_sink_unknown_axis_returns_false() {
+        use crate::abstract_interp::PathFact;
+
+        // Only dotdot is cleared — absolute stays Maybe → not path-safe.
+        let half_fact = PathFact::default().with_dotdot_cleared();
+        assert!(!half_fact.is_path_safe());
     }
 }
