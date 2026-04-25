@@ -56,6 +56,12 @@ pub struct StateFinding {
 }
 
 /// Extract findings from converged dataflow state + transfer events.
+///
+/// `path_safe_suppressed_sink_spans` lists CFG sink spans whose tainted
+/// inputs were proved path-safe by the SSA taint engine; the privileged
+/// `state-unauthed-access` finding is suppressed on those spans because
+/// the user-controlled input has already been proved unable to escape
+/// into a privileged location.
 pub fn extract_findings(
     result: &DataflowResult<ProductState, TransferEvent>,
     cfg: &Cfg,
@@ -63,6 +69,7 @@ pub fn extract_findings(
     lang: Lang,
     func_summaries: &crate::cfg::FuncSummaries,
     enable_auth: bool,
+    path_safe_suppressed_sink_spans: &std::collections::HashSet<(usize, usize)>,
 ) -> Vec<StateFinding> {
     let mut findings = Vec::new();
 
@@ -350,6 +357,18 @@ pub fn extract_findings(
                 continue;
             };
             if state.auth.auth_level == AuthLevel::Unauthed {
+                // Suppress when the SSA taint engine has already proved
+                // the tainted input flowing into this sink is path-safe
+                // (PathFact `dotdot=No && absolute=No`).  A web handler
+                // reading a sanitised user-controlled path is not the
+                // same shape as a handler reading any user-controlled
+                // path — the auth concern reduces once the data cannot
+                // escape into a privileged location.  Note this is per
+                // CFG-node span, so co-located unrelated sinks are
+                // unaffected.
+                if path_safe_suppressed_sink_spans.contains(&info.ast.span) {
+                    continue;
+                }
                 let callee_desc =
                     sanitize_desc(info.call.callee.as_deref().unwrap_or("(sensitive op)"));
                 findings.push(StateFinding {
@@ -517,7 +536,15 @@ mod tests {
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
-        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new(), false);
+        let findings = extract_findings(
+            &result,
+            &cfg,
+            &interner,
+            Lang::C,
+            &HashMap::new(),
+            false,
+            &std::collections::HashSet::new(),
+        );
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "state-resource-leak");
@@ -568,7 +595,15 @@ mod tests {
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
-        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new(), false);
+        let findings = extract_findings(
+            &result,
+            &cfg,
+            &interner,
+            Lang::C,
+            &HashMap::new(),
+            false,
+            &std::collections::HashSet::new(),
+        );
 
         assert!(findings.is_empty());
     }
@@ -693,7 +728,15 @@ mod tests {
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
-        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new(), false);
+        let findings = extract_findings(
+            &result,
+            &cfg,
+            &interner,
+            Lang::C,
+            &HashMap::new(),
+            false,
+            &std::collections::HashSet::new(),
+        );
 
         assert!(
             findings.is_empty(),
@@ -749,7 +792,15 @@ mod tests {
         };
 
         let result = engine::run_forward(&cfg, entry, &transfer, ProductState::initial());
-        let findings = extract_findings(&result, &cfg, &interner, Lang::C, &HashMap::new(), false);
+        let findings = extract_findings(
+            &result,
+            &cfg,
+            &interner,
+            Lang::C,
+            &HashMap::new(),
+            false,
+            &std::collections::HashSet::new(),
+        );
 
         assert_eq!(
             findings.len(),

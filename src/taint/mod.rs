@@ -300,6 +300,12 @@ pub fn analyse_file(
 ) -> Vec<Finding> {
     let _span = tracing::debug_span!("taint_analyse_file").entered();
 
+    // Clear the file-level path-safe-suppressed sink-span set before this
+    // file's analysis.  Populated by `is_path_safe_for_sink` and consumed
+    // by the state-analysis pass via `take_path_safe_suppressed_spans` to
+    // suppress `state-unauthed-access` on sinks already proven path-safe.
+    ssa_transfer::reset_path_safe_suppressed_spans();
+
     // 1. Lower all function bodies: produce SSA summaries + cached bodies.
     //    No locator: pass-2 intra-file summaries are transient (not persisted)
     //    and behavior depends on SinkSite.cap only, which is always populated.

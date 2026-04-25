@@ -25,8 +25,9 @@ pub use inline::{CalleeSsaBody, CrossFileNodeMeta, populate_node_meta, rebuild_b
 pub(crate) use inline::{inline_cache_clear_epoch, inline_cache_fingerprint};
 pub use state::{
     BindingKey, SsaTaintState, max_worklist_iterations, origins_truncation_count,
-    reset_origins_observability, reset_worklist_observability, seed_lookup,
-    set_max_origins_override, set_worklist_cap_override, worklist_cap_hit_count,
+    reset_origins_observability, reset_path_safe_suppressed_spans, reset_worklist_observability,
+    seed_lookup, set_max_origins_override, set_worklist_cap_override,
+    take_path_safe_suppressed_spans, worklist_cap_hit_count,
 };
 use state::{
     MAX_WORKLIST_ITERATIONS, ORIGINS_TRUNCATION_COUNT, WORKLIST_CAP_HITS, effective_max_origins,
@@ -968,12 +969,13 @@ fn compute_succ_states(
                 // Rust positive-assertion `prefix_lock` recognition still
                 // fires regardless of language; for non-Rust languages the
                 // assertion classifier returns `None` for unfamiliar shapes.
-                apply_path_fact_branch_narrowing(
+                apply_path_fact_branch_narrowing_with_interner(
                     &mut true_state,
                     &mut false_state,
                     cond_text,
                     &effective_vars,
                     ssa,
+                    Some(transfer.interner),
                 );
 
                 // Constraint refinement
@@ -1141,12 +1143,31 @@ fn apply_branch_predicates(
 /// rejection / assertion idiom.
 ///
 /// Gated on `transfer.lang == Lang::Rust` by the caller.
+#[cfg(test)]
 fn apply_path_fact_branch_narrowing(
     true_state: &mut SsaTaintState,
     false_state: &mut SsaTaintState,
     cond_text: &str,
     effective_vars: &[String],
     ssa: &SsaBody,
+) {
+    apply_path_fact_branch_narrowing_with_interner(
+        true_state,
+        false_state,
+        cond_text,
+        effective_vars,
+        ssa,
+        None,
+    );
+}
+
+fn apply_path_fact_branch_narrowing_with_interner(
+    true_state: &mut SsaTaintState,
+    false_state: &mut SsaTaintState,
+    cond_text: &str,
+    effective_vars: &[String],
+    ssa: &SsaBody,
+    interner: Option<&SymbolInterner>,
 ) {
     use crate::abstract_interp::PathFact;
     use crate::abstract_interp::path_domain::{
@@ -1158,6 +1179,28 @@ fn apply_path_fact_branch_narrowing(
 
     if rejection_axes.is_empty() && matches!(assertion, PathAssertion::None) {
         return;
+    }
+
+    // Mark validated_may on the false branch when a path-rejection
+    // pattern fires.  Mirrors the AllowlistCheck quirk that already
+    // marks validated on the rejection-arm via `apply_branch_predicates`
+    // for languages whose `.contains(...)` / membership idiom hits the
+    // AllowlistCheck classifier — but normalises behaviour for shapes
+    // like C `strstr(path, "..") != NULL` that hit the NullCheck arm
+    // first and never get a chance to mark validation through the
+    // allowlist path.  Once the path-rejection classifier has accepted
+    // the condition, the false branch (where the sink is reached after
+    // the rejection-arm terminates) is the validated arm by
+    // construction.
+    if !rejection_axes.is_empty()
+        && let Some(intern) = interner
+    {
+        for var in effective_vars {
+            if let Some(sym) = intern.get(var) {
+                false_state.validated_may.insert(sym);
+                false_state.validated_must.insert(sym);
+            }
+        }
     }
 
     // Collect SSA values whose `var_name` appears in `effective_vars`.  We
@@ -2364,8 +2407,78 @@ pub(super) fn transfer_inst(
             let mut return_bits = Cap::empty();
             let mut return_origins: SmallVec<[TaintOrigin; 2]> = SmallVec::new();
 
+            // Network-fetch source suppression: a Call that carries BOTH
+            // a Source label and a Sink(SSRF) label is a network-fetch
+            // primitive (e.g. PHP `file_get_contents`, `curl_exec`,
+            // Python `requests.get`, JS `axios.get`).  When invoked with
+            // a hardcoded URL whose prefix passes `is_string_safe_for_ssrf`
+            // (a fully-formed `scheme://host/path`), the developer has
+            // explicitly bound the endpoint at compile time — the SSRF
+            // sink suppression already trusts this prefix-lock to
+            // silence the SSRF concern, and the same trust applies on
+            // the source side: the response body is developer-chosen,
+            // not attacker-chosen.  Suppressing the Source label here
+            // mirrors the existing sink suppression so a single
+            // hardcoded-URL fetch does not create a phantom
+            // `taint-unsanitised-flow` finding when its result is
+            // echoed/printed later in the same scope.
+            let is_network_fetch_source = info
+                .taint
+                .labels
+                .iter()
+                .any(|l| matches!(l, DataLabel::Source(_)))
+                && info
+                    .taint
+                    .labels
+                    .iter()
+                    .any(|l| matches!(l, DataLabel::Sink(c) if c.contains(Cap::SSRF)));
+            // Detect a hardcoded URL via three channels:
+            //   1. `info.string_prefix` — populated by the JS/TS template-
+            //      literal extractor and inline call shapes.
+            //   2. AbstractState `StringFact` on the first positional arg —
+            //      populated by const propagation for plain string literals.
+            //   3. As a last resort when `info.call.first_arg_text` is
+            //      populated with a hardcoded literal — extracted at CFG
+            //      construction time for network-fetch primitive callees.
+            let url_prefix_safe_via_node = info
+                .string_prefix
+                .as_deref()
+                .map(|p| {
+                    let synthetic = crate::abstract_interp::StringFact::from_prefix(p);
+                    is_string_safe_for_ssrf(&synthetic)
+                })
+                .unwrap_or(false);
+            let url_prefix_safe_via_abs = state.abstract_state.as_ref().is_some_and(|abs| {
+                args.first().is_some_and(|first_arg| {
+                    !first_arg.is_empty()
+                        && first_arg
+                            .iter()
+                            .all(|v| is_string_safe_for_ssrf(&abs.get(*v).string))
+                })
+            });
+            let url_prefix_safe_via_first_arg_text = is_network_fetch_source
+                && info
+                    .call
+                    .arg_string_literals
+                    .first()
+                    .and_then(|v| v.as_deref())
+                    .map(|s| {
+                        let synthetic = crate::abstract_interp::StringFact::from_prefix(s);
+                        is_string_safe_for_ssrf(&synthetic)
+                    })
+                    .unwrap_or(false);
+            let url_is_hardcoded_safe = is_network_fetch_source
+                && (url_prefix_safe_via_node
+                    || url_prefix_safe_via_abs
+                    || url_prefix_safe_via_first_arg_text);
+
             for lbl in &info.taint.labels {
                 if let DataLabel::Source(bits) = lbl {
+                    if url_is_hardcoded_safe {
+                        // Skip Source propagation — see network-fetch
+                        // source suppression rationale above.
+                        continue;
+                    }
                     return_bits |= *bits;
                     let callee_str = info.call.callee.as_deref().unwrap_or("");
                     let source_kind = crate::labels::infer_source_kind(*bits, callee_str);
@@ -6101,7 +6214,17 @@ fn is_path_safe_for_sink(
     if leaves.is_empty() {
         return false;
     }
-    leaves.iter().all(|v| abs.get(*v).path.is_path_safe())
+    let safe = leaves.iter().all(|v| abs.get(*v).path.is_path_safe());
+    if safe {
+        // Publish the suppression to the file-level set so the
+        // state-analysis pass can suppress `state-unauthed-access` on
+        // the same sink — once the taint engine has proved the
+        // user-controlled input cannot escape into a privileged
+        // location, the auth concern is structurally reduced.
+        let span = cfg[inst.cfg_node].ast.span;
+        crate::taint::ssa_transfer::state::record_path_safe_suppressed_span(span);
+    }
+    safe
 }
 
 /// Check if call arguments prove a sink is safe via abstract domain.

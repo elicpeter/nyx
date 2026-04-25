@@ -124,6 +124,104 @@ fn ssa_all_sink_operands_constant(
     args_ok && receiver_ok
 }
 
+/// SSA-backed reassign-aware safety probe: every operand of the sink
+/// resolves to a constant, callee fragment, OR a function parameter that
+/// is not itself a Source.  Used at the cfg-unguarded-sink site under
+/// `!has_taint` — the taint engine has already proved no source-tainted
+/// data reaches the sink, so a non-source Param at operand position is
+/// inert payload-wise (e.g. HTTP writer in `Fprintf(w, "<h1>", "Guest")`).
+fn ssa_all_sink_operands_const_or_param(ctx: &AnalysisContext, sink: NodeIndex) -> bool {
+    let Some(facts) = ctx.body_const_facts else {
+        return false;
+    };
+    let Some(&sink_val) = facts.ssa.cfg_node_map.get(&sink) else {
+        return false;
+    };
+    let Some(inst) = find_inst(&facts.ssa, sink_val) else {
+        return false;
+    };
+    let SsaOp::Call { args, receiver, .. } = &inst.op else {
+        return false;
+    };
+
+    let operand_safe = |v: SsaValue| -> bool { ssa_operand_const_or_param(v, facts, ctx.cfg) };
+    let args_ok = args
+        .iter()
+        .all(|group| group.iter().all(|v| operand_safe(*v)));
+    let receiver_ok = receiver.is_none_or(operand_safe);
+    args_ok && receiver_ok
+}
+
+/// Variant of [`ssa_operand_constant`] that also accepts non-Source Params.
+/// Stricter than `ssa_operand_constant` on Source (always false) but
+/// looser on bare Params (always true unless they are Source-labeled).
+fn ssa_operand_const_or_param(
+    root: SsaValue,
+    facts: &BodyConstFacts,
+    cfg: &crate::cfg::Cfg,
+) -> bool {
+    let mut visited: HashSet<SsaValue> = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(v) = stack.pop() {
+        if !visited.insert(v) {
+            continue;
+        }
+        match facts.const_values.get(&v) {
+            Some(ConstLattice::Str(_))
+            | Some(ConstLattice::Int(_))
+            | Some(ConstLattice::Bool(_))
+            | Some(ConstLattice::Null) => continue,
+            _ => {}
+        }
+        let Some(inst) = find_inst(&facts.ssa, v) else {
+            return false;
+        };
+        // CFG-node-level Source label: when an SSA `Call` corresponds to a
+        // Source-labeled CFG node (e.g. `env::var(...)` whose callee
+        // matches a `LabelRule` Source matcher), the call's result is
+        // tainted user input — refuse, regardless of how the SSA
+        // happened to lower.  Catches the `SsaOp::Call` lowering of
+        // labeled Source functions, which the `SsaOp::Source` arm only
+        // sees for callee-less pure sources like PHP `$_GET`.
+        let cfg_node = inst.cfg_node;
+        if cfg
+            .node_weight(cfg_node)
+            .map(|info| {
+                info.taint
+                    .labels
+                    .iter()
+                    .any(|l| matches!(l, DataLabel::Source(_)))
+            })
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        match &inst.op {
+            SsaOp::Const(_) => {}
+            SsaOp::Assign(vals) => stack.extend(vals.iter().copied()),
+            SsaOp::Phi(ops) => stack.extend(ops.iter().map(|(_, v)| *v)),
+            SsaOp::Call { args, receiver, .. } => {
+                for group in args {
+                    stack.extend(group.iter().copied());
+                }
+                if let Some(r) = receiver {
+                    stack.push(*r);
+                }
+            }
+            SsaOp::Param { .. } | SsaOp::SelfParam | SsaOp::CatchParam => {
+                // Bare parameters are accepted: at the call site the
+                // taint engine has already concluded no source data
+                // reaches this sink (`!has_taint` gate).  A Param that
+                // is not source-tainted contributes only its caller-
+                // bound value, which the gate above already filtered.
+            }
+            SsaOp::Source => return false,
+            SsaOp::Nop | SsaOp::Undef => {}
+        }
+    }
+    true
+}
+
 /// Return true if this SSA operand is a compile-time-known literal, a callee
 /// fragment pseudo-use (not a real runtime value), or transitively composed
 /// of such operands.  Returns false for sources, parameters with non-callee
@@ -475,6 +573,24 @@ fn find_guard_nodes(ctx: &AnalysisContext) -> Vec<(NodeIndex, Cap)> {
                     // sinks (SQL, XSS) aren't silenced when a shell gate
                     // happens to sit upstream.
                     result.push((idx, Cap::SHELL_ESCAPE | Cap::CODE_EXEC));
+                } else {
+                    // Path-traversal rejection guard.  When the condition
+                    // matches a path-rejection idiom recognised by
+                    // `classify_path_rejection_axes` (`strstr(p, "..")`
+                    // / `.contains("..")` / `strings.Contains(p, "..")`
+                    // / `p[0] == '/'` / `path.is_absolute()` / etc.),
+                    // it acts as a guard for FILE_IO sinks.  Catches
+                    // the C/C++ `if (strstr(p, "..") != NULL)` shape
+                    // whose `!= NULL` wrapper otherwise falls through
+                    // to NullCheck classification and never registers
+                    // as a guard.  Scope kept to FILE_IO so unrelated
+                    // sinks aren't silenced.
+                    let axes = crate::abstract_interp::path_domain::classify_path_rejection_axes(
+                        cond_text,
+                    );
+                    if !axes.is_empty() {
+                        result.push((idx, Cap::FILE_IO));
+                    }
                 }
             }
         }
@@ -726,6 +842,21 @@ impl CfgAnalysis for UnguardedSink {
             // If sink args are all constants (including one-hop constant bindings)
             // and taint didn't confirm, this is a false positive — skip it.
             if is_all_args_constant(ctx, *sink) && !has_taint {
+                continue;
+            }
+
+            // SSA latest-def suppression: when the taint engine has already
+            // proved no source-tainted data reaches this sink (`!has_taint`)
+            // and every SSA operand resolves to a constant, callee-fragment
+            // pseudo-name, OR a function parameter that is not a Source —
+            // the sink's actual arguments cannot carry an injection payload.
+            // Catches the reassign-to-constant idiom (`name := req.x; name =
+            // "Guest"; sink(name)`) where the latest SSA def is a literal
+            // and a non-payload parameter (e.g. an HTTP writer / receiver)
+            // is the only other operand.  The simpler `is_all_args_constant`
+            // check above rejects that mixed shape because it forbids real
+            // parameters in operand position.
+            if !has_taint && ssa_all_sink_operands_const_or_param(ctx, *sink) {
                 continue;
             }
 

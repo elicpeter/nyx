@@ -3,7 +3,7 @@
   "metadata": {
     "description": "Nyx benchmark ground truth",
     "created": "2026-03-20",
-    "corpus_size": 343
+    "corpus_size": 358
   },
   "cases": [
     {
@@ -10982,6 +10982,454 @@
       ],
       "disabled": false,
       "notes": "TS cross-function bool validator; deferred \u2014 same reason as js-safe-016."
+    },
+    {
+      "case_id": "py-auth-decorator-001",
+      "file": "python/safe/safe_login_required_decorator.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-unauthed-access",
+        "cfg-auth-gap",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Flask @login_required decorator must suppress auth findings"
+    },
+    {
+      "case_id": "py-auth-decorator-vuln-001",
+      "file": "python/auth/vuln_no_auth_decorator.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "auth",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "cfg-auth-gap"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Same shape but missing decorator \u2014 auth-gap fires"
+    },
+    {
+      "case_id": "java-preauth-001",
+      "file": "java/auth/SafePreAuthorize.java",
+      "language": "java",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-unauthed-access",
+        "cfg-auth-gap",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Spring @PreAuthorize annotation must suppress auth findings"
+    },
+    {
+      "case_id": "java-preauth-vuln-001",
+      "file": "java/auth/VulnNoPreAuthorize.java",
+      "language": "java",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          13,
+          13
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          11,
+          11
+        ]
+      ],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Servlet doGet without auth \u2014 taint flow fires"
+    },
+    {
+      "case_id": "php-isgranted-001",
+      "file": "php/auth/safe_isgranted.php",
+      "language": "php",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-unauthed-access",
+        "cfg-auth-gap",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Symfony #[IsGranted] attribute must suppress auth findings"
+    },
+    {
+      "case_id": "php-isgranted-vuln-001",
+      "file": "php/auth/vuln_no_isgranted.php",
+      "language": "php",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          7,
+          7
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          6,
+          6
+        ]
+      ],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Top-level handler without IsGranted \u2014 taint flow fires"
+    },
+    {
+      "case_id": "ruby-before-action-001",
+      "file": "ruby/auth/safe_before_action.rb",
+      "language": "ruby",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-862",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "state-unauthed-access",
+        "cfg-auth-gap",
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Rails before_action :authenticate_user must suppress auth findings"
+    },
+    {
+      "case_id": "js-allowlist-dispatch-001",
+      "file": "javascript/safe/safe_switch_dispatch.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-78",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-unauthed-access"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Allowlist-then-exec pattern \u2014 engine must recognise membership check"
+    },
+    {
+      "case_id": "ts-iife-closure-001",
+      "file": "typescript/safe/safe_iife_closure_sanitizer.ts",
+      "language": "typescript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "IIFE wrapper around handler with encodeURIComponent \u2014 must be cleared"
+    },
+    {
+      "case_id": "ts-iife-closure-vuln-001",
+      "file": "typescript/xss/vuln_iife_closure_no_sanitizer.ts",
+      "language": "typescript",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          16,
+          16
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          14,
+          14
+        ]
+      ],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "IIFE wrapper without sanitizer \u2014 taint must propagate through closure"
+    },
+    {
+      "case_id": "py-validator-sentinel-001",
+      "file": "python/safe/safe_validator_sentinel.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-unauthed-access",
+        "cfg-auth-gap"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Cross-fn validator with empty-string sentinel + decorator"
+    },
+    {
+      "case_id": "py-validator-sentinel-vuln-001",
+      "file": "python/sqli/vuln_validator_sentinel_bypass.py",
+      "language": "python",
+      "is_vulnerable": true,
+      "vuln_class": "sqli",
+      "cwe": "CWE-89",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          22,
+          22
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          17,
+          17
+        ]
+      ],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Same shape with inverted sentinel check \u2014 SQLi fires"
+    },
+    {
+      "case_id": "py-context-sanitize-001",
+      "file": "python/safe/safe_with_context_sanitize.py",
+      "language": "python",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-22",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow",
+        "state-unauthed-access",
+        "cfg-auth-gap"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "with-block resource around sanitised path read + decorator auth"
+    },
+    {
+      "case_id": "js-destructure-sanitize-001",
+      "file": "javascript/safe/safe_object_destructure_sanitize.js",
+      "language": "javascript",
+      "is_vulnerable": false,
+      "vuln_class": "safe",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "expected_severity": "NONE",
+      "expected_category": "Security",
+      "expected_sink_lines": [],
+      "expected_source_lines": [],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Destructured field flows through encodeURIComponent before HTML sink"
+    },
+    {
+      "case_id": "js-destructure-vuln-001",
+      "file": "javascript/xss/vuln_object_destructure_no_sanitize.js",
+      "language": "javascript",
+      "is_vulnerable": true,
+      "vuln_class": "xss",
+      "cwe": "CWE-79",
+      "provenance": "synthetic",
+      "equivalence_tier": "analogue",
+      "match_mode": "rule_match",
+      "expected_rule_ids": [
+        "taint-unsanitised-flow"
+      ],
+      "allowed_alternative_rule_ids": [],
+      "forbidden_rule_ids": [],
+      "expected_severity": "HIGH",
+      "expected_category": "Security",
+      "expected_sink_lines": [
+        [
+          10,
+          10
+        ]
+      ],
+      "expected_source_lines": [
+        [
+          8,
+          8
+        ]
+      ],
+      "tags": [
+        "precision-2026-04-25"
+      ],
+      "disabled": false,
+      "notes": "Destructured field straight into template-literal HTML sink"
     }
   ]
 }

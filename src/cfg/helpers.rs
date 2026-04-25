@@ -675,7 +675,13 @@ pub(crate) fn collect_idents(n: Node, code: &[u8], out: &mut Vec<String>) {
         "identifier"
         | "field_identifier"
         | "property_identifier"
-        | "shorthand_property_identifier_pattern" => {
+        | "shorthand_property_identifier_pattern"
+        // PHP `name`: leaf node carrying the bare identifier text for
+        // function/method names and similar grammar slots.  Without this
+        // arm `function_definition` → `name` extraction returns empty
+        // for PHP, demoting every named function to `<anon#N>` and
+        // breaking cross-function summary lookup at the call site.
+        | "name" => {
             if let Some(txt) = text_of(n, code) {
                 out.push(txt);
             }

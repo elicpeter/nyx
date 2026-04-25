@@ -98,6 +98,13 @@ pub struct AnalysisContext<'a> {
     /// parsed from a raw source can't form SHELL/SQL/path payloads).  Sourced
     /// from `body_const_facts` when present — keep both pointers coherent.
     pub type_facts: Option<&'a TypeFactResult>,
+    /// Decorators / annotations / attributes attached to the body's
+    /// declaration (e.g. Python `@login_required`, Java `@PreAuthorize`,
+    /// Symfony `#[IsGranted(...)]`).  Consumed by the AuthGap analysis to
+    /// suppress `cfg-auth-gap` when the framework already enforces auth at
+    /// the function-declaration level — the gap only matters when the
+    /// auth call has to live inside the body.
+    pub auth_decorators: &'a [String],
 }
 
 pub trait CfgAnalysis {

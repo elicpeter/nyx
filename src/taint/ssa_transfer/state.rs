@@ -142,6 +142,17 @@ thread_local! {
     /// bubble callee-side cap hits up into the caller's collector.
     static BODY_ENGINE_NOTES: RefCell<SmallVec<[crate::engine_notes::EngineNote; 2]>> =
         RefCell::new(SmallVec::new());
+
+    /// File-level set of CFG sink spans whose path-traversal taint flow
+    /// was suppressed by an SSA-engine path-safety proof (PathFact
+    /// `dotdot=No && absolute=No`).  Populated by `is_path_safe_for_sink`
+    /// and consumed by the state-analysis pass to suppress
+    /// `state-unauthed-access` on the same sink — when the taint engine
+    /// has already proved the user-controlled input cannot escape into a
+    /// privileged location, the auth concern on that sink is reduced.
+    /// Reset at start of `analyse_file`, drained before state analysis.
+    static PATH_SAFE_SUPPRESSED_SPANS: RefCell<std::collections::HashSet<(usize, usize)>> =
+        RefCell::new(std::collections::HashSet::new());
 }
 
 /// Record an engine note for the body currently being analysed.  Safe to
@@ -162,6 +173,32 @@ pub(crate) fn reset_body_engine_notes() {
 /// after `run_ssa_taint_full` to attach collected notes to findings.
 pub(crate) fn take_body_engine_notes() -> SmallVec<[crate::engine_notes::EngineNote; 2]> {
     BODY_ENGINE_NOTES.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+/// Record a sink CFG-node span whose tainted input is proven path-safe by
+/// the SSA abstract domain (`PathFact::is_path_safe()`).  Consumed by the
+/// state-analysis pass to suppress `state-unauthed-access` on the same
+/// span: once the taint engine has proved the input cannot reach a
+/// privileged location, the auth concern is structurally reduced.
+pub(crate) fn record_path_safe_suppressed_span(span: (usize, usize)) {
+    PATH_SAFE_SUPPRESSED_SPANS.with(|c| {
+        c.borrow_mut().insert(span);
+    });
+}
+
+/// Reset the file-level path-safe-suppressed sink-span set.  Called at
+/// the start of `analyse_file` so each file scan starts with a clean
+/// slate.
+pub fn reset_path_safe_suppressed_spans() {
+    PATH_SAFE_SUPPRESSED_SPANS.with(|c| c.borrow_mut().clear());
+}
+
+/// Take the file-level path-safe-suppressed sink-span set, leaving it
+/// empty.  Called by the analysis orchestrator after `analyse_file` and
+/// before `run_state_analysis` so the state pass can read which sinks
+/// the taint engine already proved safe.
+pub fn take_path_safe_suppressed_spans() -> std::collections::HashSet<(usize, usize)> {
+    PATH_SAFE_SUPPRESSED_SPANS.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
 /// Stable identity for a variable binding at body boundaries.

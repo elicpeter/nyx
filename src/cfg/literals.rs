@@ -911,10 +911,28 @@ pub(super) fn extract_arg_string_literals(call_node: Node, code: &[u8]) -> Vec<O
         if kind == "keyword_argument" || kind == "named_argument" {
             continue;
         }
-        let literal = match kind {
-            "string" | "string_literal" | "interpreted_string_literal" | "raw_string_literal" => {
-                let raw = text_of(child, code);
-                raw.and_then(|s| strip_literal_quotes(&s, child, code))
+        // PHP wraps each call argument in an `argument` node whose first
+        // named child is the actual expression.  Unwrap one level so the
+        // string-literal arm below sees the literal directly rather than
+        // the wrapper kind, otherwise PHP `f("https://…")` records
+        // `None` for arg 0 and downstream prefix-aware suppressions miss.
+        let target = if kind == "argument" {
+            child.named_child(0).unwrap_or(child)
+        } else {
+            child
+        };
+        let target_kind = target.kind();
+        let literal = match target_kind {
+            "string"
+            | "string_literal"
+            | "interpreted_string_literal"
+            | "raw_string_literal"
+            // PHP's double-quoted form (single-quoted maps to `string`).
+            // Only safe to lift when there is no `encapsed_string` /
+            // `embedded_expression` interpolation child — checked below.
+            | "encapsed_string" => {
+                let raw = text_of(target, code);
+                raw.and_then(|s| strip_literal_quotes(&s, target, code))
             }
             _ => None,
         };

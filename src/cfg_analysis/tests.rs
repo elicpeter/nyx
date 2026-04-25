@@ -32,6 +32,7 @@ fn parse_and_analyse<A: CfgAnalysis>(
         taint_active: true,
         body_const_facts: None,
         type_facts: None,
+        auth_decorators: &[],
     };
     analysis.run(&ctx)
 }
@@ -59,6 +60,7 @@ fn parse_and_run_all(src: &[u8], lang_str: &str, ts_lang: Language) -> Vec<CfgFi
         taint_active: true,
         body_const_facts: None,
         type_facts: None,
+        auth_decorators: &[],
     };
     run_all(&ctx)
 }
@@ -91,6 +93,7 @@ fn parse_and_run_all_with_taint(
         taint_active: true,
         body_const_facts: None,
         type_facts: None,
+        auth_decorators: &[],
     };
     run_all(&ctx)
 }
@@ -207,6 +210,7 @@ fn parse_and_analyse_with_ssa<A: CfgAnalysis>(
         taint_active: true,
         body_const_facts: facts.as_ref(),
         type_facts: facts.as_ref().map(|f| &f.type_facts),
+        auth_decorators: &[],
     };
     analysis.run(&ctx)
 }
@@ -1135,6 +1139,7 @@ fn config_sanitizer_suppresses_unguarded_sink() {
         taint_active: true,
         body_const_facts: None,
         type_facts: None,
+        auth_decorators: &[],
     };
     let findings = run_all(&ctx);
 
@@ -1612,6 +1617,7 @@ fn cfg_only_no_taint_produces_low_severity() {
         taint_active: false, // cfg-only mode
         body_const_facts: None,
         type_facts: None,
+        auth_decorators: &[],
     };
     let findings = guards::UnguardedSink.run(&ctx);
 

@@ -35,8 +35,24 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::JSON_PARSE),
         case_sensitive: false,
     },
+    // `encodeURIComponent` percent-encodes every character outside the
+    // ASCII identifier alphabet, including `<`, `>`, `&`, `"`, `'` — so
+    // the result is safe to embed in HTML text content and HTML
+    // attribute values, not just URL components.  Treating it as
+    // covering both URL_ENCODE and HTML_ESCAPE caps avoids FPs when a
+    // wrapper that calls it is composed into an HTML sink (e.g.
+    // `res.send('<p>' + cleanInput(x) + '</p>')`).  `encodeURI` keeps a
+    // smaller reserved set (`?`, `&`, `=`, `+` are NOT encoded) so it
+    // stays URL-only.
     LabelRule {
-        matchers: &["encodeURIComponent", "encodeURI"],
+        matchers: &["encodeURIComponent"],
+        label: DataLabel::Sanitizer(Cap::from_bits_truncate(
+            Cap::URL_ENCODE.bits() | Cap::HTML_ESCAPE.bits(),
+        )),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["encodeURI"],
         label: DataLabel::Sanitizer(Cap::URL_ENCODE),
         case_sensitive: false,
     },

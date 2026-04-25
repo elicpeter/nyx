@@ -994,6 +994,12 @@ impl<'a> ParsedFile<'a> {
             &[],
             extra,
         );
+        // Drain the path-safe-suppressed sink-span set published by the
+        // SSA taint engine.  Used below by the state-analysis pass to
+        // suppress `state-unauthed-access` on sinks the taint engine has
+        // already proved cannot reach a privileged location.
+        let path_safe_suppressed_spans =
+            crate::taint::ssa_transfer::take_path_safe_suppressed_spans();
         for finding in &taint_results {
             let body_cfg = &self.file_cfg.body(finding.body_id).graph;
 
@@ -1048,6 +1054,7 @@ impl<'a> ParsedFile<'a> {
                 taint_active,
                 body_const_facts: body_const_facts.as_ref(),
                 type_facts: body_const_facts.as_ref().map(|f| &f.type_facts),
+                auth_decorators: &body.meta.auth_decorators,
             };
             for cf in cfg_analysis::run_all(&cfg_ctx) {
                 let point = byte_offset_to_point(&self.source.tree, cf.span.0);
@@ -1110,6 +1117,7 @@ impl<'a> ParsedFile<'a> {
                     cfg.scanner.enable_auth_analysis,
                     &resource_method_summaries,
                     &body.meta.auth_decorators,
+                    &path_safe_suppressed_spans,
                 );
 
                 for sf in &state_findings {

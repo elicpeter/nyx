@@ -49,6 +49,14 @@ pub fn classify_auth_decorators(lang: Lang, decorators: &[String]) -> AuthLevel 
 ///
 /// Returns findings for use-after-close, double-close, resource leaks,
 /// and unauthenticated access to sensitive sinks.
+///
+/// `path_safe_suppressed_sink_spans` lists CFG sink spans whose tainted
+/// inputs were proved path-safe by the SSA taint engine.  When a
+/// privileged sink at one of those spans is reached without
+/// authentication, `state-unauthed-access` is suppressed: the taint
+/// engine has already proved the user-controlled input cannot escape
+/// into a privileged location, so the auth concern is structurally
+/// reduced.
 #[allow(clippy::too_many_arguments)]
 pub fn run_state_analysis(
     cfg: &Cfg,
@@ -60,6 +68,7 @@ pub fn run_state_analysis(
     enable_auth: bool,
     resource_method_summaries: &[transfer::ResourceMethodSummary],
     auth_decorators: &[String],
+    path_safe_suppressed_sink_spans: &std::collections::HashSet<(usize, usize)>,
 ) -> Vec<StateFinding> {
     let _span = tracing::debug_span!("run_state_analysis").entered();
 
@@ -90,7 +99,15 @@ pub fn run_state_analysis(
     initial.auth.auth_level = classify_auth_decorators(lang, auth_decorators);
     let result = engine::run_forward(cfg, entry, &transfer, initial);
 
-    facts::extract_findings(&result, cfg, &interner, lang, func_summaries, enable_auth)
+    facts::extract_findings(
+        &result,
+        cfg,
+        &interner,
+        lang,
+        func_summaries,
+        enable_auth,
+        path_safe_suppressed_sink_spans,
+    )
 }
 
 /// Build resource method summaries by pre-scanning all method bodies for known

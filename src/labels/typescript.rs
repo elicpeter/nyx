@@ -35,8 +35,18 @@ pub static RULES: &[LabelRule] = &[
         label: DataLabel::Sanitizer(Cap::JSON_PARSE),
         case_sensitive: false,
     },
+    // See javascript.rs for rationale: encodeURIComponent is safe for
+    // HTML text and attribute contexts because it percent-encodes <, >,
+    // &, ", '.
     LabelRule {
-        matchers: &["encodeURIComponent", "encodeURI"],
+        matchers: &["encodeURIComponent"],
+        label: DataLabel::Sanitizer(Cap::from_bits_truncate(
+            Cap::URL_ENCODE.bits() | Cap::HTML_ESCAPE.bits(),
+        )),
+        case_sensitive: false,
+    },
+    LabelRule {
+        matchers: &["encodeURI"],
         label: DataLabel::Sanitizer(Cap::URL_ENCODE),
         case_sensitive: false,
     },

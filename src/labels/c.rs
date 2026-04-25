@@ -20,9 +20,17 @@ pub static RULES: &[LabelRule] = &[
         case_sensitive: false,
     },
     // ───────── Sanitizers ──────────
+    // Generic `sanitize_*` prefix: clears the full cap mask.  A function
+    // named `sanitize_*` is a developer-asserted general-purpose
+    // sanitizer; without a more specific signal (e.g. an explicit
+    // sanitizer label rule with a narrower cap), assume it covers every
+    // taint cap that flows through it.  Narrowing to a single cap (e.g.
+    // HTML_ESCAPE) under-clears developer-named sanitizers and produces
+    // FPs whenever the downstream sink belongs to a different cap (e.g.
+    // FMT_STRING via printf), which is the typical case in C/C++ code.
     LabelRule {
         matchers: &["sanitize_"],
-        label: DataLabel::Sanitizer(Cap::HTML_ESCAPE),
+        label: DataLabel::Sanitizer(Cap::all()),
         case_sensitive: false,
     },
     // Type conversion sanitizers

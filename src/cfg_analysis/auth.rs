@@ -162,6 +162,18 @@ impl CfgAnalysis for AuthGap {
     }
 
     fn run(&self, ctx: &AnalysisContext) -> Vec<CfgFinding> {
+        // Decorator/annotation/attribute auth on the body declaration
+        // already gates every sink in the body — skip the
+        // structural-call dominance check entirely when the framework
+        // enforces auth at the declaration level.  Mirrors the
+        // `classify_auth_decorators` lookup the state engine uses to
+        // seed the AuthLevel of the body's initial state, so both
+        // analyses agree on which decorators count.
+        let body_auth_level = crate::state::classify_auth_decorators(ctx.lang, ctx.auth_decorators);
+        if body_auth_level >= crate::state::domain::AuthLevel::Authed {
+            return Vec::new();
+        }
+
         let doms = dominators::compute_dominators(ctx.cfg, ctx.entry);
         let entry_funcs = find_web_entry_point_functions(ctx);
         let auth_nodes = find_auth_nodes(ctx);
