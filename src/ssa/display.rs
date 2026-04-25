@@ -104,13 +104,17 @@ impl fmt::Display for SsaBody {
                     scrutinee,
                     targets,
                     default,
+                    case_values,
                 } => {
                     write!(f, "  switch v{} → [", scrutinee.0)?;
                     for (i, t) in targets.iter().enumerate() {
                         if i > 0 {
                             write!(f, ", ")?;
                         }
-                        write!(f, "B{}", t.0)?;
+                        match case_values.get(i).and_then(|cv| cv.as_ref()) {
+                            Some(lit) => write!(f, "{:?}=B{}", lit, t.0)?,
+                            None => write!(f, "B{}", t.0)?,
+                        }
                     }
                     writeln!(f, "] default B{}", default.0)?;
                 }

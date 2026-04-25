@@ -672,28 +672,34 @@ fn run_path(
                 state.predecessor = Some(block_id);
                 state.current_block = *target;
             }
-            Terminator::Switch { .. } => {
-                // Switch is emitted only for guaranteed-exclusive dispatch
-                // (Go switch, Java arrow-switch, Rust match). The executor
-                // does not yet carry per-target case literals through the
-                // IR, so we follow the first reachable successor to keep
-                // the exploration deterministic. A follow-up can add
-                // per-target path constraints of the form `scrutinee ==
-                // case_value` once case literals are threaded through.
-                let next = block.succs.iter().find(|s| reachable.contains(s)).copied();
-                match next {
-                    Some(target) => {
-                        state.predecessor = Some(block_id);
-                        state.current_block = target;
-                    }
-                    None => {
-                        let witness = try_extract_witness(state, finding, ssa, cfg);
-                        return Some(PathOutcome {
-                            verdict: Verdict::Inconclusive,
-                            constraints_checked: state.constraints_checked,
-                            witness,
-                        });
-                    }
+            Terminator::Switch {
+                scrutinee,
+                targets,
+                default,
+                case_values,
+            } => {
+                // Switch is emitted for guaranteed-exclusive dispatch
+                // (Go switch, Java arrow-switch, Rust match). For each
+                // reachable (case_literal, target) pair, fork the state
+                // and add `scrutinee == case_value` as a path constraint.
+                // The default arm gets a `scrutinee ∉ {case_values}`
+                // constraint when at least one case literal is known.
+                if let Some(outcome) = step_switch(
+                    state,
+                    *scrutinee,
+                    targets,
+                    *default,
+                    case_values,
+                    block_id,
+                    reachable,
+                    work_queue,
+                    outcomes,
+                    search_exhausted,
+                    finding,
+                    ssa,
+                    cfg,
+                ) {
+                    return Some(outcome);
                 }
             }
             Terminator::Return(_) | Terminator::Unreachable => {
@@ -701,6 +707,193 @@ fn run_path(
             }
         }
     }
+}
+
+/// Step over a `Terminator::Switch`, forking the state per-case where case
+/// literals are known.
+///
+/// Forks one path per (case_literal, target) pair when `case_values[i]` is
+/// `Some(lit)`. The default arm is explored with a chain of `scrutinee !=
+/// known_lit_i` refinements. When no case literals are known (synthetic ≥3-way
+/// fanouts), falls back to the legacy first-reachable behavior so the
+/// exploration stays deterministic.
+///
+/// Returns `Some(PathOutcome)` only on dead-ends (no reachable successor). On
+/// success, the original state is consumed (forked into work_queue) and `None`
+/// is returned so the caller stops the current path.
+#[allow(clippy::too_many_arguments)]
+fn step_switch(
+    state: &mut ExplorationState,
+    scrutinee: SsaValue,
+    targets: &smallvec::SmallVec<[BlockId; 4]>,
+    default: BlockId,
+    case_values: &smallvec::SmallVec<[Option<crate::constraint::domain::ConstValue>; 4]>,
+    block_id: BlockId,
+    reachable: &HashSet<BlockId>,
+    work_queue: &mut VecDeque<ExplorationState>,
+    outcomes: &mut Vec<PathOutcome>,
+    search_exhausted: &mut bool,
+    finding: &Finding,
+    ssa: &SsaBody,
+    cfg: &Cfg,
+) -> Option<PathOutcome> {
+    use crate::constraint::lower::{CompOp, ConditionExpr, Operand};
+
+    // Collect known (case_literal, target) pairs that are reachable.
+    let known_cases: Vec<(crate::constraint::domain::ConstValue, BlockId)> = targets
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &tgt)| {
+            if !reachable.contains(&tgt) {
+                return None;
+            }
+            case_values
+                .get(i)
+                .and_then(|cv| cv.clone())
+                .map(|lit| (lit, tgt))
+        })
+        .collect();
+
+    let default_reachable = reachable.contains(&default);
+
+    // Fallback: no case literals known → preserve legacy first-reachable
+    // behavior to keep exploration deterministic and budget-bounded.
+    if known_cases.is_empty() {
+        let next = std::iter::once(&default)
+            .chain(targets.iter())
+            .find(|s| reachable.contains(s))
+            .copied();
+        match next {
+            Some(target) => {
+                state.predecessor = Some(block_id);
+                state.current_block = target;
+                return None;
+            }
+            None => {
+                let witness = try_extract_witness(state, finding, ssa, cfg);
+                return Some(PathOutcome {
+                    verdict: Verdict::Inconclusive,
+                    constraints_checked: state.constraints_checked,
+                    witness,
+                });
+            }
+        }
+    }
+
+    // Helper: build `scrutinee == lit` as a structured ConditionExpr.
+    let mk_eq = |lit: &crate::constraint::domain::ConstValue| ConditionExpr::Comparison {
+        lhs: Operand::Value(scrutinee),
+        op: CompOp::Eq,
+        rhs: Operand::Const(lit.clone()),
+    };
+
+    let total_paths_planned = known_cases.len() + if default_reachable { 1 } else { 0 };
+    let can_fork_per_path = |outcomes_len: usize, queue_len: usize, planned: usize| -> bool {
+        state.forks_used < MAX_FORKS_PER_FINDING
+            && outcomes_len + queue_len + planned + 1 < MAX_PATHS_PER_FINDING
+    };
+
+    let mut planned_remaining = total_paths_planned;
+    let mut any_enqueued = false;
+
+    // Fork one state per known case.
+    for (lit, target) in &known_cases {
+        if !can_fork_per_path(outcomes.len(), work_queue.len(), planned_remaining) {
+            *search_exhausted = false;
+            break;
+        }
+        planned_remaining = planned_remaining.saturating_sub(1);
+
+        let mut case_state = ExplorationState {
+            sym_state: state.sym_state.clone(),
+            env: state.env.clone(),
+            current_block: *target,
+            predecessor: Some(block_id),
+            forks_used: state.forks_used + 1,
+            steps_taken: state.steps_taken,
+            constraints_checked: state.constraints_checked,
+            visit_counts: state.visit_counts.clone(),
+            exception_context: None,
+        };
+
+        let cond = mk_eq(lit);
+        case_state.sym_state.add_constraint(PathConstraint {
+            block: block_id,
+            condition: cond.clone(),
+            polarity: true,
+        });
+        case_state.env = constraint::refine_env(&case_state.env, &cond, true);
+        case_state.constraints_checked += 1;
+
+        if case_state.env.is_unsat() {
+            outcomes.push(PathOutcome {
+                verdict: Verdict::Infeasible,
+                constraints_checked: case_state.constraints_checked,
+                witness: None,
+            });
+        } else {
+            work_queue.push_back(case_state);
+            any_enqueued = true;
+        }
+    }
+
+    // Fork a state for the default arm with `scrutinee != lit` for each
+    // known case (negate-eq refinement). When all cases are known and the
+    // refinement makes the environment unsatisfiable, the default path is
+    // recorded as Infeasible.
+    if default_reachable
+        && can_fork_per_path(outcomes.len(), work_queue.len(), planned_remaining)
+    {
+        planned_remaining = planned_remaining.saturating_sub(1);
+        let mut default_state = ExplorationState {
+            sym_state: state.sym_state.clone(),
+            env: state.env.clone(),
+            current_block: default,
+            predecessor: Some(block_id),
+            forks_used: state.forks_used + 1,
+            steps_taken: state.steps_taken,
+            constraints_checked: state.constraints_checked,
+            visit_counts: state.visit_counts.clone(),
+            exception_context: None,
+        };
+
+        for (lit, _) in &known_cases {
+            let cond = mk_eq(lit);
+            default_state.sym_state.add_constraint(PathConstraint {
+                block: block_id,
+                condition: cond.clone(),
+                polarity: false,
+            });
+            default_state.env = constraint::refine_env(&default_state.env, &cond, false);
+            default_state.constraints_checked += 1;
+        }
+
+        if default_state.env.is_unsat() {
+            outcomes.push(PathOutcome {
+                verdict: Verdict::Infeasible,
+                constraints_checked: default_state.constraints_checked,
+                witness: None,
+            });
+        } else {
+            work_queue.push_back(default_state);
+            any_enqueued = true;
+        }
+    } else if default_reachable {
+        *search_exhausted = false;
+    }
+    let _ = planned_remaining;
+
+    if !any_enqueued {
+        // All paths were pruned by infeasibility — record the current
+        // state's witness so the caller can decide.
+        let witness = try_extract_witness(state, finding, ssa, cfg);
+        return Some(PathOutcome {
+            verdict: Verdict::Infeasible,
+            constraints_checked: state.constraints_checked,
+            witness,
+        });
+    }
+    None
 }
 
 /// Apply a branch constraint and check for UNSAT.

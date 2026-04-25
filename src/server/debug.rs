@@ -342,6 +342,7 @@ fn terminator_str(t: &Terminator) -> String {
             scrutinee,
             targets,
             default,
+            ..
         } => {
             let ts: Vec<String> = targets.iter().map(|t| format!("B{}", t.0)).collect();
             format!(

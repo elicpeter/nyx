@@ -1385,6 +1385,11 @@ fn rename_variables(
             let targets: SmallVec<[BlockId; 4]> =
                 succs.iter().skip(1).map(|&s| BlockId(s as u32)).collect();
             let default = BlockId(succs[0] as u32);
+            // Synthetic ≥3-way fanouts have no per-case literal metadata —
+            // every entry is None (unknown), so the executor falls back to
+            // first-reachable behavior on this terminator.
+            let case_values: SmallVec<[Option<crate::constraint::domain::ConstValue>; 4]> =
+                std::iter::repeat_with(|| None).take(targets.len()).collect();
             tracing::debug!(
                 block = block_idx,
                 num_succs = succs.len(),
@@ -1394,6 +1399,7 @@ fn rename_variables(
                 scrutinee,
                 targets,
                 default,
+                case_values,
             }
         };
 

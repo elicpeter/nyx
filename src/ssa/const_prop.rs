@@ -394,6 +394,7 @@ fn process_terminator(
             scrutinee,
             targets,
             default,
+            case_values,
         } => {
             // Try to resolve scrutinee to a concrete integer literal; if
             // we can match it against one of the case literals (not
@@ -401,7 +402,7 @@ fn process_terminator(
             // Until per-case literals are threaded through, fall back to
             // the sound "any successor executable" behavior, which mirrors
             // the pre-Switch cascade.
-            let _ = (scrutinee, targets, default);
+            let _ = (scrutinee, targets, default, case_values);
             for &target in &block.succs {
                 mark_edge_executable(
                     block.id,

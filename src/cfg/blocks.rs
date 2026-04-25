@@ -6,6 +6,121 @@ use crate::labels::{Kind, LangAnalysisRules, lookup};
 use petgraph::graph::NodeIndex;
 use tree_sitter::Node;
 
+/// True when the language has guaranteed-exclusive (non-fall-through) cases
+/// at the *case-level* shape `build_switch` sees here. Rust `match`, Go
+/// `switch`, and Java arrow-switches qualify; classic Java/C/C++/JS switches
+/// with fall-through do not. The check is per-language because Java mixes
+/// arrow and classic shapes — that's handled by inspecting the case kind in
+/// [`extract_case_literal_text`].
+fn lang_has_exclusive_cases(lang: &str) -> bool {
+    matches!(lang, "rust" | "go")
+}
+
+/// Extract the scrutinee subtree from a switch-like AST node.
+///
+/// Returns the AST node referenced by the language's scrutinee field. Only
+/// fires for Rust `match`, Go `switch`, and Java `switch` statements — other
+/// languages return `None` so [`build_switch`] keeps its legacy behavior.
+fn extract_scrutinee_node<'a>(ast: Node<'a>, lang: &str) -> Option<Node<'a>> {
+    let field = match lang {
+        "rust" => "value",
+        "go" => "value",
+        "java" => "condition",
+        _ => return None,
+    };
+    ast.child_by_field_name(field)
+}
+
+/// Extract a single literal/path text from a case AST when the case is a
+/// plain mutually-exclusive literal pattern. Returns `None` for non-literal
+/// patterns (wildcards, OR-patterns, range patterns, guards) and for
+/// fall-through-shaped Java cases.
+fn extract_case_literal_text<'a>(case: Node<'a>, lang: &str, code: &'a [u8]) -> Option<String> {
+    let kind = case.kind();
+    match (lang, kind) {
+        ("rust", "match_arm") => {
+            // Reject guarded arms — `match x { y if cond => ... }`.
+            if case.child_by_field_name("guard").is_some() {
+                return None;
+            }
+            let pattern = case.child_by_field_name("pattern")?;
+            // `match_pattern` wraps the real pattern as a child.
+            let inner = {
+                let mut cursor = pattern.walk();
+                pattern
+                    .children(&mut cursor)
+                    .find(|c| c.is_named())
+                    .unwrap_or(pattern)
+            };
+            // Reject patterns that are not plain literals/paths.
+            if matches!(
+                inner.kind(),
+                "_" | "wildcard"
+                    | "range_pattern"
+                    | "or_pattern"
+                    | "tuple_struct_pattern"
+                    | "struct_pattern"
+                    | "ref_pattern"
+                    | "tuple_pattern"
+                    | "slice_pattern"
+                    | "captured_pattern"
+                    | "binding_pattern"
+            ) {
+                return None;
+            }
+            text_of(inner, code)
+        }
+        ("go", "expression_case") => {
+            // Go case `case v1, v2: ...` — only handle exactly one expression.
+            let value = case.child_by_field_name("value")?;
+            let mut named_children: Vec<Node> = Vec::new();
+            let mut cursor = value.walk();
+            for child in value.children(&mut cursor) {
+                if child.is_named() {
+                    named_children.push(child);
+                }
+            }
+            if named_children.len() == 1 {
+                text_of(named_children[0], code)
+            } else {
+                None
+            }
+        }
+        ("java", "switch_rule") => {
+            // Java arrow-switch (no fall-through). Look for a switch_label
+            // child whose contents are a single case value.
+            let mut cursor = case.walk();
+            for child in case.children(&mut cursor) {
+                if child.kind() != "switch_label" {
+                    continue;
+                }
+                let mut named_values: Vec<Node> = Vec::new();
+                let mut sl_cursor = child.walk();
+                let mut saw_default = false;
+                for sl_child in child.children(&mut sl_cursor) {
+                    let k = sl_child.kind();
+                    if k == "default" || k == "default_label" {
+                        saw_default = true;
+                        break;
+                    }
+                    if k == "case" || k == ":" || k == "->" || k == "," {
+                        continue;
+                    }
+                    if sl_child.is_named() {
+                        named_values.push(sl_child);
+                    }
+                }
+                if saw_default || named_values.len() != 1 {
+                    return None;
+                }
+                return text_of(named_values[0], code);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 // -------------------------------------------------------------------------
 //    Exception-source detection for try/catch wiring
 // -------------------------------------------------------------------------
@@ -484,6 +599,48 @@ pub(super) fn build_switch<'a>(
     }
     let has_default = default_pos.is_some();
 
+    // For mutually-exclusive switch shapes (Rust match, Go switch, Java
+    // arrow-switch), pre-extract the scrutinee text + idents so the synthetic
+    // dispatch headers can carry a `<scrutinee> == <case_literal>` condition.
+    // Falls back to `None` when the scrutinee is structurally complex (calls,
+    // member chains, parenthesized expressions in Go) — the existing first-
+    // reachable behavior remains correct in that case.
+    let supports_exclusive_cases = lang_has_exclusive_cases(lang) || lang == "java";
+    let (scrutinee_text, scrutinee_idents) = if supports_exclusive_cases {
+        match extract_scrutinee_node(ast, lang) {
+            Some(scrut) => {
+                let mut idents = Vec::new();
+                collect_idents(scrut, code, &mut idents);
+                idents.sort();
+                idents.dedup();
+                let text = text_of(scrut, code).map(|s| {
+                    // Java's `condition` field includes the surrounding parens.
+                    let trimmed = s.trim();
+                    if trimmed.starts_with('(') && trimmed.ends_with(')') {
+                        trimmed[1..trimmed.len() - 1].trim().to_string()
+                    } else {
+                        trimmed.to_string()
+                    }
+                });
+                // Keep only when the scrutinee is a single bare identifier;
+                // anything more complex falls back to no condition_text. This
+                // prevents synthesizing nonsense like `f(x) == 200`.
+                let single_ident = match (&text, idents.as_slice()) {
+                    (Some(t), [name]) if t == name => true,
+                    _ => false,
+                };
+                if single_ident {
+                    (text, idents)
+                } else {
+                    (None, Vec::new())
+                }
+            }
+            None => (None, Vec::new()),
+        }
+    } else {
+        (None, Vec::new())
+    };
+
     let mut switch_breaks: Vec<NodeIndex> = Vec::new();
     let mut fallthrough_exits: Vec<NodeIndex> = Vec::new();
     let mut last_header_false: Option<NodeIndex> = None;
@@ -526,6 +683,20 @@ pub(super) fn build_switch<'a>(
             g[header].call.callee = None;
             g[header].call.sink_payload_args = None;
             g[header].call.destination_uses = None;
+            // For mutually-exclusive switch shapes with a single-ident
+            // scrutinee, synthesize a `<scrutinee> == <case_literal>`
+            // structured condition on the dispatch header so SSA lowering
+            // builds a concrete `Comparison` ConditionExpr. The existing
+            // executor Branch arm then forks per-case with the right path
+            // refinement. Skipped for non-literal patterns (OR-patterns,
+            // ranges, guards), which fall back to the legacy behavior.
+            if let Some(scrut_text) = scrutinee_text.as_ref() {
+                if let Some(case_lit) = extract_case_literal_text(case, lang, code) {
+                    g[header].condition_text = Some(format!("{} == {}", scrut_text, case_lit));
+                    g[header].condition_vars = scrutinee_idents.clone();
+                    g[header].condition_negated = false;
+                }
+            }
             connect_all(g, &chain_preds, header, EdgeKind::Seq);
             // If there was a previous header in the chain, that header's
             // False edge needs to land on this header.

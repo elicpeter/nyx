@@ -1,3 +1,4 @@
+use crate::constraint::domain::ConstValue;
 use crate::constraint::lower::ConditionExpr;
 use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Serialize};
@@ -108,6 +109,18 @@ pub enum Terminator {
         scrutinee: SsaValue,
         targets: SmallVec<[BlockId; 4]>,
         default: BlockId,
+        /// Per-target case literals, aligned 1:1 with `targets`.
+        ///
+        /// `Some(c)` records the constant value the scrutinee must equal for
+        /// the corresponding target to be taken. `None` means the literal is
+        /// unknown — emitted for synthetic ≥3-way CFG fanouts or for case
+        /// patterns that aren't plain literals (OR-patterns, ranges, guards).
+        ///
+        /// When omitted/empty (length zero), all targets behave as "unknown
+        /// literal" — preserves backward compatibility with consumers that
+        /// only inspect `targets`/`default`.
+        #[serde(default)]
+        case_values: SmallVec<[Option<ConstValue>; 4]>,
     },
     Return(Option<SsaValue>),
     Unreachable,
